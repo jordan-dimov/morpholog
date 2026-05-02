@@ -5,6 +5,27 @@ Morpholog is a language for defining the unbreakable laws of your business. It d
 
 Morpholog has no objects. It has facts admitted into state, invariants that define admissible state, and transitions that replace one admissible state with another. What other languages call "entities" are projections: stable patterns over facts, introduced for reading, indexing, and human comprehension.
 
+Morpholog makes the following question irrelevant:
+
+“Where should this business rule live?”
+
+That question wastes enormous engineering time.
+
+Should it live in:
+
+  - frontend?
+  - backend?
+  - database?
+  - domain model?
+  - service?
+  - workflow engine?
+  - reporting layer?
+  - data pipeline?
+
+Morpholog’s answer:
+
+> The rule lives as an invariant. Everything else is a compiled enforcement surface.
+
 Compliance often asks:
 
   - who knew what, when?
