@@ -7,21 +7,21 @@ Morpholog has no objects. It has facts admitted into state, invariants that defi
 
 Compliance often asks:
 
-  who knew what, when?
-  who approved what?
-  what rule was in force?
-  why was this exception allowed?
-  which version of the policy applied?
+  - who knew what, when?
+  - who approved what?
+  - what rule was in force?
+  - why was this exception allowed?
+  - which version of the policy applied?
 
 Morpholog’s invariant epochs and causal audit trail answer these natively.
 
 That could make it excellent for:
 
-financial operations
-energy trading
-healthcare workflows
-insurance claims
-regulated approvals
-capital-markets reporting
+* financial operations
+* energy trading
+* healthcare workflows
+* insurance claims
+* regulated approvals
+* capital-markets reporting
 
 Not because it has special compliance modules, but because it stores reality in a compliance-shaped way.
