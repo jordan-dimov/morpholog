@@ -1,8 +1,8 @@
 # PostgreSQL Persistence (v0) — Design Pin
 
-Status: design pin for the next implementation PR. **No code yet.**
+Status: historical design pin. The PostgreSQL adapter shipped in PR #5 (`crates/morpholog-postgres`); the revenue-restatement chain was durably proven through it in PR #6. This document is preserved as the design record for what was decided and why before implementation. The live code is the source of truth for behaviour; this doc is the source of truth for *intent*.
 
-PR #4 added a deterministic JSON codec for the runtime types. This document fixes the smallest acceptable design for `propose_against_pg()` so the implementation PR stays narrow and the kernel cannot get conceptually corrupted on the way to a database.
+PR #4 added a deterministic JSON codec for the runtime types. This document fixed the smallest acceptable design for `propose_against_pg()` so the implementation PR stayed narrow and the kernel could not get conceptually corrupted on the way to a database.
 
 ## Public goal
 

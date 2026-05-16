@@ -24,13 +24,15 @@ One transformation, `create_net_settlement(party_a, party_b, lines)`. It checks 
 
 ## How to run it
 
-The program is currently executed as Rust IR (no parser yet):
+The program is executed as Rust IR (no parser yet). Two layers of tests prove the same example:
+
+### In-memory (sync kernel)
 
 ```bash
 cargo test -p morpholog-core propose_
 ```
 
-That runs three tests:
+Three tests:
 
 1. **Happy path** — approved, non-netted lines with a correct sum. Commits.
 2. **`require` failure** — a line is already netted. Rolls back *before* any assertions stage. No claims change.
@@ -38,15 +40,25 @@ That runs three tests:
 
 The third test is the load-bearing one. It proves invariants check the *candidate* state, not just the pre-state — so a transformation that *would* amplify inconsistency cannot commit, even when its preconditions individually look fine.
 
-## How it would persist
+### Durable (PostgreSQL adapter)
 
-The Morpholog runtime targets PostgreSQL 17+. The schema is **canonical runtime infrastructure** — `claims`, `audit`, `outbox` — and lives at [`crates/morpholog-core/sql/schema.sql`](../../crates/morpholog-core/sql/schema.sql). It is not example-specific.
-
-From the repo root:
+The same scenario, end-to-end through `propose_against_pg`, with the resulting claims, audit row, and outbox intent verified in the database:
 
 ```bash
 createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
+
+DATABASE_URL=postgres:///morpholog_dev \
+  cargo test -p morpholog-postgres --test integration -- --test-threads=1 \
+    settlement_netting require_failure invariant_violation
 ```
 
-The runtime is not yet wired to the database; the Rust kernel currently runs against in-memory state. Wiring up PostgreSQL is the next milestone — the schema is the agreed shape that wiring will target.
+The three filter words (`settlement_netting`, `require_failure`, `invariant_violation`) each match one of the three settlement-related tests below; cargo's test runner includes any test whose name contains any of the listed substrings.
+
+Three integration tests in `crates/morpholog-postgres/tests/integration.rs`:
+
+- `settlement_netting_happy_path_commits_claims_audit_and_outbox` — the happy path, durable. Verifies that on commit the claim mutations, the audit row, and the outbox intent all land in one PostgreSQL `SERIALIZABLE` transaction.
+- `require_failure_writes_nothing` — durable counterpart of the in-memory `require` failure case. All three tables unchanged.
+- `invariant_violation_on_candidate_state_writes_nothing` — durable counterpart of the candidate-state invariant failure. All three tables unchanged.
+
+The shared schema (`claims`, `audit`, `outbox`) is **canonical runtime infrastructure**, not example-specific. It lives at [`crates/morpholog-core/sql/schema.sql`](../../crates/morpholog-core/sql/schema.sql).
