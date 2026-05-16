@@ -137,10 +137,11 @@ pub struct Intent {
 }
 
 /// One step inside a transformation body. Statements run in declared
-/// order against a binding context; `Require` failures and `Retract` of
-/// non-existent claims short-circuit the transformation, while `Assert`,
-/// `Emit`, `Let`, `LetNewSubject`, and `For` extend the staged outcome
-/// or the binding context.
+/// order against a binding context; a failing `Require` short-circuits
+/// the transformation, while `Assert`, `Retract`, `Emit`, `Let`,
+/// `LetNewSubject`, and `For` extend the staged outcome or the binding
+/// context. `Retract` of a non-existent claim is an idempotent no-op
+/// (see the variant doc), not a short-circuit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Require(Expr),

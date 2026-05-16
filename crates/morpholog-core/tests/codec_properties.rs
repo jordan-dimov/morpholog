@@ -15,9 +15,13 @@ use morpholog_core::{ClaimInstance, EvalValue, IntentInstance};
 use proptest::prelude::*;
 use rust_decimal::Decimal;
 
-/// Generate arbitrary `rust_decimal::Decimal` values across the
-/// representable range. `scale` is bounded at 28, the maximum
-/// representable in `rust_decimal`'s 96-bit mantissa.
+/// Generate `rust_decimal::Decimal` values from the `i64` mantissa
+/// subset of the representable space, paired with scales 0..=28 (the
+/// `rust_decimal` maximum). The full `rust_decimal` mantissa is 96-bit;
+/// we deliberately stay inside `i64` here because the codec contract
+/// being exercised (decimal → JSON string → decimal, exactness
+/// preserved) does not depend on mantissa width, and `i64` keeps
+/// shrinking reports small and the strategy cheap.
 fn arb_decimal() -> impl Strategy<Value = Decimal> {
     (any::<i64>(), 0u32..=28u32).prop_map(|(mantissa, scale)| Decimal::new(mantissa, scale))
 }
@@ -58,7 +62,10 @@ fn arb_intent_name() -> impl Strategy<Value = String> {
 
 proptest! {
     /// Every `EvalValue` we can generate round-trips through JSON
-    /// byte-identically. Includes nested collections.
+    /// without value loss: the parsed value equals the original.
+    /// Includes nested collections. Does *not* assert byte-identical
+    /// JSON on re-serialisation — that is a serde-implementation
+    /// property, not a Morpholog contract.
     #[test]
     fn eval_value_json_round_trip(v in arb_eval_value()) {
         let json = serde_json::to_string(&v).unwrap();
