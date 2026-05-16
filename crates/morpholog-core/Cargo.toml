@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rust_decimal = "1"
-uuid = { version = "1", features = ["v7"] }
+rust_decimal = { workspace = true }
+uuid = { workspace = true }
 
 [lints]
 workspace = true
