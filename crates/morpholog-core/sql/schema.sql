@@ -38,8 +38,8 @@ CREATE TABLE audit (
     arguments            jsonb        NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
     invariant_epoch      int          NOT NULL,           -- v0: always 1
     invariants_checked   jsonb        NOT NULL,           -- [{name, version}]
-    asserted_claims      jsonb        NOT NULL,           -- list of [predicate, args]
-    retracted_claims     jsonb        NOT NULL,
+    asserted_claims      jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects
+    retracted_claims     jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects
     emitted_intents      jsonb        NOT NULL,           -- summary; rows in outbox
     committed_at         timestamptz  NOT NULL DEFAULT now()
 );
