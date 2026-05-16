@@ -14,5 +14,6 @@
 //! once a real parser and example-loading mechanism exist. Treat these
 //! as teaching fixtures, not a contract.
 
+pub mod claim_standing;
 pub mod revenue_restatement;
 pub mod settlement_netting;
