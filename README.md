@@ -74,6 +74,8 @@ Two worked examples drive everything:
 
 A third worked example focused on **claim standing** — when an admitted claim is *admissible for a given purpose*, and how that standing is acquired, transferred, and lost without mutating the claim itself. Settlement netting proved transactional correctness; revenue restatement proved that history survives correction; the next example should push on the standing-as-claims-about-claims pattern hard enough to either confirm it generalises or surface what's missing.
 
+The deeper framing for where Morpholog is headed — what it should grow into, what it must never become, and the unifying insight that lets concerns like read-side legitimacy, lifecycle, provenance, authority, and temporal qualification be modelled as *more claims* rather than as new subsystems — lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
+
 Parser, CLI, migrations framework, outbox worker, and read-side projections remain deliberately deferred — the next semantic frontier comes before more plumbing.
 
 ## Requirements
@@ -88,6 +90,7 @@ Parser, CLI, migrations framework, outbox worker, and read-side projections rema
 - Reads inside a transformation see pre-transformation state. Writes are staged and become real only at commit.
 - Decimal arithmetic for business values. No floats.
 - External side effects happen post-commit, at-least-once, with deterministic idempotency keys.
+- Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside. ([scope and ambition](docs/scope-and-ambition.md))
 
 ## License
 
