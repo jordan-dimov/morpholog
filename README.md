@@ -69,7 +69,7 @@ Two worked examples exercise the semantic loop end-to-end as Rust tests: **settl
 
 ## Next
 
-PostgreSQL persistence for the existing semantic loop: a `propose_against_pg()` that opens a transaction, runs the same kernel against the live `claims` table, writes one `audit` row on commit, and enqueues `outbox` rows. Parser and surface syntax come later.
+PostgreSQL persistence for the existing semantic loop: a `propose_against_pg()` that opens a transaction, runs the same kernel against the live `claims` table, writes one `audit` row on commit, and enqueues `outbox` rows. See [`docs/postgres-persistence-v0.md`](docs/postgres-persistence-v0.md) for the design pin. Parser and surface syntax come later.
 
 ## Requirements
 
