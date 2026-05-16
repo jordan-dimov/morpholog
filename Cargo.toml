@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["crates/morpholog-cli", "crates/morpholog-core"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jdimov/morpholog"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

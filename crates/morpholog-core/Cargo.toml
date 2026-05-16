@@ -1,0 +1,14 @@
+[package]
+name = "morpholog-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rust_decimal = "1"
+uuid = { version = "1", features = ["v7"] }
+
+[lints]
+workspace = true

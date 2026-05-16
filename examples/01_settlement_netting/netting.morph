@@ -1,0 +1,52 @@
+-- Bilateral settlement netting — canonical v0 example.
+--
+-- Domain: two parties have multiple settlement lines between them.
+-- Each line has a signed amount (positive = receivable, negative =
+-- payable). A net settlement is admissible only if its amount equals
+-- the signed sum of its approved underlying lines, and no line is
+-- netted into more than one settlement.
+--
+-- Prior state assumed (asserted by other transformations not shown):
+--   ApprovedSettlementLine(line)
+--   Between(line, party_a, party_b)   -- ordered: party_a is payer side
+--   LineAmount(line, amount)
+--   not Netted(line)
+
+
+invariant net_settlement_has_lines:
+    NetSettlement(net, _, _, _) implies
+        exists { line | SettlementLine(line, net, _) }
+
+
+invariant net_amount_equals_lines:
+    NetSettlement(net, _, _, amount) implies
+        amount == sum { x | SettlementLine(_, net, x) }
+
+
+invariant no_double_netting:
+    SettlementLine(line, net, _) implies
+        not exists { other |
+            SettlementLine(line, other, _) and other != net
+        }
+
+
+transformation create_net_settlement(party_a, party_b, lines):
+    require forall { line | line in lines }:
+        ApprovedSettlementLine(line)
+        and Between(line, party_a, party_b)
+        and not Netted(line)
+
+    let net = new Subject()
+
+    let amount = sum {
+        x | line in lines, LineAmount(line, x)
+    }
+
+    assert NetSettlement(net, party_a, party_b, amount)
+
+    for line in lines:
+        let amt = value LineAmount(line, _)
+        assert SettlementLine(line, net, amt)
+        assert Netted(line)
+
+    emit NetSettlementCreated(net)

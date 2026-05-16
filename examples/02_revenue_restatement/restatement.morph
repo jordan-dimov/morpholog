@@ -1,0 +1,71 @@
+-- Revenue restatement — canonical v0 example for temporal correction.
+--
+-- Domain: a battery storage asset earns monthly revenue. Three parties
+-- make claims about that revenue: the optimiser (from its dispatch
+-- logs), an independent verifier (sometimes correcting the optimiser
+-- later), and the bank (recognising a revenue figure for debt-service-
+-- coverage calculations). The bank may only recognise an amount that
+-- matches the current independent verification.
+--
+-- The key move: currentness is a separate pointer claim, not a field
+-- on the bank recognition. History is preserved by keeping superseded
+-- claims in admitted state.
+
+
+invariant current_recognition_matches_current_verification:
+    CurrentBankRecognition(asset, period, r)
+    and BankRecognisedRevenue(asset, period, amount, r)
+        implies exists {
+            v | IndependentlyVerifiedRevenue(asset, period, amount, v)
+                and not exists { newer | Supersedes(newer, v) }
+        }
+
+
+invariant at_most_one_current_recognition_per_asset_period:
+    CurrentBankRecognition(asset, period, a)
+    and CurrentBankRecognition(asset, period, b)
+        implies a == b
+
+
+invariant at_most_one_direct_successor:
+    Supersedes(new_a, old)
+    and Supersedes(new_b, old)
+        implies new_a == new_b
+
+
+transformation admit_independent_verification(
+    asset, period, amount, verification_id
+):
+    assert IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    emit IndependentVerificationAdmitted(verification_id)
+
+
+transformation recognise_bank_revenue(
+    asset, period, amount, recognition_id
+):
+    require not CurrentBankRecognition(asset, period, _)
+    assert BankRecognisedRevenue(asset, period, amount, recognition_id)
+    assert CurrentBankRecognition(asset, period, recognition_id)
+    emit BankRevenueRecognised(recognition_id)
+
+
+transformation correct_independent_verification(
+    asset, period, new_amount, new_verification_id, prior_verification_id
+):
+    require IndependentlyVerifiedRevenue(asset, period, _, prior_verification_id)
+    require not Supersedes(_, prior_verification_id)
+    assert IndependentlyVerifiedRevenue(asset, period, new_amount, new_verification_id)
+    assert Supersedes(new_verification_id, prior_verification_id)
+    retract CurrentBankRecognition(asset, period, _)
+    emit VerificationCorrected(new_verification_id, prior_verification_id)
+
+
+transformation restate_bank_revenue(
+    asset, period, new_amount, new_recognition_id, prior_recognition_id
+):
+    require BankRecognisedRevenue(asset, period, _, prior_recognition_id)
+    retract CurrentBankRecognition(asset, period, _)
+    assert BankRecognisedRevenue(asset, period, new_amount, new_recognition_id)
+    assert CurrentBankRecognition(asset, period, new_recognition_id)
+    assert Supersedes(new_recognition_id, prior_recognition_id)
+    emit BankRevenueRestated(new_recognition_id, prior_recognition_id)
