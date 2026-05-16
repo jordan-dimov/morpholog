@@ -1,0 +1,82 @@
+-- Claim standing — admissibility-for-purpose example (v0).
+--
+-- Domain: a battery storage asset earns monthly revenue. An independent
+-- verifier issues a revenue figure. Different parties want to use the
+-- same verified figure for different decisions:
+--   - the bank, for debt-service-coverage covenant tests
+--   - investor relations, for shareholder reporting
+-- Each grants *standing* to the verification for its specific purpose,
+-- and may revoke that standing later.
+--
+-- The key move: standing is a separate AdmissibleFor claim, not a
+-- field on the verification. The same underlying verification can
+-- carry parallel standings from different authorities. A revocation
+-- retracts the standing but does not touch the verification or any
+-- historical decision that already relied on it.
+--
+-- Where Example 2 (revenue restatement) asks "which claim is in force
+-- now?" (currentness), Example 3 asks "which claim may be relied on
+-- for *this* purpose?" (standing). These are different.
+
+
+invariant admissibility_has_provenance:
+    AdmissibleFor(c, p) implies StandingGrantedBy(c, p, _, _)
+
+
+invariant admissibility_excludes_revocation:
+    AdmissibleFor(c, p) implies not exists {
+        r | StandingRevoked(c, p, r)
+    }
+
+
+-- Note: no invariant ties decision claims (DebtServiceRevenue,
+-- InvestorReportedRevenue) to AdmissibleFor. Decisions are gated at
+-- admission time via `require`, and once admitted are locked in.
+-- Revocation prevents new decisions but does not invalidate
+-- historical ones. This is intentional and matches real-world
+-- semantics: a calculation made under valid standing at time T
+-- stays valid even if standing is revoked at T+1.
+
+
+transformation admit_independent_verification(
+    asset, period, amount, verification_id
+):
+    assert IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    emit IndependentVerificationAdmitted(verification_id)
+
+
+transformation grant_standing(
+    claim_id, purpose, authority, grant_id
+):
+    require not StandingRevoked(claim_id, purpose, _)
+    require not AdmissibleFor(claim_id, purpose)
+    assert StandingGrantedBy(claim_id, purpose, authority, grant_id)
+    assert AdmissibleFor(claim_id, purpose)
+    emit StandingGranted(grant_id)
+
+
+transformation revoke_standing(
+    claim_id, purpose, revocation_id
+):
+    require AdmissibleFor(claim_id, purpose)
+    retract AdmissibleFor(claim_id, purpose)
+    assert StandingRevoked(claim_id, purpose, revocation_id)
+    emit StandingRevocationAdmitted(revocation_id)
+
+
+transformation admit_debt_service_revenue(
+    asset, period, amount, decision_id, verification_id
+):
+    require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    require AdmissibleFor(verification_id, bank_debt_service)
+    assert DebtServiceRevenue(asset, period, amount, decision_id, verification_id)
+    emit DebtServiceRevenueAdmitted(decision_id)
+
+
+transformation admit_investor_reported_revenue(
+    asset, period, amount, report_id, verification_id
+):
+    require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    require AdmissibleFor(verification_id, investor_reporting)
+    assert InvestorReportedRevenue(asset, period, amount, report_id, verification_id)
+    emit InvestorReportedRevenueAdmitted(report_id)
