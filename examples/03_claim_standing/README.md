@@ -57,8 +57,10 @@ The decision transformations embed their target purpose (`bank_debt_service`, `i
 ## How to run it
 
 ```bash
-cargo test -p morpholog-core claim_standing standing parallel revocation wrong_amount cannot_admit
+cargo test -p morpholog-core -- standing revocation cannot_admit
 ```
+
+The three filter words (`standing`, `revocation`, `cannot_admit`) each match one or more of the five tests below; the substring filters are forwarded to the libtest binary after `--`, and cargo's positional `TESTNAME` argument is left unset.
 
 Five in-memory tests:
 
@@ -91,6 +93,14 @@ This was the load-bearing design decision in this example. Three options:
 1. **`require` for admission gate, invariants govern standing claims only.** Chosen here. Decisions check standing at admission time; once admitted they are locked in; revocation does not invalidate them.
 2. *Cascading retraction.* Invariant ties decisions to standing; revoke must also retract every dependent decision. Historical decisions are not preserved. Rejected: contradicts the design goal that revocation be lossless on history.
 3. *Decision-standing snapshot.* Decision claim records the specific `grant_id` it relied on; invariant says decision implies snapshot pins to a real `StandingGrantedBy` in history. More complex; would prove a deeper claims-about-claims-about-claims pattern. Deferred until a future example needs it.
+
+### Standing is generic over what is being stood up
+
+The `grant_standing` transformation will admit `AdmissibleFor(any_subject, any_purpose)` even if the named subject has no underlying claim in state — the test `cannot_admit_decision_without_iv` shows standing being granted on `ver_999` while no `IndependentlyVerifiedRevenue(_, _, _, ver_999)` exists. This is intentional. `AdmissibleFor(claim_id, purpose)` is a generic standing relation: the same shape applies to verifications, journal entries, curve snapshots, audit artefacts, valuation reports, and other claim kinds we may add later. The runtime has no way today to know which predicate a given subject is meant to identify, so it cannot enforce "this subject names a real verification" at standing-grant time.
+
+The responsibility is pushed one layer down: each decision transformation requires the *specific underlying claim shape* it relies on (here, `IndependentlyVerifiedRevenue(asset, period, amount, verification_id)`). A decision against a stood-up-but-non-existent verification fails at admission, not at the standing grant.
+
+A future typed-predicate or claim-identity affordance — declaring that a predicate's *n*th argument is a subject identifying a specific claim kind — would let `grant_standing` reject "standing on a verification id that names nothing" at grant time, not at decision time. Until then, generic standing is the honest position.
 
 ### Three things deliberately not in this example
 
