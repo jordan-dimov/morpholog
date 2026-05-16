@@ -24,6 +24,8 @@ The line is not "core vs application." It is **governed truth vs everything else
 
 The right question for every proposed feature is: *does this need to be governed, or merely computed?* If it needs to be governed, it becomes a claim and an invariant. If it is merely computed or merely presented, it lives outside and the result — if it carries any legitimacy weight — is admitted back in as a claim with provenance.
 
+A useful sharpening of this line, especially around process-shaped concerns: **workflow orchestration is outside; the legitimacy of each workflow step is inside.** Morpholog does not schedule approvals, route tasks, or own user notifications — that is what message brokers, queues, and workflow engines exist for. But whether a given approval was admitted under the authority and conditions the rules require, whether a step may legitimately follow from the prior admitted state, and what the audit trail says afterwards — those are inside, and they are claims. This distinction protects the project from two opposite mistakes: building Camunda inside Morpholog, and letting workflow middleware bypass Morpholog's legitimacy check.
+
 ## The expansion principle
 
 > **Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.**
@@ -40,9 +42,9 @@ This single rule subsumes a large family of concepts that other systems implemen
 | Permissions / approvals / authority | `HasRole(actor, role)`, `ApprovalAuthorityFor(actor, threshold)` — claims |
 | Temporal qualification (event / effective / known time) | `OccurredOn(subject, date)`, `EffectiveFor(subject, period)`, `KnownAsOf(subject, time)` — claims |
 
-This is a **discovery, not an extension.** Morpholog does not need seven new subsystems to govern these concerns. It already has the primitive. The expansion is in vocabulary (which predicates exist and what they mean) and in language affordances that keep claim-vocabulary tractable at scale — not in new mechanisms.
+This is a **modelling discovery, not a licence to add seven subsystems.** Morpholog already has the core primitive — admitted claims governed by invariants — and the categories above are *ontologically located* in that primitive, not *implementationally solved* by it. Several of them will still require carefully designed language affordances and real runtime work (derived-claim materialisation, as-of evaluation strategies, indexing, invalidation, provenance bookkeeping). The discipline is that any new support must serve the claim/invariant model rather than becoming an independent subsystem alongside it.
 
-The corollary: feature proposals that introduce a new *subsystem* (a workflow engine, an IAM module, a BI layer, a projection framework as a separate abstraction) should be re-examined first as proposals to introduce a new *claim vocabulary*. Most of them collapse.
+The corollary: feature proposals that introduce a new *subsystem* (a workflow engine, an IAM module, a BI layer, a projection framework as a separate abstraction) should be re-examined first as proposals to introduce a new *claim vocabulary* and, where genuinely necessary, a small, claim-serving runtime affordance. Most of them collapse along that axis.
 
 ## What the language actually needs
 
@@ -84,6 +86,8 @@ This single construct subsumes:
 
 Derived claims are the answer to "how does Morpholog own the read side without becoming a query engine?" — by making the read side a governed artefact rather than a free query surface.
 
+Derived claims are a **candidate affordance, not yet a committed design.** Their exact semantics — what may appear on the right-hand side, when materialisation is required vs optional, how invalidation propagates, how provenance is recorded — must be forced by worked examples (especially Examples 4 and 5 on the roadmap below) before parser or runtime support is locked in.
+
 ### 3. As-of, as a single operator
 
 The audit log already records every transition with a UUIDv7 transition id and timestamp. One operator — `state at T` (or `as of t`) — lets any invariant or derived claim be evaluated against the state that existed at any prior transition.
@@ -95,7 +99,7 @@ This single primitive collapses the four temporal notions that ETRM and accounti
 - **Effective time** — modelled as a claim `EffectiveFor(subject, period)`.
 - **Knowledge time** — the `as of T` operator, evaluated against the audit log.
 
-No new columns. No bitemporal table schemas. Just claims about time plus one operator that already has all the data it needs.
+No bitemporal schema is assumed at the modelling level. The v0 audit log already contains enough information to define as-of semantics by replay; performance may later require snapshots or materialised histories, but those are *implementation strategies* rather than *semantic primitives*. The semantics is "evaluate against the state that existed at T"; how to do that efficiently is a separate, contained question.
 
 ### 4. Actor context on transformations
 

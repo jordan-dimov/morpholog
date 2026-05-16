@@ -28,7 +28,7 @@ State itself is not a soup of mutable rows. It is a set of **claims**: typed ass
 
 The wording matters. A claim is not "the truth" — it is an *admitted assertion*, with a recorded provenance. The optimiser may claim a battery earned £100k of revenue this month, the independent verifier may claim £91.7k, the bank may recognise £92k for debt-service coverage, the owner may expect £110k. Conventional systems collapse these into a single mutable status (often a lie). Morpholog preserves them all and lets invariants decide which claims may be used for which purposes.
 
-This single shift — *invariants decide; transformations are the only mover; state is a set of admitted claims with provenance, not a snapshot of mutable truth* — turns out to be enough to make most of the failure modes above structurally impossible.
+This single shift — *invariants decide; transformations are the only mover; state is a set of admitted claims with provenance, not a snapshot of mutable truth* — turns out to make the legitimacy-bearing versions of the failures above much harder to produce, and in well-modelled cases structurally impossible. It does not, of course, prevent every kind of failure a business system can have: bad inputs, faulty integrations, human misuse, and missing rules will still bite. What it removes is the specific class of failure in which *admitted state itself is illegitimate under the rules the system claims to enforce*.
 
 ## What this looks like in three domains
 
