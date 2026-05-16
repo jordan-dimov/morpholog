@@ -49,6 +49,10 @@ The load-bearing detail is in `correct_independent_verification`: when the verif
 
 ## How to run it
 
+The same scenario is proven at two layers — in-memory through the sync kernel, and durably through the PostgreSQL adapter.
+
+### In-memory (sync kernel)
+
 ```bash
 cargo test -p morpholog-core full_restatement_chain
 ```
@@ -69,6 +73,20 @@ No `CurrentBankRecognition(asset_a, p, rec_001)`. No metadata anywhere.
 
 There is also a more focused test, `correct_independent_verification_retracts_dependent_current_pointer`, that isolates the load-bearing primitive: a single verifier correction against a pre-state that already has a current bank pointer. It verifies the staged retract happens and the historical recognition survives.
 
+### Durable (PostgreSQL adapter)
+
+```bash
+DATABASE_URL=postgres:///morpholog_dev \
+  cargo test -p morpholog-postgres --test integration -- --test-threads=1 revenue_restatement correct_verification
+```
+
+Two integration tests in `crates/morpholog-postgres/tests/integration.rs`:
+
+- `revenue_restatement_full_chain_preserves_history_and_moves_pointer` — the full four-step chain (admit → recognise → correct → restate), end-to-end through `propose_against_pg`. Verifies all seven final claims are in `morpholog.claims`, four audit rows are recorded, four outbox intents are enqueued in causal order, the `CurrentBankRecognition(_, _, rec_001)` pointer is gone, and the historical `BankRecognisedRevenue(92, rec_001)` survives.
+- `correct_verification_with_no_prior_rejects_and_writes_nothing` — a `correct_independent_verification` call with no matching prior verification fails its `require` and leaves all three tables empty.
+
+This is the example that proves the *contested legitimacy* philosophy survives the durable boundary, not just the in-memory kernel: historical claims persist across PostgreSQL commits, current-standing pointers move via retraction in one atomic transaction, and supersession lineage is recorded as ordinary claims.
+
 ---
 
 ## Design notes
@@ -88,4 +106,4 @@ Three things are deliberately deferred:
 
 1. **Cascading retraction.** `correct_independent_verification` retracts the dependent `CurrentBankRecognition`. If many predicates eventually depend on a given verification, the cascade grows. We'll need to decide whether such cascades stay as explicit retractions in transformation bodies or get derived automatically — probably the former until a pattern repeats three times.
 2. **Cross-authority coupling.** The verifier's correction transformation "knows about" the bank's pointer structure. The coupling is structural, not authority-based: transformations are not owned by an authority, they are system-level transitions.
-3. **Read-side.** "What is the current bank-recognised revenue for asset_a in 2026-04?" is a join over `CurrentBankRecognition` and `BankRecognisedRevenue` matching `recognition_id`. We have not addressed how reads work yet. The example shows they will be join-heavy.
+3. **Read-side.** "What is the current bank-recognised revenue for asset_a in 2026-04?" is a join over `CurrentBankRecognition` and `BankRecognisedRevenue` matching `recognition_id`. We have not built read-side machinery yet. The disciplined direction is *derived claims* — a first-class declaration of "this claim is true iff this expression over admitted claims is true, recomputable, materialisable, with provenance" — rather than an ad-hoc query DSL. The framing lives in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md); the example will be locked in by a third worked example focused on claim *standing* and admissibility-for-purpose.
