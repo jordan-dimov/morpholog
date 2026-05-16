@@ -11,10 +11,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{
-    Claim, ClaimInstance, EvalValue, Expr, Intent, IntentInstance, Invariant, Stmt, Term,
-    Transformation,
-};
+use morpholog_core::examples::settlement_netting;
+use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{PgProposalOutcome, compute_idempotency_key, propose_against_pg};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -76,172 +74,6 @@ fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
     }
 }
 
-// ============================================================
-// Settlement-netting IR
-//
-// TODO: extract these to a `pub mod examples` in morpholog-core so
-// morpholog-core's own tests and these integration tests can share
-// the constructors. Duplicated here for now to keep the PG-adapter
-// PR focused on persistence.
-// ============================================================
-
-fn net_settlement_has_lines() -> Invariant {
-    let var = |s: &str| Term::Var(s.to_string());
-    Invariant {
-        name: "net_settlement_has_lines".to_string(),
-        version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "NetSettlement".to_string(),
-                args: vec![var("net"), Term::Wildcard, Term::Wildcard, Term::Wildcard],
-            }),
-            right: Box::new(Expr::Exists {
-                binding: "line".to_string(),
-                body: Box::new(Expr::Claim {
-                    predicate: "SettlementLine".to_string(),
-                    args: vec![var("line"), var("net"), Term::Wildcard],
-                }),
-            }),
-        },
-    }
-}
-
-fn net_amount_equals_lines() -> Invariant {
-    let var = |s: &str| Term::Var(s.to_string());
-    Invariant {
-        name: "net_amount_equals_lines".to_string(),
-        version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "NetSettlement".to_string(),
-                args: vec![var("net"), Term::Wildcard, Term::Wildcard, var("amount")],
-            }),
-            right: Box::new(Expr::Eq(
-                Box::new(Expr::Term(var("amount"))),
-                Box::new(Expr::Sum {
-                    value: var("x"),
-                    binding: "x".to_string(),
-                    body: Box::new(Expr::Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![Term::Wildcard, var("net"), var("x")],
-                    }),
-                }),
-            )),
-        },
-    }
-}
-
-fn no_double_netting() -> Invariant {
-    let var = |s: &str| Term::Var(s.to_string());
-    Invariant {
-        name: "no_double_netting".to_string(),
-        version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "SettlementLine".to_string(),
-                args: vec![var("line"), var("net"), Term::Wildcard],
-            }),
-            right: Box::new(Expr::Not(Box::new(Expr::Exists {
-                binding: "other".to_string(),
-                body: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![var("line"), var("other"), Term::Wildcard],
-                    },
-                    Expr::Neq(var("other"), var("net")),
-                ])),
-            }))),
-        },
-    }
-}
-
-fn create_net_settlement() -> Transformation {
-    let var = |s: &str| Term::Var(s.to_string());
-    Transformation {
-        name: "create_net_settlement".to_string(),
-        parameters: vec![
-            "party_a".to_string(),
-            "party_b".to_string(),
-            "lines".to_string(),
-        ],
-        body: vec![
-            Stmt::Require(Expr::Forall {
-                binding: "line".to_string(),
-                source: Box::new(Expr::In(var("line"), var("lines"))),
-                body: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "ApprovedSettlementLine".to_string(),
-                        args: vec![var("line")],
-                    },
-                    Expr::Claim {
-                        predicate: "Between".to_string(),
-                        args: vec![var("line"), var("party_a"), var("party_b")],
-                    },
-                    Expr::Not(Box::new(Expr::Claim {
-                        predicate: "Netted".to_string(),
-                        args: vec![var("line")],
-                    })),
-                ])),
-            }),
-            Stmt::LetNewSubject {
-                name: "net".to_string(),
-            },
-            Stmt::Let {
-                name: "amount".to_string(),
-                value: Expr::Sum {
-                    value: var("x"),
-                    binding: "x".to_string(),
-                    body: Box::new(Expr::And(vec![
-                        Expr::In(var("line"), var("lines")),
-                        Expr::Claim {
-                            predicate: "LineAmount".to_string(),
-                            args: vec![var("line"), var("x")],
-                        },
-                    ])),
-                },
-            },
-            Stmt::Assert(Claim {
-                predicate: "NetSettlement".to_string(),
-                args: vec![var("net"), var("party_a"), var("party_b"), var("amount")],
-            }),
-            Stmt::For {
-                binding: "line".to_string(),
-                collection: Expr::Term(var("lines")),
-                body: vec![
-                    Stmt::Let {
-                        name: "amt".to_string(),
-                        value: Expr::ValueOf {
-                            predicate: "LineAmount".to_string(),
-                            args: vec![var("line"), Term::Wildcard],
-                            default: None,
-                        },
-                    },
-                    Stmt::Assert(Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![var("line"), var("net"), var("amt")],
-                    }),
-                    Stmt::Assert(Claim {
-                        predicate: "Netted".to_string(),
-                        args: vec![var("line")],
-                    }),
-                ],
-            },
-            Stmt::Emit(Intent {
-                name: "NetSettlementCreated".to_string(),
-                args: vec![var("net")],
-            }),
-        ],
-    }
-}
-
-fn all_netting_invariants() -> Vec<Invariant> {
-    vec![
-        net_settlement_has_lines(),
-        net_amount_equals_lines(),
-        no_double_netting(),
-    ]
-}
-
 fn netting_pre_state_claims() -> Vec<ClaimInstance> {
     vec![
         claim("ApprovedSettlementLine", vec![subj("l1")]),
@@ -279,9 +111,9 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -356,9 +188,9 @@ async fn require_failure_writes_nothing() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -406,9 +238,9 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -547,9 +379,9 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
