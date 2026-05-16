@@ -41,7 +41,7 @@ Think of Morpholog right now as a **governed-state runtime**, not a programming 
 ```bash
 cargo test -p morpholog-core --all-targets                        # 26 tests, in-memory
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 8 tests, durable
+  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 10 tests, durable
 ```
 
 - **`morpholog-core`** — synchronous in-memory semantic kernel. IR types (Invariant, Transformation, Stmt, Expr, Term, Value, Claim, Intent), the evaluator, and `propose()` which builds a candidate state, runs every active invariant against it, and returns `Accepted` or `Rejected`.
@@ -72,12 +72,14 @@ Two worked examples drive everything:
 
 ## Next
 
-A durable proof for the revenue-restatement example via the PostgreSQL adapter — running the full admit → recognise → correct → restate chain through `propose_against_pg` and verifying that historical claims remain, the current-standing pointer moves, and supersession lineage persists. The settlement-netting PG tests proved transactional correctness; the revenue-restatement PG test will prove the philosophy.
+A third worked example focused on **claim standing** — when an admitted claim is *admissible for a given purpose*, and how that standing is acquired, transferred, and lost without mutating the claim itself. Settlement netting proved transactional correctness; revenue restatement proved that history survives correction; the next example should push on the standing-as-claims-about-claims pattern hard enough to either confirm it generalises or surface what's missing.
+
+Parser, CLI, migrations framework, outbox worker, and read-side projections remain deliberately deferred — the next semantic frontier comes before more plumbing.
 
 ## Requirements
 
 - Rust 1.95+ (install via [rustup](https://rustup.rs))
-- PostgreSQL 17+ — **no other database is or will be supported.** Morpholog uses PostgreSQL-specific features (SSI for SERIALIZABLE, JSONB with CHECK constraints, JSONB path functions) without portability apologies.
+- PostgreSQL 17+. Morpholog v0 targets PostgreSQL only and deliberately uses PostgreSQL-specific features (SSI for SERIALIZABLE, JSONB with CHECK constraints, JSONB path functions) without portability apologies. Database portability is not a goal at this stage.
 
 ## Design tenets
 
