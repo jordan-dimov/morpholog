@@ -1,6 +1,6 @@
 # Morpholog: Scope and Ambition
 
-Status: design doctrine. Companion to [`runtime-semantics.md`](runtime-semantics.md).
+Status: design doctrine. Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`forced-by-examples.md`](forced-by-examples.md), which records (retrospectively) which specific examples forced which design decisions.
 
 This document fixes what Morpholog is *for*, what it should grow into, and — equally important — what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
 
