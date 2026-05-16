@@ -78,6 +78,11 @@ pub enum Value {
     /// Arbitrary-precision decimal stored as its exact source string.
     /// Parsing into a numeric type is the evaluator's concern, not the IR's.
     Decimal(String),
+    /// Opaque subject identifier embedded as a literal in the IR.
+    /// Lets predicates and requires reference named constants
+    /// (purposes, statuses, named authorities, etc.) without forcing
+    /// every transformation to take them as extra parameters.
+    Subject(String),
 }
 
 /// A Claim is an admitted assertion candidate — a statement that may be
@@ -313,6 +318,10 @@ fn unify_args(patterns: &[Term], values: &[EvalValue], base: &Bindings) -> Optio
                     _ => return None,
                 }
             }
+            Term::Literal(Value::Subject(s)) => match v {
+                EvalValue::Subject(id) if id == s => {}
+                _ => return None,
+            },
         }
     }
     Some(b)
@@ -442,6 +451,7 @@ fn resolve_term(t: &Term, bindings: &Bindings) -> Result<EvalValue, EvalError> {
                 .map_err(|_| EvalError::TypeMismatch(format!("invalid decimal: {s}")))?;
             Ok(EvalValue::Decimal(d))
         }
+        Term::Literal(Value::Subject(s)) => Ok(EvalValue::Subject(s.clone())),
     }
 }
 
@@ -749,6 +759,37 @@ mod tests {
             Term::Literal(v),
             Term::Literal(Value::Decimal("1250.75".to_string()))
         );
+    }
+
+    #[test]
+    fn subject_literal_constructs_and_resolves() {
+        let v = Value::Subject("bank_debt_service".to_string());
+        assert_eq!(
+            Term::Literal(v),
+            Term::Literal(Value::Subject("bank_debt_service".to_string()))
+        );
+        let resolved = resolve_term(
+            &Term::Literal(Value::Subject("bank_debt_service".to_string())),
+            &Bindings::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved,
+            EvalValue::Subject("bank_debt_service".to_string())
+        );
+    }
+
+    #[test]
+    fn subject_literal_unifies_with_matching_subject_arg() {
+        let pattern = vec![Term::Literal(Value::Subject("p1".to_string()))];
+        let value = vec![EvalValue::Subject("p1".to_string())];
+        assert!(unify_args(&pattern, &value, &Bindings::new()).is_some());
+
+        let mismatch = vec![EvalValue::Subject("p2".to_string())];
+        assert!(unify_args(&pattern, &mismatch, &Bindings::new()).is_none());
+
+        let wrong_kind = vec![EvalValue::Decimal(Decimal::new(1, 0))];
+        assert!(unify_args(&pattern, &wrong_kind, &Bindings::new()).is_none());
     }
 
     #[test]
