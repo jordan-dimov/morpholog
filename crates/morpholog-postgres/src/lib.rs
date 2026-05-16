@@ -121,13 +121,20 @@ pub async fn propose_against_pg(
     }
 }
 
+/// Predicate: is this SQLSTATE the PostgreSQL serialization-failure
+/// code (`40001`) returned by SSI when a SERIALIZABLE transaction
+/// cannot be linearised? Extracted as a pure function so the magic
+/// string can be unit-tested without mocking `sqlx::DatabaseError`.
+fn is_serialization_failure_code(code: Option<&str>) -> bool {
+    code == Some("40001")
+}
+
 /// Maps a `sqlx::Error` to a [`PgError`], recognising SQLSTATE 40001
 /// (PostgreSQL SSI serialization failure) as the distinct retryable
 /// variant. All other errors propagate as [`PgError::Database`].
 fn classify(err: sqlx::Error) -> PgError {
-    if let Some(db_err) = err.as_database_error()
-        && db_err.code().as_deref() == Some("40001")
-    {
+    let code = err.as_database_error().and_then(|e| e.code());
+    if is_serialization_failure_code(code.as_deref()) {
         return PgError::SerializationFailure;
     }
     PgError::Database(err)
@@ -280,6 +287,17 @@ async fn write_accepted(
 /// prevents duplicate outbox rows under retry/redelivery mechanics — not
 /// duplicate business events, which would require an idempotency key
 /// derived from the inbound request.
+///
+/// **Duplicate intents within one transformation:** if a transformation
+/// emits the same intent (same `name` and `args`) twice, both rows will
+/// share an idempotency key and the second `INSERT` will violate the
+/// `outbox.idempotency_key` UNIQUE constraint — surfacing as a
+/// `PgError::Database` and rolling back the whole transformation. This
+/// is intentional for v0: identical duplicate intents are almost always
+/// a bug and should not silently produce two outbox rows. If genuinely
+/// distinct same-shaped intents are needed later, the `Intent` type
+/// will gain a discriminator field (logical key, purpose, sequence) and
+/// this docstring should be updated.
 pub fn compute_idempotency_key(
     transition_id: Uuid,
     intent: &IntentInstance,
@@ -292,4 +310,27 @@ pub fn compute_idempotency_key(
     hasher.update(b"\0");
     hasher.update(&args_bytes);
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_serialization_failure_code;
+
+    /// Pins the SQLSTATE used to identify PostgreSQL SSI serialization
+    /// failures. If anyone changes the magic string `"40001"` this test
+    /// fails — the retry contract cannot regress silently.
+    #[test]
+    fn sqlstate_40001_classified_as_serialization_failure() {
+        assert!(is_serialization_failure_code(Some("40001")));
+    }
+
+    /// Negative cases: other SQLSTATEs and the absence of a code must not
+    /// be treated as retryable serialization failures.
+    #[test]
+    fn other_sqlstates_are_not_serialization_failures() {
+        assert!(!is_serialization_failure_code(None));
+        assert!(!is_serialization_failure_code(Some("40000")));
+        assert!(!is_serialization_failure_code(Some("23505"))); // unique_violation
+        assert!(!is_serialization_failure_code(Some("40P01"))); // deadlock_detected
+    }
 }

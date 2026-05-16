@@ -464,6 +464,81 @@ fn idempotency_key_matches_golden_hash() {
     assert_eq!(actual, expected);
 }
 
+fn retract_marker_transformation() -> Transformation {
+    let var = |s: &str| Term::Var(s.to_string());
+    Transformation {
+        name: "retract_marker".to_string(),
+        parameters: vec!["subject".to_string()],
+        body: vec![Stmt::Retract {
+            predicate: "Marker".to_string(),
+            args: vec![var("subject")],
+        }],
+    }
+}
+
+#[tokio::test]
+async fn retraction_deletes_targeted_row_and_preserves_others() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    insert_pre_state(
+        &pool,
+        vec![
+            claim("Marker", vec![subj("x")]),
+            claim("Marker", vec![subj("y")]),
+            claim("Marker", vec![subj("z")]),
+        ],
+    )
+    .await;
+
+    let outcome = propose_against_pg(
+        &pool,
+        &retract_marker_transformation(),
+        vec![subj("y")],
+        &[],
+    )
+    .await
+    .expect("propose_against_pg should not error");
+
+    let PgProposalOutcome::Committed {
+        asserted_claims,
+        retracted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("expected Committed, got {outcome:?}");
+    };
+
+    assert!(asserted_claims.is_empty());
+    assert_eq!(retracted_claims.len(), 1);
+    assert_eq!(retracted_claims[0].predicate, "Marker");
+    assert_eq!(retracted_claims[0].args, vec![subj("y")]);
+    assert!(emitted_intents.is_empty());
+
+    // Only Marker(y) should have been deleted.
+    let remaining: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT predicate_name, arguments FROM morpholog.claims
+         WHERE predicate_name = 'Marker' ORDER BY arguments::text",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        remaining.len(),
+        2,
+        "Marker(y) deleted, Marker(x) and Marker(z) preserved"
+    );
+
+    let preserved_args: Vec<EvalValue> = remaining
+        .iter()
+        .map(|(_, v)| serde_json::from_value(v.clone()).unwrap())
+        .map(|args: Vec<EvalValue>| args.into_iter().next().unwrap())
+        .collect();
+    assert!(preserved_args.contains(&subj("x")));
+    assert!(preserved_args.contains(&subj("z")));
+    assert!(!preserved_args.contains(&subj("y")));
+}
+
 #[tokio::test]
 async fn audit_jsonb_columns_round_trip_through_codec() {
     let pool = test_pool().await;
