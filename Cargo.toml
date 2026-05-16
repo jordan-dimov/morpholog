@@ -9,5 +9,13 @@ rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jdimov/morpholog"
 
+[workspace.dependencies]
+rust_decimal = "1"
+uuid = { version = "1", features = ["v7"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
