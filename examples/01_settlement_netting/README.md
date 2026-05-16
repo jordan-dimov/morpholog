@@ -49,8 +49,11 @@ createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --test integration -- --test-threads=1 settlement_netting
+  cargo test -p morpholog-postgres --test integration -- --test-threads=1 \
+    settlement_netting require_failure invariant_violation
 ```
+
+The three filter words (`settlement_netting`, `require_failure`, `invariant_violation`) each match one of the three settlement-related tests below; cargo's test runner includes any test whose name contains any of the listed substrings.
 
 Three integration tests in `crates/morpholog-postgres/tests/integration.rs`:
 

@@ -103,10 +103,17 @@ DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 10 tests, durable
 ```
 
+The durable suite requires a PostgreSQL 17+ database with the canonical schema (`crates/morpholog-core/sql/schema.sql`) applied. First-time setup:
+
+```bash
+createdb morpholog_dev
+psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
+```
+
 Crates:
 
 - **`morpholog-core`** — synchronous, pure semantic kernel. IR types (Invariant, Transformation, Claim, etc.), the evaluator, and `propose()`, which builds a candidate state, runs every active invariant against it, and returns `Accepted` or `Rejected`. No I/O.
-- **`morpholog-postgres`** — async adapter. `propose_against_pg()` opens one PostgreSQL transaction at `SERIALIZABLE` isolation, loads the relevant claims, calls the sync kernel, and either rolls back atomically (`Rejected`) or commits claim mutations, the audit row, and outbox intents in one transaction (`Committed`).
+- **`morpholog-postgres`** — async adapter. `propose_against_pg()` opens one PostgreSQL transaction at `SERIALIZABLE` isolation, loads all admitted claims into an in-memory `State`, calls the sync kernel, and either rolls back atomically (`Rejected`) or commits claim mutations, the audit row, and outbox intents in one transaction (`Committed`). Scoped loading is a future optimisation, not a current capability.
 - **`morpholog-cli`** — version-printer skeleton. Subcommands wait on surface syntax.
 
 Canonical schema: [`crates/morpholog-core/sql/schema.sql`](crates/morpholog-core/sql/schema.sql) — three tables (`claims`, `audit`, `outbox`).

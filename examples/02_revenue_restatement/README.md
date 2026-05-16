@@ -75,9 +75,19 @@ There is also a more focused test, `correct_independent_verification_retracts_de
 
 ### Durable (PostgreSQL adapter)
 
+First-time setup (skip if the schema is already applied):
+
+```bash
+createdb morpholog_dev
+psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
+```
+
+Then:
+
 ```bash
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --test integration -- --test-threads=1 revenue_restatement correct_verification
+  cargo test -p morpholog-postgres --test integration -- --test-threads=1 \
+    revenue_restatement correct_verification
 ```
 
 Two integration tests in `crates/morpholog-postgres/tests/integration.rs`:
