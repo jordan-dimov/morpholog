@@ -19,6 +19,15 @@ use std::str::FromStr;
 
 pub mod examples;
 
+/// A named, versioned rule that must hold over admitted state. Invariants
+/// are evaluated against the candidate state produced by a
+/// [`Transformation`]; if any active invariant fails, the transformation is
+/// rejected atomically.
+///
+/// The `version` field is carried from day one (v0 is `version: 1`
+/// everywhere) so that audit rows can record exactly which invariant
+/// version-set governed each committed transition. Adding versioning later
+/// would be painful; the empty cost of carrying it now is cheap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invariant {
     pub name: String,
@@ -26,6 +35,17 @@ pub struct Invariant {
     pub body: Expr,
 }
 
+/// Expression nodes used inside invariant bodies, transformation requires,
+/// and let-bindings. An `Expr` is evaluated against a state and a set of
+/// variable bindings to yield either a boolean / truth-witness (when used
+/// as a predicate) or a value (when used in value position).
+///
+/// The variants are deliberately narrow: predicate composition (`And`,
+/// `Not`, `Implies`, `Exists`, `Forall`), claim and inequality matching
+/// (`Claim`, `Neq`, `Eq`), one bounded aggregation (`Sum`), one collection
+/// primitive (`In`), one functional-lookup primitive (`ValueOf`), and
+/// `Term`-as-value lifting. Anything that cannot be expressed within this
+/// set is, by design, not yet a runtime concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Claim {
@@ -66,6 +86,10 @@ pub enum Expr {
     },
 }
 
+/// A positional argument in a claim, intent, or expression. A `Term` is
+/// either a variable to be bound by the surrounding context, a wildcard
+/// that matches anything, or a literal constant. Resolved through
+/// `Bindings` during evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(String),
@@ -73,6 +97,10 @@ pub enum Term {
     Literal(Value),
 }
 
+/// Literal constants embeddable in IR `Term`s. Distinct from `EvalValue`
+/// (which is a runtime value, including booleans and collections that
+/// cannot appear as IR literals). The variants are deliberately narrow:
+/// each was added when a worked example forced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     /// Arbitrary-precision decimal stored as its exact source string.
@@ -95,12 +123,24 @@ pub struct Claim {
     pub args: Vec<Term>,
 }
 
+/// An outbound effect declared by a transformation's `emit` statement.
+/// Intents are *staged* during transformation execution and *enqueued*
+/// to the outbox at commit time; they are never sent during the
+/// transaction itself.
+///
+/// Distinct from [`IntentInstance`], which is the resolved (no-variables)
+/// form ready to be enqueued.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Intent {
     pub name: String,
     pub args: Vec<Term>,
 }
 
+/// One step inside a transformation body. Statements run in declared
+/// order against a binding context; `Require` failures and `Retract` of
+/// non-existent claims short-circuit the transformation, while `Assert`,
+/// `Emit`, `Let`, `LetNewSubject`, and `For` extend the staged outcome
+/// or the binding context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Require(Expr),
@@ -128,6 +168,15 @@ pub enum Stmt {
     Emit(Intent),
 }
 
+/// A named, parameterised proposal to change admitted state. A
+/// transformation is the only path by which governed state may change.
+/// Its body is a sequence of [`Stmt`]s; when invoked via [`propose`],
+/// the body executes against a snapshot of pre-state, stages assertions
+/// and retractions and intents, and produces an [`Outcome`] that the
+/// caller can either commit or discard.
+///
+/// Reads inside a transformation always see the *pre-transformation*
+/// snapshot. Writes are staged and become real only at commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transformation {
     pub name: String,
@@ -174,20 +223,46 @@ pub struct ClaimInstance {
     pub args: Vec<EvalValue>,
 }
 
+/// The admitted state of the runtime: a set of grounded [`ClaimInstance`]s
+/// against which invariants are evaluated and transformations are
+/// proposed. State is set-valued: identity is `(predicate, args)`. The
+/// PG adapter persists this set as rows in `morpholog.claims`; this
+/// in-memory representation is what the kernel evaluates against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct State {
     pub claims: Vec<ClaimInstance>,
 }
 
+/// Variable bindings used during expression evaluation and
+/// transformation execution. Maps variable name to resolved
+/// [`EvalValue`].
 pub type Bindings = HashMap<String, EvalValue>;
 
+/// Errors raised by the evaluator and the transformation runner. These
+/// are distinct from *lawful business rejection* (which is reported as
+/// [`Outcome::Rejected`]); an `EvalError` indicates that an expression
+/// or transformation was structurally ill-formed and cannot be run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalError {
+    /// A variable was referenced before being bound by a parameter,
+    /// `let`, `for`, or `exists` binding.
     UnboundVariable(String),
+    /// An expression demanded an operand of one kind but received
+    /// another (e.g. arithmetic on a subject, membership on a non-
+    /// collection, etc.).
     TypeMismatch(String),
+    /// An expression that must be predicate-shaped (boolean-valued)
+    /// was used in a position that cannot interpret it.
     NotPredicate,
+    /// An expression that must be value-producing was used in a
+    /// position that requires a value (e.g. as a `let` right-hand side
+    /// or a sum target).
     NotValue,
+    /// `Expr::ValueOf(predicate, args)` matched zero claims and no
+    /// `default` was supplied.
     ValueOfZeroMatches(String),
+    /// `Expr::ValueOf(predicate, args)` matched more than one claim;
+    /// the functional-lookup contract requires exactly one match.
     ValueOfMultipleMatches(String),
 }
 
