@@ -11,7 +11,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::settlement_netting;
+use morpholog_core::examples::{revenue_restatement, settlement_netting};
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{PgProposalOutcome, compute_idempotency_key, propose_against_pg};
 use rust_decimal::Decimal;
@@ -432,4 +432,242 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     let intents: Vec<IntentInstance> = serde_json::from_value(intents_json).unwrap();
     assert_eq!(intents.len(), 1);
     assert_eq!(intents[0].name, "NetSettlementCreated");
+}
+
+// ============================================================
+// Revenue restatement (Example 2) — durable proof of the
+// contested-legitimacy model through propose_against_pg.
+//
+// Mirrors the in-memory test
+// `full_restatement_chain_preserves_history_and_updates_pointer`
+// in crates/morpholog-core/src/lib.rs, but runs every step through
+// the PostgreSQL adapter and inspects the durable claims/audit/
+// outbox rows directly.
+// ============================================================
+
+fn asset() -> EvalValue {
+    subj("asset_a")
+}
+
+fn period() -> EvalValue {
+    subj("p_2026_04")
+}
+
+async fn count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(&format!("SELECT COUNT(*) FROM morpholog.{table}"))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> bool {
+    let args_json = serde_json::to_value(args).unwrap();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM morpholog.claims
+         WHERE predicate_name = $1 AND arguments = $2",
+    )
+    .bind(predicate)
+    .bind(args_json)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    n > 0
+}
+
+#[tokio::test]
+async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = revenue_restatement::all_invariants();
+
+    // 1. Admit initial independent verification at 92.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::admit_independent_verification(),
+        vec![asset(), period(), dec(92), subj("ver_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 1 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 1 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
+
+    // 2. Bank recognises 92, rec_001. I1 holds against the current verification.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::recognise_bank_revenue(),
+        vec![asset(), period(), dec(92), subj("rec_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 2 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 2 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "BankRevenueRecognised");
+
+    // 3. Verifier corrects to 91 (ver_002 supersedes ver_001). The verifier's
+    //    transformation body also retracts CurrentBankRecognition, so I1 is
+    //    vacuously satisfied (no current pointer remains until the bank
+    //    restates).
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::correct_independent_verification(),
+        vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 3 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        retracted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("step 3 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(retracted_claims.len(), 1);
+    assert_eq!(retracted_claims[0].predicate, "CurrentBankRecognition");
+    assert_eq!(emitted_intents[0].name, "VerificationCorrected");
+
+    // 4. Bank restates to 91 with rec_002. New current pointer; new Supersedes.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::restate_bank_revenue(),
+        vec![asset(), period(), dec(91), subj("rec_002"), subj("rec_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 4 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 4 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "BankRevenueRestated");
+
+    // Final DB shape: 2 IV + 2 BR + 2 Supersedes + 1 Current = 7 claims.
+    assert_eq!(count(&pool, "claims").await, 7);
+    assert_eq!(count(&pool, "audit").await, 4);
+    assert_eq!(count(&pool, "outbox").await, 4);
+
+    // Historical IV remains; new IV present; supersession recorded.
+    assert!(
+        claim_exists(
+            &pool,
+            "IndependentlyVerifiedRevenue",
+            &[asset(), period(), dec(92), subj("ver_001")],
+        )
+        .await,
+        "historical IV(92, ver_001) must be preserved"
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "IndependentlyVerifiedRevenue",
+            &[asset(), period(), dec(91), subj("ver_002")],
+        )
+        .await
+    );
+    assert!(
+        claim_exists(&pool, "Supersedes", &[subj("ver_002"), subj("ver_001")]).await,
+        "verification lineage must persist"
+    );
+
+    // Historical BR preserved; new BR + supersession recorded.
+    assert!(
+        claim_exists(
+            &pool,
+            "BankRecognisedRevenue",
+            &[asset(), period(), dec(92), subj("rec_001")],
+        )
+        .await,
+        "historical BR(92, rec_001) must be preserved"
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "BankRecognisedRevenue",
+            &[asset(), period(), dec(91), subj("rec_002")],
+        )
+        .await
+    );
+    assert!(
+        claim_exists(&pool, "Supersedes", &[subj("rec_002"), subj("rec_001")]).await,
+        "recognition lineage must persist"
+    );
+
+    // Current pointer moved to rec_002; rec_001 pointer gone.
+    assert!(
+        claim_exists(
+            &pool,
+            "CurrentBankRecognition",
+            &[asset(), period(), subj("rec_002")],
+        )
+        .await,
+        "current pointer must be rec_002"
+    );
+    assert!(
+        !claim_exists(
+            &pool,
+            "CurrentBankRecognition",
+            &[asset(), period(), subj("rec_001")],
+        )
+        .await,
+        "old current pointer must have been retracted"
+    );
+
+    // Outbox carries one intent per committed step, in causal order.
+    let intent_types: Vec<String> =
+        sqlx::query_scalar("SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        intent_types,
+        vec![
+            "IndependentVerificationAdmitted".to_string(),
+            "BankRevenueRecognised".to_string(),
+            "VerificationCorrected".to_string(),
+            "BankRevenueRestated".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn correct_verification_with_no_prior_rejects_and_writes_nothing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // No pre-state: there is no IndependentlyVerifiedRevenue for the
+    // (asset, period, _, prior_verification_id) tuple, so the first
+    // `require` in correct_independent_verification fails. The proposal
+    // must be rejected and leave all three tables empty.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::correct_independent_verification(),
+        vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
+        &revenue_restatement::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
+
+    let PgProposalOutcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(reason.contains("require"), "got reason: {reason}");
+
+    assert_eq!(count(&pool, "claims").await, 0);
+    assert_eq!(count(&pool, "audit").await, 0);
+    assert_eq!(count(&pool, "outbox").await, 0);
 }
