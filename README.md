@@ -1,70 +1,45 @@
 # Morpholog
 
-An experimental runtime for business systems where the rules that decide whether a piece of state is legitimate are enforced by the language itself, not by code somebody remembered to write.
+An experimental runtime for business systems where the rules that decide whether state may be admitted as legitimate are enforced by the language itself, not by code somebody remembered to write.
 
-## The problem it targets
+## What it is
 
-If you have spent any time near finance, trading, accounting, or regulated lending, you will recognise a small family of questions that conventional software answers badly:
+Business software has spent decades trying to make this guarantee from the outside — validation layers, ORM hooks, stored procedures, scheduled reconciliation scripts, periodic audits, end-of-day batch jobs. The result is the kind of failure every operator of a serious business system eventually recognises: the records say one thing, the reports say another, and nobody can explain when the drift started.
 
-- Why doesn't the trial balance match the sub-ledger any more, and when did the drift start?
-- What did we actually believe at 5pm last Tuesday, under the rules in force then?
-- The covenant test said we were compliant in Q2. Was that based on the revenue figure we had then, or on the figure that has since been restated?
-- Who authorised this posting? The workflow log says it was approved, but the approval limit was raised three days later.
-- Can we reproduce the regulatory return we filed last quarter, line by line, from the inputs available at the time?
-- The position report disagrees with the risk system, which disagrees with the back office. Whose number is right?
+Morpholog moves the legitimacy boundary into the language. The runtime is built on three primitives:
 
-These are not seven different problems. They are one problem in seven disguises: **state was treated as legitimate that the system cannot, under explicit rules, justify treating as legitimate.**
+- **Claims** — admitted assertions about subjects, kept with full provenance. State is a set of claims, not a snapshot of mutable rows.
+- **Invariants** — rules over admitted state that must always hold.
+- **Transformations** — the only path by which state may change. A transformation proposes a set of additions, removals, and outbound intents; the runtime evaluates every active invariant against the result; if any fails, the transformation is rejected atomically — no claim is written, no instruction is sent.
 
-Conventional systems leak on this question because the legitimacy boundary is scattered across thousands of lines of validation code, ORM hooks, stored procedures, end-of-day reconciliation scripts, and tribal knowledge in the heads of senior controllers, traders, and risk officers. Morpholog's wager is that this boundary should be **the language itself** — and that once it is, the entire family of failures above becomes much harder to produce.
+There are no entities, no classes, no validators, no reconciliation scripts. The discipline is exact:
 
-## The shift
+> Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.
 
-Morpholog asks you to write only two things:
+That is the entire surface area.
 
-- **Invariants** — rules that must always hold over admitted state. "The debits and credits of a posted journal entry must balance." "A bilateral net settlement must equal the signed sum of its approved underlying lines." "Every confirmed trade must have both counterparty confirmations admitted."
-- **Transformations** — the only path by which admitted state may change. A transformation proposes a set of additions, removals, and outbound intents. The runtime evaluates every active invariant against the resulting candidate state. If any invariant fails, the transformation is rejected atomically — nothing is written, no outbound message is sent.
+## What that means in practice
 
-State itself is not a soup of mutable rows. It is a set of **claims**: typed assertions admitted into governed state under a specific authority, at a specific moment, by a specific transformation.
+Consider any system that needs to answer questions like these:
 
-The wording matters. A claim is not "the truth" — it is an *admitted assertion*, with a recorded provenance. The optimiser may claim a battery earned £100k of revenue this month, the independent verifier may claim £91.7k, the bank may recognise £92k for debt-service coverage, the owner may expect £110k. Conventional systems collapse these into a single mutable status (often a lie). Morpholog preserves them all and lets invariants decide which claims may be used for which purposes.
+- *What did we believe at the close of business last Tuesday, under the rules in force then?*
+- *Why does this report differ from the one we filed three months ago?*
+- *Who authorised this entry, under what limit, and when?*
+- *If the authorisation we relied on was rescinded yesterday, was yesterday's decision still legitimate?*
 
-This single shift — *invariants decide; transformations are the only mover; state is a set of admitted claims with provenance, not a snapshot of mutable truth* — turns out to make the legitimacy-bearing versions of the failures above much harder to produce, and in well-modelled cases structurally impossible. It does not, of course, prevent every kind of failure a business system can have: bad inputs, faulty integrations, human misuse, and missing rules will still bite. What it removes is the specific class of failure in which *admitted state itself is illegitimate under the rules the system claims to enforce*.
+In conventional software these are answered by detective work — searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog they are structured queries over claims, audit rows, and lineage that the runtime is incapable of losing.
 
-## What this looks like in three domains
+Three worked examples in this repository show the pattern in increasing depth:
 
-### Energy trading and settlement
+- [**Bilateral settlement netting**](examples/01_settlement_netting/) — invariants that catch arithmetic and exclusion errors before any state changes.
+- [**Revenue restatement**](examples/02_revenue_restatement/) — historical claims survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims.
+- [**Claim standing**](examples/03_claim_standing/) — the same underlying claim can carry different admissibility for different decisions, granted by different authorities, lost without mutating the claim itself.
 
-Two counterparties have dozens of bilateral settlement lines between them. At month-end the back office produces a single net settlement amount and instructs payment.
+Each is proven both in-memory and durably against PostgreSQL.
 
-In a conventional system, the netting amount and the underlying lines can drift apart: someone edits an approved line after the netting was computed; the same line is included in two different nets by accident; an unapproved line slips in. The discrepancy usually surfaces when the counterparty's settlement team queries the figure, and an apologetic reconciliation begins.
+## A small illustrative example
 
-In Morpholog, *the netting amount equals the signed sum of its approved lines* is an invariant. The transformation that creates a net settlement stages the assertion of the net, the line-to-net links, and the per-line "netted" flags. If any line is already netted, or the computed amount does not match the admitted line amounts, the transformation is rejected — no settlement row is created, no instruction is sent. The audit row records exactly which invariant version checked which lines, so a regulator or counterparty asking "how do you know this number was correct" gets a structured answer rather than a forensic exercise.
-
-The same pattern extends to position limits ("total open exposure to counterparty C must not exceed the credit limit in force at admission time"), REMIT-style reporting obligations, and any rule of the form "this artefact is admissible only if these other claims hold."
-
-### Accounting and period close
-
-Every accounting system has a fundamental invariant: *the debits and credits of a posted journal entry must balance*. Every accounting system also has a second, harder invariant: *once a period is closed, no posting may add to it — except via a controlled restatement that preserves the history of what was filed before.*
-
-The first invariant is usually enforced. The second is usually a polite fiction. Real systems close a period with a flag, then quietly accept "adjusting" entries that bypass the close because finance needs to fix something the auditors found. The original numbers get overwritten; the prior-quarter trial balance silently changes; an external auditor asking "what did we report at the time, and what did we restate to, and why" can only be answered by archaeology.
-
-In Morpholog, period close is a transformation that admits a `PeriodClosed` claim. Ordinary posting transformations require the absence of that claim and are refused after close. Restatement is a separate, governed transformation that admits a new claim about the closed period and records a `Supersedes` link to the prior one. **The original posting is never deleted or edited.** The historical trial balance still resolves correctly. The restatement is fully audited. The two questions an external auditor cares about — *what was filed?* and *what was restated, by whom, when, and why?* — have definite answers that the system cannot misplace.
-
-This is not theoretical. The second canonical worked example in this repository (`examples/02_revenue_restatement/`) proves exactly this pattern, durably, against PostgreSQL.
-
-### Banking and regulated lending
-
-A bank lends against a battery storage asset. The loan covenant requires the debt-service coverage ratio to exceed 1.2 each quarter. The bank computes the ratio from the revenue figure it has independently verified at quarter-end.
-
-In a conventional system, the revenue figure is a row in a database. It changes. It may be restated three months later when an audit finds a meter reading was wrong, or when the optimiser corrects a settlement adjustment. Was the covenant met *as of the quarter-end test*, based on the figure the bank had at the time? Or is it currently in breach, based on the restated figure? Most systems cannot answer this question without a paper trail kept outside the database.
-
-In Morpholog, the bank's recognised revenue is a claim with a transition id. The covenant test result is another claim that cites the specific revenue claim it relied on. When the verifier later admits a corrected revenue claim — and records a `Supersedes` link to the prior one — the historical claim is *not deleted*. The covenant test still cites the figure it actually used. Asking "was the covenant met when we tested it, and what did we believe at the time?" returns a precise answer from the audit log. Separately, the system can compute the answer *under the restated figure* by re-evaluating against the current state. Two different questions, two different answers, neither one a guess.
-
-The same pattern covers ongoing covenant monitoring, regulatory capital reporting, IFRS-9 staging decisions, and any setting where "what did we know, when, and what did we rely on for which decision" is a question that can be put to you by a regulator or a court.
-
-## What the language looks like
-
-Surface syntax is not final. The example below illustrates the *shape* of an invariant and a transformation. The current implementation reads programs as Rust data structures; a parser for the surface syntax is deliberately deferred until the kernel has been pushed harder.
+Surface syntax is not final. The shape:
 
 ```
 invariant net_amount_equals_lines:
@@ -83,61 +58,46 @@ transformation create_net_settlement(party_a, party_b, lines):
     emit NetSettlementCreated(net)
 ```
 
-Note what is and is not in the language: there are no classes, no entities, no services, no ORM, no workflow engine. There are predicates, claims, invariants, transformations, and outbound intents. *Whatever you want to make legitimate, you name as a predicate and admit as a claim. Whatever rules must hold, you write as an invariant. Everything else lives outside.* That is the entire surface area.
+The invariant says what must be true of state. The transformation is the only path by which state may change. If the transformation would produce a state where the invariant does not hold, the runtime refuses to commit it.
 
-## Where Morpholog ends and the rest of your system begins
+## Where Morpholog ends
 
-Morpholog is deliberately not trying to be the language you write a whole business system in. UI, dashboards, market data ingestion, OCR, ML categorisation, pricing engines, valuation models, optimisation solvers, scheduling, search, BI — all of this lives outside Morpholog and uses normal tools. The runtime governs *commit legitimacy*: the question of whether a proposed change to admitted state may be admitted, and what the audit trail says about it afterwards.
+Morpholog is deliberately not the language you write a whole business system in. User interfaces, market data, reports, dashboards, search, machine learning, optimisation — all of this lives outside Morpholog and uses normal tools. What Morpholog owns is the *legitimacy surface*: the part of the system where the question "may this be admitted as legitimate?" must have a definite answer.
 
-Measured in lines of code, Morpholog will always be a minority of a real business system. Measured in **failure modes prevented**, it can be most of what matters. The deeper framing of this — the scope boundary, the ambition ceiling, and how concerns like read-side reporting, lifecycle, provenance, authority, and temporal qualification all collapse to "more claims" rather than "more subsystems" — lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
+Measured in lines of code, that is always a minority of a real system. Measured in failure modes prevented, it can be most of what matters. The deeper framing — what the project is for, what it should grow into, and what it must never become — lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
 
 ---
 
 ## Project status
 
-Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. The two canonical examples — settlement netting and revenue restatement — are proven both in-memory and durably against PostgreSQL. There is no parser, no usable CLI beyond `--version`, and no outbox worker. Those are deliberately deferred; the next semantic frontier (claim *standing* — admissibility-for-purpose) comes before more plumbing.
+Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Three worked examples are proven both in-memory and durably against PostgreSQL. There is no parser, no usable CLI beyond `--version`, and no outbox worker — these are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
 
 ```bash
-cargo test -p morpholog-core --all-targets                              # 26 tests, in-memory
+cargo test -p morpholog-core --all-targets                              # 33 tests, in-memory
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 10 tests, durable
+  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 12 tests, durable
 ```
 
-The durable suite requires a PostgreSQL 17+ database with the canonical schema (`crates/morpholog-core/sql/schema.sql`) applied. First-time setup:
+First-time setup (skip if the schema is already applied):
 
 ```bash
 createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
-Crates:
-
-- **`morpholog-core`** — synchronous, pure semantic kernel. IR types (Invariant, Transformation, Claim, etc.), the evaluator, and `propose()`, which builds a candidate state, runs every active invariant against it, and returns `Accepted` or `Rejected`. No I/O.
-- **`morpholog-postgres`** — async adapter. `propose_against_pg()` opens one PostgreSQL transaction at `SERIALIZABLE` isolation, loads all admitted claims into an in-memory `State`, calls the sync kernel, and either rolls back atomically (`Rejected`) or commits claim mutations, the audit row, and outbox intents in one transaction (`Committed`). Scoped loading is a future optimisation, not a current capability.
-- **`morpholog-cli`** — version-printer skeleton. Subcommands wait on surface syntax.
-
-Canonical schema: [`crates/morpholog-core/sql/schema.sql`](crates/morpholog-core/sql/schema.sql) — three tables (`claims`, `audit`, `outbox`).
+Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`), `morpholog-cli` (version-printer skeleton; subcommands wait on surface syntax).
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) — what Morpholog is for, what it should grow into, and what it must never become. The unifying thesis and the four language affordances on the roadmap. Start here if you want the full design framing.
-- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) — design doctrine for the IR and runtime kernel. The semantics that `morpholog-core` realises.
-- [`docs/postgres-persistence-v0.md`](docs/postgres-persistence-v0.md) — the design pin written before the PostgreSQL adapter shipped, preserved as the historical design record.
-- Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/) and [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/).
+- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) — what Morpholog is for, the four language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
+- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) — semantics that the `morpholog-core` kernel realises.
+- [`docs/postgres-persistence-v0.md`](docs/postgres-persistence-v0.md) — historical design pin for the PostgreSQL adapter.
+- Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/).
 
 ## Requirements
 
 - Rust 1.95+ (install via [rustup](https://rustup.rs)).
-- PostgreSQL 17+. Morpholog v0 targets PostgreSQL only and deliberately uses PostgreSQL-specific features (SSI for `SERIALIZABLE`, JSONB with CHECK constraints, JSONB path functions) without portability apologies. Database portability is not a goal at this stage.
-
-## Design tenets
-
-- Surface language has only invariants and transformations. No entities, classes, or services.
-- State is a set of *admitted claims* over opaque subject identifiers — not objective facts. A claim is a statement admitted into governed state under a specific authority, epoch, and transformation.
-- Reads inside a transformation see pre-transformation state. Writes are staged and become real only at commit.
-- Decimal arithmetic for business values. No floats.
-- External side effects happen post-commit, at-least-once, with deterministic idempotency keys.
-- Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside. ([scope and ambition](docs/scope-and-ambition.md))
+- PostgreSQL 17+. Morpholog v0 targets PostgreSQL only and uses PostgreSQL-specific features (SSI for `SERIALIZABLE`, JSONB with CHECK constraints, JSONB path functions). Database portability is not a goal at this stage.
 
 ## License
 
