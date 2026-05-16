@@ -20,6 +20,23 @@ jobs:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
     steps:
       - uses: actions/checkout@v5
 
@@ -31,6 +48,11 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
+      - name: Apply Morpholog schema
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -f crates/morpholog-core/sql/schema.sql
+
       - name: rustfmt
         run: cargo fmt --all -- --check
 
@@ -38,4 +60,4 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: test
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets -- --test-threads=1
