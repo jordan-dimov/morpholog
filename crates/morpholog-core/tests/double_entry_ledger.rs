@@ -15,7 +15,7 @@ mod common;
 
 use common::{dec, has_claim, must_accept, subj};
 use morpholog_core::examples::double_entry_ledger;
-use morpholog_core::{Outcome, State, propose};
+use morpholog_core::{ClaimInstance, Outcome, State, eval_invariant, propose};
 
 #[test]
 fn simple_entry_balances_and_commits() {
@@ -283,6 +283,32 @@ fn restatement_into_closed_period_preserves_original() {
 
     // Period still closed.
     assert!(has_claim(&s3, "PeriodClosed", &[subj("p_2026_04")]));
+}
+
+#[test]
+fn lone_journal_entry_without_lines_violates_invariant() {
+    // The `balanced_posted_entry` invariant trivially admits a
+    // JournalEntry with zero lines (both sums are 0). The
+    // `journal_entry_has_lines` invariant closes that gap: a
+    // JournalEntry must have at least one matching JournalLine.
+    //
+    // None of the supplied transformations can produce this state
+    // (post_simple_entry, post_split_entry, and restate_entry all
+    // assert at least two lines), so this test evaluates the
+    // invariant directly against a hand-crafted state that no
+    // legitimate path could reach.
+    let state = State {
+        claims: vec![ClaimInstance {
+            predicate: "JournalEntry".to_string(),
+            args: vec![subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
+        }],
+    };
+    let inv = double_entry_ledger::journal_entry_has_lines();
+    let holds = eval_invariant(&inv, &state).expect("evaluation should not error");
+    assert!(
+        !holds,
+        "a JournalEntry with no matching JournalLine must violate journal_entry_has_lines"
+    );
 }
 
 #[test]

@@ -19,7 +19,7 @@ See [`ledger.morph`](ledger.morph) for the (illustrative) surface syntax.
 | Predicate | Role |
 | --- | --- |
 | `JournalEntry(entry_id, posting_date, period)` | The header for a posted entry. **Append-only.** |
-| `JournalLine(entry_id, account, debit, credit)` | One line of an entry. Either `debit` or `credit` is non-zero; the other is `0`. **Append-only.** |
+| `JournalLine(entry_id, account, debit, credit)` | One line of an entry. The supplied transformations always emit either a debit amount with `credit = 0` or a credit amount with `debit = 0`; per-line shape (e.g. "exactly one side is non-zero") is not currently enforced by an invariant. **Append-only.** |
 | `PeriodClosed(period)` | Marks that a period has been closed against further normal posting. **Append-only and terminal in v0** — there is no `reopen_period`. |
 | `Supersedes(new_entry_id, prior_entry_id)` | Restatement lineage. **Append-only.** |
 
@@ -30,6 +30,7 @@ The append-only discipline (per [`docs/forced-by-examples.md`](../../docs/forced
 | Invariant | Says |
 | --- | --- |
 | `balanced_posted_entry` | For every `JournalEntry`, the sum of line debits equals the sum of line credits. The fundamental accounting equation, evaluated as `Eq(Sum, Sum)` over the entry's `JournalLine` claims. |
+| `journal_entry_has_lines` | Every `JournalEntry` must have at least one matching `JournalLine`. Without this, a zero-line entry would trivially satisfy `balanced_posted_entry` (both sums = 0). Closes the gap explicitly because the runtime's contract is "candidate state is admissible under invariants," not "our transformations happen to be well behaved." |
 | `at_most_one_direct_successor` | A `JournalEntry` can be superseded by at most one direct restatement (no parallel restatements). Same shape as Example 2. |
 
 **Note what is deliberately not an invariant:** there is no rule saying "no `JournalEntry` exists with a closed-period `PeriodClosed`". This is the same load-bearing design choice from Example 3 — period-close gating lives in `require` on the posting transformations, not in an invariant. If it were an invariant, closing a period would force either (a) rejection of the close (because pre-close historical postings now violate the rule), or (b) cascade-retraction of those historical postings (which destroys the record). The `require` formulation matches the real-world semantics: *postings made before close stay valid; postings attempted after close are rejected at admission time*.
@@ -55,7 +56,7 @@ The same scenario is proven at two layers — in-memory through the sync kernel,
 cargo test -p morpholog-core --test double_entry_ledger
 ```
 
-Seven tests:
+Eight tests:
 
 1. **`simple_entry_balances_and_commits`** — happy path: cash debit 100, revenue credit 100. Final state has 1 `JournalEntry` and 2 `JournalLine`s.
 2. **`split_entry_balances_and_commits`** — cash debit 100, revenue credit 70 + deferred revenue credit 30. Balance holds; final state has 1 `JournalEntry` and 3 `JournalLine`s.
@@ -63,7 +64,8 @@ Seven tests:
 4. **`closed_period_rejects_normal_posting`** — close period, try to post an entry into it. `require not PeriodClosed` catches it at admission.
 5. **`double_close_rejected`** — close the same period twice. Second close rejected.
 6. **`restatement_into_closed_period_preserves_original`** — **the load-bearing test.** Post → close → restate. The original entry header and lines remain in admitted state. The new entry is present at the corrected amount. `Supersedes(new, prior)` is recorded. The period stays closed. Final state has 8 claims.
-7. **`cannot_restate_already_restated_entry`** — the at-most-one-direct-successor restriction blocks parallel restatement chains.
+7. **`lone_journal_entry_without_lines_violates_invariant`** — evaluates `journal_entry_has_lines` directly against a hand-crafted state that no legitimate transformation could produce, to pin the contract that a `JournalEntry` cannot exist without lines.
+8. **`cannot_restate_already_restated_entry`** — the at-most-one-direct-successor restriction blocks parallel restatement chains.
 
 ### Durable (PostgreSQL adapter)
 

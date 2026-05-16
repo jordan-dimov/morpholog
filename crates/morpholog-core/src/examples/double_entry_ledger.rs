@@ -78,6 +78,31 @@ pub fn balanced_posted_entry() -> Invariant {
     }
 }
 
+/// Every `JournalEntry` must have at least one matching
+/// `JournalLine`. Without this invariant, a `JournalEntry` with
+/// zero lines would trivially satisfy `balanced_posted_entry`
+/// (both debit and credit sums are zero). The supplied
+/// transformations never construct that state, but the runtime's
+/// contract is "candidate state is admissible under invariants",
+/// not "our transformations happen to be well behaved" — so the
+/// invariant rules out the gap explicitly.
+pub fn journal_entry_has_lines() -> Invariant {
+    Invariant {
+        name: "journal_entry_has_lines".to_string(),
+        version: 1,
+        body: Expr::Implies {
+            left: Box::new(Expr::Claim {
+                predicate: "JournalEntry".to_string(),
+                args: vec![var("entry"), Term::Wildcard, Term::Wildcard],
+            }),
+            right: Box::new(Expr::Claim {
+                predicate: "JournalLine".to_string(),
+                args: vec![var("entry"), Term::Wildcard, Term::Wildcard, Term::Wildcard],
+            }),
+        },
+    }
+}
+
 /// A posted entry can be superseded by at most one direct successor.
 /// Reuses Example 2's at-most-one-direct-successor shape.
 pub fn at_most_one_direct_successor() -> Invariant {
@@ -331,5 +356,9 @@ pub fn restate_entry() -> Transformation {
 }
 
 pub fn all_invariants() -> Vec<Invariant> {
-    vec![balanced_posted_entry(), at_most_one_direct_successor()]
+    vec![
+        balanced_posted_entry(),
+        journal_entry_has_lines(),
+        at_most_one_direct_successor(),
+    ]
 }

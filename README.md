@@ -74,7 +74,7 @@ Measured in lines of code, that is always a minority of a real system. Measured 
 Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Four worked examples are proven both in-memory and durably against PostgreSQL. There is no parser, no usable CLI beyond `--version`, and no outbox worker — these are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
 
 ```bash
-cargo test -p morpholog-core --all-targets                              # 44 tests, in-memory
+cargo test -p morpholog-core --all-targets                              # 45 tests, in-memory
 DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 14 tests, durable
 ```
