@@ -628,11 +628,12 @@ async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
     );
 
     // Outbox carries one intent per committed step, in causal order.
-    let intent_types: Vec<String> =
-        sqlx::query_scalar("SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let intent_types: Vec<String> = sqlx::query_scalar(
+        "SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at, intent_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         intent_types,
         vec![
@@ -925,11 +926,12 @@ async fn claim_standing_full_chain_through_pg() {
 
     // Outbox carries one intent per committed transformation, in causal
     // order.
-    let intent_types: Vec<String> =
-        sqlx::query_scalar("SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let intent_types: Vec<String> = sqlx::query_scalar(
+        "SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at, intent_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         intent_types,
         vec![

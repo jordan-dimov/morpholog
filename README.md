@@ -12,7 +12,7 @@ Morpholog moves the legitimacy boundary into the language. The runtime is built 
 - **Invariants** — rules over admitted state that must always hold.
 - **Transformations** — the only path by which state may change. A transformation proposes a set of additions, removals, and outbound intents; the runtime evaluates every active invariant against the result; if any fails, the transformation is rejected atomically — no claim is written, no instruction is sent.
 
-There are no entities, no classes, no validators, no reconciliation scripts. The discipline is exact:
+There are no entities, no classes, no ad-hoc validators, no reconciliation scripts. The discipline is exact:
 
 > Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.
 
@@ -27,7 +27,7 @@ Consider any system that needs to answer questions like these:
 - *Who authorised this entry, under what limit, and when?*
 - *If the authorisation we relied on was rescinded yesterday, was yesterday's decision still legitimate?*
 
-In conventional software these are answered by detective work — searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog they are structured queries over claims, audit rows, and lineage that the runtime is incapable of losing.
+In conventional software these are answered by detective work — searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog the raw material for those answers — claims, transformations, audit rows, and supersession lineage — is preserved by construction; the query and projection machinery that turns it into reproducible reports is part of what is being built (see [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md)).
 
 Three worked examples in this repository show the pattern in increasing depth:
 
