@@ -11,10 +11,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{
-    Claim, ClaimInstance, EvalValue, Expr, Intent, IntentInstance, Invariant, Stmt, Term,
-    Transformation,
-};
+use morpholog_core::examples::{revenue_restatement, settlement_netting};
+use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{PgProposalOutcome, compute_idempotency_key, propose_against_pg};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -76,172 +74,6 @@ fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
     }
 }
 
-// ============================================================
-// Settlement-netting IR
-//
-// TODO: extract these to a `pub mod examples` in morpholog-core so
-// morpholog-core's own tests and these integration tests can share
-// the constructors. Duplicated here for now to keep the PG-adapter
-// PR focused on persistence.
-// ============================================================
-
-fn net_settlement_has_lines() -> Invariant {
-    let var = |s: &str| Term::Var(s.to_string());
-    Invariant {
-        name: "net_settlement_has_lines".to_string(),
-        version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "NetSettlement".to_string(),
-                args: vec![var("net"), Term::Wildcard, Term::Wildcard, Term::Wildcard],
-            }),
-            right: Box::new(Expr::Exists {
-                binding: "line".to_string(),
-                body: Box::new(Expr::Claim {
-                    predicate: "SettlementLine".to_string(),
-                    args: vec![var("line"), var("net"), Term::Wildcard],
-                }),
-            }),
-        },
-    }
-}
-
-fn net_amount_equals_lines() -> Invariant {
-    let var = |s: &str| Term::Var(s.to_string());
-    Invariant {
-        name: "net_amount_equals_lines".to_string(),
-        version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "NetSettlement".to_string(),
-                args: vec![var("net"), Term::Wildcard, Term::Wildcard, var("amount")],
-            }),
-            right: Box::new(Expr::Eq(
-                Box::new(Expr::Term(var("amount"))),
-                Box::new(Expr::Sum {
-                    value: var("x"),
-                    binding: "x".to_string(),
-                    body: Box::new(Expr::Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![Term::Wildcard, var("net"), var("x")],
-                    }),
-                }),
-            )),
-        },
-    }
-}
-
-fn no_double_netting() -> Invariant {
-    let var = |s: &str| Term::Var(s.to_string());
-    Invariant {
-        name: "no_double_netting".to_string(),
-        version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "SettlementLine".to_string(),
-                args: vec![var("line"), var("net"), Term::Wildcard],
-            }),
-            right: Box::new(Expr::Not(Box::new(Expr::Exists {
-                binding: "other".to_string(),
-                body: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![var("line"), var("other"), Term::Wildcard],
-                    },
-                    Expr::Neq(var("other"), var("net")),
-                ])),
-            }))),
-        },
-    }
-}
-
-fn create_net_settlement() -> Transformation {
-    let var = |s: &str| Term::Var(s.to_string());
-    Transformation {
-        name: "create_net_settlement".to_string(),
-        parameters: vec![
-            "party_a".to_string(),
-            "party_b".to_string(),
-            "lines".to_string(),
-        ],
-        body: vec![
-            Stmt::Require(Expr::Forall {
-                binding: "line".to_string(),
-                source: Box::new(Expr::In(var("line"), var("lines"))),
-                body: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "ApprovedSettlementLine".to_string(),
-                        args: vec![var("line")],
-                    },
-                    Expr::Claim {
-                        predicate: "Between".to_string(),
-                        args: vec![var("line"), var("party_a"), var("party_b")],
-                    },
-                    Expr::Not(Box::new(Expr::Claim {
-                        predicate: "Netted".to_string(),
-                        args: vec![var("line")],
-                    })),
-                ])),
-            }),
-            Stmt::LetNewSubject {
-                name: "net".to_string(),
-            },
-            Stmt::Let {
-                name: "amount".to_string(),
-                value: Expr::Sum {
-                    value: var("x"),
-                    binding: "x".to_string(),
-                    body: Box::new(Expr::And(vec![
-                        Expr::In(var("line"), var("lines")),
-                        Expr::Claim {
-                            predicate: "LineAmount".to_string(),
-                            args: vec![var("line"), var("x")],
-                        },
-                    ])),
-                },
-            },
-            Stmt::Assert(Claim {
-                predicate: "NetSettlement".to_string(),
-                args: vec![var("net"), var("party_a"), var("party_b"), var("amount")],
-            }),
-            Stmt::For {
-                binding: "line".to_string(),
-                collection: Expr::Term(var("lines")),
-                body: vec![
-                    Stmt::Let {
-                        name: "amt".to_string(),
-                        value: Expr::ValueOf {
-                            predicate: "LineAmount".to_string(),
-                            args: vec![var("line"), Term::Wildcard],
-                            default: None,
-                        },
-                    },
-                    Stmt::Assert(Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![var("line"), var("net"), var("amt")],
-                    }),
-                    Stmt::Assert(Claim {
-                        predicate: "Netted".to_string(),
-                        args: vec![var("line")],
-                    }),
-                ],
-            },
-            Stmt::Emit(Intent {
-                name: "NetSettlementCreated".to_string(),
-                args: vec![var("net")],
-            }),
-        ],
-    }
-}
-
-fn all_netting_invariants() -> Vec<Invariant> {
-    vec![
-        net_settlement_has_lines(),
-        net_amount_equals_lines(),
-        no_double_netting(),
-    ]
-}
-
 fn netting_pre_state_claims() -> Vec<ClaimInstance> {
     vec![
         claim("ApprovedSettlementLine", vec![subj("l1")]),
@@ -279,9 +111,9 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -356,9 +188,9 @@ async fn require_failure_writes_nothing() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -406,9 +238,9 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -547,9 +379,9 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
 
     let outcome = propose_against_pg(
         &pool,
-        &create_net_settlement(),
+        &settlement_netting::create_net_settlement(),
         netting_args(),
-        &all_netting_invariants(),
+        &settlement_netting::all_invariants(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -600,4 +432,242 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     let intents: Vec<IntentInstance> = serde_json::from_value(intents_json).unwrap();
     assert_eq!(intents.len(), 1);
     assert_eq!(intents[0].name, "NetSettlementCreated");
+}
+
+// ============================================================
+// Revenue restatement (Example 2) — durable proof of the
+// contested-legitimacy model through propose_against_pg.
+//
+// Mirrors the in-memory test
+// `full_restatement_chain_preserves_history_and_updates_pointer`
+// in crates/morpholog-core/src/lib.rs, but runs every step through
+// the PostgreSQL adapter and inspects the durable claims/audit/
+// outbox rows directly.
+// ============================================================
+
+fn asset() -> EvalValue {
+    subj("asset_a")
+}
+
+fn period() -> EvalValue {
+    subj("p_2026_04")
+}
+
+async fn count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(&format!("SELECT COUNT(*) FROM morpholog.{table}"))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> bool {
+    let args_json = serde_json::to_value(args).unwrap();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM morpholog.claims
+         WHERE predicate_name = $1 AND arguments = $2",
+    )
+    .bind(predicate)
+    .bind(args_json)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    n > 0
+}
+
+#[tokio::test]
+async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = revenue_restatement::all_invariants();
+
+    // 1. Admit initial independent verification at 92.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::admit_independent_verification(),
+        vec![asset(), period(), dec(92), subj("ver_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 1 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 1 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
+
+    // 2. Bank recognises 92, rec_001. I1 holds against the current verification.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::recognise_bank_revenue(),
+        vec![asset(), period(), dec(92), subj("rec_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 2 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 2 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "BankRevenueRecognised");
+
+    // 3. Verifier corrects to 91 (ver_002 supersedes ver_001). The verifier's
+    //    transformation body also retracts CurrentBankRecognition, so I1 is
+    //    vacuously satisfied (no current pointer remains until the bank
+    //    restates).
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::correct_independent_verification(),
+        vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 3 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        retracted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("step 3 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(retracted_claims.len(), 1);
+    assert_eq!(retracted_claims[0].predicate, "CurrentBankRecognition");
+    assert_eq!(emitted_intents[0].name, "VerificationCorrected");
+
+    // 4. Bank restates to 91 with rec_002. New current pointer; new Supersedes.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::restate_bank_revenue(),
+        vec![asset(), period(), dec(91), subj("rec_002"), subj("rec_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 4 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 4 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "BankRevenueRestated");
+
+    // Final DB shape: 2 IV + 2 BR + 2 Supersedes + 1 Current = 7 claims.
+    assert_eq!(count(&pool, "claims").await, 7);
+    assert_eq!(count(&pool, "audit").await, 4);
+    assert_eq!(count(&pool, "outbox").await, 4);
+
+    // Historical IV remains; new IV present; supersession recorded.
+    assert!(
+        claim_exists(
+            &pool,
+            "IndependentlyVerifiedRevenue",
+            &[asset(), period(), dec(92), subj("ver_001")],
+        )
+        .await,
+        "historical IV(92, ver_001) must be preserved"
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "IndependentlyVerifiedRevenue",
+            &[asset(), period(), dec(91), subj("ver_002")],
+        )
+        .await
+    );
+    assert!(
+        claim_exists(&pool, "Supersedes", &[subj("ver_002"), subj("ver_001")]).await,
+        "verification lineage must persist"
+    );
+
+    // Historical BR preserved; new BR + supersession recorded.
+    assert!(
+        claim_exists(
+            &pool,
+            "BankRecognisedRevenue",
+            &[asset(), period(), dec(92), subj("rec_001")],
+        )
+        .await,
+        "historical BR(92, rec_001) must be preserved"
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "BankRecognisedRevenue",
+            &[asset(), period(), dec(91), subj("rec_002")],
+        )
+        .await
+    );
+    assert!(
+        claim_exists(&pool, "Supersedes", &[subj("rec_002"), subj("rec_001")]).await,
+        "recognition lineage must persist"
+    );
+
+    // Current pointer moved to rec_002; rec_001 pointer gone.
+    assert!(
+        claim_exists(
+            &pool,
+            "CurrentBankRecognition",
+            &[asset(), period(), subj("rec_002")],
+        )
+        .await,
+        "current pointer must be rec_002"
+    );
+    assert!(
+        !claim_exists(
+            &pool,
+            "CurrentBankRecognition",
+            &[asset(), period(), subj("rec_001")],
+        )
+        .await,
+        "old current pointer must have been retracted"
+    );
+
+    // Outbox carries one intent per committed step, in causal order.
+    let intent_types: Vec<String> =
+        sqlx::query_scalar("SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        intent_types,
+        vec![
+            "IndependentVerificationAdmitted".to_string(),
+            "BankRevenueRecognised".to_string(),
+            "VerificationCorrected".to_string(),
+            "BankRevenueRestated".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn correct_verification_with_no_prior_rejects_and_writes_nothing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // No pre-state: there is no IndependentlyVerifiedRevenue for the
+    // (asset, period, _, prior_verification_id) tuple, so the first
+    // `require` in correct_independent_verification fails. The proposal
+    // must be rejected and leave all three tables empty.
+    let outcome = propose_against_pg(
+        &pool,
+        &revenue_restatement::correct_independent_verification(),
+        vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
+        &revenue_restatement::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
+
+    let PgProposalOutcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(reason.contains("require"), "got reason: {reason}");
+
+    assert_eq!(count(&pool, "claims").await, 0);
+    assert_eq!(count(&pool, "audit").await, 0);
+    assert_eq!(count(&pool, "outbox").await, 0);
 }

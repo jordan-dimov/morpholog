@@ -32,49 +32,54 @@ transformation create_net_settlement(party_a, party_b, lines):
 
 ## Status
 
-Very early. A small in-memory semantic kernel exists; there is no parser, no PostgreSQL integration, and no usable CLI yet. If you came here looking for something to deploy, come back in a few months.
+Very early, but no longer an in-memory toy. Morpholog has a synchronous semantic kernel and a working PostgreSQL persistence adapter. There is still no parser, no usable CLI, and no outbox worker.
+
+Think of Morpholog right now as a **governed-state runtime**, not a programming language. The product is *commit legitimacy*: a transformation is the only way governed state changes, and it commits only if the resulting state is admissible.
 
 ## What works today
 
 ```bash
-cargo test -p morpholog-core      # 17 tests pass
-cargo run -q                      # prints: morpholog 0.0.1
+cargo test -p morpholog-core --all-targets                        # 26 tests, in-memory
+DATABASE_URL=postgres:///morpholog_dev \
+  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 10 tests, durable
 ```
 
-The library can:
+- **`morpholog-core`** — synchronous in-memory semantic kernel. IR types (Invariant, Transformation, Stmt, Expr, Term, Value, Claim, Intent), the evaluator, and `propose()` which builds a candidate state, runs every active invariant against it, and returns `Accepted` or `Rejected`.
+- **`morpholog-postgres`** — thin async I/O adapter. `propose_against_pg()` opens one PostgreSQL transaction at `SERIALIZABLE` isolation, loads claims into an in-memory `State`, calls the existing sync kernel, and either rolls back atomically (Rejected) or commits claims + audit + outbox in one transaction (Committed). Outbox intents are enqueued for post-commit delivery.
+- **Canonical schema** at [`crates/morpholog-core/sql/schema.sql`](crates/morpholog-core/sql/schema.sql) — `claims`, `audit`, `outbox`.
 
-- represent invariants and transformations as Rust IR data;
-- evaluate an invariant against an in-memory state of admitted claims;
-- propose a transformation against a pre-state, stage claim assertions/retractions and outbox intents, build the candidate state, run all active invariants against it, and return either `Accepted` or `Rejected { reason }`.
+Two worked examples drive everything:
 
-Two worked examples exercise the semantic loop end-to-end as Rust tests: **settlement netting** (a clean kernel proof) and **revenue restatement** (preserves historical claims while moving current-standing pointer claims under temporal correction, with no metadata on any claim).
+- **Settlement netting** ([`examples/01_settlement_netting/`](examples/01_settlement_netting/)) — proves the runtime can enforce arithmetic and exclusion (no double-netting). Has both in-memory tests and PostgreSQL integration tests.
+- **Revenue restatement** ([`examples/02_revenue_restatement/`](examples/02_revenue_restatement/)) — proves the runtime can model **contested legitimacy**: historical claims remain admitted, current-standing pointer claims move via retractions, supersession lineage is recorded, all without claim metadata.
 
 ## What this baseline proves
 
 - **Claims are admitted assertions, not objective facts.** State is a set of typed `(predicate, args)` claims. Multiple authorities can legitimately make different claims about the same underlying event; the system preserves all of them.
 - **Transformations propose; invariants decide.** A transformation stages assertions, retractions, and outbox intents against a snapshot of pre-state. The runtime builds a candidate state and evaluates every active invariant against it. The transformation commits only if all invariants hold.
-- **Settlement netting** enforces existence, equality-via-aggregation, and exclusion invariants. Tests prove that a valid netting commits, that a `require` failure rolls back before any staging, and that an invariant violation on the *candidate state* rolls back atomically.
-- **Revenue restatement** preserves historical claims while moving current-standing pointer claims, with no metadata. A four-step chain test exercises admit → recognise → correct verification (which retracts the dependent current pointer) → restate, and verifies the final state.
+- **Durable commit boundary.** The PostgreSQL adapter atomically writes claim mutations, one audit row, and one outbox row per emitted intent. SQLSTATE `40001` is classified as a distinct retryable error. Rejected transformations write nothing.
 - **"Claims about claims"** is sufficient for currentness, lineage, and standing. Authority lives in predicate naming; currentness in pointer claims; lineage in `Supersedes` claims. Metadata on claims is deferred until a real example forces it.
 
-## What this baseline does not yet prove
+## What is not yet in place
 
 - Surface syntax. `.morph` source files exist as a North-Star target but are never parsed.
 - CLI beyond `--version`. No subcommands.
-- PostgreSQL execution. A v0 schema is applied to a local dev DB but no Rust code talks to it.
-- Audit and outbox row writing. The IR stages these as values; they never persist.
+- Outbox worker. Intents are enqueued; nobody consumes them yet.
 - Invariant lifecycle (versioned epochs). The IR carries `version: 1` everywhere.
 - Read-side framework. Queries against committed state are unstudied.
+- Migrations framework. The schema is applied by hand (or by CI).
 - Model checker for the decidable core. Documented as a later artefact.
 
 ## Next
 
-PostgreSQL persistence for the existing semantic loop: a `propose_against_pg()` that opens a transaction, runs the same kernel against the live `claims` table, writes one `audit` row on commit, and enqueues `outbox` rows. See [`docs/postgres-persistence-v0.md`](docs/postgres-persistence-v0.md) for the design pin. Parser and surface syntax come later.
+A third worked example focused on **claim standing** — when an admitted claim is *admissible for a given purpose*, and how that standing is acquired, transferred, and lost without mutating the claim itself. Settlement netting proved transactional correctness; revenue restatement proved that history survives correction; the next example should push on the standing-as-claims-about-claims pattern hard enough to either confirm it generalises or surface what's missing.
+
+Parser, CLI, migrations framework, outbox worker, and read-side projections remain deliberately deferred — the next semantic frontier comes before more plumbing.
 
 ## Requirements
 
 - Rust 1.95+ (install via [rustup](https://rustup.rs))
-- PostgreSQL 17+ (needed once the runtime is wired to storage)
+- PostgreSQL 17+. Morpholog v0 targets PostgreSQL only and deliberately uses PostgreSQL-specific features (SSI for SERIALIZABLE, JSONB with CHECK constraints, JSONB path functions) without portability apologies. Database portability is not a goal at this stage.
 
 ## Design tenets
 

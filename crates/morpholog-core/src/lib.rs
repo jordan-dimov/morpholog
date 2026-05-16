@@ -1,14 +1,23 @@
-//! Morpholog v0 IR and in-memory evaluator.
+//! Morpholog v0 semantic kernel.
 //!
-//! The IR defines the minimum data types needed to represent invariants
-//! and transformations as Rust data. The evaluator evaluates an invariant
-//! against an in-memory `State` (a set of grounded claims) and returns
-//! whether it holds. No PostgreSQL, no transformation execution yet.
+//! This crate is the synchronous, pure heart of Morpholog. It defines
+//! the IR (invariants, transformations, claims, statements, expressions),
+//! evaluates invariants against in-memory state, and exposes [`propose`]
+//! — the function that turns a proposed transformation into either an
+//! accepted post-state or a rejected attempt.
+//!
+//! `morpholog-core` does no I/O. The PostgreSQL persistence adapter
+//! lives in the separate `morpholog-postgres` crate and wraps this
+//! kernel as an async boundary.
+//!
+//! Worked examples (IR data) live under [`examples`].
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+
+pub mod examples;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invariant {
@@ -665,75 +674,19 @@ fn build_candidate_state(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
-    fn net_settlement_has_lines() -> Invariant {
-        Invariant {
-            name: "net_settlement_has_lines".to_string(),
-            version: 1,
-            body: Expr::Implies {
-                left: Box::new(Expr::Claim {
-                    predicate: "NetSettlement".to_string(),
-                    args: vec![
-                        Term::Var("net".to_string()),
-                        Term::Wildcard,
-                        Term::Wildcard,
-                        Term::Wildcard,
-                    ],
-                }),
-                right: Box::new(Expr::Exists {
-                    binding: "line".to_string(),
-                    body: Box::new(Expr::Claim {
-                        predicate: "SettlementLine".to_string(),
-                        args: vec![
-                            Term::Var("line".to_string()),
-                            Term::Var("net".to_string()),
-                            Term::Wildcard,
-                        ],
-                    }),
-                }),
-            },
-        }
-    }
-
-    fn no_double_netting() -> Invariant {
-        Invariant {
-            name: "no_double_netting".to_string(),
-            version: 1,
-            body: Expr::Implies {
-                left: Box::new(Expr::Claim {
-                    predicate: "SettlementLine".to_string(),
-                    args: vec![
-                        Term::Var("line".to_string()),
-                        Term::Var("net".to_string()),
-                        Term::Wildcard,
-                    ],
-                }),
-                right: Box::new(Expr::Not(Box::new(Expr::Exists {
-                    binding: "other".to_string(),
-                    body: Box::new(Expr::And(vec![
-                        Expr::Claim {
-                            predicate: "SettlementLine".to_string(),
-                            args: vec![
-                                Term::Var("line".to_string()),
-                                Term::Var("other".to_string()),
-                                Term::Wildcard,
-                            ],
-                        },
-                        Expr::Neq(Term::Var("other".to_string()), Term::Var("net".to_string())),
-                    ])),
-                }))),
-            },
-        }
-    }
+    use crate::examples::{revenue_restatement, settlement_netting};
 
     #[test]
     fn invariant_round_trips_through_equality() {
-        assert_eq!(net_settlement_has_lines(), net_settlement_has_lines());
+        assert_eq!(
+            settlement_netting::net_settlement_has_lines(),
+            settlement_netting::net_settlement_has_lines()
+        );
     }
 
     #[test]
     fn invariant_has_expected_top_level_shape() {
-        let inv = net_settlement_has_lines();
+        let inv = settlement_netting::net_settlement_has_lines();
         assert_eq!(inv.name, "net_settlement_has_lines");
         assert_eq!(inv.version, 1);
         assert!(matches!(inv.body, Expr::Implies { .. }));
@@ -741,12 +694,15 @@ mod tests {
 
     #[test]
     fn no_double_netting_round_trips() {
-        assert_eq!(no_double_netting(), no_double_netting());
+        assert_eq!(
+            settlement_netting::no_double_netting(),
+            settlement_netting::no_double_netting()
+        );
     }
 
     #[test]
     fn no_double_netting_has_expected_shape() {
-        let inv = no_double_netting();
+        let inv = settlement_netting::no_double_netting();
         assert_eq!(inv.name, "no_double_netting");
         assert_eq!(inv.version, 1);
 
@@ -762,47 +718,17 @@ mod tests {
         assert!(matches!(body.as_ref(), Expr::And(_)));
     }
 
-    fn net_amount_equals_lines() -> Invariant {
-        Invariant {
-            name: "net_amount_equals_lines".to_string(),
-            version: 1,
-            body: Expr::Implies {
-                left: Box::new(Expr::Claim {
-                    predicate: "NetSettlement".to_string(),
-                    args: vec![
-                        Term::Var("net".to_string()),
-                        Term::Wildcard,
-                        Term::Wildcard,
-                        Term::Var("amount".to_string()),
-                    ],
-                }),
-                right: Box::new(Expr::Eq(
-                    Box::new(Expr::Term(Term::Var("amount".to_string()))),
-                    Box::new(Expr::Sum {
-                        value: Term::Var("x".to_string()),
-                        binding: "x".to_string(),
-                        body: Box::new(Expr::Claim {
-                            predicate: "SettlementLine".to_string(),
-                            args: vec![
-                                Term::Wildcard,
-                                Term::Var("net".to_string()),
-                                Term::Var("x".to_string()),
-                            ],
-                        }),
-                    }),
-                )),
-            },
-        }
-    }
-
     #[test]
     fn net_amount_equals_lines_round_trips() {
-        assert_eq!(net_amount_equals_lines(), net_amount_equals_lines());
+        assert_eq!(
+            settlement_netting::net_amount_equals_lines(),
+            settlement_netting::net_amount_equals_lines()
+        );
     }
 
     #[test]
     fn net_amount_equals_lines_has_expected_shape() {
-        let inv = net_amount_equals_lines();
+        let inv = settlement_netting::net_amount_equals_lines();
         assert_eq!(inv.name, "net_amount_equals_lines");
         assert_eq!(inv.version, 1);
 
@@ -825,106 +751,17 @@ mod tests {
         );
     }
 
-    fn create_net_settlement() -> Transformation {
-        let var = |s: &str| Term::Var(s.to_string());
-
-        Transformation {
-            name: "create_net_settlement".to_string(),
-            parameters: vec![
-                "party_a".to_string(),
-                "party_b".to_string(),
-                "lines".to_string(),
-            ],
-            body: vec![
-                // require forall { line | line in lines }:
-                //   ApprovedSettlementLine(line)
-                //   and Between(line, party_a, party_b)
-                //   and not Netted(line)
-                Stmt::Require(Expr::Forall {
-                    binding: "line".to_string(),
-                    source: Box::new(Expr::In(var("line"), var("lines"))),
-                    body: Box::new(Expr::And(vec![
-                        Expr::Claim {
-                            predicate: "ApprovedSettlementLine".to_string(),
-                            args: vec![var("line")],
-                        },
-                        Expr::Claim {
-                            predicate: "Between".to_string(),
-                            args: vec![var("line"), var("party_a"), var("party_b")],
-                        },
-                        Expr::Not(Box::new(Expr::Claim {
-                            predicate: "Netted".to_string(),
-                            args: vec![var("line")],
-                        })),
-                    ])),
-                }),
-                // let net = new Subject()
-                Stmt::LetNewSubject {
-                    name: "net".to_string(),
-                },
-                // let amount = sum { x | line in lines, LineAmount(line, x) }
-                Stmt::Let {
-                    name: "amount".to_string(),
-                    value: Expr::Sum {
-                        value: var("x"),
-                        binding: "x".to_string(),
-                        body: Box::new(Expr::And(vec![
-                            Expr::In(var("line"), var("lines")),
-                            Expr::Claim {
-                                predicate: "LineAmount".to_string(),
-                                args: vec![var("line"), var("x")],
-                            },
-                        ])),
-                    },
-                },
-                // assert NetSettlement(net, party_a, party_b, amount)
-                Stmt::Assert(Claim {
-                    predicate: "NetSettlement".to_string(),
-                    args: vec![var("net"), var("party_a"), var("party_b"), var("amount")],
-                }),
-                // for line in lines:
-                //   let amt = value LineAmount(line, _)
-                //   assert SettlementLine(line, net, amt)
-                //   assert Netted(line)
-                Stmt::For {
-                    binding: "line".to_string(),
-                    collection: Expr::Term(var("lines")),
-                    body: vec![
-                        Stmt::Let {
-                            name: "amt".to_string(),
-                            value: Expr::ValueOf {
-                                predicate: "LineAmount".to_string(),
-                                args: vec![var("line"), Term::Wildcard],
-                                default: None,
-                            },
-                        },
-                        Stmt::Assert(Claim {
-                            predicate: "SettlementLine".to_string(),
-                            args: vec![var("line"), var("net"), var("amt")],
-                        }),
-                        Stmt::Assert(Claim {
-                            predicate: "Netted".to_string(),
-                            args: vec![var("line")],
-                        }),
-                    ],
-                },
-                // emit NetSettlementCreated(net)
-                Stmt::Emit(Intent {
-                    name: "NetSettlementCreated".to_string(),
-                    args: vec![var("net")],
-                }),
-            ],
-        }
-    }
-
     #[test]
     fn create_net_settlement_round_trips() {
-        assert_eq!(create_net_settlement(), create_net_settlement());
+        assert_eq!(
+            settlement_netting::create_net_settlement(),
+            settlement_netting::create_net_settlement()
+        );
     }
 
     #[test]
     fn create_net_settlement_has_expected_shape() {
-        let t = create_net_settlement();
+        let t = settlement_netting::create_net_settlement();
         assert_eq!(t.name, "create_net_settlement");
         assert_eq!(t.parameters, vec!["party_a", "party_b", "lines"]);
         assert_eq!(t.body.len(), 6);
@@ -938,7 +775,7 @@ mod tests {
 
     #[test]
     fn for_body_contains_let_and_two_asserts() {
-        let t = create_net_settlement();
+        let t = settlement_netting::create_net_settlement();
         let Stmt::For { body, .. } = &t.body[4] else {
             panic!("body[4] should be Stmt::For");
         };
@@ -982,7 +819,7 @@ mod tests {
     #[test]
     fn net_amount_equals_lines_holds_when_amount_matches() {
         let state = netting_state(100);
-        let inv = net_amount_equals_lines();
+        let inv = settlement_netting::net_amount_equals_lines();
         let result = eval_invariant(&inv, &state).expect("evaluation should not error");
         assert!(result, "invariant should hold for amount = 60 + 40 = 100");
     }
@@ -990,7 +827,7 @@ mod tests {
     #[test]
     fn net_amount_equals_lines_fails_when_amount_mismatches() {
         let state = netting_state(101);
-        let inv = net_amount_equals_lines();
+        let inv = settlement_netting::net_amount_equals_lines();
         let result = eval_invariant(&inv, &state).expect("evaluation should not error");
         assert!(
             !result,
@@ -1037,14 +874,6 @@ mod tests {
         State { claims }
     }
 
-    fn all_invariants() -> Vec<Invariant> {
-        vec![
-            net_settlement_has_lines(),
-            net_amount_equals_lines(),
-            no_double_netting(),
-        ]
-    }
-
     fn netting_args() -> Vec<EvalValue> {
         vec![
             subj("party_a"),
@@ -1056,9 +885,14 @@ mod tests {
     #[test]
     fn propose_accepts_well_formed_netting() {
         let pre = netting_pre_state(vec![]);
-        let t = create_net_settlement();
-        let outcome =
-            propose(&t, netting_args(), &pre, &all_invariants()).expect("propose should not error");
+        let t = settlement_netting::create_net_settlement();
+        let outcome = propose(
+            &t,
+            netting_args(),
+            &pre,
+            &settlement_netting::all_invariants(),
+        )
+        .expect("propose should not error");
 
         let Outcome::Accepted {
             asserted_claims,
@@ -1091,9 +925,14 @@ mod tests {
             args: vec![subj("l1")],
         }];
         let pre = netting_pre_state(extra);
-        let t = create_net_settlement();
-        let outcome =
-            propose(&t, netting_args(), &pre, &all_invariants()).expect("propose should not error");
+        let t = settlement_netting::create_net_settlement();
+        let outcome = propose(
+            &t,
+            netting_args(),
+            &pre,
+            &settlement_netting::all_invariants(),
+        )
+        .expect("propose should not error");
 
         let Outcome::Rejected { reason } = outcome else {
             panic!("expected Rejected, got {outcome:?}");
@@ -1105,152 +944,12 @@ mod tests {
     // Revenue restatement (Example 2) — IR data
     // -----------------------------------------------------------------
 
-    fn current_recognition_matches_current_verification() -> Invariant {
-        let var = |s: &str| Term::Var(s.to_string());
-        Invariant {
-            name: "current_recognition_matches_current_verification".to_string(),
-            version: 1,
-            body: Expr::Implies {
-                left: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "CurrentBankRecognition".to_string(),
-                        args: vec![var("asset"), var("period"), var("r")],
-                    },
-                    Expr::Claim {
-                        predicate: "BankRecognisedRevenue".to_string(),
-                        args: vec![var("asset"), var("period"), var("amount"), var("r")],
-                    },
-                ])),
-                right: Box::new(Expr::Exists {
-                    binding: "v".to_string(),
-                    body: Box::new(Expr::And(vec![
-                        Expr::Claim {
-                            predicate: "IndependentlyVerifiedRevenue".to_string(),
-                            args: vec![var("asset"), var("period"), var("amount"), var("v")],
-                        },
-                        Expr::Not(Box::new(Expr::Exists {
-                            binding: "newer".to_string(),
-                            body: Box::new(Expr::Claim {
-                                predicate: "Supersedes".to_string(),
-                                args: vec![var("newer"), var("v")],
-                            }),
-                        })),
-                    ])),
-                }),
-            },
-        }
-    }
-
-    fn at_most_one_current_recognition_per_asset_period() -> Invariant {
-        let var = |s: &str| Term::Var(s.to_string());
-        Invariant {
-            name: "at_most_one_current_recognition_per_asset_period".to_string(),
-            version: 1,
-            body: Expr::Implies {
-                left: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "CurrentBankRecognition".to_string(),
-                        args: vec![var("asset"), var("period"), var("a")],
-                    },
-                    Expr::Claim {
-                        predicate: "CurrentBankRecognition".to_string(),
-                        args: vec![var("asset"), var("period"), var("b")],
-                    },
-                ])),
-                right: Box::new(Expr::Eq(
-                    Box::new(Expr::Term(var("a"))),
-                    Box::new(Expr::Term(var("b"))),
-                )),
-            },
-        }
-    }
-
-    fn at_most_one_direct_successor() -> Invariant {
-        let var = |s: &str| Term::Var(s.to_string());
-        Invariant {
-            name: "at_most_one_direct_successor".to_string(),
-            version: 1,
-            body: Expr::Implies {
-                left: Box::new(Expr::And(vec![
-                    Expr::Claim {
-                        predicate: "Supersedes".to_string(),
-                        args: vec![var("new_a"), var("old")],
-                    },
-                    Expr::Claim {
-                        predicate: "Supersedes".to_string(),
-                        args: vec![var("new_b"), var("old")],
-                    },
-                ])),
-                right: Box::new(Expr::Eq(
-                    Box::new(Expr::Term(var("new_a"))),
-                    Box::new(Expr::Term(var("new_b"))),
-                )),
-            },
-        }
-    }
-
-    fn correct_independent_verification() -> Transformation {
-        let var = |s: &str| Term::Var(s.to_string());
-        Transformation {
-            name: "correct_independent_verification".to_string(),
-            parameters: vec![
-                "asset".to_string(),
-                "period".to_string(),
-                "new_amount".to_string(),
-                "new_verification_id".to_string(),
-                "prior_verification_id".to_string(),
-            ],
-            body: vec![
-                // The prior verification must exist.
-                Stmt::Require(Expr::Claim {
-                    predicate: "IndependentlyVerifiedRevenue".to_string(),
-                    args: vec![
-                        var("asset"),
-                        var("period"),
-                        Term::Wildcard,
-                        var("prior_verification_id"),
-                    ],
-                }),
-                // The prior verification must not already be superseded.
-                Stmt::Require(Expr::Not(Box::new(Expr::Claim {
-                    predicate: "Supersedes".to_string(),
-                    args: vec![Term::Wildcard, var("prior_verification_id")],
-                }))),
-                // Admit the new verification.
-                Stmt::Assert(Claim {
-                    predicate: "IndependentlyVerifiedRevenue".to_string(),
-                    args: vec![
-                        var("asset"),
-                        var("period"),
-                        var("new_amount"),
-                        var("new_verification_id"),
-                    ],
-                }),
-                // Record the supersession.
-                Stmt::Assert(Claim {
-                    predicate: "Supersedes".to_string(),
-                    args: vec![var("new_verification_id"), var("prior_verification_id")],
-                }),
-                // Invalidate any dependent current bank recognition.
-                // History (BankRecognisedRevenue) is preserved; the pointer moves.
-                Stmt::Retract {
-                    predicate: "CurrentBankRecognition".to_string(),
-                    args: vec![var("asset"), var("period"), Term::Wildcard],
-                },
-                Stmt::Emit(Intent {
-                    name: "VerificationCorrected".to_string(),
-                    args: vec![var("new_verification_id"), var("prior_verification_id")],
-                }),
-            ],
-        }
-    }
-
     #[test]
     fn correct_independent_verification_retracts_dependent_current_pointer() {
         let invariants = vec![
-            current_recognition_matches_current_verification(),
-            at_most_one_current_recognition_per_asset_period(),
-            at_most_one_direct_successor(),
+            revenue_restatement::current_recognition_matches_current_verification(),
+            revenue_restatement::at_most_one_current_recognition_per_asset_period(),
+            revenue_restatement::at_most_one_direct_successor(),
         ];
 
         let pre = State {
@@ -1278,8 +977,13 @@ mod tests {
             subj("ver_001"),
         ];
 
-        let outcome = propose(&correct_independent_verification(), args, &pre, &invariants)
-            .expect("propose should not error");
+        let outcome = propose(
+            &revenue_restatement::correct_independent_verification(),
+            args,
+            &pre,
+            &invariants,
+        )
+        .expect("propose should not error");
 
         let Outcome::Accepted {
             candidate_state,
@@ -1349,126 +1053,6 @@ mod tests {
         }
     }
 
-    fn admit_independent_verification() -> Transformation {
-        let var = |s: &str| Term::Var(s.to_string());
-        Transformation {
-            name: "admit_independent_verification".to_string(),
-            parameters: vec![
-                "asset".to_string(),
-                "period".to_string(),
-                "amount".to_string(),
-                "verification_id".to_string(),
-            ],
-            body: vec![
-                Stmt::Assert(Claim {
-                    predicate: "IndependentlyVerifiedRevenue".to_string(),
-                    args: vec![
-                        var("asset"),
-                        var("period"),
-                        var("amount"),
-                        var("verification_id"),
-                    ],
-                }),
-                Stmt::Emit(Intent {
-                    name: "IndependentVerificationAdmitted".to_string(),
-                    args: vec![var("verification_id")],
-                }),
-            ],
-        }
-    }
-
-    fn recognise_bank_revenue() -> Transformation {
-        let var = |s: &str| Term::Var(s.to_string());
-        Transformation {
-            name: "recognise_bank_revenue".to_string(),
-            parameters: vec![
-                "asset".to_string(),
-                "period".to_string(),
-                "amount".to_string(),
-                "recognition_id".to_string(),
-            ],
-            body: vec![
-                // No existing current pointer for this (asset, period).
-                Stmt::Require(Expr::Not(Box::new(Expr::Claim {
-                    predicate: "CurrentBankRecognition".to_string(),
-                    args: vec![var("asset"), var("period"), Term::Wildcard],
-                }))),
-                Stmt::Assert(Claim {
-                    predicate: "BankRecognisedRevenue".to_string(),
-                    args: vec![
-                        var("asset"),
-                        var("period"),
-                        var("amount"),
-                        var("recognition_id"),
-                    ],
-                }),
-                Stmt::Assert(Claim {
-                    predicate: "CurrentBankRecognition".to_string(),
-                    args: vec![var("asset"), var("period"), var("recognition_id")],
-                }),
-                Stmt::Emit(Intent {
-                    name: "BankRevenueRecognised".to_string(),
-                    args: vec![var("recognition_id")],
-                }),
-            ],
-        }
-    }
-
-    fn restate_bank_revenue() -> Transformation {
-        let var = |s: &str| Term::Var(s.to_string());
-        Transformation {
-            name: "restate_bank_revenue".to_string(),
-            parameters: vec![
-                "asset".to_string(),
-                "period".to_string(),
-                "new_amount".to_string(),
-                "new_recognition_id".to_string(),
-                "prior_recognition_id".to_string(),
-            ],
-            body: vec![
-                // The prior recognition must exist (otherwise there is
-                // nothing to restate and Supersedes would be meaningless).
-                Stmt::Require(Expr::Claim {
-                    predicate: "BankRecognisedRevenue".to_string(),
-                    args: vec![
-                        var("asset"),
-                        var("period"),
-                        Term::Wildcard,
-                        var("prior_recognition_id"),
-                    ],
-                }),
-                // Retract any current pointer for (asset, period). Idempotent
-                // if none exists (the verifier's correction may already have
-                // retracted it).
-                Stmt::Retract {
-                    predicate: "CurrentBankRecognition".to_string(),
-                    args: vec![var("asset"), var("period"), Term::Wildcard],
-                },
-                Stmt::Assert(Claim {
-                    predicate: "BankRecognisedRevenue".to_string(),
-                    args: vec![
-                        var("asset"),
-                        var("period"),
-                        var("new_amount"),
-                        var("new_recognition_id"),
-                    ],
-                }),
-                Stmt::Assert(Claim {
-                    predicate: "CurrentBankRecognition".to_string(),
-                    args: vec![var("asset"), var("period"), var("new_recognition_id")],
-                }),
-                Stmt::Assert(Claim {
-                    predicate: "Supersedes".to_string(),
-                    args: vec![var("new_recognition_id"), var("prior_recognition_id")],
-                }),
-                Stmt::Emit(Intent {
-                    name: "BankRevenueRestated".to_string(),
-                    args: vec![var("new_recognition_id"), var("prior_recognition_id")],
-                }),
-            ],
-        }
-    }
-
     fn must_accept(
         t: &Transformation,
         args: Vec<EvalValue>,
@@ -1498,9 +1082,9 @@ mod tests {
     #[test]
     fn full_restatement_chain_preserves_history_and_updates_pointer() {
         let invariants = vec![
-            current_recognition_matches_current_verification(),
-            at_most_one_current_recognition_per_asset_period(),
-            at_most_one_direct_successor(),
+            revenue_restatement::current_recognition_matches_current_verification(),
+            revenue_restatement::at_most_one_current_recognition_per_asset_period(),
+            revenue_restatement::at_most_one_direct_successor(),
         ];
 
         let a = subj("asset_a");
@@ -1508,7 +1092,7 @@ mod tests {
 
         // 1. Admit initial independent verification at 92.
         let s1 = must_accept(
-            &admit_independent_verification(),
+            &revenue_restatement::admit_independent_verification(),
             vec![a.clone(), p.clone(), dec(92), subj("ver_001")],
             State::default(),
             &invariants,
@@ -1516,7 +1100,7 @@ mod tests {
 
         // 2. Bank recognises 92, rec_001. I1 holds against the current verification.
         let s2 = must_accept(
-            &recognise_bank_revenue(),
+            &revenue_restatement::recognise_bank_revenue(),
             vec![a.clone(), p.clone(), dec(92), subj("rec_001")],
             s1,
             &invariants,
@@ -1527,7 +1111,7 @@ mod tests {
         // verifier's transformation body, so I1 is vacuously satisfied
         // (no current pointer remains).
         let s3 = must_accept(
-            &correct_independent_verification(),
+            &revenue_restatement::correct_independent_verification(),
             vec![
                 a.clone(),
                 p.clone(),
@@ -1542,7 +1126,7 @@ mod tests {
         // 4. Bank restates to 91 with a new recognition_id. New current
         // pointer; new Supersedes link.
         let s4 = must_accept(
-            &restate_bank_revenue(),
+            &revenue_restatement::restate_bank_revenue(),
             vec![
                 a.clone(),
                 p.clone(),
@@ -1621,9 +1205,14 @@ mod tests {
             args: vec![subj("l1"), subj("old_net"), dec(60)],
         }];
         let pre = netting_pre_state(extra);
-        let t = create_net_settlement();
-        let outcome =
-            propose(&t, netting_args(), &pre, &all_invariants()).expect("propose should not error");
+        let t = settlement_netting::create_net_settlement();
+        let outcome = propose(
+            &t,
+            netting_args(),
+            &pre,
+            &settlement_netting::all_invariants(),
+        )
+        .expect("propose should not error");
 
         let Outcome::Rejected { reason } = outcome else {
             panic!("expected Rejected, got {outcome:?}");
