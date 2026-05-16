@@ -10,8 +10,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jdimov/morpholog"
 
 [workspace.dependencies]
-rust_decimal = "1"
+rust_decimal = { version = "1", features = ["serde-with-str"] }
 uuid = { version = "1", features = ["v7"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
