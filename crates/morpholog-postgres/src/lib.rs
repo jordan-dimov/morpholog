@@ -3,8 +3,8 @@
 //! Thin async I/O layer around the existing synchronous
 //! [`morpholog_core::propose`] kernel. The kernel itself is unchanged.
 //!
-//! See `docs/postgres-persistence-v0.md` for the design pin and
-//! `crates/morpholog-core/sql/schema.sql` for the canonical schema.
+//! See `crates/morpholog-core/sql/schema.sql` for the canonical schema
+//! and `docs/scope-and-ambition.md` for the runtime's positioning.
 
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State, Transformation,
