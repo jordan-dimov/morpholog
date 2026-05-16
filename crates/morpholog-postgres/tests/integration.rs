@@ -11,7 +11,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::{revenue_restatement, settlement_netting};
+use morpholog_core::examples::{claim_standing, revenue_restatement, settlement_netting};
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{PgProposalOutcome, compute_idempotency_key, propose_against_pg};
 use rust_decimal::Decimal;
@@ -668,6 +668,342 @@ async fn correct_verification_with_no_prior_rejects_and_writes_nothing() {
     assert!(reason.contains("require"), "got reason: {reason}");
 
     assert_eq!(count(&pool, "claims").await, 0);
+    assert_eq!(count(&pool, "audit").await, 0);
+    assert_eq!(count(&pool, "outbox").await, 0);
+}
+
+// ============================================================
+// Claim standing (Example 3) — durable proof of
+// admissibility-for-purpose through propose_against_pg.
+//
+// Mirrors the in-memory chain in
+// `crates/morpholog-core/src/lib.rs` but runs every step through
+// the PostgreSQL adapter and inspects the durable claims, audit,
+// and outbox rows directly.
+// ============================================================
+
+#[tokio::test]
+async fn claim_standing_full_chain_through_pg() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = claim_standing::all_invariants();
+    let bank = subj(claim_standing::BANK_DEBT_SERVICE);
+    let investor = subj(claim_standing::INVESTOR_REPORTING);
+
+    // 1. Admit IV at 91.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::admit_independent_verification(),
+        vec![asset(), period(), dec(91), subj("ver_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 1 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 1 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
+
+    // 2. Bank credit committee grants debt-service-coverage standing.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::grant_standing(),
+        vec![
+            subj("ver_001"),
+            bank.clone(),
+            subj("credit_committee"),
+            subj("grant_001"),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("step 2 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        asserted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("step 2 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(
+        asserted_claims.len(),
+        2,
+        "StandingGrantedBy + AdmissibleFor"
+    );
+    assert_eq!(emitted_intents[0].name, "StandingGranted");
+
+    // 3. Bank admits a debt-service decision against the verification.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::admit_debt_service_revenue(),
+        vec![
+            asset(),
+            period(),
+            dec(91),
+            subj("decision_001"),
+            subj("ver_001"),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("step 3 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 3 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "DebtServiceRevenueAdmitted");
+
+    // 4. Investor relations office grants investor-reporting standing on the
+    //    same verification. Parallel admissibility — bank standing is still
+    //    active, and now investor standing too.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::grant_standing(),
+        vec![
+            subj("ver_001"),
+            investor.clone(),
+            subj("investor_relations_office"),
+            subj("grant_002"),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("step 4 propose_against_pg should not error");
+    let PgProposalOutcome::Committed { .. } = outcome else {
+        panic!("step 4 expected Committed, got {outcome:?}");
+    };
+
+    // 5. Investor relations admits an investor report against the verification.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::admit_investor_reported_revenue(),
+        vec![
+            asset(),
+            period(),
+            dec(91),
+            subj("report_001"),
+            subj("ver_001"),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("step 5 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("step 5 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(emitted_intents[0].name, "InvestorReportedRevenueAdmitted");
+
+    // 6. Bank revokes its standing. AdmissibleFor(ver_001, bank) is retracted;
+    //    the historical decision_001 must survive; investor standing is
+    //    untouched.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::revoke_standing(),
+        vec![subj("ver_001"), bank.clone(), subj("revoke_001")],
+        &invariants,
+    )
+    .await
+    .expect("step 6 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        retracted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("step 6 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(retracted_claims.len(), 1);
+    assert_eq!(retracted_claims[0].predicate, "AdmissibleFor");
+    assert_eq!(emitted_intents[0].name, "StandingRevocationAdmitted");
+
+    // Final DB shape: 1 IV + 2 StandingGrantedBy + 1 AdmissibleFor (investor
+    // only) + 1 StandingRevoked + 1 DebtServiceRevenue + 1
+    // InvestorReportedRevenue = 7 claims.
+    assert_eq!(count(&pool, "claims").await, 7);
+    assert_eq!(count(&pool, "audit").await, 6);
+    assert_eq!(count(&pool, "outbox").await, 6);
+
+    // Underlying IV unchanged.
+    assert!(
+        claim_exists(
+            &pool,
+            "IndependentlyVerifiedRevenue",
+            &[asset(), period(), dec(91), subj("ver_001")],
+        )
+        .await
+    );
+
+    // Both grant provenances preserved.
+    assert!(
+        claim_exists(
+            &pool,
+            "StandingGrantedBy",
+            &[
+                subj("ver_001"),
+                bank.clone(),
+                subj("credit_committee"),
+                subj("grant_001"),
+            ],
+        )
+        .await,
+        "bank grant provenance must persist after revocation"
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "StandingGrantedBy",
+            &[
+                subj("ver_001"),
+                investor.clone(),
+                subj("investor_relations_office"),
+                subj("grant_002"),
+            ],
+        )
+        .await
+    );
+
+    // Revocation recorded as its own append-only claim.
+    assert!(
+        claim_exists(
+            &pool,
+            "StandingRevoked",
+            &[subj("ver_001"), bank.clone(), subj("revoke_001")],
+        )
+        .await
+    );
+
+    // Active admissibility: investor present, bank gone.
+    assert!(
+        claim_exists(&pool, "AdmissibleFor", &[subj("ver_001"), investor.clone()],).await,
+        "investor standing must remain active"
+    );
+    assert!(
+        !claim_exists(&pool, "AdmissibleFor", &[subj("ver_001"), bank.clone()]).await,
+        "bank standing must have been retracted"
+    );
+
+    // Historical decisions both survive.
+    assert!(
+        claim_exists(
+            &pool,
+            "DebtServiceRevenue",
+            &[
+                asset(),
+                period(),
+                dec(91),
+                subj("decision_001"),
+                subj("ver_001"),
+            ],
+        )
+        .await,
+        "the bank's historical decision must survive revocation"
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "InvestorReportedRevenue",
+            &[
+                asset(),
+                period(),
+                dec(91),
+                subj("report_001"),
+                subj("ver_001"),
+            ],
+        )
+        .await
+    );
+
+    // Outbox carries one intent per committed transformation, in causal
+    // order.
+    let intent_types: Vec<String> =
+        sqlx::query_scalar("SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        intent_types,
+        vec![
+            "IndependentVerificationAdmitted".to_string(),
+            "StandingGranted".to_string(),
+            "DebtServiceRevenueAdmitted".to_string(),
+            "StandingGranted".to_string(),
+            "InvestorReportedRevenueAdmitted".to_string(),
+            "StandingRevocationAdmitted".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn decision_after_revocation_rejects_and_writes_nothing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Pre-state: IV admitted, bank standing was granted and then revoked
+    // (so the historical StandingGrantedBy and StandingRevoked claims are
+    // present, but no active AdmissibleFor). This is the shape the chain
+    // test above leaves behind after step 6 for the bank purpose.
+    insert_pre_state(
+        &pool,
+        vec![
+            claim(
+                "IndependentlyVerifiedRevenue",
+                vec![asset(), period(), dec(91), subj("ver_001")],
+            ),
+            claim(
+                "StandingGrantedBy",
+                vec![
+                    subj("ver_001"),
+                    subj(claim_standing::BANK_DEBT_SERVICE),
+                    subj("credit_committee"),
+                    subj("grant_001"),
+                ],
+            ),
+            claim(
+                "StandingRevoked",
+                vec![
+                    subj("ver_001"),
+                    subj(claim_standing::BANK_DEBT_SERVICE),
+                    subj("revoke_001"),
+                ],
+            ),
+        ],
+    )
+    .await;
+
+    // A new debt-service decision must be rejected: the AdmissibleFor
+    // require fails because revocation retracted it.
+    let outcome = propose_against_pg(
+        &pool,
+        &claim_standing::admit_debt_service_revenue(),
+        vec![
+            asset(),
+            period(),
+            dec(91),
+            subj("decision_002"),
+            subj("ver_001"),
+        ],
+        &claim_standing::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
+
+    let PgProposalOutcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(reason.contains("require"), "got reason: {reason}");
+
+    // Pre-state had 3 claims; no audit or outbox rows must appear.
+    assert_eq!(count(&pool, "claims").await, 3, "pre-state unchanged");
     assert_eq!(count(&pool, "audit").await, 0);
     assert_eq!(count(&pool, "outbox").await, 0);
 }
