@@ -16,8 +16,8 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
-  check:
-    name: fmt + clippy + test
+  fmt-clippy:
+    name: fmt + clippy
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,6 +30,8 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          key: fmt-clippy
 
       - name: rustfmt
         run: cargo fmt --all -- --check
@@ -37,5 +39,47 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: test
-        run: cargo test --workspace --all-targets
+  test:
+    name: test (with postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: Apply Morpholog schema
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -f crates/morpholog-core/sql/schema.sql
+
+      # Core unit tests have no DB dependency and run in parallel.
+      - name: test (core, parallel)
+        run: cargo test -p morpholog-core --all-targets
+
+      # PG integration tests share one schema and must run serially.
+      - name: test (postgres, serial)
+        run: cargo test -p morpholog-postgres --all-targets -- --test-threads=1

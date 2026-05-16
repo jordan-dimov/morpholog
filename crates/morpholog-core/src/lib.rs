@@ -177,6 +177,25 @@ pub enum EvalError {
     ValueOfMultipleMatches(String),
 }
 
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EvalError::UnboundVariable(name) => write!(f, "unbound variable: {name}"),
+            EvalError::TypeMismatch(msg) => write!(f, "type mismatch: {msg}"),
+            EvalError::NotPredicate => write!(f, "expression is not a predicate"),
+            EvalError::NotValue => write!(f, "expression is not value-producing"),
+            EvalError::ValueOfZeroMatches(p) => {
+                write!(f, "value({p}, _): zero matches")
+            }
+            EvalError::ValueOfMultipleMatches(p) => {
+                write!(f, "value({p}, _): multiple matches")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
+
 /// Evaluate an invariant against a state. Returns true if the invariant
 /// holds, false if it fails.
 pub fn eval_invariant(inv: &Invariant, state: &State) -> Result<bool, EvalError> {
