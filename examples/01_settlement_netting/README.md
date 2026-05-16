@@ -40,11 +40,13 @@ The third test is the load-bearing one. It proves invariants check the *candidat
 
 ## How it would persist
 
-[`schema.sql`](schema.sql) sketches the PostgreSQL schema (`claims`, `audit`, `outbox`). It applies cleanly to PostgreSQL 17:
+The Morpholog runtime targets PostgreSQL 17+. The schema is **canonical runtime infrastructure** — `claims`, `audit`, `outbox` — and lives at [`crates/morpholog-core/sql/schema.sql`](../../crates/morpholog-core/sql/schema.sql). It is not example-specific.
+
+From the repo root:
 
 ```bash
 createdb morpholog_dev
-psql morpholog_dev -f schema.sql
+psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
 The runtime is not yet wired to the database; the Rust kernel currently runs against in-memory state. Wiring up PostgreSQL is the next milestone — the schema is the agreed shape that wiring will target.

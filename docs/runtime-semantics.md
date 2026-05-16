@@ -134,7 +134,7 @@ Steps 1–7 are atomic. Post-commit, outbox intents deliver at-least-once via wo
 - No "claim language" or "intent language" exposed to users.
 - No entities, classes, services, or projection forms.
 - No invariant lifecycle. v0 has one canonical epoch; all invariants are `version: 1`, status `enforced`.
-- No SQL generation from claim shapes. v0 uses a small hand-written PG schema for claims, audit, outbox.
+- No SQL generation from claim shapes. v0 uses a small hand-written PG schema at `crates/morpholog-core/sql/schema.sql` for the runtime tables (claims, audit, outbox).
 - No model checker; the decidable-core spec is a later artefact.
 - No units. No floating-point arithmetic.
 
