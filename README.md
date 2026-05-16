@@ -1,16 +1,12 @@
 # Morpholog
 
-An experimental runtime for business systems where the rules that decide whether state may be admitted as legitimate are enforced by the language itself, not by code somebody remembered to write.
+An experimental runtime for business systems where the rules that decide what may legitimately enter the records are enforced by the language itself — not by code somebody remembered to write.
 
-## What it is
+## The failure it addresses
 
-Business software has spent decades trying to make this guarantee from the outside — validation layers, ORM hooks, stored procedures, scheduled reconciliation scripts, periodic audits, end-of-day batch jobs. The result is the kind of failure every operator of a serious business system eventually recognises: the records say one thing, the reports say another, and nobody can explain when the drift started.
+Anyone who has worked closely with a serious business system — a trading book, a general ledger, a regulated lending platform, a settlement engine — knows the family of bugs Morpholog targets. The records and the reports disagree. Yesterday's number is no longer today's number, and nobody can explain when it changed. The audit trail can show *what* happened, but not whether what happened was *legitimate under the rules in force at the time*. The rules themselves are scattered across validation layers, ORM hooks, stored procedures, end-of-day reconciliation scripts, and tribal knowledge in the heads of senior staff. Business software has spent decades trying to make that legitimacy guarantee from the outside; the result is the kind of long-tail failure every operator of a serious system eventually recognises.
 
-Morpholog moves the legitimacy boundary into the language. The runtime is built on three primitives:
-
-- **Claims** — admitted assertions about subjects, kept with full provenance. State is a set of claims, not a snapshot of mutable rows.
-- **Invariants** — rules over admitted state that must always hold.
-- **Transformations** — the only path by which state may change. A transformation proposes a set of additions, removals, and outbound intents; the runtime evaluates every active invariant against the result; if any fails, the transformation is rejected atomically — no claim is written, no instruction is sent.
+Morpholog moves the legitimacy boundary *into* the language. State is no longer a soup of mutable rows. It is a set of **claims** — typed assertions admitted into governed state under a specific authority, at a specific moment, by a specific transformation, with full provenance. The rules that must always hold over admitted state are **invariants**. The only way claims change is through a **transformation**, which proposes a set of additions, removals, and outbound effects; the runtime checks every active invariant against the proposed result; if any fails, the transformation is rejected atomically and nothing is written or sent.
 
 There are no entities, no classes, no ad-hoc validators, no reconciliation scripts. The discipline is exact:
 
@@ -18,18 +14,41 @@ There are no entities, no classes, no ad-hoc validators, no reconciliation scrip
 
 That is the entire surface area.
 
-## What that means in practice
+## What it looks like
 
-Consider any system that needs to answer questions like these:
+Surface syntax is illustrative — the parser is deliberately deferred. The shape, drawn from the double-entry ledger example, is small enough to read in a sitting:
 
-- *What did we believe at the close of business last Tuesday, under the rules in force then?*
+```
+invariant balanced_posted_entry:
+    JournalEntry(entry, _, _) implies
+        sum { d | JournalLine(entry, _, d, _) }
+        == sum { c | JournalLine(entry, _, _, c) }
+
+transformation post_simple_entry(
+    entry_id, posting_date, period,
+    debit_account, credit_account, amount
+):
+    require not PeriodClosed(period)
+    assert JournalEntry(entry_id, posting_date, period)
+    assert JournalLine(entry_id, debit_account, amount, 0)
+    assert JournalLine(entry_id, credit_account, 0, amount)
+    emit JournalEntryPosted(entry_id)
+```
+
+The invariant says what must be true of state — debits and credits balance for every posted entry. The transformation is the only path by which a journal entry can enter state, and it is admitted only if the period is open and the result satisfies every active invariant. If anything fails, no claim is written and no `JournalEntryPosted` notification is sent. The fundamental accounting equation is not a check the application code performs — it is a property of the runtime.
+
+## Why this matters
+
+Consider questions a controller, auditor, or risk officer might ask of any serious business system:
+
 - *Why does this report differ from the one we filed three months ago?*
-- *Who authorised this entry, under what limit, and when?*
+- *Who authorised this entry, and under what limit?*
 - *If the authorisation we relied on was rescinded yesterday, was yesterday's decision still legitimate?*
+- *What did the books say at quarter-end, under the close rules in force then?*
 
-In conventional software these are answered by detective work — searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog the raw material for those answers — claims, transformations, audit rows, and supersession lineage — is preserved by construction; the query and projection machinery that turns it into reproducible reports is part of what is being built (see [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md)).
+In conventional software these get answered by detective work — searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog the raw material is preserved by construction: claims, transformations, audit rows, and supersession lineage are all governed state, never overwritten by accident. The query and projection machinery that would turn that raw material into reproducible reports — derived claims, as-of evaluation — is named on the roadmap (see [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md)) and is what the next worked examples will push on.
 
-Four worked examples in this repository show the pattern in increasing depth:
+Four worked examples already in this repository show the pattern in increasing depth:
 
 - [**Bilateral settlement netting**](examples/01_settlement_netting/) — invariants that catch arithmetic and exclusion errors before any state changes.
 - [**Revenue restatement**](examples/02_revenue_restatement/) — historical claims survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims.
@@ -38,34 +57,11 @@ Four worked examples in this repository show the pattern in increasing depth:
 
 Each is proven both in-memory and durably against PostgreSQL.
 
-## A small illustrative example
-
-Surface syntax is not final. The shape:
-
-```
-invariant net_amount_equals_lines:
-    NetSettlement(net, _, _, amount) implies
-        amount == sum { x | SettlementLine(line, net, x) }
-
-transformation create_net_settlement(party_a, party_b, lines):
-    require forall { line | line in lines }:
-        ApprovedSettlementLine(line) and not Netted(line)
-    let net = new Subject()
-    let amount = sum { x | line in lines and LineAmount(line, x) }
-    assert NetSettlement(net, party_a, party_b, amount)
-    for line in lines:
-        assert SettlementLine(line, net, LineAmount(line))
-        assert Netted(line)
-    emit NetSettlementCreated(net)
-```
-
-The invariant says what must be true of state. The transformation is the only path by which state may change. If the transformation would produce a state where the invariant does not hold, the runtime refuses to commit it.
-
 ## Where Morpholog ends
 
-Morpholog is deliberately not the language you write a whole business system in. User interfaces, market data, reports, dashboards, search, machine learning, optimisation — all of this lives outside Morpholog and uses normal tools. What Morpholog owns is the *legitimacy surface*: the part of the system where the question "may this be admitted as legitimate?" must have a definite answer.
+Morpholog is deliberately not the language you write a whole business system in. User interfaces, market data, reports, dashboards, search, machine learning, optimisation, integrations — all of this lives outside Morpholog and uses normal tools. What Morpholog owns is the *legitimacy surface*: the part of the system where the question "may this be admitted as legitimate?" must have a definite answer.
 
-Measured in lines of code, that is always a minority of a real system. Measured in failure modes prevented, it can be most of what matters. The deeper framing — what the project is for, what it should grow into, and what it must never become — lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
+Measured in lines of code, that is always a small fraction of a real business system. Measured in failure modes prevented, it can be most of what matters. The deeper framing — what the project is for, what it should grow into, and what it must never become — lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
 
 ---
 
@@ -92,7 +88,7 @@ Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (asy
 
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) — what Morpholog is for, the four language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) — semantics that the `morpholog-core` kernel realises.
-- [`docs/postgres-persistence-v0.md`](docs/postgres-persistence-v0.md) — historical design pin for the PostgreSQL adapter.
+- [`docs/forced-by-examples.md`](docs/forced-by-examples.md) — retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## Requirements

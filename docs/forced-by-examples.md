@@ -10,7 +10,7 @@ The project's pacing discipline — *smallest possible increment that produces a
 - **What did we consider and reject?** The credible alternatives, and why we did not pick them.
 - **What does this mean for future examples?** The pattern the decision sets and where it is likely to apply or break next.
 
-The doc covers Examples 1–3 (settlement netting, revenue restatement, claim standing) as of the third example's completion in PR #9. It will be extended as later examples crystallize further decisions.
+The doc now covers Examples 1–4 (settlement netting, revenue restatement, claim standing, double-entry ledger with period close). It is extended each time a worked example crystallizes a decision the forward-looking doctrine docs hadn't yet pinned.
 
 ## Decisions forced by the examples
 
