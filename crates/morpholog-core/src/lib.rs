@@ -143,8 +143,17 @@ pub enum EvalValue {
 
 /// A grounded claim: all args are values, no variables or wildcards.
 ///
-/// JSON encoding shape: `{ "predicate": "...", "args": [ ... ] }`. Suitable
-/// for `audit.asserted_claims` / `audit.retracted_claims` JSONB arrays.
+/// JSON encoding shape: `{ "predicate": "...", "args": [ ... ] }`.
+///
+/// Used as-is for elements of `audit.asserted_claims` and
+/// `audit.retracted_claims` (each column is a JSONB array of these objects).
+///
+/// For row writes to the `claims` table itself, the PG adapter **splits**
+/// the claim across two columns: `predicate_name` (text, from `predicate`)
+/// and `arguments` (JSONB array, from `args`). The `arguments` column has
+/// a CHECK constraint that requires `jsonb_typeof(arguments) = 'array'`,
+/// so writing the full object there would fail. The `claim_args_serialise_as_a_json_array`
+/// test pins this contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimInstance {
     pub predicate: String,
@@ -414,9 +423,17 @@ fn resolve_term(t: &Term, bindings: &Bindings) -> Result<EvalValue, EvalError> {
 
 /// A resolved intent: all args are values, ready to be enqueued in an outbox.
 ///
-/// JSON encoding shape: `{ "name": "...", "args": [ ... ] }`. Suitable for
-/// `audit.emitted_intents` JSONB arrays and for the `outbox.arguments`
-/// column on each outbox row.
+/// JSON encoding shape: `{ "name": "...", "args": [ ... ] }`.
+///
+/// Used as-is for elements of `audit.emitted_intents` (a JSONB array of these
+/// objects).
+///
+/// For row writes to the `outbox` table, the PG adapter **splits** the intent
+/// across two columns: `intent_type` (text, from `name`) and `arguments`
+/// (JSONB array, from `args`). The `arguments` column has a CHECK constraint
+/// that requires `jsonb_typeof(arguments) = 'array'`, so writing the full
+/// object there would fail. The `intent_args_serialise_as_a_json_array`
+/// test pins this contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentInstance {
     pub name: String,
@@ -1681,5 +1698,39 @@ mod tests {
         assert!(json.contains(&format!(r#""value":"{exact}""#)));
         let parsed: EvalValue = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, v);
+    }
+
+    #[test]
+    fn claim_args_serialise_as_a_json_array() {
+        // Pins the split contract: the `claims.arguments` column has a CHECK
+        // constraint `jsonb_typeof(arguments) = 'array'`. The PG adapter
+        // writes only the `args` field of a ClaimInstance into that column.
+        let c = ClaimInstance {
+            predicate: "Quantity".to_string(),
+            args: vec![subj("trade123"), dec(10)],
+        };
+        let args_json = serde_json::to_string(&c.args).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&args_json).unwrap();
+        assert!(
+            parsed.is_array(),
+            "claim.args must serialise as a JSON array"
+        );
+    }
+
+    #[test]
+    fn intent_args_serialise_as_a_json_array() {
+        // Pins the split contract: the `outbox.arguments` column has a CHECK
+        // constraint `jsonb_typeof(arguments) = 'array'`. The PG adapter
+        // writes only the `args` field of an IntentInstance into that column.
+        let i = IntentInstance {
+            name: "NetSettlementCreated".to_string(),
+            args: vec![subj("net1"), dec(100)],
+        };
+        let args_json = serde_json::to_string(&i.args).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&args_json).unwrap();
+        assert!(
+            parsed.is_array(),
+            "intent.args must serialise as a JSON array"
+        );
     }
 }
