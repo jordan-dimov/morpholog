@@ -110,3 +110,16 @@ If the next worked example is double-entry ledger with period close (as outlined
 - **Likely to defer:** typed predicate declarations, derived claims (trial balance as projection), actor context, as-of evaluation. Each is an "if forced" affordance from `scope-and-ambition.md` — Example 4 alone probably does not force them.
 
 If those predictions hold, Example 4 reuses the affordances Examples 1–3 already forced. If a new affordance is forced, this document gains another section.
+
+### Update — confirmed by Example 4
+
+The predictions above were written before Example 4 was implemented. Both the in-memory and durable proofs landed in the same PR and **all four predictions held**. No new IR primitive was forced.
+
+Specifics:
+
+- **Balance is `Eq(Sum, Sum)` with no new aggregation primitive.** The fundamental accounting equation — `sum { d | JournalLine(entry, _, d, _) } == sum { c | JournalLine(entry, _, _, c) }` — composes directly with existing IR variants. `eval_value` already handles `Expr::Sum` (returning `EvalValue::Decimal`); `Expr::Eq` evaluates both sides through `eval_value`; the comparison is decimal-to-decimal equality. Confirmed by the `unbalanced_entry_rejected_by_invariant` test, which catches a 5-unit credit shortfall on candidate state.
+- **Period close is admission-gating via `require not PeriodClosed(period)`** in the posting transformations. No invariant ties `JournalEntry` to `PeriodClosed`, which means closing a period does not invalidate historical entries (the same lesson as the require-vs-invariant section above). Confirmed by `closed_period_rejects_normal_posting` and by `restatement_into_closed_period_preserves_original`.
+- **Restatement reuses `Supersedes`** from Example 2 with no shape changes — `Supersedes(new_entry_id, prior_entry_id)` works for journal entries exactly as for revenue verifications. The `at_most_one_direct_successor` invariant is re-declared in `double_entry_ledger` but is structurally identical to the Example 2 version.
+- **The three-bucket append-only / retractable / append-only classification holds completely** for Example 4: every predicate is content (`JournalEntry`, `JournalLine`), terminal state (`PeriodClosed`), or lineage (`Supersedes`). No retractable pointers were needed — callers walk the `Supersedes` chain instead of consulting a current pointer.
+
+The clean reuse outcome is itself informative: the accumulated affordances from Examples 1–3 are sufficient to express a textbook accounting workflow. The next semantic frontier — *derived claims* for read-side projections like trial balance and account-balance lookups — is what Example 5 will push on. That is where new pressure is expected to surface; Examples 1–4 give a stable baseline for the write/admission boundary, but "stable baseline" is not the same as "finished," and later examples may yet stress admission via derived state or as-of evaluation in ways the current shape cannot express.

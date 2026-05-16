@@ -1,0 +1,75 @@
+-- Double-entry ledger with period close — canonical v0 example for
+-- the fundamental accounting equation and period-close discipline.
+--
+-- Domain: a business posts journal entries throughout an accounting
+-- period. Every posted entry must satisfy the foundational rule of
+-- double-entry bookkeeping: the sum of its line debits equals the
+-- sum of its line credits. When a period closes (at month-end, quarter-
+-- end, year-end), no new entries dated within that period may be
+-- posted by normal means. Errors discovered in a closed period are
+-- corrected by *restatement* — a separate transformation that admits
+-- a new entry and records a `Supersedes` link to the original. The
+-- original is preserved as the record of what was filed.
+--
+-- The key moves: balance is an eternal invariant (every entry in
+-- admitted state must balance); period close is an admission gate
+-- (`require` in the posting transformations, not an invariant) so
+-- that closing a period does not invalidate the historical postings
+-- made before it. Restatement reuses the `Supersedes` lineage pattern
+-- proven in Example 2.
+
+
+invariant balanced_posted_entry:
+    JournalEntry(entry, _, _) implies
+        sum { d | JournalLine(entry, _, d, _) }
+        == sum { c | JournalLine(entry, _, _, c) }
+
+
+invariant at_most_one_direct_successor:
+    Supersedes(new_a, old)
+    and Supersedes(new_b, old)
+        implies new_a == new_b
+
+
+transformation post_simple_entry(
+    entry_id, posting_date, period,
+    debit_account, credit_account, amount
+):
+    require not PeriodClosed(period)
+    assert JournalEntry(entry_id, posting_date, period)
+    assert JournalLine(entry_id, debit_account, amount, 0)
+    assert JournalLine(entry_id, credit_account, 0, amount)
+    emit JournalEntryPosted(entry_id)
+
+
+transformation post_split_entry(
+    entry_id, posting_date, period,
+    debit_account, debit_amount,
+    credit_a_account, credit_a_amount,
+    credit_b_account, credit_b_amount
+):
+    require not PeriodClosed(period)
+    assert JournalEntry(entry_id, posting_date, period)
+    assert JournalLine(entry_id, debit_account, debit_amount, 0)
+    assert JournalLine(entry_id, credit_a_account, 0, credit_a_amount)
+    assert JournalLine(entry_id, credit_b_account, 0, credit_b_amount)
+    emit JournalEntryPosted(entry_id)
+
+
+transformation close_period(period):
+    require not PeriodClosed(period)
+    assert PeriodClosed(period)
+    emit PeriodClosed(period)
+
+
+transformation restate_entry(
+    new_entry_id, prior_entry_id, posting_date, period,
+    debit_account, credit_account, amount
+):
+    require JournalEntry(prior_entry_id, _, period)
+    require not Supersedes(_, prior_entry_id)
+    assert JournalEntry(new_entry_id, posting_date, period)
+    assert JournalLine(new_entry_id, debit_account, amount, 0)
+    assert JournalLine(new_entry_id, credit_account, 0, amount)
+    assert Supersedes(new_entry_id, prior_entry_id)
+    emit JournalEntryRestated(new_entry_id, prior_entry_id)

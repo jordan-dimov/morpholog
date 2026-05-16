@@ -15,5 +15,6 @@
 //! as teaching fixtures, not a contract.
 
 pub mod claim_standing;
+pub mod double_entry_ledger;
 pub mod revenue_restatement;
 pub mod settlement_netting;

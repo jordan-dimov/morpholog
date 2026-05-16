@@ -29,11 +29,12 @@ Consider any system that needs to answer questions like these:
 
 In conventional software these are answered by detective work — searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog the raw material for those answers — claims, transformations, audit rows, and supersession lineage — is preserved by construction; the query and projection machinery that turns it into reproducible reports is part of what is being built (see [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md)).
 
-Three worked examples in this repository show the pattern in increasing depth:
+Four worked examples in this repository show the pattern in increasing depth:
 
 - [**Bilateral settlement netting**](examples/01_settlement_netting/) — invariants that catch arithmetic and exclusion errors before any state changes.
 - [**Revenue restatement**](examples/02_revenue_restatement/) — historical claims survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims.
 - [**Claim standing**](examples/03_claim_standing/) — the same underlying claim can carry different admissibility for different decisions, granted by different authorities, lost without mutating the claim itself.
+- [**Double-entry ledger with period close**](examples/04_double_entry_ledger/) — the fundamental accounting equation enforced as an invariant; period close as an admission gate; closed periods corrected by restatement that preserves the original record.
 
 Each is proven both in-memory and durably against PostgreSQL.
 
@@ -70,12 +71,12 @@ Measured in lines of code, that is always a minority of a real system. Measured 
 
 ## Project status
 
-Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Three worked examples are proven both in-memory and durably against PostgreSQL. There is no parser, no usable CLI beyond `--version`, and no outbox worker — these are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
+Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Four worked examples are proven both in-memory and durably against PostgreSQL. There is no parser, no usable CLI beyond `--version`, and no outbox worker — these are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
 
 ```bash
-cargo test -p morpholog-core --all-targets                              # 33 tests, in-memory
+cargo test -p morpholog-core --all-targets                              # 45 tests, in-memory
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 12 tests, durable
+  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 14 tests, durable
 ```
 
 First-time setup (skip if the schema is already applied):
@@ -92,7 +93,7 @@ Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (asy
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) — what Morpholog is for, the four language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) — semantics that the `morpholog-core` kernel realises.
 - [`docs/postgres-persistence-v0.md`](docs/postgres-persistence-v0.md) — historical design pin for the PostgreSQL adapter.
-- Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/).
+- Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## Requirements
 
