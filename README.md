@@ -4,11 +4,11 @@ An experimental runtime for business systems where the rules that decide what ma
 
 ## The failure it addresses
 
-Anyone who has worked closely with a serious business system - a trading book, a general ledger, a regulated lending platform, a settlement engine - knows the family of bugs Morpholog targets. The records and the reports disagree. Yesterday's number is no longer today's number, and nobody can explain when it changed. The audit trail can show *what* happened, but not whether what happened was *legitimate under the rules in force at the time*. The rules themselves are scattered across validation layers, ORM hooks, stored procedures, end-of-day reconciliation scripts, and tribal knowledge in the heads of senior staff. Business software has spent decades trying to make that legitimacy guarantee from the outside; the result is the kind of long-tail failure every operator of a serious system eventually recognises.
+Anyone who has worked closely with a serious business system - a trading book, a general ledger, a regulated lending platform, a settlement engine - knows the family of bugs Morpholog targets. The records and the reports disagree. Yesterday's number is no longer today's number, and nobody can explain when it changed. The audit trail can show *what* happened, but not whether what happened was *legitimate under the rules in force at the time*. The rules themselves are scattered across validation layers, ORM hooks, stored procedures, reconciliation scripts, and tribal knowledge. Decades of business software have tried to make that legitimacy guarantee from the outside, and the long-tail failures are what operators learn to live with.
 
-Morpholog moves the legitimacy boundary *into* the language. State is no longer a soup of mutable rows. It is a set of **claims** - typed assertions admitted into governed state under a specific authority, at a specific moment, by a specific transformation, with full provenance. The rules that must always hold over admitted state are **invariants**. The only way claims change is through a **transformation**, which proposes a set of additions, removals, and outbound effects; the runtime checks every active invariant against the proposed result; if any fails, the transformation is rejected atomically and nothing is written or sent.
+Morpholog moves the legitimacy boundary *into* the language. State is a set of **claims** - typed assertions admitted into governed state under a specific authority, at a specific moment, by a specific transformation. The rules that must always hold are **invariants**. The only way claims change is through a **transformation**, which proposes a set of additions, removals, and outbound effects; the runtime checks every active invariant against the proposed result, and if any fails the transformation is rejected atomically - nothing is written and nothing is sent.
 
-There are no entities, no classes, no ad-hoc validators, no reconciliation scripts. The discipline is exact:
+There are no entities, classes, ad-hoc validators, or reconciliation scripts. The discipline is exact:
 
 > Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.
 
@@ -89,8 +89,7 @@ Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (asy
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the four language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics that the `morpholog-core` kernel realises.
 - [`docs/forced-by-examples.md`](docs/forced-by-examples.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
-- [`docs/mvp-cut.md`](docs/mvp-cut.md) - decision record for the MVP cut line. Concrete operational threshold ("a developer can run governed transformations against PostgreSQL without editing Morpholog's Rust source") and the PRs that crossed it.
-- [`docs/derived-claims-sketch.md`](docs/derived-claims-sketch.md) - design sketch for Example 5 (derived claims for read-side projections). Records the open design questions that the implementation PR has to answer; accompanied by a spike test in `crates/morpholog-core/tests/derived_claims_spike.rs`.
+- [`docs/mvp-cut.md`](docs/mvp-cut.md) - decision record for the MVP cut line and the PRs that crossed it.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## Requirements

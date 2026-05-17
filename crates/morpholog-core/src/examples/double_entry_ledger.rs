@@ -367,12 +367,12 @@ pub fn all_invariants() -> Vec<Invariant> {
 /// row per distinct account; the balance is debits minus credits.
 ///
 /// This is the worked example for Example 5 (derived claims). The
-/// derived claim is enumerable via [`crate::enumerate_derived`]; in
-/// v0 it is not added to admitted state, not visible to invariants
-/// or transformations, not persisted by the PostgreSQL adapter, and
-/// not exposed through the CLI. See `docs/derived-claims-sketch.md`
-/// for the design history and `docs/forced-by-examples.md` for the
-/// retrospective on what Example 5 forced.
+/// derived claim is enumerable via [`crate::enumerate_derived`] (or
+/// `morpholog inspect derived double_entry_ledger TrialBalanceRow`
+/// from the CLI). In v0 it is not added to admitted state, not
+/// visible to invariants or transformations, not persisted, and not
+/// recursively referenceable from another derived claim's body. See
+/// `docs/forced-by-examples.md` for the Example 5 retrospective.
 ///
 /// Shape:
 ///

@@ -86,7 +86,7 @@ This single construct subsumes:
 
 Derived claims are the answer to "how does Morpholog own the read side without becoming a query engine?" - by making the read side a governed artefact rather than a free query surface.
 
-Derived claims are a **candidate affordance, not yet a committed design.** Their exact semantics - what may appear on the right-hand side, when materialisation is required vs optional, how invalidation propagates, how provenance is recorded - must be forced by worked examples (especially Examples 4 and 5 on the roadmap below) before parser or runtime support is locked in.
+The first cut of derived claims landed with Example 5 (trial balance over the double-entry ledger): `DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, no materialisation, no recursion, not visible to invariants or transformations. Later questions - materialisation, invalidation, provenance, recursion through other derived claims, visibility to invariants - remain forced-by-examples territory; see `docs/forced-by-examples.md` for what Example 5 forced and what was explicitly deferred.
 
 ### 3. As-of, as a single operator
 
@@ -152,12 +152,14 @@ Proven by:
 
 Standing first (the next semantic frontier already named in the README), then derived claims as the disciplined answer to read-side legitimacy.
 
-To be proven by:
-- **Example 3 - Claim standing.** `AdmissibleFor(claim, purpose)` as the central pattern: which admitted claims may be used for which decisions, and how that standing is acquired and lost without mutating the claims themselves.
-- **Example 4 - Double-entry ledger with period close.** Whether Xero-like accounting cores are a credible target. Tests posted-balance invariants, closed-period rejection, restatement-with-supersession for prior periods, and admissibility of journal categories (draft, posted, reversing, adjusting) for different reports.
-- **Example 5 - Position / exposure as derived claims.** Whether ETRM-like position/exposure read-side outputs can be derived claims with provenance, materialised, and queried as-of, without Morpholog becoming a query engine.
+Proven by:
+- **Example 3 - Claim standing.** `AdmissibleFor(claim, purpose)` as the central pattern: which admitted claims may be used for which decisions, and how that standing is acquired and lost without mutating the claims themselves. (Landed; forced `Value::Subject` and the require-vs-invariant distinction.)
+- **Example 4 - Double-entry ledger with period close.** Whether Xero-like accounting cores are a credible target. Posted-balance invariants, closed-period rejection, restatement-with-supersession for prior periods. (Landed; reused existing affordances without forcing new ones.)
+- **Example 5 - Trial balance as a derived claim.** Whether read-side projections can be governed by the same model as admitted state. (Landed; forced `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`. Materialisation, provenance, recursion, and as-of evaluation remain deferred.)
 
-Level 2 also drives the language affordances: typed predicate declarations and derived claims become well-specified once these examples force their shape. As-of and actor context likely follow from Example 4 and Example 3 respectively.
+The remaining ETRM-shaped pressure (position / exposure / as-of evaluation of derived views over long audit logs) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
+
+Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. As-of and actor context likely follow from a future temporal-correction example and from Example 3 respectively.
 
 ### Level 3 - Governed external and integration provenance
 

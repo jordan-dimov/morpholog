@@ -14,7 +14,7 @@
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
 pub mod examples;
@@ -263,8 +263,8 @@ impl Program {
 /// to [`State.claims`], *not* visible to invariants or
 /// transformations, *not* persisted by the PostgreSQL adapter, and
 /// *not* recursively referenceable from another derived claim's body.
-/// See `docs/derived-claims-sketch.md` for the design history; see
-/// `docs/forced-by-examples.md` for what Example 5 forced.
+/// See `docs/forced-by-examples.md` for the Example 5 retrospective
+/// and what derived claims forced into the IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedClaim {
     pub predicate: String,
@@ -539,8 +539,6 @@ pub fn enumerate_derived(
     derived: &DerivedClaim,
     state: &State,
 ) -> Result<Vec<ClaimInstance>, EvalError> {
-    use std::collections::BTreeSet;
-
     let raw_bindings = find_matches(&derived.domain, state, &Bindings::new())?;
 
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
@@ -575,6 +573,83 @@ pub fn enumerate_derived(
         });
     }
     Ok(out)
+}
+
+/// Return the set of predicate names this expression references
+/// anywhere in its tree. Used by the PostgreSQL adapter's read path
+/// to load only the claims a derived-claim enumeration needs,
+/// instead of fetching the whole `morpholog.claims` table.
+///
+/// The match below is **exhaustive over `Expr` variants on purpose**
+/// (no `_` arm). If a future PR adds a new `Expr` variant, the
+/// compiler will refuse this function until the new variant is
+/// handled. That compile-time check is what keeps the analysis
+/// honest: a missed variant here would silently produce
+/// wrong-answer bugs at runtime - the read path would skip claims
+/// the kernel actually needs, and `enumerate_derived` would return
+/// an answer computed against an incomplete state.
+///
+/// `Neq`, `Term`, and `In` take only `Term`s (variables, wildcards,
+/// or literals), none of which can reference a predicate; they
+/// contribute nothing.
+pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Claim { predicate, .. } => {
+            out.insert(predicate.clone());
+        }
+        Expr::ValueOf {
+            predicate, default, ..
+        } => {
+            out.insert(predicate.clone());
+            if let Some(d) = default {
+                predicates_referenced_by_expr(d, out);
+            }
+        }
+        Expr::Implies { left, right } => {
+            predicates_referenced_by_expr(left, out);
+            predicates_referenced_by_expr(right, out);
+        }
+        Expr::And(exprs) => {
+            for e in exprs {
+                predicates_referenced_by_expr(e, out);
+            }
+        }
+        Expr::Not(e) | Expr::Exists { body: e, .. } => {
+            predicates_referenced_by_expr(e, out);
+        }
+        Expr::Eq(l, r) | Expr::Sub(l, r) => {
+            predicates_referenced_by_expr(l, out);
+            predicates_referenced_by_expr(r, out);
+        }
+        Expr::Sum { body, .. } => {
+            predicates_referenced_by_expr(body, out);
+        }
+        Expr::Forall { source, body, .. } => {
+            predicates_referenced_by_expr(source, out);
+            predicates_referenced_by_expr(body, out);
+        }
+        Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => {
+            // No predicate references; operate on Terms only.
+        }
+    }
+}
+
+/// Return the set of predicate names that `enumerate_derived(derived,
+/// state)` will need to read out of `state`. Computed as the union of
+/// the `domain` expression's referenced predicates and every
+/// `DerivedValue.expr`'s referenced predicates.
+///
+/// The `predicate` field on the derived claim itself is **not**
+/// included: that names the OUTPUT predicate of the enumeration,
+/// which the kernel never reads from state. Including it would tell
+/// callers to load claims they have no use for.
+pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    predicates_referenced_by_expr(&derived.domain, &mut out);
+    for v in &derived.values {
+        predicates_referenced_by_expr(&v.expr, &mut out);
+    }
+    out
 }
 
 /// `EvalValue` does not derive `Ord`. Wrap it in a newtype that
@@ -1330,6 +1405,126 @@ mod tests {
             cash_positions.len(),
             2,
             "both JournalLine claims share account_cash at position 1"
+        );
+    }
+
+    /// Pins the contract of `predicates_referenced_by_expr` by
+    /// building an `Expr` that touches every variant carrying at
+    /// least one nested `Expr` or `Claim`-shaped node. Each `Claim`
+    /// and `ValueOf` site uses a unique predicate name. The
+    /// extracted set must contain every planted name.
+    ///
+    /// This is the runtime safety net for the analysis. The
+    /// compile-time safety net is the exhaustive `match` in
+    /// `predicates_referenced_by_expr` itself: if a new `Expr`
+    /// variant is added without handling, the function will not
+    /// compile.
+    #[test]
+    fn predicates_referenced_by_expr_covers_every_variant() {
+        // Helper to build a Claim-shaped Expr with a given predicate.
+        let claim = |p: &str| Expr::Claim {
+            predicate: p.to_string(),
+            args: vec![],
+        };
+        // Helper to build a ValueOf-shaped Expr with a given predicate
+        // and optionally a default expression that may carry more
+        // predicates.
+        let value_of = |p: &str, default: Option<Expr>| Expr::ValueOf {
+            predicate: p.to_string(),
+            args: vec![Term::Wildcard],
+            default: default.map(Box::new),
+        };
+
+        let expr = Expr::And(vec![
+            // Implies wraps two sides; both should be visited.
+            Expr::Implies {
+                left: Box::new(claim("P_implies_left")),
+                right: Box::new(claim("P_implies_right")),
+            },
+            // Exists has a body.
+            Expr::Exists {
+                binding: "x".to_string(),
+                body: Box::new(claim("P_exists_body")),
+            },
+            // Not wraps one expression.
+            Expr::Not(Box::new(claim("P_not_body"))),
+            // Eq operates on two sub-expressions.
+            Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
+            // Sub operates on two sub-expressions.
+            Expr::Sub(
+                Box::new(claim("P_sub_left")),
+                Box::new(claim("P_sub_right")),
+            ),
+            // Sum wraps a body.
+            Expr::Sum {
+                value: Term::Var("v".to_string()),
+                binding: "v".to_string(),
+                body: Box::new(claim("P_sum_body")),
+            },
+            // Forall has both source and body.
+            Expr::Forall {
+                binding: "y".to_string(),
+                source: Box::new(claim("P_forall_source")),
+                body: Box::new(claim("P_forall_body")),
+            },
+            // ValueOf carries its own predicate AND a recursive
+            // default expression with another predicate.
+            value_of("P_valueof_self", Some(claim("P_valueof_default"))),
+            // Variants that carry no predicate references: must
+            // contribute nothing. If any of these incorrectly added
+            // entries the test below would still pass, but the
+            // exhaustive set comparison further down catches
+            // unexpected predicates too.
+            Expr::Neq(Term::Var("a".to_string()), Term::Var("b".to_string())),
+            Expr::Term(Term::Var("z".to_string())),
+            Expr::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
+        ]);
+
+        let mut got = BTreeSet::new();
+        predicates_referenced_by_expr(&expr, &mut got);
+
+        let expected: BTreeSet<String> = [
+            "P_implies_left",
+            "P_implies_right",
+            "P_exists_body",
+            "P_not_body",
+            "P_eq_left",
+            "P_eq_right",
+            "P_sub_left",
+            "P_sub_right",
+            "P_sum_body",
+            "P_forall_source",
+            "P_forall_body",
+            "P_valueof_self",
+            "P_valueof_default",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(
+            got, expected,
+            "every Expr variant that carries a predicate reference must contribute it"
+        );
+    }
+
+    /// Sanity-check against the real worked example: the trial-balance
+    /// derived claim from `examples::double_entry_ledger` should
+    /// extract exactly `{"JournalLine"}` - the `JournalEntry` claims
+    /// in the ledger are not touched by `enumerate_derived`. This is
+    /// the test that pays for the read-path optimization: the PG
+    /// adapter knows to skip the JournalEntry rows.
+    #[test]
+    fn predicates_referenced_by_trial_balance_derived_excludes_unused_predicates() {
+        let derived = examples::double_entry_ledger::trial_balance_row();
+        let footprint = predicates_referenced_by_derived(&derived);
+        let expected: BTreeSet<String> = ["JournalLine"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            footprint, expected,
+            "trial_balance_row reads only JournalLine; the derived's own \
+             predicate (TrialBalanceRow) must not appear in the footprint, \
+             and unrelated ledger predicates (JournalEntry, PeriodClosed, \
+             etc.) must not appear either"
         );
     }
 }

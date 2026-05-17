@@ -148,4 +148,4 @@ The settlement netting program, constructed directly as IR data, executes such t
 2. An invariant-violating attempt (a double-netted line, or an amount mismatch, or a settlement with zero lines) rolls back atomically - no claims changed, no audit written, no outbox row.
 3. The intent in the outbox row does not fire inside the database transaction.
 
-Status (2026-05-16): items 1 and 2 are proved in memory via `propose()` and the netting test suite. Item 3 is structurally satisfied (intents stage as IR data, never resolved to actual side effects) but is not yet wired to PostgreSQL.
+Status: all three items hold both in memory (via `propose()` and the netting test suite) and durably (via `propose_against_pg`). The PostgreSQL adapter commits asserted/retracted claims, the audit row, and the outbox row in one SERIALIZABLE transaction; the intent in the outbox row is staged for an external worker that has not yet been built.

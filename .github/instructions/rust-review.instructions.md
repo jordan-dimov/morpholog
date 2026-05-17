@@ -27,7 +27,7 @@ Apply these in addition to the repo-wide `.github/copilot-instructions.md`. Thes
 ## Morpholog-specific patterns
 
 - Treat IR types (`Invariant`, `Transformation`, `Stmt`, `Expr`, `Term`, `Value`, `Claim`, `Intent`) as a narrow API surface. New variants should be justified by a worked example; new fields on existing variants need stronger justification.
-- `eval_invariant` and `propose()` are load-bearing entry points. Changes to their semantics should be exercised against the existing two examples in `crates/morpholog-core/src/lib.rs#tests`, not just isolated unit tests.
+- `eval_invariant` and `propose()` are load-bearing entry points. Changes to their semantics should be exercised against the worked examples (`crates/morpholog-core/tests/*.rs`, one file per example), not just isolated unit tests.
 - The split between `find_matches` (predicate-side, returns binding extensions) and `eval_value` (value-producing) is deliberate. Don't collapse them - the asymmetry preserves the distinction between "is this true here?" and "what does this evaluate to?".
 - `unify_args` is the single matching point against grounded claim args. Changes ripple through every transformation.
 - Set semantics on claims is enforced by deduplication in `build_candidate_state`. Don't reintroduce multiset behaviour.

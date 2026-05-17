@@ -1,4 +1,4 @@
-# What the first three examples forced into the language
+# What the worked examples forced into the language
 
 Status: retrospective. Companion to [`scope-and-ambition.md`](scope-and-ambition.md) and [`runtime-semantics.md`](runtime-semantics.md). This doc records design moves the runtime made *because a worked example forced them*, not moves we set out to make ex ante. Updated when a new example crystallizes a decision the doctrine docs hadn't yet.
 
@@ -10,7 +10,7 @@ The project's pacing discipline - *smallest possible increment that produces a w
 - **What did we consider and reject?** The credible alternatives, and why we did not pick them.
 - **What does this mean for future examples?** The pattern the decision sets and where it is likely to apply or break next.
 
-The doc now covers Examples 1-4 (settlement netting, revenue restatement, claim standing, double-entry ledger with period close). It is extended each time a worked example crystallizes a decision the forward-looking doctrine docs hadn't yet pinned.
+The doc covers each worked example in chronological order. It is extended each time a new example crystallizes a decision the forward-looking doctrine docs hadn't yet pinned.
 
 ## Decisions forced by the examples
 
@@ -100,29 +100,16 @@ Each entry below was actively considered during one of the three examples and de
 | Sharing IR fixture helpers across example modules | The `morpholog_core::examples::*` modules each re-declare their own IR fixtures; they happen to use the same predicate names (e.g. `IndependentlyVerifiedRevenue` in Examples 2 and 3) without sharing constructor code. Keeps examples independent. |
 | Per-example PostgreSQL schemas | All three examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
 
-## What this means for Example 4 and beyond
+## Example 4: double-entry ledger reused everything, forced nothing
 
-If the next worked example is double-entry ledger with period close (as outlined in `scope-and-ambition.md`'s roadmap), some predictions:
+Example 4 (posted-balance invariants, closed-period admission gating, restatement-with-supersession) landed without forcing any new IR primitive. The accumulated affordances from Examples 1-3 were sufficient. Specifically:
 
-- **Likely to reuse:** the require-vs-invariant distinction (period close is admission gating); history-as-append-only (journal entries are content; period-closed status is a pointer / admissibility; restatement lineage is `Supersedes`); generic standing (a posted journal may have multiple admissibilities - statutory, tax, management).
-- **Likely to stretch:** the *require* semantics - period-close transformations need to reject postings dated within the closed period via require, and the same period cannot be "un-closed" without going through a new restatement transformation. This is the same shape as standing revocation being terminal in v0.
-- **Likely to introduce:** sum-of-balances invariants under the existing `Expr::Sum`. The "debits and credits balance per posted entry" rule is exactly this shape.
-- **Likely to defer:** typed predicate declarations, derived claims (trial balance as projection), actor context, as-of evaluation. Each is an "if forced" affordance from `scope-and-ambition.md` - Example 4 alone probably does not force them.
+- **Balance is `Eq(Sum, Sum)`.** The accounting equation `sum { d | JournalLine(entry, _, d, _) } == sum { c | JournalLine(entry, _, _, c) }` composes directly with existing IR variants. Pinned by `unbalanced_entry_rejected_by_invariant`.
+- **Period close is admission-gating via `require not PeriodClosed(period)`.** No invariant ties `JournalEntry` to `PeriodClosed`, so closing a period does not invalidate historical entries - the same require-vs-invariant lesson as Example 2.
+- **Restatement reuses `Supersedes`** from Example 2 with no shape changes.
+- **The append-only / retractable / append-only three-bucket classification holds**: every predicate is content, terminal state, or lineage. No retractable pointers were needed.
 
-If those predictions hold, Example 4 reuses the affordances Examples 1-3 already forced. If a new affordance is forced, this document gains another section.
-
-### Update - confirmed by Example 4
-
-The predictions above were written before Example 4 was implemented. Both the in-memory and durable proofs landed in the same PR and **all four predictions held**. No new IR primitive was forced.
-
-Specifics:
-
-- **Balance is `Eq(Sum, Sum)` with no new aggregation primitive.** The fundamental accounting equation - `sum { d | JournalLine(entry, _, d, _) } == sum { c | JournalLine(entry, _, _, c) }` - composes directly with existing IR variants. `eval_value` already handles `Expr::Sum` (returning `EvalValue::Decimal`); `Expr::Eq` evaluates both sides through `eval_value`; the comparison is decimal-to-decimal equality. Confirmed by the `unbalanced_entry_rejected_by_invariant` test, which catches a 5-unit credit shortfall on candidate state.
-- **Period close is admission-gating via `require not PeriodClosed(period)`** in the posting transformations. No invariant ties `JournalEntry` to `PeriodClosed`, which means closing a period does not invalidate historical entries (the same lesson as the require-vs-invariant section above). Confirmed by `closed_period_rejects_normal_posting` and by `restatement_into_closed_period_preserves_original`.
-- **Restatement reuses `Supersedes`** from Example 2 with no shape changes - `Supersedes(new_entry_id, prior_entry_id)` works for journal entries exactly as for revenue verifications. The `at_most_one_direct_successor` invariant is re-declared in `double_entry_ledger` but is structurally identical to the Example 2 version.
-- **The three-bucket append-only / retractable / append-only classification holds completely** for Example 4: every predicate is content (`JournalEntry`, `JournalLine`), terminal state (`PeriodClosed`), or lineage (`Supersedes`). No retractable pointers were needed - callers walk the `Supersedes` chain instead of consulting a current pointer.
-
-The clean reuse outcome is itself informative: the accumulated affordances from Examples 1-3 are sufficient to express a textbook accounting workflow. The next semantic frontier - *derived claims* for read-side projections like trial balance and account-balance lookups - is what Example 5 will push on. That is where new pressure is expected to surface; Examples 1-4 give a stable baseline for the write/admission boundary, but "stable baseline" is not the same as "finished," and later examples may yet stress admission via derived state or as-of evaluation in ways the current shape cannot express.
+The clean reuse outcome is itself informative: the accumulated affordances from Examples 1-3 are sufficient to express a textbook accounting workflow. The next semantic frontier - derived claims for read-side projections - was what Example 5 pushed on. See the next section.
 
 ### `DerivedClaim`, `DerivedValue`, and `Expr::Sub`
 
@@ -130,7 +117,7 @@ The clean reuse outcome is itself informative: the accumulated affordances from 
 
 **The pressure:** the Example 4 prediction above named derived claims as the next frontier. Concretely, "what is the balance of every account?" had no expression in the v0 runtime. A caller could iterate `state.claims` in plain Rust and compute the trial balance by hand, but that logic lived outside the governed model. There was no way to say "trial balance is part of the ledger program and these are the rules that define it" alongside the invariants and transformations.
 
-**The design conversation:** PR #19 added a design sketch (`docs/derived-claims-sketch.md`) and a spike test that pinned the target API before any kernel code. The sketch raised eight open design questions; review (recorded in PR #19's polish commit) narrowed the four most consequential ones:
+**The design conversation:** PR #19 added a design sketch and a spike test that pinned the target API before any kernel code. The sketch raised eight open design questions; review (recorded in PR #19's polish commit) narrowed the four most consequential ones:
 
 - The naive `DerivedClaim { predicate, parameters, body }` shape was rejected. It conflated *enumerated* keys (`account`) with *computed* values (`balance`), leaving the evaluator without a principled way to tell them apart.
 - The revised shape splits the two explicitly: `DerivedClaim { predicate, keys, values, domain }` with `DerivedValue { name, expr }` for each computed value, and a separate `domain` expression that enumerates distinct key bindings.
