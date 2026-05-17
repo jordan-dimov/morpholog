@@ -79,16 +79,18 @@ Linear in `N` and essentially independent of `K`. The remaining cost on `propose
 | 10 000 | 1.0 | ~170 ms | **~4 600 ms** | ~2 600 ms |
 | 10 000 | 0.5 | ~170 ms | ~690 ms | ~520 ms |
 
-**The replay is structurally quadratic in the claim count.** Going from `N=1 000` to `N=10 000` (10x) makes `reconstruct` ~140x slower; halving the replay depth at `N=10 000` (`--at 0.5`) makes it ~6.8x faster - both consistent with O(N^2). The cause is the per-row dedupe loop inside `reconstruct_inner`: `claims.iter().any(|c| c == a)` over a growing `claims` Vec for every asserted claim, summing to O(N^2) over the full replay. Same family of pathology as the original write-path quadratic that `PR #22` surfaced and `PR #23` fixed.
+**This asserts-only replay has a quadratic membership-check pathology.** Going from `N=1 000` to `N=10 000` (10x) makes `reconstruct` ~140x slower; halving the replay depth at `N=10 000` (`--at 0.5`) makes it ~6.8x faster - both consistent with O(N^2). The cause is the per-row dedupe inside `reconstruct_inner`: `claims.iter().any(|c| c == a)` over a growing `Vec<ClaimInstance>` for every asserted claim, summing to O(N^2) over the full replay. Same family of pathology as the original write-path quadratic that PR #22 surfaced and PR #23 fixed.
+
+The fixture is asserts-only, so this finding is precise about that case. A retraction-heavy audit log would also stress `claims.retain(|c| c != r)`, which is independently O(|claims|) per retraction; that variant has not been benchmarked yet but the same structural fix would help.
 
 This bench scenario is the evidence that forces the next optimisation. Candidates, in roughly increasing complexity:
 
-- Use a `HashSet<(predicate, args)>` or similar for the replay's working set, doing O(1) dedupe instead of O(|claims|) linear scan. Same structural fix as `State`'s predicate index in PR #23, applied to the replay loop.
+- **Replay working set with O(1) membership.** Replace the `Vec<ClaimInstance>` with a set-backed structure - either `Vec<ClaimInstance>` + `HashSet<ClaimInstance>` for membership, or a tombstoned `Vec + HashMap<ClaimInstance, usize> + live: Vec<bool>` that also gives O(1) retraction. Requires `Hash` on `ClaimInstance` (the children already derive it after PR #23). The cheapest fix; mirrors PR #23's `State` index work applied to the replay loop.
 - Streaming `sqlx::query::fetch` instead of `fetch_all`, to bound peak memory (Copilot #5 from PR #27).
 - Incremental snapshots: periodically materialise `State` at well-known transition points so replay only walks the tail.
 - Full materialisation: maintain a snapshot at the latest transition continuously.
 
-The dedupe-set fix is the smallest and least architecturally invasive; the others are progressively bigger commitments. The bench will measure each.
+The replay-working-set fix is the smallest and least architecturally invasive; the others are progressively bigger commitments. The bench will measure each.
 
 ### History
 

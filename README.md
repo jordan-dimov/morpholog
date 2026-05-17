@@ -1,6 +1,6 @@
 # Morpholog
 
-A runtime that owns the legitimacy boundary of your business records. Every entry that enters governed state is checked against every active rule by the language itself - not by validators someone remembered to write, not by reconciliation scripts run nightly, not by tribal knowledge in the heads of senior staff. If the rules say no, nothing is written and nothing is sent. If they say yes, the record is part of an append-only history that any auditor can query, including as it stood at any past moment.
+A runtime that owns the legitimacy boundary of your business records. Every entry that enters governed state is checked against every active rule by the language itself - not by validators someone remembered to write, not by reconciliation scripts run nightly, not by tribal knowledge in the heads of senior staff. If the rules say no, nothing is written and nothing is sent. If they say yes, the record is part of an append-only audit log that any auditor can query, including as it stood after any committed transition.
 
 ## The questions Morpholog answers
 
@@ -14,7 +14,7 @@ A controller, an auditor, or a risk officer asks these questions of every seriou
 
 Conventional answers involve detective work: searching log tables, reconciling parallel systems, asking colleagues who happened to be on shift. Some questions never get a clean answer; the books just stop tying out, and accountants learn to live with that.
 
-Morpholog makes those answers part of the substrate. **All five questions above are answerable today** through a single `morpholog inspect ...` invocation against the PostgreSQL-backed runtime. The audit log is the chronological record; derived views (trial balance, exposure, account balance) are governed by the same rules as the source data; and as-of evaluation reconstructs any past historical view from the audit log without any bitemporal flags polluting the schema.
+Morpholog makes those answers part of the substrate. The current runtime answers the worked-example versions of these questions today: it can show admitted claims, audit history, derived views such as trial balance, and those same views as they stood after any committed transition. The broader production forms - actor authority, exposure limits, end-to-end regulated workflows - are the direction of the project, not yet a packaged product surface. The substrate is the same in both cases: the audit log is the chronological record; derived views are governed by the same rules as the source data; and as-of evaluation reconstructs historical state from the audit log without any bitemporal flags polluting the schema.
 
 ## How it works
 
@@ -23,7 +23,7 @@ Two language constructs are first-class. Everything else is built from them:
 - An **invariant** is a rule that must always hold over admitted state.
 - A **transformation** is the only path by which state may change. It proposes a set of additions, removals, and outbound effects.
 
-The runtime checks every active invariant against the proposed result. If any fails, the transformation is rejected atomically - nothing is written, nothing is sent. Records that survive are **claims**: typed assertions admitted under a specific authority, at a specific moment, by a specific transformation. Claims are append-only; correction happens by retraction and supersession, never by overwrite.
+The runtime checks every active invariant against the proposed result. If any fails, the transformation is rejected atomically - nothing is written, nothing is sent. Records that survive are **claims**: typed assertions admitted under a specific authority, at a specific moment, by a specific transformation. The audit log is append-only; current claim-state changes by asserted and retracted claims, with corrections preserving history through supersession rather than overwriting prior audit records. The originals stay findable forever, even after restatement.
 
 Surface syntax is illustrative (the parser is on the roadmap; programs today are constructed as Rust IR). The shape, drawn from the double-entry ledger example, fits on one screen:
 
