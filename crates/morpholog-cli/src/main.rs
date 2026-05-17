@@ -78,8 +78,13 @@ enum Inspect {
     Claims(InspectClaimsArgs),
     /// List every committed audit row, in commit order. `--as-of`
     /// does not apply here: the audit table IS the chronological
-    /// record; filtering it would just be `transition_id <= T`,
-    /// which is what callers should do via a SQL query.
+    /// record. Callers who want a time-bounded audit view should
+    /// query `morpholog.audit` directly with their own predicate -
+    /// the same `(committed_at, transition_id) <= target` shape the
+    /// adapter's `reconstruct_state_at` uses internally, not
+    /// `transition_id <= T` alone (which can include or exclude the
+    /// wrong rows when commit order and UUID order diverge under
+    /// concurrent commits).
     Audit(InspectArgs),
     /// List every pending outbox intent, in enqueue order. `--as-of`
     /// does not apply: outbox is delivery state, not claim state.
