@@ -140,6 +140,15 @@ Mechanism 1 is the simpler v0 path: the worker is responsible for not double-inv
 
 The implementation PR sequencing in this doc commits to mechanism 1 for the first cut, with mechanism 2 available as a deeper guard the user can layer on top in their own programs.
 
+**The substrate landed in PR 1 (`mark_outbox_failed` + `record_compensation`) does not close this gap on its own.** `mark_outbox_failed` releases the lease before any compensation runs, and `record_compensation` is a lineage setter - its `compensation_transition_id IS NULL` predicate only rejects a duplicate *record* call, not a duplicate *compensating transformation* that has already committed. Two workers racing on the same `failed` row can both invoke `propose_against_pg` on the compensating transformation; only the second `record_compensation` errors, but the duplicate compensation is already in the audit log.
+
+The single-row processor PR (PR 2 in the sequencing) is therefore on the hook for closing this. Two viable shapes:
+
+- **Retain the lease through compensation.** Change the state machine so that on `NonRetryable`, the worker transitions the row to a new `compensation_in_progress` state (still leased), commits the compensation, calls `record_compensation`, then transitions to `failed`. The `failed` state then means "permanently failed, compensation lineage recorded" rather than "transient state mid-compensation." Requires one more `status` value (already named: see the existing `compensation_failed`).
+- **Push idempotency into the compensating program.** Per mechanism 2 above - the compensation asserts a `CompensationApplied(original_intent_id)` claim and an invariant rejects duplicates. The worker is then free to invoke compensation as many times as it likes; the kernel refuses the second.
+
+PR 2 must pick one explicitly. The design constraint should be load-bearing, not an afterthought.
+
 ### Schema additions
 
 New nullable columns on `morpholog.outbox`:

@@ -786,8 +786,27 @@ pub async fn mark_outbox_failed(
 /// This helper does NOT gate on a lease. By the time the worker
 /// is recording compensation, the original delivery attempt is
 /// over and the row is in `failed`; the lease was already released
-/// by [`mark_outbox_failed`]. Concurrent double-compensation is
-/// guarded by the `compensation_transition_id IS NULL` predicate.
+/// by [`mark_outbox_failed`].
+///
+/// **Important: this is a lineage setter, not a duplicate-invocation
+/// guard.** The `compensation_transition_id IS NULL` predicate only
+/// prevents a second *record* call from overwriting the first - it
+/// does not prevent a second *compensating transformation* from
+/// being committed via [`propose_against_pg`] before either record
+/// call runs. If two workers race on the same `failed` row, both
+/// can commit independent compensating transformations against the
+/// underlying state; only the second `record_compensation` will
+/// fail, but by then a duplicate compensation has already landed
+/// in `morpholog.audit` and its claims in `morpholog.claims`.
+///
+/// The single-row processor that invokes this helper is therefore
+/// responsible for preventing duplicate compensation upstream -
+/// either by retaining lease ownership across the failed -> commit
+/// compensation -> record_compensation arc (rather than releasing
+/// in [`mark_outbox_failed`]), or by guarding the compensating
+/// transformation itself with an invariant over an
+/// `original_intent_id` predicate. See `docs/outbox-sketch.md` for
+/// the two-mechanism discussion.
 pub async fn record_compensation(
     pool: &PgPool,
     intent_id: Uuid,
