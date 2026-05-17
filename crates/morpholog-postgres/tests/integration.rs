@@ -1420,10 +1420,16 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     assert_eq!(outbox[0].intent_type, "JournalEntryPosted");
     assert_eq!(outbox[1].intent_type, "PeriodClosed");
 
-    // Every pending row has the expected default fields.
+    // Every pending row has the expected default fields. A row that
+    // has never been attempted has `attempt_count = 0` and
+    // `last_attempt_at = None`; a row that has been retried (e.g. by
+    // a delivery worker that failed) would have `attempt_count > 0`
+    // and a non-NULL `last_attempt_at`. The four tests here exercise
+    // only the fresh-enqueue path, so both assertions are tight.
     for row in &outbox {
         assert_eq!(row.status, "pending");
         assert_eq!(row.attempt_count, 0);
+        assert!(row.last_attempt_at.is_none());
         assert!(!row.idempotency_key.is_empty());
     }
 

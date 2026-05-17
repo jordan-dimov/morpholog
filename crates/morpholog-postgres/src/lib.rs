@@ -347,11 +347,17 @@ pub struct AuditRow {
 
 /// One row of `morpholog.outbox` decoded into typed runtime values.
 ///
-/// `attempt_count` is included because retries against external systems
-/// are part of the outbox contract; `last_attempt_at` and `delivered_at`
-/// are excluded because [`list_pending_outbox`] filters to `status =
-/// 'pending'` and both are NULL in that state. A future
-/// `list_all_outbox` or per-status query would surface them.
+/// `attempt_count` and `last_attempt_at` are included because retry
+/// activity is part of the outbox contract — a `pending` row with
+/// `attempt_count > 0` and a non-NULL `last_attempt_at` is one a
+/// worker has tried and failed, not a fresh enqueue. Inspection
+/// helpers should surface that signal.
+///
+/// `delivered_at` is excluded: [`list_pending_outbox`] filters to
+/// `status = 'pending'`, and `delivered_at` is set only when status
+/// transitions to `'delivered'`, so it is structurally NULL for
+/// every row this helper returns. A future `list_all_outbox` or
+/// per-status query would surface it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboxRow {
     pub intent_id: Uuid,
@@ -362,6 +368,7 @@ pub struct OutboxRow {
     pub status: String,
     pub attempt_count: i32,
     pub enqueued_at: DateTime<Utc>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
 }
 
 /// Return every currently-admitted claim from `morpholog.claims`.
@@ -475,10 +482,12 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
         String,
         i32,
         DateTime<Utc>,
+        Option<DateTime<Utc>>,
     );
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT intent_id, transition_id, intent_type, arguments,
-                idempotency_key, status, attempt_count, enqueued_at
+                idempotency_key, status, attempt_count, enqueued_at,
+                last_attempt_at
          FROM morpholog.outbox
          WHERE status = 'pending'
          ORDER BY enqueued_at, intent_id",
@@ -498,6 +507,7 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
                 status,
                 attempt_count,
                 enqueued_at,
+                last_attempt_at,
             )| {
                 Ok(OutboxRow {
                     intent_id,
@@ -508,6 +518,7 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
                     status,
                     attempt_count,
                     enqueued_at,
+                    last_attempt_at,
                 })
             },
         )
