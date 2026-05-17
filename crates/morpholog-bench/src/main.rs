@@ -57,14 +57,37 @@ enum Command {
 #[derive(clap::Args, Debug)]
 struct ScenarioArgs {
     /// Number of journal entries to pre-populate. The fixture inserts
-    /// `1 + 2 * N` claims total (one JournalEntry plus two
-    /// JournalLines per entry).
+    /// `3 * N` claims total (one JournalEntry plus two JournalLines
+    /// per entry).
     n: usize,
 
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
+
+    /// Required: acknowledge that this binary will TRUNCATE the
+    /// entire morpholog schema (claims, audit, outbox) in the target
+    /// database before running. Exists to prevent accidental
+    /// destruction via the `DATABASE_URL` env-var fallback when a
+    /// shell already points at a non-benchmark database.
+    #[arg(long)]
+    reset: bool,
+}
+
+/// Refuses to proceed unless `--reset` was explicitly passed. The
+/// target URL is echoed so the operator can see what is about to be
+/// truncated; this is the closest the binary gets to a "are you sure"
+/// dialog without making scripted use awkward.
+fn require_reset_ack(args: &ScenarioArgs) -> Result<()> {
+    if !args.reset {
+        return Err(anyhow!(
+            "this benchmark TRUNCATES the morpholog schema in the target database. \
+             Re-run with `--reset` to acknowledge. Target: {}",
+            args.database_url
+        ));
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -77,6 +100,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_write(args: ScenarioArgs) -> Result<()> {
+    require_reset_ack(&args)?;
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
@@ -116,6 +140,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
 }
 
 async fn run_read(args: ScenarioArgs) -> Result<()> {
+    require_reset_ack(&args)?;
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
@@ -133,9 +158,17 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     println!("  list_derived:   {:>8} ms", t.elapsed().as_millis());
     println!("  derived_rows:   {}", rows.len());
 
-    if rows.len() != 2 {
+    // n=0 is a legitimate baseline (measures load_state + enumerate
+    // cost against an empty state); the fixture inserts no
+    // JournalLine claims so the domain enumerates to zero key
+    // bindings and the derived extension is empty. For n>0 every
+    // entry hits the same two accounts (cash, revenue), so the
+    // expected row count is exactly two regardless of n.
+    let expected = if args.n == 0 { 0 } else { 2 };
+    if rows.len() != expected {
         return Err(anyhow!(
-            "expected exactly two derived rows (cash, revenue), got {}",
+            "expected {expected} derived row(s) for n={}, got {}",
+            args.n,
             rows.len()
         ));
     }

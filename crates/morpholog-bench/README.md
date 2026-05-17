@@ -18,13 +18,13 @@ The fixture is uniform on purpose: every entry debits `account_cash` and credits
 ## Running
 
 ```bash
-DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release -- write 1000
-DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release -- read 10000
+DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release -- write 1000 --reset
+DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release -- read 10000 --reset
 ```
 
 `--release` matters; debug builds add an order of magnitude that obscures the algorithmic signal.
 
-The bench **truncates the entire `morpholog` schema before each run**. Do not point it at a database with anything you want to keep.
+The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at. Do not point it at a database with anything you want to keep.
 
 ## Initial observations (2026-05-17, local PostgreSQL 17)
 
