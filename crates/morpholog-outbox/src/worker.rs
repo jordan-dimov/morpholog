@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use morpholog_postgres::{CompensationSpec, Deliverer, PgError, PgPool};
+use morpholog_postgres::{
+    CompensationSpec, Deliverer, PgError, PgPool, ProcessOutcome, earliest_pending_retry,
+};
 use tokio::sync::watch;
 
 use crate::clock::Clock;
@@ -123,7 +125,7 @@ where
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let _outcomes = process_available_outbox_rows(
+            let outcomes = process_available_outbox_rows(
                 &self.pool,
                 &self.worker_id,
                 &self.intent_type,
@@ -134,7 +136,8 @@ where
             .await?;
 
             let factor = self.rng.jitter_factor(self.jitter_low, self.jitter_high);
-            let sleep_dur = self.base_interval.mul_f64(factor);
+            let base_dur = self.base_interval.mul_f64(factor);
+            let sleep_dur = self.smart_sleep_duration(&outcomes, base_dur).await?;
             tokio::select! {
                 _ = self.clock.sleep_for(sleep_dur) => {}
                 changed = shutdown.changed() => {
@@ -144,5 +147,42 @@ where
                 }
             }
         }
+    }
+
+    /// Decide how long to sleep before the next drain pass.
+    ///
+    /// Default is the jittered base interval. The smart-sleep
+    /// shortcut applies ONLY when the drain just returned no
+    /// terminal work (`outcomes` is empty or contains only
+    /// `TransientRetry` outcomes, both of which indicate "no due
+    /// work to deliver right now"). In that case we ask
+    /// [`earliest_pending_retry`] for the soonest future
+    /// `next_attempt_at`; if it is sooner than `base_dur`, the
+    /// worker sleeps until that instant instead, so a scheduled
+    /// retry becomes claimable as soon as it is due.
+    ///
+    /// The base interval remains the ceiling: even if the next
+    /// retry is hours away, we still wake up after `base_dur` to
+    /// catch newly-enqueued immediately-due rows.
+    async fn smart_sleep_duration(
+        &self,
+        outcomes: &[ProcessOutcome],
+        base_dur: Duration,
+    ) -> Result<Duration, PgError> {
+        let only_deferred = outcomes
+            .iter()
+            .all(|o| matches!(o, ProcessOutcome::TransientRetry { .. }));
+        if !only_deferred {
+            return Ok(base_dur);
+        }
+        let Some(next) = earliest_pending_retry(&self.pool, &self.intent_type).await? else {
+            return Ok(base_dur);
+        };
+        let now = self.clock.now();
+        let until = match (next - now).to_std() {
+            Ok(d) => d,
+            Err(_) => return Ok(base_dur),
+        };
+        Ok(std::cmp::min(base_dur, until))
     }
 }

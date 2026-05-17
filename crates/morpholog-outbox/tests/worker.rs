@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_outbox::OutboxWorker;
@@ -291,4 +291,103 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
             .await
             .unwrap();
     assert_eq!(pending.0, 0);
+}
+
+#[tokio::test]
+async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    // Commit a row, then directly set its status to `pending` (it
+    // already is) with a `next_attempt_at` 80ms in the future.
+    // The drain will return empty (the row is not due yet), and
+    // smart sleep should clamp the post-drain sleep to ~80ms even
+    // though the base interval is 5 seconds.
+    commit_simple_entry(&pool, "entry_001").await;
+    let future_retry = Utc::now() + ChronoDuration::milliseconds(80);
+    sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$1 WHERE intent_type=$2")
+        .bind(future_retry)
+        .bind(INTENT_TYPE)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let clock = MockClock::new(Utc::now());
+
+    let worker = OutboxWorker::new(
+        pool.clone(),
+        "worker_a",
+        INTENT_TYPE,
+        AlwaysDelivers,
+        clock.clone(),
+        FixedJitter::new(1.0),
+    )
+    .with_base_interval(Duration::from_secs(5));
+
+    let handle = tokio::spawn(worker.run(shutdown_rx));
+    // Yield enough that the worker completes drain + smart-sleep
+    // computation + records the sleep on the mock clock. With
+    // MockClock the sleep resolves instantly, so the worker loops;
+    // we let it iterate several times then shut down.
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    shutdown_tx.send(true).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let sleeps = clock.sleeps();
+    assert!(!sleeps.is_empty(), "worker must have recorded sleeps");
+    // Every recorded sleep should be under the base interval - smart
+    // sleep clamped to ~80ms (the future next_attempt_at). We allow
+    // some slack for the few-ms gap between MockClock construction
+    // and the row's next_attempt_at insertion.
+    for s in &sleeps {
+        assert!(
+            *s < Duration::from_secs(5),
+            "smart sleep must clamp below base_interval; got {s:?}"
+        );
+        assert!(
+            *s < Duration::from_millis(200),
+            "smart sleep should be near the 80ms next_attempt_at, got {s:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_uses_base_interval_when_no_pending_retries_exist() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    // Empty outbox: drain returns nothing; smart sleep finds no
+    // pending retry; worker falls back to base_interval *
+    // jitter_factor.
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let clock = MockClock::new(Utc::now());
+
+    let worker = OutboxWorker::new(
+        pool,
+        "worker_a",
+        INTENT_TYPE,
+        AlwaysDelivers,
+        clock.clone(),
+        FixedJitter::new(1.0),
+    )
+    .with_base_interval(Duration::from_millis(40));
+
+    let handle = tokio::spawn(worker.run(shutdown_rx));
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    shutdown_tx.send(true).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let sleeps = clock.sleeps();
+    assert!(!sleeps.is_empty());
+    for s in &sleeps {
+        assert_eq!(
+            *s,
+            Duration::from_millis(40),
+            "with no pending retries, sleep must equal base_interval * jitter_factor"
+        );
+    }
 }

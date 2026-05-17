@@ -947,6 +947,38 @@ pub async fn release_outbox_claim(
     })
 }
 
+/// Soonest future `next_attempt_at` over pending rows of the given
+/// `intent_type`. Returns `None` if no such row exists.
+///
+/// A polling worker uses this after a drain returns no work to
+/// decide how long to sleep before its next poll: instead of always
+/// sleeping the base poll interval, it can wake up exactly when
+/// the soonest scheduled retry becomes due, but no later than the
+/// base interval (so that newly-enqueued immediately-due rows are
+/// still picked up promptly).
+///
+/// `next_attempt_at` is filtered to `> now()` so a row whose retry
+/// instant has already passed is not returned (it would have been
+/// claimed by the drain that just ran).
+pub async fn earliest_pending_retry(
+    pool: &PgPool,
+    intent_type: &str,
+) -> Result<Option<DateTime<Utc>>, PgError> {
+    let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
+        "SELECT min(next_attempt_at)
+         FROM morpholog.outbox
+         WHERE status='pending'
+           AND intent_type=$1
+           AND next_attempt_at IS NOT NULL
+           AND next_attempt_at > now()",
+    )
+    .bind(intent_type)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify)?;
+    Ok(row.and_then(|(t,)| t))
+}
+
 fn lease_duration_to_secs(lease_duration: std::time::Duration) -> Result<i64, PgError> {
     let lease_secs: i64 = lease_duration
         .as_secs()
