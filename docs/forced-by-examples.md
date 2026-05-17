@@ -161,11 +161,11 @@ The other sketch leans that held into implementation:
 
 **What was confirmed about the design conversation:** the keys lean held - no kernel change required, two-function shape was the right call, the `(committed_at, transition_id)` two-column comparison was straightforward to implement (PostgreSQL supports row comparison natively). The spike test was retired; its headline scenario became test #1 of the production integration suite. The single ambiguity from the sketch (question #6) was resolved by review *before* implementation, which is the value the sketch-then-implement pattern is supposed to capture.
 
-**Implication for future examples:** as-of is now reachable. The next natural pressure points:
+**Implication for future examples:** as-of is now reachable. The next natural pressure points (most have since landed; see the entries below for the actual retrospectives):
 
-- A bench scenario that surfaces the replay cost at long-audit-log scale. The sketch documents the O(transitions up to T) cost; until a real workload bites, materialisation is speculative.
-- A CLI flag `--as-of <transition_id>` on the inspect subcommands. The adapter has the helpers; only argument parsing and threading remain.
-- A worked example that combines as-of with effective-time claims (`EffectiveFor(subject, period)`), which is how the four temporal axes - event time, admission time, effective time, knowledge time - become accessible without polluting any schema with bitemporal flags.
+- A bench scenario that surfaces the replay cost at long-audit-log scale. **Landed in PR #28**, which also surfaced an O(N^2) pathology in `reconstruct_inner` that the next PR fixed. See the `ReplaySet` entry below.
+- A CLI flag `--as-of <transition_id>` on the inspect subcommands. **Landed in PR #28**.
+- A worked example that combines as-of with effective-time claims (`EffectiveFor(subject, period)`), which is how the four temporal axes - event time, admission time, effective time, knowledge time - become accessible without polluting any schema with bitemporal flags. **Still open** as of the latest entry below.
 - Write-path as-of (as a primitive inside invariants or transformations) remains explicitly deferred. The failure mode is much worse - a missed predicate in a write-path footprint analysis could let invalid commits through - so it gets its own forcing example and its own scrutiny when forced.
 
 ### `ReplaySet` (audit-log replay working set)

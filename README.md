@@ -1,22 +1,20 @@
 # Morpholog
 
-A programming language and runtime for the parts of your business system where you can't afford to be wrong about whether a record was allowed.
+There comes a moment in every serious business when someone — an auditor, a regulator, a board director who has not been having a great quarter — asks you to *prove* a number. Why is it what it is. Who decided it should be. What it looked like before the restatement. Whether the rule it had to satisfy actually held at the moment it was admitted.
 
-The two halves are inseparable. The language only has constructs the runtime can guarantee. The runtime only enforces what the language can express. Together they cover the thing every serious business system needs and almost none of them have: a place where "may this record be admitted as legitimate?" has a definite answer, written once, checked on every change.
+In most systems, those answers come from detective work. You pull logs, reconcile parallel files, ask the people who happened to be on call. Sometimes the answer is good enough. Sometimes the books just stop tying out, and everyone learns to live with that.
 
-You know the kind of records this is for. General ledger entries. Trades booked into a position keeper. Loan disbursements. Anything where an auditor will eventually ask "why is this number what it is, and how do you know?" — and a fuzzy answer will not do.
+Morpholog is a programming language and runtime that takes those questions out of detective territory. You write down the rules your records have to satisfy. The language only lets you express rules the runtime can guarantee, and the runtime checks every one on every change. Anything that breaks a rule never gets in. Everything that does get in carries enough provenance that you can reconstruct exactly what the books said at any past point in the audit log — no bitemporal columns, no shadow tables, no overnight reconciliation scripts.
+
+The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
 
 ## The questions you can answer
-
-If you've been close to the books for any length of time, you know this list:
 
 - *Why does this report differ from the one we filed last quarter?*
 - *Who admitted this entry, and under what authority?*
 - *If that authority was rescinded yesterday, was yesterday's decision still valid?*
 - *What did the books say on the last day of Q1, under the close rules in force then?*
 - *Did this trade conform to our exposure limits when it was booked? Not now — then?*
-
-Conventional systems answer these with detective work. You search log tables, reconcile parallel systems, ask the person who happened to be on call. Sometimes the answer is good enough. Sometimes the books just stop tying out, and accountants quietly learn to live with that.
 
 Morpholog answers a meaningful subset of these today, against a real PostgreSQL database, through a small CLI. The trial-balance worked example handles question 1 and question 4 directly. The claim-standing worked example handles 2 and 3. Question 5 needs an exposure-limit program that doesn't exist yet, but the runtime would handle it the same way — that is the point of writing the runtime first.
 
