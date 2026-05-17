@@ -295,7 +295,7 @@ pub struct DerivedValue {
 /// (`{ "type": "...", "value": ... }`), suitable for the PG JSONB columns
 /// defined in `crates/morpholog-core/sql/schema.sql`. Decimals serialise
 /// as JSON **strings** to preserve exactness; never as JSON numbers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum EvalValue {
     Decimal(#[serde(with = "rust_decimal::serde::str")] Decimal),
@@ -329,16 +329,36 @@ pub struct ClaimInstance {
 /// PG adapter persists this set as rows in `morpholog.claims`; this
 /// in-memory representation is what the kernel evaluates against.
 ///
-/// Internally indexed by predicate name. Construct via
-/// [`State::from_claims`] or [`State::default`]; mutation is not part
-/// of the API (the index would otherwise go stale). The public
-/// accessors are [`State::claims`] (all admitted claims, in
-/// construction order) and [`State::claims_for`] (`O(1)` lookup of all
-/// claims for a given predicate).
+/// Internally indexed by predicate name AND by `(predicate, arg
+/// position, arg value)` to support ground-argument lookup. Construct
+/// via [`State::from_claims`] or [`State::default`]; mutation is not
+/// part of the API (the indexes would otherwise go stale). The
+/// public accessors are [`State::claims`] (all admitted claims, in
+/// construction order) and [`State::claims_for`] (`O(1)` lookup of
+/// all claims for a given predicate). Argument-position lookup is
+/// internal to the kernel and used by `find_claim_matches` to narrow
+/// the candidate set when any argument is already ground.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct State {
     claims: Vec<ClaimInstance>,
-    by_predicate: HashMap<String, Vec<usize>>,
+    by_predicate: HashMap<String, PredicateIndex>,
+}
+
+/// Per-predicate index entry stored on [`State`]. Holds the
+/// construction-order positions of every claim with this predicate,
+/// plus a secondary index keyed on `(arg position, arg value)` for
+/// ground-argument lookup.
+///
+/// `by_arg` grows lazily as predicates of varying arity are observed:
+/// position `p` gets a map only when some claim of this predicate has
+/// at least `p + 1` args.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct PredicateIndex {
+    /// Indices into `State.claims` for every claim with this predicate.
+    all: Vec<usize>,
+    /// `by_arg[position][value]` -> indices into `State.claims` for
+    /// claims with this predicate where `args[position] == value`.
+    by_arg: Vec<HashMap<EvalValue, Vec<usize>>>,
 }
 
 impl std::fmt::Debug for State {
@@ -350,14 +370,23 @@ impl std::fmt::Debug for State {
 }
 
 impl State {
-    /// Build a `State` from a vector of admitted claims, indexing them
-    /// by predicate name. `claims` is the construction-order list;
-    /// the index records, for each predicate name, the positions of
-    /// that predicate's claims within the list.
+    /// Build a `State` from a vector of admitted claims. Builds two
+    /// indexes during construction: a per-predicate bucket of claim
+    /// positions, and a per-`(predicate, arg position, arg value)`
+    /// bucket of claim positions for ground-argument lookup. Both
+    /// indexes are immutable thereafter; the State itself is
+    /// immutable.
     pub fn from_claims(claims: Vec<ClaimInstance>) -> Self {
-        let mut by_predicate: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut by_predicate: HashMap<String, PredicateIndex> = HashMap::new();
         for (i, c) in claims.iter().enumerate() {
-            by_predicate.entry(c.predicate.clone()).or_default().push(i);
+            let entry = by_predicate.entry(c.predicate.clone()).or_default();
+            entry.all.push(i);
+            if entry.by_arg.len() < c.args.len() {
+                entry.by_arg.resize_with(c.args.len(), HashMap::new);
+            }
+            for (pos, value) in c.args.iter().enumerate() {
+                entry.by_arg[pos].entry(value.clone()).or_default().push(i);
+            }
         }
         Self {
             claims,
@@ -381,9 +410,37 @@ impl State {
     ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
         self.by_predicate
             .get(predicate)
-            .map(|positions| positions.iter().map(|&i| &self.claims[i]))
+            .map(|idx| idx.all.iter().map(|&i| &self.claims[i]))
             .into_iter()
             .flatten()
+    }
+
+    /// Indices into `claims()` for every claim where `predicate`
+    /// matches AND `args[position] == value`. `O(1)` lookup. Returns
+    /// `None` when no claim of this predicate has this value at this
+    /// position, which the caller uses to short-circuit an empty
+    /// intersection. Internal to the kernel; used by
+    /// `find_claim_matches` to narrow the candidate set when at least
+    /// one argument is already ground (a literal in the IR, or a
+    /// variable already bound in the surrounding context).
+    pub(crate) fn claim_indices_for_arg(
+        &self,
+        predicate: &str,
+        position: usize,
+        value: &EvalValue,
+    ) -> Option<&[usize]> {
+        self.by_predicate
+            .get(predicate)
+            .and_then(|idx| idx.by_arg.get(position))
+            .and_then(|m| m.get(value))
+            .map(|v| v.as_slice())
+    }
+
+    /// Look up a claim by its `claims()` index. Used internally
+    /// alongside [`State::claim_indices_for_arg`] when iterating an
+    /// argument-position bucket.
+    pub(crate) fn claim_at(&self, index: usize) -> &ClaimInstance {
+        &self.claims[index]
     }
 
     /// Total number of admitted claims across all predicates.
@@ -658,12 +715,65 @@ fn find_claim_matches(
     base: &Bindings,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut out = vec![];
-    for claim in state.claims_for(predicate) {
-        if claim.args.len() != args.len() {
+
+    // First pass: identify every argument position that is *ground* in
+    // the current binding context (Term::Literal in the IR, or
+    // Term::Var already bound in `base`). Pick the position whose
+    // (predicate, position, value) bucket is smallest; that's the most
+    // selective lookup.
+    //
+    // For a typical invariant body like `JournalLine(entry, _, d, _)`
+    // evaluated inside a `forall entry: ...`, `entry` is bound to a
+    // specific subject and position 0 has a bucket of exactly the few
+    // lines for that entry. That changes the scan from "all
+    // JournalLines" to "JournalLines for this entry" - the difference
+    // between O(N) and O(lines_per_entry) per lookup, which is where
+    // the quadratic in `balanced_posted_entry` lives.
+    //
+    // If a ground arg's bucket is missing entirely, no claim of this
+    // predicate has that value at that position; the result set is
+    // empty and we short-circuit.
+    //
+    // If no argument is ground, fall back to scanning the whole
+    // predicate bucket via `state.claims_for(predicate)`.
+    let mut best: Option<&[usize]> = None;
+    for (pos, term) in args.iter().enumerate() {
+        let ground = match term {
+            Term::Wildcard => None,
+            Term::Var(name) => base.get(name).cloned(),
+            Term::Literal(Value::Subject(s)) => Some(EvalValue::Subject(s.clone())),
+            Term::Literal(Value::Decimal(s)) => Decimal::from_str(s).ok().map(EvalValue::Decimal),
+        };
+        let Some(value) = ground else {
             continue;
+        };
+        match state.claim_indices_for_arg(predicate, pos, &value) {
+            None => return Ok(out),
+            Some(bucket) => match best {
+                Some(prev) if prev.len() <= bucket.len() => {}
+                _ => best = Some(bucket),
+            },
         }
-        if let Some(b) = unify_args(args, &claim.args, base) {
-            out.push(b);
+    }
+
+    if let Some(bucket) = best {
+        for &i in bucket {
+            let claim = state.claim_at(i);
+            if claim.args.len() != args.len() {
+                continue;
+            }
+            if let Some(b) = unify_args(args, &claim.args, base) {
+                out.push(b);
+            }
+        }
+    } else {
+        for claim in state.claims_for(predicate) {
+            if claim.args.len() != args.len() {
+                continue;
+            }
+            if let Some(b) = unify_args(args, &claim.args, base) {
+                out.push(b);
+            }
         }
     }
     Ok(out)
@@ -1154,6 +1264,72 @@ mod tests {
             state.claims(),
             &[a1, b1, a2],
             "claims() preserves construction order across all predicates"
+        );
+    }
+
+    /// Pins the contract of `State::claim_indices_for_arg`: it returns
+    /// the indices of claims with the requested predicate where the
+    /// argument at the requested position equals the requested value,
+    /// `None` (not Some empty) when no such bucket exists, and does
+    /// not match claims of a different predicate that happen to share
+    /// a value at the same position. The lookup is what
+    /// `find_claim_matches` uses to make ground-argument matching
+    /// O(bucket size) instead of O(predicate size).
+    #[test]
+    fn claim_indices_for_arg_narrows_by_predicate_position_and_value() {
+        let line_for_entry_a = ClaimInstance {
+            predicate: "JournalLine".to_string(),
+            args: vec![
+                EvalValue::Subject("entry_a".to_string()),
+                EvalValue::Subject("account_cash".to_string()),
+            ],
+        };
+        let line_for_entry_b = ClaimInstance {
+            predicate: "JournalLine".to_string(),
+            args: vec![
+                EvalValue::Subject("entry_b".to_string()),
+                EvalValue::Subject("account_cash".to_string()),
+            ],
+        };
+        // Same value at position 0 but different predicate; must not
+        // pollute the JournalLine[0=entry_a] bucket.
+        let je_for_entry_a = ClaimInstance {
+            predicate: "JournalEntry".to_string(),
+            args: vec![EvalValue::Subject("entry_a".to_string())],
+        };
+        let state = State::from_claims(vec![
+            line_for_entry_a.clone(),
+            line_for_entry_b.clone(),
+            je_for_entry_a.clone(),
+        ]);
+
+        let entry_a = EvalValue::Subject("entry_a".to_string());
+        let positions = state
+            .claim_indices_for_arg("JournalLine", 0, &entry_a)
+            .expect("entry_a appears at JournalLine[0]");
+        let claims: Vec<&ClaimInstance> = positions.iter().map(|&i| state.claim_at(i)).collect();
+        assert_eq!(
+            claims,
+            vec![&line_for_entry_a],
+            "must return only the JournalLine claim, not JournalEntry"
+        );
+
+        let unknown = EvalValue::Subject("entry_z".to_string());
+        assert!(
+            state
+                .claim_indices_for_arg("JournalLine", 0, &unknown)
+                .is_none(),
+            "absent value returns None, signalling empty intersection"
+        );
+
+        let cash = EvalValue::Subject("account_cash".to_string());
+        let cash_positions = state
+            .claim_indices_for_arg("JournalLine", 1, &cash)
+            .expect("account_cash appears at JournalLine[1]");
+        assert_eq!(
+            cash_positions.len(),
+            2,
+            "both JournalLine claims share account_cash at position 1"
         );
     }
 }

@@ -26,20 +26,19 @@ DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release --
 
 The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at. Do not point it at a database with anything you want to keep.
 
-## Initial observations (2026-05-17, local PostgreSQL 17)
+## Observations (2026-05-17, local PostgreSQL 17)
 
 Run on a developer workstation against a local `morpholog_dev` database. Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
 
 | N | fixture_build | write: propose_one | read: list_derived |
 |--:|--:|--:|--:|
-| 100 | 13 ms | 6 ms | 3 ms |
-| 1 000 | 34 ms | 310 ms | 24 ms |
-| 10 000 | 313 ms | 30 945 ms | 332 ms |
-| 100 000 | 3 509 ms | (not measured) | 1 659 ms |
+| 100 | 13 ms | < 5 ms | 3 ms |
+| 1 000 | 34 ms | 14 ms | 24 ms |
+| 10 000 | ~300 ms | 142 ms | 346 ms |
+| 100 000 | ~3 500 ms | 1 601 ms | 1 878 ms |
 
-Two patterns are visible:
+Both paths scale roughly linearly in `N`. The write path used to be quadratic; an early version of this bench surfaced that pathology, and the predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x at N=10000. The history of those numbers is preserved in the PRs themselves (`#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix).
 
-- **Read scales roughly linearly.** `list_derived` cost is dominated by `load_state` (fetch every row, decode JSONB) and `enumerate_derived`'s two `Sum` sweeps over the loaded claims (one per derived value side). Linear in `N`, ~30 microseconds per entry at 10K-100K. Survivable for mid-size states; uncomfortable past 1M.
-- **Write looks ~quadratic.** N=100 -> 6 ms, N=1000 -> 310 ms, N=10000 -> 30 945 ms. The cause is structural: `propose_against_pg` re-evaluates every invariant against the full candidate state, and `balanced_posted_entry` is `forall entry: sum(debits) == sum(credits)`. Each pre-existing entry contributes a forall iteration; each iteration does a sum sweep over the full JournalLine set. Cost is approximately O(invariants * entries * journal_lines), and with two journal lines per entry that's O(N^2) for the balanced check alone. 31 seconds for one proposal at 10K entries is the lower bound; at 100K it would be untenable.
+The remaining linear cost on the write path is `load_state` (one `SELECT ... FROM morpholog.claims` over the entire table, one JSONB decode per row), plus `find_claim_matches` over the indexed state for the few JournalLine lookups the invariants actually do. On the read path the cost is the same `load_state` plus `enumerate_derived`'s `Sum` sweeps over the loaded claims; the per-account sums benefit from argument-position indexing, but the domain enumeration scans the full JournalLine bucket once and materialises one `Bindings` HashMap per match, which is what the read-path time is mostly spent on.
 
-The bench was the smallest scaffold needed to see that. The next move is the optimisation work that the numbers force: predicate-indexed `State` to cut the per-lookup cost, predicate-scoped `load_state` to avoid pulling unrelated claims into memory, and relevant-invariant pruning to skip invariants whose predicate footprint does not overlap with the proposed transformation.
+The next bottleneck the bench would surface is the read path: either streaming `find_matches` instead of materialising `Vec<Bindings>`, or scoping `load_state` so the kernel only pulls claims for predicates the invariants and the derived claim actually touch. Neither is forced yet at these sizes; the bench is the regression test that will reveal when either becomes acute.
