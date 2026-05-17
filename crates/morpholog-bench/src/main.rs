@@ -65,13 +65,18 @@ struct ScenarioArgs {
     /// Each entry `i` debits `account_{i mod K}` and credits
     /// `account_{(i + 1) mod K}` for the same amount; the fixture is
     /// always self-balancing per entry. Default is `2`, which
-    /// preserves the original K=2 baseline (entries alternate cash
-    /// and revenue) so older numbers remain comparable.
+    /// preserves the original K=2 baseline (entries alternate
+    /// `account_0` / `account_1`) so older numbers remain comparable.
+    ///
+    /// `K = 1` is allowed but degenerate: both debit and credit land
+    /// on `account_0`, so every entry self-balances on a single
+    /// account and trial balance produces exactly one row with
+    /// balance zero. Useful as a "no grouping" baseline.
     ///
     /// The trial-balance derived claim produces one row per distinct
-    /// account, so K is the number of derived rows expected on the
-    /// read scenario. Larger K stresses `enumerate_derived`'s grouping
-    /// and the per-account `Sum` lookups.
+    /// account, so K is the upper bound on derived rows expected on
+    /// the read scenario. Larger K stresses `enumerate_derived`'s
+    /// grouping and the per-account `Sum` lookups.
     #[arg(long, default_value_t = 2)]
     accounts: usize,
 
@@ -104,9 +109,10 @@ fn require_reset_ack(args: &ScenarioArgs) -> Result<()> {
     Ok(())
 }
 
-/// `--accounts 0` would break the fixture's modulo-K distribution
-/// (`i % 0` is undefined in PostgreSQL and meaningless conceptually -
-/// there must be at least one account for any journal line to land on).
+/// `--accounts 0` would break the fixture's modulo-K distribution.
+/// PostgreSQL raises `SQLSTATE 22012 (division_by_zero)` on integer
+/// modulo by zero, and conceptually there must be at least one
+/// account for any journal line to land on.
 fn require_positive_k(args: &ScenarioArgs) -> Result<()> {
     if args.accounts == 0 {
         return Err(anyhow!(
@@ -224,22 +230,22 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
                 rows.len()
             ));
         }
-    } else {
-        if rows.is_empty() {
-            return Err(anyhow!(
-                "expected at least one derived row for n={} k={}, got none",
-                args.n,
-                args.accounts
-            ));
-        }
-        if rows.len() > args.accounts {
-            return Err(anyhow!(
-                "derived rows ({}) exceeded the K-account ceiling ({}); \
-                 fixture distribution is broken",
-                rows.len(),
-                args.accounts
-            ));
-        }
+        return Ok(());
+    }
+    if rows.is_empty() {
+        return Err(anyhow!(
+            "expected at least one derived row for n={} k={}, got none",
+            args.n,
+            args.accounts
+        ));
+    }
+    if rows.len() > args.accounts {
+        return Err(anyhow!(
+            "derived rows ({}) exceeded the K-account ceiling ({}); \
+             fixture distribution is broken",
+            rows.len(),
+            args.accounts
+        ));
     }
     Ok(())
 }

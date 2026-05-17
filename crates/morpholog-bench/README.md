@@ -63,6 +63,6 @@ Linear in `N` and essentially independent of `K`. The remaining cost on `propose
 
 ### History
 
-The write path used to be **structurally quadratic**: an early version of this bench surfaced 31 seconds per propose at `N = 10 000`. The predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x. The full history is preserved in the PRs themselves: `#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix; the next PR (this one) added the `--accounts K` axis and the read-path phase split, plus a small clone-elision in `State::from_claims` worth ~5-10 ms at N=100 000.
+The write path used to be **structurally quadratic**: an early version of this bench surfaced 31 seconds per propose at `N = 10 000`. The predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x. The full history is preserved in the PRs themselves: `#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix; the next PR (this one) added the `--accounts K` axis and the read-path phase split.
 
 The next bench enhancement worth doing would be a workload with many distinct predicates (the current ledger has only `JournalEntry` and `JournalLine`), so the predicate index's narrowing effect becomes visible separately from the argument-position index. Until that scenario exists, the predicate index's value is theoretical for this bench - the argument-position index does all the visible work.
