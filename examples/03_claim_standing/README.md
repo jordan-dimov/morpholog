@@ -10,9 +10,9 @@ A battery storage asset's monthly revenue has been independently verified at £9
 - Investor relations uses it for shareholder reporting. Standing for this purpose is granted by an entirely different authority under entirely different rules.
 - The asset owner might consume it on an internal dashboard, with no formal standing required at all.
 
-The verification is *the same number*. What changes between use-cases is **who has admitted it as legitimate for what purpose**. In conventional systems this distinction is implicit — buried in process documents, side-table lookups, or convention. In Morpholog it is a first-class claim.
+The verification is *the same number*. What changes between use-cases is **who has admitted it as legitimate for what purpose**. In conventional systems this distinction is implicit - buried in process documents, side-table lookups, or convention. In Morpholog it is a first-class claim.
 
-When a regulator, auditor, or counterparty asks *"was this figure admissible for this decision at the time the decision was made?"* the answer is a structured query over claims with a definite answer. When standing is later revoked — perhaps the verification is too old, perhaps the authority's terms changed — the historical decision that relied on standing-at-the-time is **not** invalidated. The system does not pretend the past did not happen.
+When a regulator, auditor, or counterparty asks *"was this figure admissible for this decision at the time the decision was made?"* the answer is a structured query over claims with a definite answer. When standing is later revoked - perhaps the verification is too old, perhaps the authority's terms changed - the historical decision that relied on standing-at-the-time is **not** invalidated. The system does not pretend the past did not happen.
 
 ## The program
 
@@ -52,7 +52,7 @@ The matching real-world principle: a bank's covenant calculation, made on June 3
 | `admit_debt_service_revenue` | Decision transformation for the bank-debt-service purpose. Requires a matching `IndependentlyVerifiedRevenue` *and* active `AdmissibleFor(verification_id, bank_debt_service)`. |
 | `admit_investor_reported_revenue` | Decision transformation for the investor-reporting purpose. Same shape; investor standing required. |
 
-The decision transformations embed their target purpose (`bank_debt_service`, `investor_reporting`) as a literal subject in the IR — this is what motivated adding `Value::Subject` to the IR in this PR. Before that addition, the alternative would have been to pass the purpose in as a parameter the caller already knows.
+The decision transformations embed their target purpose (`bank_debt_service`, `investor_reporting`) as a literal subject in the IR - this is what motivated adding `Value::Subject` to the IR in this PR. Before that addition, the alternative would have been to pass the purpose in as a parameter the caller already knows.
 
 ## How to run it
 
@@ -64,11 +64,11 @@ The three filter words (`standing`, `revocation`, `cannot_admit`) each match one
 
 Five in-memory tests:
 
-1. **`standing_is_purpose_specific`** — Bank standing only; debt-service decision accepted, investor report rejected. Proves the basic admissibility-for-purpose split.
-2. **`parallel_standings_permit_corresponding_decisions`** — Both bank and investor standings granted on the same verification; both decision types accepted. Proves that multiple parallel `AdmissibleFor` claims can attach to the same underlying claim.
-3. **`revocation_blocks_new_decisions_but_preserves_history`** — The load-bearing test. After bank standing is granted and a decision admitted, the standing is revoked. The historical decision survives. The underlying verification is unchanged. The grant provenance and the revocation are both in admitted state. A new decision against the same verification is rejected.
-4. **`wrong_amount_rejected_even_with_valid_standing`** — Verified amount is 91; decision claiming 92 against the same verification id is rejected by the IV-match `require`. Standing alone is not enough; the cited number must match the verification.
-5. **`cannot_admit_decision_without_iv`** — Standing granted on a verification id that has no underlying `IndependentlyVerifiedRevenue`. The grant succeeds (standing is its own claim); the decision fails when it tries to find the matching IV.
+1. **`standing_is_purpose_specific`** - Bank standing only; debt-service decision accepted, investor report rejected. Proves the basic admissibility-for-purpose split.
+2. **`parallel_standings_permit_corresponding_decisions`** - Both bank and investor standings granted on the same verification; both decision types accepted. Proves that multiple parallel `AdmissibleFor` claims can attach to the same underlying claim.
+3. **`revocation_blocks_new_decisions_but_preserves_history`** - The load-bearing test. After bank standing is granted and a decision admitted, the standing is revoked. The historical decision survives. The underlying verification is unchanged. The grant provenance and the revocation are both in admitted state. A new decision against the same verification is rejected.
+4. **`wrong_amount_rejected_even_with_valid_standing`** - Verified amount is 91; decision claiming 92 against the same verification id is rejected by the IV-match `require`. Standing alone is not enough; the cited number must match the verification.
+5. **`cannot_admit_decision_without_iv`** - Standing granted on a verification id that has no underlying `IndependentlyVerifiedRevenue`. The grant succeeds (standing is its own claim); the decision fails when it tries to find the matching IV.
 
 The PostgreSQL durability proof for this example is intentionally deferred to a follow-up PR, matching the development pattern that worked for Example 2.
 
@@ -96,11 +96,11 @@ This was the load-bearing design decision in this example. Three options:
 
 ### Standing is generic over what is being stood up
 
-The `grant_standing` transformation will admit `AdmissibleFor(any_subject, any_purpose)` even if the named subject has no underlying claim in state — the test `cannot_admit_decision_without_iv` shows standing being granted on `ver_999` while no `IndependentlyVerifiedRevenue(_, _, _, ver_999)` exists. This is intentional. `AdmissibleFor(claim_id, purpose)` is a generic standing relation: the same shape applies to verifications, journal entries, curve snapshots, audit artefacts, valuation reports, and other claim kinds we may add later. The runtime has no way today to know which predicate a given subject is meant to identify, so it cannot enforce "this subject names a real verification" at standing-grant time.
+The `grant_standing` transformation will admit `AdmissibleFor(any_subject, any_purpose)` even if the named subject has no underlying claim in state - the test `cannot_admit_decision_without_iv` shows standing being granted on `ver_999` while no `IndependentlyVerifiedRevenue(_, _, _, ver_999)` exists. This is intentional. `AdmissibleFor(claim_id, purpose)` is a generic standing relation: the same shape applies to verifications, journal entries, curve snapshots, audit artefacts, valuation reports, and other claim kinds we may add later. The runtime has no way today to know which predicate a given subject is meant to identify, so it cannot enforce "this subject names a real verification" at standing-grant time.
 
 The responsibility is pushed one layer down: each decision transformation requires the *specific underlying claim shape* it relies on (here, `IndependentlyVerifiedRevenue(asset, period, amount, verification_id)`). A decision against a stood-up-but-non-existent verification fails at admission, not at the standing grant.
 
-A future typed-predicate or claim-identity affordance — declaring that a predicate's *n*th argument is a subject identifying a specific claim kind — would let `grant_standing` reject "standing on a verification id that names nothing" at grant time, not at decision time. Until then, generic standing is the honest position.
+A future typed-predicate or claim-identity affordance - declaring that a predicate's *n*th argument is a subject identifying a specific claim kind - would let `grant_standing` reject "standing on a verification id that names nothing" at grant time, not at decision time. Until then, generic standing is the honest position.
 
 ### Three things deliberately not in this example
 
@@ -108,7 +108,7 @@ A future typed-predicate or claim-identity affordance — declaring that a predi
 
 2. **Cross-purpose constraints.** No invariant says "anything admissible for investor reporting is also admissible for owner dashboard." Such cross-purpose implications are reasonable in some domains and would be expressed as additional invariants. Deferred.
 
-3. **Time-bounded standing.** Real grants typically expire ("admissible for 12 months from the verification date"). This needs *temporal qualification* — claims about effective windows — and probably the as-of operator named in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md). Deferred until the project has an example that genuinely forces it.
+3. **Time-bounded standing.** Real grants typically expire ("admissible for 12 months from the verification date"). This needs *temporal qualification* - claims about effective windows - and probably the as-of operator named in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md). Deferred until the project has an example that genuinely forces it.
 
 ### What this example proves about the doctrine
 
@@ -116,6 +116,6 @@ The expansion principle from `docs/scope-and-ambition.md` says:
 
 > Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.
 
-Standing is a perfect test of that principle. It looks at first like it might want to be metadata on the verification, or a status field, or a permissions subsystem. It is none of those. It is *more claims* — `AdmissibleFor`, `StandingGrantedBy`, `StandingRevoked` — governed by ordinary invariants. The verification itself stays untouched.
+Standing is a perfect test of that principle. It looks at first like it might want to be metadata on the verification, or a status field, or a permissions subsystem. It is none of those. It is *more claims* - `AdmissibleFor`, `StandingGrantedBy`, `StandingRevoked` - governed by ordinary invariants. The verification itself stays untouched.
 
 The corollary: when a future concern looks like it needs a new subsystem, the first move is to see whether it can be expressed as claims about claims, with invariants in the existing kernel. Most of the time, it can.

@@ -8,9 +8,9 @@ Treat this repository as a language/runtime design project, not a conventional C
 
 The conceptual core is intentionally tiny:
 
-- **Invariant** — defines admissible governed state.
-- **Transformation** — the only lawful way governed state may change.
-- **Claim** — runtime substrate; an admitted assertion candidate, not objective truth.
+- **Invariant** - defines admissible governed state.
+- **Transformation** - the only lawful way governed state may change.
+- **Claim** - runtime substrate; an admitted assertion candidate, not objective truth.
 
 Preserve this ontology unless a change clearly earns an extension. The canonical statement of the semantic model is `docs/runtime-semantics.md`.
 
@@ -26,7 +26,7 @@ Preserve this ontology unless a change clearly earns an extension. The canonical
 
 ## Current semantic commitments (locked)
 
-- Reads are **snapshot-based** — no read-your-writes inside a transformation.
+- Reads are **snapshot-based** - no read-your-writes inside a transformation.
 - Writes are staged as asserted/retracted claims and emitted intents.
 - Invariants evaluate against the **candidate post-state**, not the snapshot.
 - Rejected transformations must not change governed state.
@@ -39,10 +39,10 @@ Preserve this ontology unless a change clearly earns an extension. The canonical
 
 The two examples are the test of whether the ontology survives real pressure:
 
-- `examples/01_settlement_netting` — clean kernel proof: existence, equality-via-aggregation, exclusion.
-- `examples/02_revenue_restatement` — temporal correction without claim metadata, using a separate `CurrentBankRecognition` pointer claim and `Supersedes` lineage claim.
+- `examples/01_settlement_netting` - clean kernel proof: existence, equality-via-aggregation, exclusion.
+- `examples/02_revenue_restatement` - temporal correction without claim metadata, using a separate `CurrentBankRecognition` pointer claim and `Supersedes` lineage claim.
 
-When reviewing changes to the IR, evaluator, or `propose()` runtime, ask whether the existing tests for these examples still pass *and* whether new semantic ground is being added — not just plumbing.
+When reviewing changes to the IR, evaluator, or `propose()` runtime, ask whether the existing tests for these examples still pass *and* whether new semantic ground is being added - not just plumbing.
 
 ## Review checklist
 

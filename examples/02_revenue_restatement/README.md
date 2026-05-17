@@ -10,7 +10,7 @@ A battery storage asset earns revenue each month. Three parties make claims abou
 - **An independent verifier** issues a verified figure, sometimes weeks later, sometimes correcting itself.
 - **The bank** recognises a revenue figure for debt-service-coverage calculations. The bank may only recognise an amount that matches the current independent verification.
 
-When the verifier corrects a figure that the bank has already recognised against, the bank's previous recognition is no longer current — but it was correct at the time and should be preserved. The hard part: do this without adding `admitted_at` or `stale` fields to any claim.
+When the verifier corrects a figure that the bank has already recognised against, the bank's previous recognition is no longer current - but it was correct at the time and should be preserved. The hard part: do this without adding `admitted_at` or `stale` fields to any claim.
 
 ## The program
 
@@ -49,7 +49,7 @@ The load-bearing detail is in `correct_independent_verification`: when the verif
 
 ## How to run it
 
-The same scenario is proven at two layers — in-memory through the sync kernel, and durably through the PostgreSQL adapter.
+The same scenario is proven at two layers - in-memory through the sync kernel, and durably through the PostgreSQL adapter.
 
 ### In-memory (sync kernel)
 
@@ -92,8 +92,8 @@ DATABASE_URL=postgres:///morpholog_dev \
 
 Two integration tests in `crates/morpholog-postgres/tests/integration.rs`:
 
-- `revenue_restatement_full_chain_preserves_history_and_moves_pointer` — the full four-step chain (admit → recognise → correct → restate), end-to-end through `propose_against_pg`. Verifies all seven final claims are in `morpholog.claims`, four audit rows are recorded, four outbox intents are enqueued in causal order, the `CurrentBankRecognition(_, _, rec_001)` pointer is gone, and the historical `BankRecognisedRevenue(92, rec_001)` survives.
-- `correct_verification_with_no_prior_rejects_and_writes_nothing` — a `correct_independent_verification` call with no matching prior verification fails its `require` and leaves all three tables empty.
+- `revenue_restatement_full_chain_preserves_history_and_moves_pointer` - the full four-step chain (admit → recognise → correct → restate), end-to-end through `propose_against_pg`. Verifies all seven final claims are in `morpholog.claims`, four audit rows are recorded, four outbox intents are enqueued in causal order, the `CurrentBankRecognition(_, _, rec_001)` pointer is gone, and the historical `BankRecognisedRevenue(92, rec_001)` survives.
+- `correct_verification_with_no_prior_rejects_and_writes_nothing` - a `correct_independent_verification` call with no matching prior verification fails its `require` and leaves all three tables empty.
 
 This is the example that proves the *contested legitimacy* philosophy survives the durable boundary, not just the in-memory kernel: historical claims persist across PostgreSQL commits, current-standing pointers move via retraction in one atomic transaction, and supersession lineage is recorded as ordinary claims.
 
@@ -101,9 +101,9 @@ This is the example that proves the *contested legitimacy* philosophy survives t
 
 ## Design notes
 
-The instinct on first reading is to add metadata — an `admitted_at` field, a `stale` flag, an `authority` tag. **Try claims-about-claims first.** Metadata is a fallback for cases where standing, authority, validity, or lineage cannot be cleanly expressed as separate claims. In this example, claims-about-claims work.
+The instinct on first reading is to add metadata - an `admitted_at` field, a `stale` flag, an `authority` tag. **Try claims-about-claims first.** Metadata is a fallback for cases where standing, authority, validity, or lineage cannot be cleanly expressed as separate claims. In this example, claims-about-claims work.
 
-> A lot of what feels like claim metadata — *current, stale, valid, in-force, authority, exception* — can be re-expressed as a **claim about a claim**. Ask "what additional claim gives this claim standing in this context?" before asking "what field should this claim carry?"
+> A lot of what feels like claim metadata - *current, stale, valid, in-force, authority, exception* - can be re-expressed as a **claim about a claim**. Ask "what additional claim gives this claim standing in this context?" before asking "what field should this claim carry?"
 
 In this example:
 
@@ -114,6 +114,6 @@ In this example:
 
 Three things are deliberately deferred:
 
-1. **Cascading retraction.** `correct_independent_verification` retracts the dependent `CurrentBankRecognition`. If many predicates eventually depend on a given verification, the cascade grows. We'll need to decide whether such cascades stay as explicit retractions in transformation bodies or get derived automatically — probably the former until a pattern repeats three times.
+1. **Cascading retraction.** `correct_independent_verification` retracts the dependent `CurrentBankRecognition`. If many predicates eventually depend on a given verification, the cascade grows. We'll need to decide whether such cascades stay as explicit retractions in transformation bodies or get derived automatically - probably the former until a pattern repeats three times.
 2. **Cross-authority coupling.** The verifier's correction transformation "knows about" the bank's pointer structure. The coupling is structural, not authority-based: transformations are not owned by an authority, they are system-level transitions.
-3. **Read-side.** "What is the current bank-recognised revenue for asset_a in 2026-04?" is a join over `CurrentBankRecognition` and `BankRecognisedRevenue` matching `recognition_id`. We have not built read-side machinery yet. The disciplined direction is *derived claims* — a first-class declaration of "this claim is true iff this expression over admitted claims is true, recomputable, materialisable, with provenance" — rather than an ad-hoc query DSL. The framing lives in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md); the example will be locked in by a third worked example focused on claim *standing* and admissibility-for-purpose.
+3. **Read-side.** "What is the current bank-recognised revenue for asset_a in 2026-04?" is a join over `CurrentBankRecognition` and `BankRecognisedRevenue` matching `recognition_id`. We have not built read-side machinery yet. The disciplined direction is *derived claims* - a first-class declaration of "this claim is true iff this expression over admitted claims is true, recomputable, materialisable, with provenance" - rather than an ad-hoc query DSL. The framing lives in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md); the example will be locked in by a third worked example focused on claim *standing* and admissibility-for-purpose.
