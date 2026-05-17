@@ -149,6 +149,8 @@ DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-postgres --all-targets -- --test-threads=1
 ```
 
+Existing databases need the migrations under `crates/morpholog-core/sql/migrations/` applied in numeric order. Fresh installations get the head schema from `crates/morpholog-core/sql/schema.sql`.
+
 The workspace splits into `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter and read helpers), `morpholog-cli` (the `morpholog` binary), and `morpholog-bench` (scale-pressure benchmark).
 
 ## Where this is heading
