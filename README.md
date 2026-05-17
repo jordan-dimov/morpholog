@@ -144,6 +144,7 @@ The workspace splits into `morpholog-core` (synchronous kernel, no I/O), `morpho
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics the `morpholog-core` kernel realises.
 - [`docs/forced-by-examples.md`](docs/forced-by-examples.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
+- [`docs/outbox-sketch.md`](docs/outbox-sketch.md) - design sketch for the outbox worker plus compensating-transformation pattern (the "Morpholog plus an Outside Coordinator" architecture). Accompanied by a hand-rolled spike test; not yet implemented.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## License
