@@ -303,8 +303,9 @@ async fn list_derived_at_at_latest_equals_list_derived() {
 
 /// Test #7: list_derived_at ignores unrelated predicates during
 /// replay (proves scoped reconstruction is correct under noise).
-/// Insert a pile of unrelated claims via a direct audit row, then
-/// confirm the trial balance at the latest transition is unchanged.
+/// Commit an unrelated transformation via `propose_against_pg`
+/// (which adds its own audit row), then confirm the trial balance
+/// at that new transition is unchanged.
 #[tokio::test]
 async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let pool = test_pool().await;
@@ -346,22 +347,25 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     );
 }
 
-/// Test #8: list_derived_at uses scoped reconstruction internally -
-/// the partial state it loads contains only JournalLine claims
-/// (the trial-balance footprint), not the JournalEntry or Supersedes
-/// claims that also exist in the audit log.
+/// Test #8: confirms the trial balance derived enumeration is
+/// correct against historical state that ALSO contains predicates
+/// the derived does not touch (JournalEntry, Supersedes). This is
+/// the output-level check: `list_derived_at` produces the right
+/// answer even when the audit log contains noise predicates.
 ///
-/// This is checked indirectly: the test reuses
-/// `reconstruct_state_at_for_predicates`'s effect via
-/// `list_derived_at` and verifies the returned rows are still
-/// correct. A regression that loaded everything would not change the
-/// answer (the derived enumeration would still find the right
-/// JournalLines), so the structural test below pins it more
-/// directly: build the full state at tid3, then build a footprint-
-/// scoped state at tid3 by hand for one specific predicate, and
-/// confirm only that predicate's claims are present.
+/// Note: this test does NOT directly inspect what
+/// `reconstruct_state_at_for_predicates` returns - that function is
+/// `pub(crate)` and not reachable from integration tests. The
+/// partial-state contract (only requested predicates in the
+/// reconstructed state) is enforced internally by the
+/// `predicate_in_scope_set` check in the replay loop and validated
+/// here only indirectly via correct output. A regression that
+/// accidentally loaded everything would still produce correct
+/// output for the trial balance (the JournalLines would still be
+/// there); the test that catches such a regression is the bench's
+/// list_scoped phase timing.
 #[tokio::test]
-async fn scoped_reconstruction_keeps_only_requested_predicates() {
+async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let (_tid1, _tid2, tid3) = three_step_ledger(&pool).await;
@@ -388,4 +392,136 @@ async fn scoped_reconstruction_keeps_only_requested_predicates() {
     // Current state: entry_001 (100) + entry_002 (200) + entry_001_v2 (150) = 450 on cash.
     assert_balance(&rows, "account_cash", 450);
     assert_balance(&rows, "account_revenue", -450);
+}
+
+/// Test #9: cross-transition retraction.
+///
+/// The previous eight tests exercise additive workflows only
+/// (`post_simple_entry`, `restate_entry`) - neither retracts
+/// anything, so the replay loop's `claims.retain(|c| c != r)`
+/// branch is never tickled by realistic data. This test uses
+/// `revenue_restatement::correct_independent_verification`, which
+/// **retracts** `CurrentBankRecognition` as part of its body. The
+/// scenario:
+///
+/// 1. `admit_independent_verification` (IV1)        -> tid1
+/// 2. `recognise_bank_revenue`                       -> tid2 (asserts
+///    `BankRecognisedRevenue` and `CurrentBankRecognition`)
+/// 3. `correct_independent_verification`             -> tid3 (asserts
+///    new IV2 + `Supersedes`; **retracts** the `CurrentBankRecognition`
+///    that step 2 created)
+///
+/// As-of tid2: `CurrentBankRecognition` IS present.
+/// As-of tid3: `CurrentBankRecognition` is GONE.
+///
+/// A regression that broke the retraction branch of the replay loop
+/// (e.g. ignored retractions, or applied them after assertions
+/// rather than before, or scoped them out under
+/// `reconstruct_state_at_for_predicates`) would make this test
+/// fail.
+#[tokio::test]
+async fn reconstruct_state_at_applies_cross_transition_retractions() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = revenue_restatement::all_invariants();
+    let asset = subj("asset_a");
+    let period = subj("p_2026_04");
+
+    // Step 1: admit IV at 92.
+    let _tid1 = expect_committed(
+        propose_against_pg(
+            &pool,
+            &revenue_restatement::admit_independent_verification(),
+            vec![asset.clone(), period.clone(), dec(92), subj("ver_001")],
+            &invariants,
+        )
+        .await
+        .unwrap(),
+    );
+
+    // Step 2: recognise bank revenue at 92, with rec_001.
+    let tid2 = expect_committed(
+        propose_against_pg(
+            &pool,
+            &revenue_restatement::recognise_bank_revenue(),
+            vec![asset.clone(), period.clone(), dec(92), subj("rec_001")],
+            &invariants,
+        )
+        .await
+        .unwrap(),
+    );
+
+    // Step 3: correct the verification to 91 (ver_002). This
+    // transformation retracts CurrentBankRecognition as part of its
+    // body - the contested-legitimacy semantics from PR #6.
+    let tid3 = expect_committed(
+        propose_against_pg(
+            &pool,
+            &revenue_restatement::correct_independent_verification(),
+            vec![asset, period, dec(91), subj("ver_002"), subj("ver_001")],
+            &invariants,
+        )
+        .await
+        .unwrap(),
+    );
+
+    // At tid2: CurrentBankRecognition IS present.
+    let claims_at_tid2 = list_claims_at(&pool, tid2).await.unwrap();
+    let current_at_tid2 = claims_at_tid2
+        .iter()
+        .filter(|c| c.predicate == "CurrentBankRecognition")
+        .count();
+    assert_eq!(
+        current_at_tid2, 1,
+        "CurrentBankRecognition should be admitted as of tid2"
+    );
+
+    // At tid3 (after the retraction): CurrentBankRecognition is GONE.
+    let claims_at_tid3 = list_claims_at(&pool, tid3).await.unwrap();
+    let current_at_tid3 = claims_at_tid3
+        .iter()
+        .filter(|c| c.predicate == "CurrentBankRecognition")
+        .count();
+    assert_eq!(
+        current_at_tid3, 0,
+        "CurrentBankRecognition should be gone as of tid3 (retracted by correct_independent_verification)"
+    );
+
+    // The historical IV1 must survive the correction (history is
+    // append-only); both verifications should be in admitted state
+    // at tid3.
+    let iv_at_tid3 = claims_at_tid3
+        .iter()
+        .filter(|c| c.predicate == "IndependentlyVerifiedRevenue")
+        .count();
+    assert_eq!(
+        iv_at_tid3, 2,
+        "both IV1 (original 92) and IV2 (corrected 91) should be admitted at tid3"
+    );
+}
+
+/// Test #10: empty audit log.
+///
+/// `reconstruct_state_at(pool, any_uuid)` against a database whose
+/// audit table is empty must return `TransitionNotFound`, not
+/// `Ok(empty State)`. Pins the "as of *this actual committed
+/// transition*" contract at its edge: even when there are no
+/// committed transitions at all, an unknown id is still an error.
+/// A regression that returned an empty state for "the audit table
+/// has nothing matching" would silently succeed with the wrong
+/// semantics.
+#[tokio::test]
+async fn reconstruct_state_at_on_empty_audit_log_is_transition_not_found() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    // No commits at all. The audit table is empty.
+
+    let err = reconstruct_state_at(&pool, Uuid::now_v7())
+        .await
+        .expect_err("reconstruct against an empty audit log must error");
+    assert!(
+        matches!(err, PgError::TransitionNotFound(_)),
+        "empty audit log should still produce TransitionNotFound, not an empty state; got {err:?}"
+    );
 }

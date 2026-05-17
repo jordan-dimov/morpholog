@@ -702,13 +702,29 @@ pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<
 /// would correctly report zero matches because those claims were
 /// never added, not because they do not exist.
 ///
-/// Empty `predicates` returns a `State` containing zero claims (the
-/// target transition must still exist or this is an error).
+/// Empty `predicates` short-circuits: the target `transition_id`
+/// must still exist (returning [`PgError::TransitionNotFound`]
+/// otherwise), but no audit rows are fetched or replayed because
+/// the result is unconditionally an empty `State`. Mirrors the
+/// short-circuit behaviour of [`list_claims_for_predicates`].
 pub(crate) async fn reconstruct_state_at_for_predicates(
     pool: &PgPool,
     transition_id: Uuid,
     predicates: &[String],
 ) -> Result<State, PgError> {
+    if predicates.is_empty() {
+        // Still verify the target transition exists; the contract
+        // is "as of *this actual committed transition*", and an
+        // empty footprint does not change that.
+        let target: Option<(Uuid,)> =
+            sqlx::query_as("SELECT transition_id FROM morpholog.audit WHERE transition_id = $1")
+                .bind(transition_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(classify)?;
+        target.ok_or(PgError::TransitionNotFound(transition_id))?;
+        return Ok(State::default());
+    }
     reconstruct_inner(pool, transition_id, Some(predicates)).await
 }
 
@@ -777,6 +793,14 @@ async fn reconstruct_inner(
     let (target_committed_at, target_transition_id) =
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
 
+    // Precompute the predicate scope as a HashSet for O(1) lookups
+    // inside the replay loop. For derived footprints with one or
+    // two predicates the linear scan was fine; precomputing once
+    // per reconstruction keeps it cheap regardless of footprint
+    // size or audit-log length.
+    let scope_set: Option<HashSet<&str>> =
+        predicates.map(|preds| preds.iter().map(String::as_str).collect());
+
     // Replay every transition with a `(committed_at, transition_id)`
     // tuple less than or equal to the target's. PostgreSQL row
     // comparison (`(a, b) <= (c, d)`) is lexicographic; ordering by
@@ -802,13 +826,13 @@ async fn reconstruct_inner(
         // Within each transition: retractions first, then assertions.
         // Matches build_candidate_state in the kernel.
         for r in &retracted {
-            if !predicate_in_scope(&r.predicate, predicates) {
+            if !predicate_in_scope_set(&r.predicate, scope_set.as_ref()) {
                 continue;
             }
             claims.retain(|c| c != r);
         }
         for a in &asserted {
-            if !predicate_in_scope(&a.predicate, predicates) {
+            if !predicate_in_scope_set(&a.predicate, scope_set.as_ref()) {
                 continue;
             }
             // Set-valued: skip if already present.
@@ -821,11 +845,13 @@ async fn reconstruct_inner(
 }
 
 /// Predicate-scope check. `None` (full reconstruction) accepts
-/// everything; `Some(slice)` accepts only predicates in the slice.
-fn predicate_in_scope(predicate: &str, scope: Option<&[String]>) -> bool {
+/// everything; `Some(set)` accepts only predicates whose name is in
+/// the set. The set is precomputed once per reconstruction in
+/// [`reconstruct_inner`], so each check is O(1).
+fn predicate_in_scope_set(predicate: &str, scope: Option<&HashSet<&str>>) -> bool {
     match scope {
         None => true,
-        Some(set) => set.iter().any(|p| p == predicate),
+        Some(set) => set.contains(predicate),
     }
 }
 
