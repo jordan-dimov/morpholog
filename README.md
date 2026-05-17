@@ -67,7 +67,7 @@ Measured in lines of code, that is always a small fraction of a real business sy
 
 ## Project status
 
-Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Four worked examples are proven both in-memory and durably against PostgreSQL. There is no parser, no usable CLI beyond `--version`, and no outbox worker — these are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
+Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Four worked examples are proven both in-memory and durably against PostgreSQL. The CLI offers read-only inspection only (`morpholog inspect {claims,audit,outbox}`); there is no parser, no transformation-driving CLI commands, and no outbox worker. These are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
 
 ```bash
 cargo test -p morpholog-core --all-targets                              # 45 tests, in-memory

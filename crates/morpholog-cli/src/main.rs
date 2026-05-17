@@ -90,9 +90,17 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn connect(url: &str) -> anyhow::Result<PgPool> {
+    // The URL is deliberately NOT included in error context: a typical
+    // PostgreSQL connection string is `postgres://user:password@host/db`,
+    // and echoing it into stderr (where it may be captured by shells,
+    // CI logs, or terminal scrollback) would leak credentials. The
+    // underlying sqlx error already describes what went wrong (DNS
+    // failure, connection refused, authentication failed, etc.); the
+    // user knows which URL they supplied via `--database-url` or
+    // `DATABASE_URL`.
     PgPool::connect(url)
         .await
-        .with_context(|| format!("failed to connect to PostgreSQL at `{url}`"))
+        .context("failed to connect to PostgreSQL")
 }
 
 fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
