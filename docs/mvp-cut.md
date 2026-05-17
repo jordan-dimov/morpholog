@@ -20,12 +20,11 @@ Item 1 is the missing piece. Until the introduction of the [`Program`](../crates
 
 ## In scope (for MVP)
 
-- `Program` container in `morpholog-core` packaging a set of invariants and named transformations under a stable identifier. **Landed.**
-- A `program()` constructor on each built-in example. **Landed.**
-- CLI discovery of built-in example programs: `morpholog examples` lists them; `morpholog example <name>` shows the program's invariant and transformation names. **Pending.**
-- CLI invocation of a named transformation from a named program, with arguments supplied as JSON: `morpholog example <program> propose <transformation> --args '<json>' --database-url <url>`. The runtime parses arguments as `Vec<EvalValue>` via the existing codec, opens a SERIALIZABLE PG transaction, and runs the existing `propose_against_pg`. **Pending.**
+- `Program` container in `morpholog-core` packaging a set of invariants and named transformations under a stable identifier. **Landed (PR #17).**
+- A `program()` constructor on each built-in example. **Landed (PR #17).**
+- CLI invocation of a named transformation from a named program, with arguments supplied as JSON: `morpholog propose <program> <transformation> --args '<json>' --database-url <url>`. The runtime looks up the named program (one of the built-in examples), looks up the named transformation, parses arguments as `Vec<EvalValue>` via the existing codec, opens a SERIALIZABLE PG transaction, and runs the existing `propose_against_pg`. Outcome is serialised as JSON to stdout. **This PR.**
 
-After the two pending pieces land, item 1 is satisfied for *built-in* programs. That is the MVP threshold. User-supplied programs (i.e. programs not compiled into the morpholog-cli binary) are a follow-on once the parser exists.
+After the pending piece lands, item 1 of the threshold is satisfied for *built-in* programs. That is the MVP threshold. User-supplied programs (i.e. programs not compiled into the `morpholog-cli` binary) are a follow-on once the parser exists.
 
 ## Out of scope (for MVP)
 
@@ -43,21 +42,23 @@ These are explicitly deferred. Each is interesting; none is required to cross th
 
 ## Sequence
 
-Three PRs total. The first has landed.
+Two PRs total. The first has landed.
 
-1. **PR #17 (this PR pair):** `Program` struct in `morpholog-core` + per-example `program()` constructors + this doc.
-2. **Next PR:** CLI discovery. `morpholog examples` lists built-in programs; `morpholog example <name>` (or similar) shows what is in one. No PostgreSQL connection required.
-3. **Final MVP PR:** CLI invocation. `morpholog example <program> propose <transformation> --args '<json>' --database-url <url>`. Connects, parses args as `Vec<EvalValue>` via the existing codec, calls `propose_against_pg`, prints the outcome as JSON.
+1. **PR #17:** `Program` struct in `morpholog-core` + per-example `program()` constructors + the original version of this doc.
+2. **Final MVP PR (this PR):** CLI invocation. `morpholog propose <program> <transformation> --args '<json>' --database-url <url>`. Looks up the named program and transformation, parses args as `Vec<EvalValue>` via the existing codec, calls `propose_against_pg`, prints the outcome as JSON.
 
-After step 3, the MVP threshold is crossed. A human can commit governed state against PostgreSQL without writing Rust. Subsequent work (parser, derived claims, anything else) is post-MVP and is not constrained by this document.
+After step 2, the MVP threshold is crossed. A human can commit governed state against PostgreSQL without writing Rust. Subsequent work (parser, derived claims, anything else) is post-MVP and is not constrained by this document.
+
+The original three-PR sequence had a separate CLI discovery step in the middle (`morpholog examples` / `morpholog example <name>`). It was dropped after first-pass review: discovery of built-in programs is what the per-example READMEs and `clap --help` already provide, and a dedicated subcommand for it has no precedent in mainstream language tooling (`rustc`, `python`, `cargo`, `go`, `psql` all defer this to documentation). Adding it would have been CLI ceremony without an actual customer.
 
 ## Why this cut line and not another
 
-Three alternative cut lines were considered and rejected:
+The alternative cut lines below were considered and rejected:
 
 - *Parser-first MVP.* Rejected because a parser is not one feature; it commits to too many design decisions before the operational surface is settled. Better to expose the existing IR through `Program` and a tiny CLI, watch how it gets used, and let the surface syntax catch up to the operational reality rather than dictate it.
 - *Derived-claims-first MVP.* Rejected because derived claims are a semantic expansion that should be forced by an example, not added speculatively. Without read-side projections you can still cross the operability threshold; without operability, derived claims would be implementing for an audience that does not yet exist.
-- *Doctrine-document-first MVP.* Rejected because the project already has enough doctrine (`scope-and-ambition.md`, `runtime-semantics.md`, `forced-by-examples.md`). One more abstract essay would add prose gravity without changing what the runtime can do. This document is the smallest doctrinal addition that fits: a single page recording the operational threshold and the three PRs that cross it.
+- *Doctrine-document-first MVP.* Rejected because the project already has enough doctrine (`scope-and-ambition.md`, `runtime-semantics.md`, `forced-by-examples.md`). One more abstract essay would add prose gravity without changing what the runtime can do. This document is the smallest doctrinal addition that fits: a single page recording the operational threshold and the PRs that cross it.
+- *Discovery-first MVP.* Originally scheduled as step 2 of a three-PR sequence (`morpholog examples` to list built-in programs, `morpholog example <name>` to inspect one). Dropped after first-pass review: discovery of built-in programs is what the per-example READMEs and `clap --help` already provide, with richer context than any CLI listing could. No mainstream language tool ships a "list built-in examples" subcommand for the same reason.
 
 ## What this document is not
 
