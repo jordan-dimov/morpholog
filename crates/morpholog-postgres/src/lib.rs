@@ -815,6 +815,121 @@ pub async fn record_compensation(
     }
 }
 
+/// Atomically claim one due-pending (or expired-leased) outbox row
+/// of the given `intent_type` for delivery by `worker_id`.
+///
+/// The row is selected with `FOR UPDATE SKIP LOCKED` inside an
+/// `UPDATE ... RETURNING` so concurrent workers cannot race on the
+/// same row; if two workers run this query at the same moment, one
+/// claims the row, the other skips it and either finds the next
+/// candidate or returns `None`.
+///
+/// Claim eligibility:
+/// - `status='pending'` AND (`next_attempt_at IS NULL OR <= now()`):
+///   a row whose retry backoff has elapsed (or which has no
+///   scheduled retry) is eligible.
+/// - OR `status='in_progress' AND lock_expires_at < now()`: a row
+///   whose previous worker crashed mid-delivery and whose lease
+///   has expired is also eligible. Reclaim is transparent.
+///
+/// On claim: sets `status='in_progress'`, `locked_by=worker_id`,
+/// `lock_expires_at=now()+lease_duration`. Returns the full
+/// `OutboxRow` (now reflecting the lease).
+///
+/// `lease_duration` is the wall-clock window during which the
+/// claiming worker has exclusive rights to mutate the row through
+/// `mark_outbox_delivered`, `mark_outbox_transient_attempt`, or
+/// `mark_outbox_failed`. Picking the right duration is the worker's
+/// responsibility - long enough to cover the deliverer's expected
+/// latency plus headroom; short enough that a crashed worker's
+/// rows become reclaimable in reasonable time.
+///
+/// The deliverer must run **outside** any database transaction;
+/// this helper opens and closes the only transaction the claim
+/// needs (a single atomic UPDATE ... RETURNING), and the caller
+/// holds the lease via the `locked_by`/`lock_expires_at` columns
+/// rather than a held row lock.
+pub async fn claim_pending_outbox_row(
+    pool: &PgPool,
+    worker_id: &str,
+    intent_type: &str,
+    lease_duration: std::time::Duration,
+) -> Result<Option<OutboxRow>, PgError> {
+    let lease_secs: i64 = lease_duration
+        .as_secs()
+        .try_into()
+        .map_err(|_| PgError::InvalidState("lease_duration too large for i64".to_string()))?;
+    let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
+        "UPDATE morpholog.outbox
+         SET status='in_progress',
+             locked_by=$1,
+             lock_expires_at=now() + ($2 || ' seconds')::interval
+         WHERE intent_id = (
+             SELECT intent_id
+             FROM morpholog.outbox
+             WHERE intent_type=$3
+               AND (
+                   (status='pending'
+                    AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
+                OR (status='in_progress'
+                    AND lock_expires_at < now())
+               )
+             ORDER BY enqueued_at, intent_id
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED
+         )
+         RETURNING intent_id, transition_id, intent_type, arguments,
+                   idempotency_key, status, attempt_count, enqueued_at,
+                   last_attempt_at, delivered_at, failed_at, failure_reason,
+                   next_attempt_at, compensation_transition_id, locked_by,
+                   lock_expires_at",
+    )
+    .bind(worker_id)
+    .bind(lease_secs.to_string())
+    .bind(intent_type)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify)?;
+
+    row_opt.map(decode_outbox_row).transpose()
+}
+
+/// Release a held lease without resolving the row to a terminal
+/// state. The row returns to `status='pending'` and becomes
+/// claimable by another worker on its next pass.
+///
+/// Useful for shutdown paths (a worker dying gracefully releases
+/// its in-flight claims so they can be re-picked immediately
+/// rather than waiting for the lease to expire). Returns
+/// `LeaseLost` if the worker no longer holds the lease - which is
+/// expected if a slow worker is shutting down after its lease
+/// already expired.
+pub async fn release_outbox_claim(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+) -> Result<OutboxUpdate, PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='pending',
+             locked_by=NULL,
+             lock_expires_at=NULL
+         WHERE intent_id=$1
+           AND locked_by=$2
+           AND lock_expires_at > now()",
+    )
+    .bind(intent_id)
+    .bind(worker_id)
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    })
+}
+
 /// Enumerate a derived claim's extension against the current durable state.
 ///
 /// Loads only the admitted claims for predicates the derived claim's

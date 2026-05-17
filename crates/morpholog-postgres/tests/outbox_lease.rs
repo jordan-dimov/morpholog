@@ -1,0 +1,300 @@
+//! Integration tests for the outbox lease helpers
+//! (`claim_pending_outbox_row`, `release_outbox_claim`) added in
+//! PR 1 of the outbox arc (per `docs/outbox-sketch.md`'s sequencing).
+//!
+//! The state-mutating helpers (`mark_outbox_delivered`,
+//! `mark_outbox_transient_attempt`, `mark_outbox_failed`,
+//! `record_compensation`) are exercised in the sibling file
+//! `outbox_helpers.rs` so each file stays focused.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::time::Duration;
+
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use morpholog_core::EvalValue;
+use morpholog_core::examples::double_entry_ledger;
+use morpholog_postgres::{
+    OutboxUpdate, PgPool, PgProposalOutcome, claim_pending_outbox_row, propose_against_pg,
+    release_outbox_claim,
+};
+use rust_decimal::Decimal;
+use uuid::Uuid;
+
+// ============================================================
+// Test infrastructure
+// ============================================================
+
+async fn test_pool() -> PgPool {
+    let url = std::env::var("DATABASE_URL").expect(
+        "DATABASE_URL must be set for morpholog-postgres integration tests \
+         (e.g. postgres:///morpholog_dev)",
+    );
+    PgPool::connect(&url)
+        .await
+        .expect("failed to connect to PostgreSQL test database")
+}
+
+async fn reset_db(pool: &PgPool) {
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit CASCADE")
+        .execute(pool)
+        .await
+        .expect("failed to truncate test DB");
+}
+
+fn subj(s: &str) -> EvalValue {
+    EvalValue::Subject(s.to_string())
+}
+
+fn dec(n: i64) -> EvalValue {
+    EvalValue::Decimal(Decimal::new(n, 0))
+}
+
+/// Commit one ledger entry with the supplied `entry_id` and return
+/// the resulting outbox row's `intent_id`. The row is in
+/// `status='pending'`, no lease held, no `next_attempt_at`.
+async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
+    let invariants = double_entry_ledger::all_invariants();
+    let outcome = propose_against_pg(
+        pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj(entry_id),
+            subj("d_2026_05_17"),
+            subj("p_lease"),
+            subj(&format!("account_cash_{entry_id}")),
+            subj(&format!("account_revenue_{entry_id}")),
+            dec(100),
+        ],
+        &invariants,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
+        PgProposalOutcome::Rejected { reason } => panic!("setup rejected: {reason}"),
+    };
+    // post_simple_entry emits one intent per call, so its intent_id
+    // is the latest pending row for this transition.
+    let (intent_id,): (Uuid,) = sqlx::query_as(
+        "SELECT intent_id FROM morpholog.outbox
+         ORDER BY enqueued_at DESC LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    intent_id
+}
+
+/// Directly set the next_attempt_at on a pending row (used to
+/// simulate a row whose backoff has not yet elapsed).
+async fn set_next_attempt_at(pool: &PgPool, intent_id: Uuid, when: DateTime<Utc>) {
+    sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$2 WHERE intent_id=$1")
+        .bind(intent_id)
+        .bind(when)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Directly force a row into in_progress with an already-expired
+/// lease (used to simulate a worker that crashed mid-delivery).
+async fn force_expired_lease(pool: &PgPool, intent_id: Uuid, worker_id: &str) {
+    sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='in_progress',
+             locked_by=$2,
+             lock_expires_at=now() - interval '1 second'
+         WHERE intent_id=$1",
+    )
+    .bind(intent_id)
+    .bind(worker_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn row_status_and_lease(pool: &PgPool, intent_id: Uuid) -> (String, Option<String>) {
+    sqlx::query_as("SELECT status, locked_by FROM morpholog.outbox WHERE intent_id=$1")
+        .bind(intent_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+const INTENT_TYPE: &str = "JournalEntryPosted";
+const LEASE: Duration = Duration::from_secs(30);
+
+// ============================================================
+// Tests
+// ============================================================
+
+#[tokio::test]
+async fn claim_returns_first_pending_row_and_sets_lease() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let enqueued = enqueue_pending(&pool, "entry_001").await;
+
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap()
+        .expect("must return Some when a pending row is available");
+
+    assert_eq!(claimed.intent_id, enqueued);
+    assert_eq!(claimed.status, "in_progress");
+    assert_eq!(claimed.locked_by, Some("worker_a".to_string()));
+    let lease_until = claimed
+        .lock_expires_at
+        .expect("lock_expires_at must be populated");
+    assert!(
+        lease_until > Utc::now(),
+        "lease must be in the future, got {lease_until}"
+    );
+    assert!(
+        lease_until - Utc::now() <= ChronoDuration::seconds(31),
+        "lease must be roughly the requested duration, got {} seconds",
+        (lease_until - Utc::now()).num_seconds()
+    );
+}
+
+#[tokio::test]
+async fn claim_returns_none_when_no_pending_row_exists() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap();
+    assert!(
+        claimed.is_none(),
+        "must return None when the outbox is empty"
+    );
+}
+
+#[tokio::test]
+async fn claim_respects_intent_type_filter() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let _enqueued = enqueue_pending(&pool, "entry_001").await;
+
+    // The pending row's intent_type is JournalEntryPosted; a worker
+    // dedicated to a different intent_type must not pick it up.
+    let claimed = claim_pending_outbox_row(&pool, "worker_wire", "WireTransferRequested", LEASE)
+        .await
+        .unwrap();
+    assert!(
+        claimed.is_none(),
+        "worker filtering on a different intent_type must not claim the row"
+    );
+}
+
+#[tokio::test]
+async fn claim_returns_oldest_pending_row_first() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let first = enqueue_pending(&pool, "entry_001").await;
+    // Insert a small wall-clock gap so the second row's
+    // enqueued_at is provably later.
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    let _second = enqueue_pending(&pool, "entry_002").await;
+
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap()
+        .expect("must return the oldest pending row");
+    assert_eq!(
+        claimed.intent_id, first,
+        "must claim the earlier-enqueued row first"
+    );
+}
+
+#[tokio::test]
+async fn claim_skips_row_with_future_next_attempt_at() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_pending(&pool, "entry_001").await;
+    // Simulate a row that was tried, failed transiently, and
+    // scheduled to retry well in the future.
+    set_next_attempt_at(&pool, intent_id, Utc::now() + ChronoDuration::hours(1)).await;
+
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap();
+    assert!(
+        claimed.is_none(),
+        "row whose retry is scheduled in the future must not be claimable yet"
+    );
+}
+
+#[tokio::test]
+async fn claim_reclaims_row_whose_lease_has_expired() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_pending(&pool, "entry_001").await;
+    force_expired_lease(&pool, intent_id, "worker_crashed").await;
+
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap()
+        .expect("expired-lease row must be reclaimable");
+    assert_eq!(claimed.intent_id, intent_id);
+    assert_eq!(claimed.locked_by, Some("worker_a".to_string()));
+    assert_eq!(
+        claimed.status, "in_progress",
+        "row remains in_progress; lease just moved to the new worker"
+    );
+    let lease_until = claimed.lock_expires_at.unwrap();
+    assert!(
+        lease_until > Utc::now(),
+        "reclaim must set a fresh future lease, not preserve the expired one"
+    );
+}
+
+#[tokio::test]
+async fn release_returns_row_to_pending_and_clears_lease() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_pending(&pool, "entry_001").await;
+    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap()
+        .expect("claim must succeed");
+
+    let result = release_outbox_claim(&pool, intent_id, "worker_a")
+        .await
+        .unwrap();
+    assert_eq!(result, OutboxUpdate::Applied);
+
+    let (status, locked_by) = row_status_and_lease(&pool, intent_id).await;
+    assert_eq!(status, "pending", "row must return to pending");
+    assert!(locked_by.is_none(), "lease must be cleared");
+
+    // And the row is once again claimable by a different worker.
+    let reclaimed = claim_pending_outbox_row(&pool, "worker_b", INTENT_TYPE, LEASE)
+        .await
+        .unwrap()
+        .expect("released row must be re-claimable");
+    assert_eq!(reclaimed.intent_id, intent_id);
+    assert_eq!(reclaimed.locked_by, Some("worker_b".to_string()));
+}
+
+#[tokio::test]
+async fn release_returns_lease_lost_when_worker_does_not_hold_lease() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_pending(&pool, "entry_001").await;
+    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+        .await
+        .unwrap()
+        .expect("claim must succeed");
+
+    let result = release_outbox_claim(&pool, intent_id, "worker_b_imposter")
+        .await
+        .unwrap();
+    assert_eq!(result, OutboxUpdate::LeaseLost);
+
+    // Row remains in_progress under worker_a's lease.
+    let (status, locked_by) = row_status_and_lease(&pool, intent_id).await;
+    assert_eq!(status, "in_progress");
+    assert_eq!(locked_by, Some("worker_a".to_string()));
+}
