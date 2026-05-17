@@ -1,6 +1,6 @@
 # Derived claims: design sketch
 
-Status: design sketch for Example 5. Not a doctrine doc; records intent and open design questions before any kernel work lands. This sketch plus a spike test are PR #19; the implementation PR follows once the design questions below are answered.
+Status: historical design sketch. PR #19 added this doc plus a spike test that pinned the target API. PR #20 implemented `DerivedClaim`, `DerivedValue`, `Expr::Sub`, `Program::derived_claims`, and `enumerate_derived`, and added `trial_balance_row()` to the double-entry-ledger example. The shape that landed matches the "revised shape (current lean)" below; the open design questions are now settled and recorded in `forced-by-examples.md` as part of the Example 5 retrospective. This document is preserved as the record of the design conversation that produced the implementation.
 
 ## Problem
 

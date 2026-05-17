@@ -169,5 +169,6 @@ pub fn program() -> crate::Program {
         name: "settlement_netting".to_string(),
         invariants: all_invariants(),
         transformations: vec![create_net_settlement()],
+        derived_claims: vec![],
     }
 }
