@@ -185,6 +185,50 @@ pub struct Transformation {
     pub body: Vec<Stmt>,
 }
 
+/// A governed domain model: a named set of invariants and named
+/// transformations, packaged together so the runtime, the CLI, and
+/// external callers can refer to it as one unit.
+///
+/// `Program` is deliberately the smallest possible container. It
+/// does not own any state, does not own a connection, does not own
+/// a schema. It is just the set of rules and the set of admitted
+/// state-change paths that make up one governed model. A caller
+/// proposes a transformation against a `Program` by looking up the
+/// transformation by name and passing it to [`propose`] (or to the
+/// PostgreSQL adapter's `propose_against_pg`) together with the
+/// program's `invariants` and the arguments.
+///
+/// Each worked example exposes a `program()` constructor that
+/// returns its `Program`. Whether `Program`s are eventually loaded
+/// from `.morph` source files, or assembled programmatically, or
+/// both, is a later decision; the type is the smallest stable
+/// surface for naming "a governed domain model" today.
+///
+/// `name` is a stable identifier (snake_case is conventional; the
+/// built-in examples use `"settlement_netting"`, `"revenue_restatement"`,
+/// `"claim_standing"`, `"double_entry_ledger"`). The CLI uses it to
+/// select a program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Program {
+    pub name: String,
+    pub invariants: Vec<Invariant>,
+    pub transformations: Vec<Transformation>,
+}
+
+impl Program {
+    /// Look up a transformation by name. Returns `None` if no
+    /// transformation in the program has that name.
+    pub fn transformation(&self, name: &str) -> Option<&Transformation> {
+        self.transformations.iter().find(|t| t.name == name)
+    }
+
+    /// Look up an invariant by name. Returns `None` if no invariant
+    /// in the program has that name.
+    pub fn invariant(&self, name: &str) -> Option<&Invariant> {
+        self.invariants.iter().find(|i| i.name == name)
+    }
+}
+
 // ===========================================================================
 // In-memory evaluator
 // ===========================================================================

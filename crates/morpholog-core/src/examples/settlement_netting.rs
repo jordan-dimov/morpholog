@@ -160,3 +160,14 @@ pub fn all_invariants() -> Vec<Invariant> {
         no_double_netting(),
     ]
 }
+
+/// The settlement-netting example as a [`crate::Program`]: one
+/// transformation (`create_net_settlement`) and three invariants.
+/// Stable identifier: `"settlement_netting"`.
+pub fn program() -> crate::Program {
+    crate::Program {
+        name: "settlement_netting".to_string(),
+        invariants: all_invariants(),
+        transformations: vec![create_net_settlement()],
+    }
+}
