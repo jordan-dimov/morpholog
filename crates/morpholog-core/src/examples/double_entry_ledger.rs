@@ -362,3 +362,19 @@ pub fn all_invariants() -> Vec<Invariant> {
         at_most_one_direct_successor(),
     ]
 }
+
+/// The double-entry-ledger example as a [`crate::Program`]: four
+/// transformations and three invariants. Stable identifier:
+/// `"double_entry_ledger"`.
+pub fn program() -> crate::Program {
+    crate::Program {
+        name: "double_entry_ledger".to_string(),
+        invariants: all_invariants(),
+        transformations: vec![
+            post_simple_entry(),
+            post_split_entry(),
+            close_period(),
+            restate_entry(),
+        ],
+    }
+}

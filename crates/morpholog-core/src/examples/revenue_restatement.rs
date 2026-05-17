@@ -261,3 +261,19 @@ pub fn all_invariants() -> Vec<Invariant> {
         at_most_one_direct_successor(),
     ]
 }
+
+/// The revenue-restatement example as a [`crate::Program`]: four
+/// transformations and three invariants. Stable identifier:
+/// `"revenue_restatement"`.
+pub fn program() -> crate::Program {
+    crate::Program {
+        name: "revenue_restatement".to_string(),
+        invariants: all_invariants(),
+        transformations: vec![
+            admit_independent_verification(),
+            recognise_bank_revenue(),
+            correct_independent_verification(),
+            restate_bank_revenue(),
+        ],
+    }
+}

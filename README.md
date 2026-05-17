@@ -89,6 +89,7 @@ Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (asy
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the four language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics that the `morpholog-core` kernel realises.
 - [`docs/forced-by-examples.md`](docs/forced-by-examples.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
+- [`docs/mvp-cut.md`](docs/mvp-cut.md) - decision record for the MVP cut line. Concrete operational threshold ("a developer can run governed transformations against PostgreSQL without editing Morpholog's Rust source") and the three PRs that cross it.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## Requirements

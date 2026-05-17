@@ -323,3 +323,20 @@ pub fn all_invariants() -> Vec<Invariant> {
         admissibility_excludes_revocation(),
     ]
 }
+
+/// The claim-standing example as a [`crate::Program`]: five
+/// transformations and two invariants. Stable identifier:
+/// `"claim_standing"`.
+pub fn program() -> crate::Program {
+    crate::Program {
+        name: "claim_standing".to_string(),
+        invariants: all_invariants(),
+        transformations: vec![
+            admit_independent_verification(),
+            grant_standing(),
+            revoke_standing(),
+            admit_debt_service_revenue(),
+            admit_investor_reported_revenue(),
+        ],
+    }
+}
