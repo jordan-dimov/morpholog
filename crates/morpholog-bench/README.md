@@ -10,16 +10,21 @@ Exploratory. The numbers this binary prints are not regression assertions and ar
 
 | Scenario | Setup | Hot path | What it stresses |
 |---|---|---|---|
-| `write` | N synthetic journal entries inserted via direct SQL | one `propose_against_pg(post_simple_entry, ...)` call | `load_state` + invariant evaluation over the full candidate state + commit |
-| `read`  | same fixture | one `list_derived(trial_balance_row)` call | `load_state` + `enumerate_derived` (find_matches scans + grouping) |
+| `write` | N synthetic journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | `load_state` + invariant evaluation over the full candidate state + commit |
+| `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived` with each phase timed separately | the three layers of the read path, so the dominant cost is visible directly |
 
-The fixture is uniform on purpose: every entry debits `account_cash` and credits `account_revenue` for the same amount, so trial balance always produces exactly two rows. That holds `enumerate_derived`'s grouping cost small and concentrates the read-path cost in load + sum sweeps. A future scenario that distributes lines across many accounts would shift the dominant cost into grouping; not in scope for v1.
+The fixture distributes journal lines across `K` distinct accounts (default `K = 2`, configurable via `--accounts`). Entry `i` debits `account_{i mod K}` and credits `account_{(i+1) mod K}` for the same amount, so every entry is self-balancing and the `balanced_posted_entry` invariant holds. The trial-balance derived claim produces one row per distinct account that received at least one line; assertions on the read scenario check the loose bound `0 < rows <= K`.
+
+Larger `K` stresses two things at once on the read path: `enumerate_derived`'s grouping (the BTreeSet that orders the K key tuples) and the per-account `Sum` lookups (one per account, each narrowed by the argument-position index on `JournalLine[1] = account`). The write path is largely independent of `K`; varying it mostly changes fixture characteristics.
 
 ## Running
 
 ```bash
-DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release -- write 1000 --reset
-DATABASE_URL=postgres:///morpholog_dev cargo run -p morpholog-bench --release -- read 10000 --reset
+DATABASE_URL=postgres:///morpholog_dev \
+  cargo run -p morpholog-bench --release -- write 1000 --reset
+
+DATABASE_URL=postgres:///morpholog_dev \
+  cargo run -p morpholog-bench --release -- read 10000 --accounts 100 --reset
 ```
 
 `--release` matters; debug builds add an order of magnitude that obscures the algorithmic signal.
@@ -30,15 +35,34 @@ The bench **truncates the entire `morpholog` schema before each run**. The requi
 
 Run on a developer workstation against a local `morpholog_dev` database. Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
 
-| N | fixture_build | write: propose_one | read: list_derived |
+### Read path phase split
+
+The read scenario now reports `list_claims`, `build_state`, and `enumerate` separately. At `N = 100 000` (300 000 claims):
+
+| K | list_claims | build_state | enumerate | derived rows |
+|--:|--:|--:|--:|--:|
+| 2 | 1 151 ms | 239 ms | 364 ms | 2 |
+| 100 | 1 171 ms | 230 ms | 282 ms | 100 |
+
+Observations:
+
+- `list_claims` dominates (~65% of read time). That's the PostgreSQL fetch + JSONB decode for every claim in the table. **This is the next forced optimization.** The structurally-aware fix is predicate-scoped loading: load only the claims for predicates the derived claim's body actually references. A `SELECT ... WHERE predicate_name = ANY($1)` for the relevant set would skip most of the table for narrow workloads.
+- `build_state` is ~14% (~240 ms for 300 000 claims). Builds both indexes from scratch. Linear in claim count and constant per claim.
+- `enumerate` is ~20%. Slightly *cheaper* at K=100 than at K=2, which is a positive signal about the argument-position index: the per-account `Sum` for each of 100 accounts touches roughly `2N/K` lines (so K=100 sums each touch ~6 000 lines instead of K=2 sums each touching ~300 000 lines). The argument-position index on `JournalLine[1] = account` is what makes this scale; without it, K=100 would be ~100x slower than K=2 for the enumerate phase.
+
+### Write path
+
+| N | K | fixture_build | propose_one |
 |--:|--:|--:|--:|
-| 100 | 13 ms | < 5 ms | 3 ms |
-| 1 000 | 34 ms | 14 ms | 24 ms |
-| 10 000 | ~300 ms | 142 ms | 346 ms |
-| 100 000 | ~3 500 ms | 1 601 ms | 1 878 ms |
+| 1 000 | 2 | 30 ms | ~15 ms |
+| 10 000 | 2 | ~300 ms | ~240 ms |
+| 10 000 | 100 | ~520 ms | ~240 ms |
+| 100 000 | 100 | ~5 200 ms | ~2 300 ms |
 
-Both paths scale roughly linearly in `N`. The write path used to be quadratic; an early version of this bench surfaced that pathology, and the predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x at N=10000. The history of those numbers is preserved in the PRs themselves (`#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix).
+Linear in `N` and essentially independent of `K`. The remaining cost on `propose_one` is `load_state` + the indexed kernel work for `propose` + `INSERT` for claims/audit/outbox + COMMIT. Improvements here likely come from the same `load_state` work as the read path; the kernel itself is no longer the bottleneck at these sizes.
 
-The remaining linear cost on the write path is `load_state` (one `SELECT ... FROM morpholog.claims` over the entire table, one JSONB decode per row), plus `find_claim_matches` over the indexed state for the few JournalLine lookups the invariants actually do. On the read path the cost is the same `load_state` plus `enumerate_derived`'s `Sum` sweeps over the loaded claims; the per-account sums benefit from argument-position indexing, but the domain enumeration scans the full JournalLine bucket once and materialises one `Bindings` HashMap per match, which is what the read-path time is mostly spent on.
+### History
 
-The next bottleneck the bench would surface is the read path: either streaming `find_matches` instead of materialising `Vec<Bindings>`, or scoping `load_state` so the kernel only pulls claims for predicates the invariants and the derived claim actually touch. Neither is forced yet at these sizes; the bench is the regression test that will reveal when either becomes acute.
+The write path used to be **structurally quadratic**: an early version of this bench surfaced 31 seconds per propose at `N = 10 000`. The predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x. The full history is preserved in the PRs themselves: `#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix; the next PR (this one) added the `--accounts K` axis and the read-path phase split.
+
+The next bench enhancement worth doing would be a workload with many distinct predicates (the current ledger has only `JournalEntry` and `JournalLine`), so the predicate index's narrowing effect becomes visible separately from the argument-position index. Until that scenario exists, the predicate index's value is theoretical for this bench - the argument-position index does all the visible work.
