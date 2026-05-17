@@ -22,9 +22,9 @@ Item 1 is the missing piece. Until the introduction of the [`Program`](../crates
 
 - `Program` container in `morpholog-core` packaging a set of invariants and named transformations under a stable identifier. **Landed (PR #17).**
 - A `program()` constructor on each built-in example. **Landed (PR #17).**
-- CLI invocation of a named transformation from a named program, with arguments supplied as JSON: `morpholog propose <program> <transformation> --args '<json>' --database-url <url>`. The runtime looks up the named program (one of the built-in examples), looks up the named transformation, parses arguments as `Vec<EvalValue>` via the existing codec, opens a SERIALIZABLE PG transaction, and runs the existing `propose_against_pg`. Outcome is serialised as JSON to stdout. **This PR.**
+- CLI invocation of a named transformation from a named program, with arguments supplied as JSON: `morpholog propose <program> <transformation> --args '<json>' --database-url <url>`. The runtime looks up the named program (one of the built-in examples), looks up the named transformation, parses arguments as `Vec<EvalValue>` via the existing codec, opens a SERIALIZABLE PG transaction, and runs the existing `propose_against_pg`. Outcome is serialised as JSON to stdout. **Landed (PR #18).**
 
-After the pending piece lands, item 1 of the threshold is satisfied for *built-in* programs. That is the MVP threshold. User-supplied programs (i.e. programs not compiled into the `morpholog-cli` binary) are a follow-on once the parser exists.
+With both pieces landed, item 1 of the threshold is satisfied for *built-in* programs and the MVP threshold is crossed. User-supplied programs (i.e. programs not compiled into the `morpholog-cli` binary) are a follow-on once the parser exists.
 
 ## Out of scope (for MVP)
 
@@ -42,12 +42,12 @@ These are explicitly deferred. Each is interesting; none is required to cross th
 
 ## Sequence
 
-Two PRs total. The first has landed.
+Two PRs total. Both have landed.
 
 1. **PR #17:** `Program` struct in `morpholog-core` + per-example `program()` constructors + the original version of this doc.
-2. **Final MVP PR (this PR):** CLI invocation. `morpholog propose <program> <transformation> --args '<json>' --database-url <url>`. Looks up the named program and transformation, parses args as `Vec<EvalValue>` via the existing codec, calls `propose_against_pg`, prints the outcome as JSON.
+2. **PR #18:** CLI invocation. `morpholog propose <program> <transformation> --args '<json>' --database-url <url>`. Looks up the named program and transformation, parses args as `Vec<EvalValue>` via the existing codec, calls `propose_against_pg`, prints the outcome as JSON.
 
-After step 2, the MVP threshold is crossed. A human can commit governed state against PostgreSQL without writing Rust. Subsequent work (parser, derived claims, anything else) is post-MVP and is not constrained by this document.
+After PR #18, the MVP threshold is crossed. A human can commit governed state against PostgreSQL without writing Rust. Subsequent work (parser, derived claims, anything else) is post-MVP and is not constrained by this document.
 
 The original three-PR sequence had a separate CLI discovery step in the middle (`morpholog examples` / `morpholog example <name>`). It was dropped after first-pass review: discovery of built-in programs is what the per-example READMEs and `clap --help` already provide, and a dedicated subcommand for it has no precedent in mainstream language tooling (`rustc`, `python`, `cargo`, `go`, `psql` all defer this to documentation). Adding it would have been CLI ceremony without an actual customer.
 

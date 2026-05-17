@@ -121,3 +121,53 @@ fn unknown_lookups_return_none() {
     assert!(p.transformation("").is_none());
     assert!(p.invariant("not_a_real_invariant").is_none());
 }
+
+#[test]
+fn all_programs_registry_contains_every_per_example_program() {
+    // `examples::all_programs()` is the canonical built-in registry
+    // the CLI uses to resolve a `--program` name supplied on the
+    // command line. If a new worked example lands but the contributor
+    // forgets to add its `program()` constructor to `all_programs()`,
+    // `morpholog propose <new_example> ...` would silently fail with
+    // "program not found".
+    //
+    // Pin the contract by checking that every per-example `program()`
+    // is reachable through the registry by name. The list below is
+    // load-bearing: it should be updated whenever a new example is
+    // added, in the same commit that adds the example to
+    // `all_programs()`.
+    let registry = morpholog_core::examples::all_programs();
+    let registry_names: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
+
+    for expected_name in [
+        settlement_netting::program().name.as_str(),
+        revenue_restatement::program().name.as_str(),
+        claim_standing::program().name.as_str(),
+        double_entry_ledger::program().name.as_str(),
+    ] {
+        assert!(
+            registry_names.contains(&expected_name),
+            "all_programs() registry must include `{expected_name}`; \
+             currently contains: {registry_names:?}"
+        );
+    }
+}
+
+#[test]
+fn all_programs_registry_has_unique_names() {
+    // The CLI resolves a `--program` name by linear search through
+    // `all_programs()` and returns the first match. Duplicate names
+    // would make one of the duplicates unreachable, silently. Pin
+    // uniqueness so the failure surfaces immediately rather than at
+    // CLI invocation time.
+    let registry = morpholog_core::examples::all_programs();
+    let mut names: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
+    let total = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        total,
+        "program names in all_programs() must be unique"
+    );
+}

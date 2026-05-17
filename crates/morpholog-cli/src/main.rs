@@ -1,18 +1,27 @@
 //! Morpholog CLI.
 //!
-//! v0 exposes one subcommand group, `inspect`, which dumps the durable
-//! substrate (claims, audit rows, pending outbox intents) as JSON. The
-//! CLI is deliberately read-only: there is no `propose`, no `run`, no
-//! `apply` yet — and there will not be one until the parser exists and
-//! there is a surface program for the CLI to drive. The point of this
-//! crate today is to make the runtime *operable* (you can point it at
-//! a database and see what was admitted) rather than only *testable*.
+//! v0 exposes two surfaces:
 //!
-//! All inspection subcommands accept `--database-url <url>` or read
-//! `DATABASE_URL` from the environment; if neither is supplied, clap
-//! emits a clear error. Output is pretty-printed JSON to stdout via
-//! `serde_json::to_string_pretty`. There is no table formatting, no
-//! filtering, and no as-of evaluation in v0.
+//! - `inspect` dumps the durable substrate (current claims, audit
+//!   rows, pending outbox intents) as JSON. Read-only.
+//! - `propose` runs a named transformation from a built-in [`Program`]
+//!   against a Morpholog PostgreSQL database, with arguments supplied
+//!   as a JSON array of `EvalValue`s. Outcome is JSON on stdout, with
+//!   exit codes that let scripts distinguish commit from business
+//!   rejection from operational error.
+//!
+//! [`Program`]: morpholog_core::Program
+//!
+//! Both surfaces accept `--database-url <url>` or read `DATABASE_URL`
+//! from the environment; if neither is supplied, clap emits a clear
+//! error. Output is pretty-printed JSON via
+//! `serde_json::to_string_pretty`.
+//!
+//! The CLI is still deliberately narrow. Explicit non-goals: no
+//! parser, no user-supplied program loading (`propose` only accepts
+//! built-in programs from `morpholog_core::examples::all_programs()`),
+//! no outbox-delivery worker, no filtering or pagination DSL, no
+//! as-of evaluation, no derived-claim machinery.
 
 use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
@@ -200,6 +209,15 @@ async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
     )?;
 
     // 4. Connect and propose.
+    //
+    // Known v0 limitation: `PgError::SerializationFailure` (PostgreSQL
+    // SSI conflict; SQLSTATE 40001) is documented as caller-retryable,
+    // but the CLI surfaces it as a single failed invocation instead of
+    // retrying internally. Acceptable for the developer/operator use
+    // case the CLI is built for; concurrent `morpholog propose`
+    // pipelines should add their own retry wrapper, or this code
+    // should grow a small bounded-retry loop. Deferred until concurrent
+    // CLI use is actually pressured.
     let pool = connect(&args.database_url).await?;
     let outcome = propose_against_pg(&pool, transformation, eval_args, &program.invariants)
         .await
