@@ -108,6 +108,18 @@ Cash is back at 100. Revenue is back at -100. The report is exactly what an audi
 
 If you had tried to post an unbalanced entry - say, debit 100 against credits totalling 95 - the receipt would have come back as `{"status":"rejected","reason":"balanced_posted_entry invariant did not hold"}`, and your database would look exactly the way it did before you tried. That is the whole point.
 
+## What you get for writing your rules this way
+
+The as-of tour is the most visceral feature, but it is not the only one and probably not the most important. The list a controller or a risk officer might actually care about:
+
+- **Atomic commit or full rollback.** A transformation either lands every change it proposed - claims, audit row, outbound notifications - or none of them. There is no half-written ledger, no orphaned audit row, no notification fired against a state that never actually committed. PostgreSQL's `SERIALIZABLE` isolation does the work; the runtime guarantees it.
+- **An append-only audit of every change.** Every committed transformation writes a row carrying the transformation name, the arguments, the asserted and retracted claims, the emitted notifications, the invariants that governed admission, and a UUIDv7-timestamped transition id. The record of how a number got to be what it is, three months from now, is the row that wrote it.
+- **Read-side projections governed by the same rules.** A trial balance, an exposure summary, an account balance - these are derived claims, computed from admitted state on demand. They cannot reflect a record an invariant rejected. The report cannot drift from the source.
+- **Correction without overwriting.** When a record needs to change, the original stays admitted; a new transformation asserts the correction and a `Supersedes` claim records the lineage. Auditors three quarters later can still see the original number, the corrected number, and the moment one became the other.
+- **Notification staging that respects the commit boundary.** Outbound side effects (a wire dispatch instruction, a webhook fire, a Kafka publish) stage as outbox rows at commit and deliver afterward through a worker. Side effects never run inside the database transaction; they never run if the commit rolled back.
+- **Arbitrary-precision decimal arithmetic throughout.** No floating-point drift in financial quantities. Adds, subtracts, sums - all exact.
+- **Admissibility-for-purpose without mutation.** The same underlying claim can carry different standing for different decisions, granted and revoked by different authorities, without ever modifying the underlying record. Regulated lending and statutory reporting need exactly this shape; the third worked example demonstrates it end-to-end.
+
 ## Worked examples
 
 Each runs both in memory (against the kernel) and durably (against PostgreSQL). The integration tests exercise the same audit log the CLI does; nothing is mocked.
@@ -138,6 +150,18 @@ DATABASE_URL=postgres:///morpholog_dev \
 ```
 
 The workspace splits into `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter and read helpers), `morpholog-cli` (the `morpholog` binary), and `morpholog-bench` (scale-pressure benchmark).
+
+## Where this is heading
+
+The runtime today is operationally complete enough to defend a number; the next arc is making it operationally complete enough to defend an *organisation*. The roadmap, framed in business shapes rather than feature names:
+
+- **An outbox worker plus compensating transformations.** Outbound notifications (wire dispatch, webhook fire, Kafka publish) need a consumer. When delivery fails non-retryably - the SEPA network rejects a wire because of an out-of-band AML lock, say - the runtime should reconcile through a *compensating transformation* that goes back through every invariant gate and writes its own audit row. The ledger does not pretend the original commit never happened; it records the external contradiction and the correction as further governed facts. This is the *Morpholog plus an Outside Coordinator* architecture: the runtime stays a strict local gatekeeper; the worker owns the asynchronous conversation with the world. Sketched in [`docs/outbox-sketch.md`](docs/outbox-sketch.md); first substrate PR landing now.
+- **Actor authority and approval limits.** "Who admitted this entry, and under what authority?" is one of the questions the runtime promises to answer; closing it fully requires `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims and an invariant that gates admission on the actor's standing. A worked example is the right forcing function.
+- **Effective time as a first-class temporal axis.** As-of evaluation already gives knowledge time (what did we believe at moment T). Effective time (the day a contract becomes binding; the period a posting reflects) is expressible as ordinary claims; combining the two gives full bitemporal addressability without ever introducing `valid_from`/`valid_to` columns to any schema.
+- **A surface syntax and parser.** Programs are constructed as Rust IR today; the CLI accepts built-in programs only. A parser commits to file layout, module system, error spans, literal syntax, and a dozen other things that should be ratified by a real outside user, not pre-decided. The parser arrives when an outside collaborator is genuinely blocked by its absence - not before.
+- **Materialised derived claims.** Trial balance and similar reads are recomputed on demand today. For long audit logs and frequent queries, materialised snapshots will become forced. The benchmark is the regression test that will reveal when.
+
+The discipline that has carried the runtime so far - *smallest possible increment that produces a working artefact, forced by a worked example* - applies to each. None of these are speculative roadmap entries; each has a concrete forcing scenario named in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) or [`docs/forced-by-examples.md`](docs/forced-by-examples.md), and each lands when an example actually demands it.
 
 ## Deeper reading
 
