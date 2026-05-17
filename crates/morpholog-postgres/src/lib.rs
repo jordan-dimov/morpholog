@@ -6,6 +6,7 @@
 //! See `crates/morpholog-core/sql/schema.sql` for the canonical schema
 //! and `docs/scope-and-ambition.md` for the runtime's positioning.
 
+use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State, Transformation,
     propose,
@@ -155,13 +156,14 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>) -> Result<State, PgError
     Ok(State { claims })
 }
 
-/// Audit JSON shape for `invariants_checked`: an array of objects with
-/// `name` and `version` fields. Self-describing audit data is preferred
-/// over tuple compactness.
-#[derive(Serialize, Deserialize)]
-struct CheckedInvariant {
-    name: String,
-    version: u32,
+/// One entry in an audit row's `invariants_checked` JSONB array. Recorded
+/// per committed transformation: the invariant `name` plus the `version`
+/// active at admission time. Self-describing audit data is preferred over
+/// tuple compactness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvariantCheck {
+    pub name: String,
+    pub version: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -224,9 +226,9 @@ async fn write_accepted(
     }
 
     // Audit row.
-    let checked: Vec<CheckedInvariant> = invariants
+    let checked: Vec<InvariantCheck> = invariants
         .iter()
-        .map(|inv| CheckedInvariant {
+        .map(|inv| InvariantCheck {
             name: inv.name.clone(),
             version: inv.version,
         })
@@ -310,6 +312,206 @@ pub fn compute_idempotency_key(
     hasher.update(b"\0");
     hasher.update(&args_bytes);
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+// ===========================================================================
+// Read API — current-state inspection
+// ===========================================================================
+//
+// These helpers expose the durable substrate for inspection without
+// requiring callers to write raw SQL. They return *current* state only:
+// no as-of evaluation, no derived claims, no projection. A caller that
+// needs "what did the state look like at transition T" must build that
+// by replay over `list_audit_rows`; the kernel does not yet support
+// historical reconstruction directly.
+
+/// One row of `morpholog.audit` decoded into typed runtime values.
+///
+/// Each row corresponds to exactly one committed transformation. The
+/// JSONB columns (`arguments`, `invariants_checked`, `asserted_claims`,
+/// `retracted_claims`, `emitted_intents`) are decoded through the same
+/// codec that wrote them, so the round-trip is exact for any value the
+/// kernel can represent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditRow {
+    pub transition_id: Uuid,
+    pub transformation_name: String,
+    pub arguments: Vec<EvalValue>,
+    pub invariant_epoch: i32,
+    pub invariants_checked: Vec<InvariantCheck>,
+    pub asserted_claims: Vec<ClaimInstance>,
+    pub retracted_claims: Vec<ClaimInstance>,
+    pub emitted_intents: Vec<IntentInstance>,
+    pub committed_at: DateTime<Utc>,
+}
+
+/// One row of `morpholog.outbox` decoded into typed runtime values.
+///
+/// `attempt_count` is included because retries against external systems
+/// are part of the outbox contract; `last_attempt_at` and `delivered_at`
+/// are excluded because [`list_pending_outbox`] filters to `status =
+/// 'pending'` and both are NULL in that state. A future
+/// `list_all_outbox` or per-status query would surface them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxRow {
+    pub intent_id: Uuid,
+    pub transition_id: Uuid,
+    pub intent_type: String,
+    pub arguments: Vec<EvalValue>,
+    pub idempotency_key: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub enqueued_at: DateTime<Utc>,
+}
+
+/// Return every currently-admitted claim from `morpholog.claims`.
+///
+/// Order is `(asserted_at, predicate_name, arguments::text)` — causal
+/// admission order, with predicate-then-args as the stable tie-break.
+/// Two claims admitted in the same microsecond will appear in a
+/// deterministic order across runs.
+///
+/// This is a `SELECT *` over the entire table. For large states the
+/// caller should use SQL directly; the v0 helper is for tests, demos,
+/// and small-state inspection.
+pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT predicate_name, arguments
+         FROM morpholog.claims
+         ORDER BY asserted_at, predicate_name, arguments::text",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+
+    rows.into_iter()
+        .map(|(predicate, args_json)| {
+            Ok(ClaimInstance {
+                predicate,
+                args: serde_json::from_value(args_json)?,
+            })
+        })
+        .collect()
+}
+
+/// Return every committed audit row from `morpholog.audit`, ordered by
+/// `(committed_at, transition_id)` — causal commit order with the
+/// `transition_id` PRIMARY KEY (UUIDv7, time-ordered) as the stable
+/// tie-break.
+///
+/// All five JSONB columns are decoded through the codec; the caller
+/// receives typed values, not raw `serde_json::Value`. A decoding error
+/// surfaces as [`PgError::Encoding`] — that should never happen against
+/// a database the runtime itself wrote to, and indicates corruption or
+/// out-of-band tampering.
+pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
+    type Row = (
+        Uuid,
+        String,
+        serde_json::Value,
+        i32,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        DateTime<Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT transition_id, transformation_name, arguments,
+                invariant_epoch, invariants_checked,
+                asserted_claims, retracted_claims, emitted_intents,
+                committed_at
+         FROM morpholog.audit
+         ORDER BY committed_at, transition_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+
+    rows.into_iter()
+        .map(
+            |(
+                transition_id,
+                transformation_name,
+                args_json,
+                invariant_epoch,
+                invariants_checked_json,
+                asserted_json,
+                retracted_json,
+                intents_json,
+                committed_at,
+            )| {
+                Ok(AuditRow {
+                    transition_id,
+                    transformation_name,
+                    arguments: serde_json::from_value(args_json)?,
+                    invariant_epoch,
+                    invariants_checked: serde_json::from_value(invariants_checked_json)?,
+                    asserted_claims: serde_json::from_value(asserted_json)?,
+                    retracted_claims: serde_json::from_value(retracted_json)?,
+                    emitted_intents: serde_json::from_value(intents_json)?,
+                    committed_at,
+                })
+            },
+        )
+        .collect()
+}
+
+/// Return outbox rows whose `status = 'pending'`, ordered by
+/// `(enqueued_at, intent_id)` — the same causal-order-with-PK-tie-break
+/// pattern used elsewhere. This is the natural "what does the worker
+/// have to deliver?" query.
+///
+/// Delivered and failed rows are excluded; a future `list_all_outbox`
+/// or status-filtered helper would surface them. v0 only exposes the
+/// in-flight queue.
+pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
+    type Row = (
+        Uuid,
+        Uuid,
+        String,
+        serde_json::Value,
+        String,
+        String,
+        i32,
+        DateTime<Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT intent_id, transition_id, intent_type, arguments,
+                idempotency_key, status, attempt_count, enqueued_at
+         FROM morpholog.outbox
+         WHERE status = 'pending'
+         ORDER BY enqueued_at, intent_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+
+    rows.into_iter()
+        .map(
+            |(
+                intent_id,
+                transition_id,
+                intent_type,
+                args_json,
+                idempotency_key,
+                status,
+                attempt_count,
+                enqueued_at,
+            )| {
+                Ok(OutboxRow {
+                    intent_id,
+                    transition_id,
+                    intent_type,
+                    arguments: serde_json::from_value(args_json)?,
+                    idempotency_key,
+                    status,
+                    attempt_count,
+                    enqueued_at,
+                })
+            },
+        )
+        .collect()
 }
 
 #[cfg(test)]

@@ -15,7 +15,10 @@ use morpholog_core::examples::{
     claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
 };
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
-use morpholog_postgres::{PgProposalOutcome, compute_idempotency_key, propose_against_pg};
+use morpholog_postgres::{
+    PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_pending_outbox,
+    propose_against_pg,
+};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -1243,4 +1246,231 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     assert_eq!(count(&pool, "claims").await, 1, "pre-state unchanged");
     assert_eq!(count(&pool, "audit").await, 0);
     assert_eq!(count(&pool, "outbox").await, 0);
+}
+
+// ============================================================
+// Read API — current-state inspection helpers
+//
+// The helpers are deliberately boring: current state only, no
+// as-of, no derived claims, no filtering beyond the natural
+// `status = 'pending'` filter on outbox. The tests below pin
+// the helpers against scenarios already exercised by the
+// propose_against_pg tests above; the goal is to verify the
+// codec round-trips and the orderings are stable, not to
+// re-prove the kernel semantics.
+// ============================================================
+
+#[tokio::test]
+async fn list_claims_returns_admitted_claims_in_stable_order() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Post a simple journal entry: cash 100 debit, revenue 100 credit.
+    // Three claims will land: 1 JournalEntry, 2 JournalLine.
+    let outcome = propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_001"),
+            subj("d_2026_04_15"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    let claims = list_claims(&pool)
+        .await
+        .expect("list_claims should not error");
+
+    assert_eq!(claims.len(), 3, "1 JournalEntry + 2 JournalLine");
+
+    // The three claims, in insertion order. Since they were all admitted
+    // by the same transition (same asserted_at to microsecond resolution),
+    // the predicate-then-args tie-break determines order:
+    //   JournalEntry < JournalLine alphabetically by predicate_name.
+    // Within JournalLine, the two rows are ordered by `arguments::text`.
+    assert_eq!(claims[0].predicate, "JournalEntry");
+    assert_eq!(claims[1].predicate, "JournalLine");
+    assert_eq!(claims[2].predicate, "JournalLine");
+
+    // Verify the JournalEntry's args round-trip through the codec.
+    assert_eq!(
+        claims[0].args,
+        vec![subj("entry_001"), subj("d_2026_04_15"), ledger_period()]
+    );
+}
+
+#[tokio::test]
+async fn list_audit_rows_returns_committed_transformations_in_order() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Two committed transformations in causal order: post then close.
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_001"),
+            subj("d_2026_04_15"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .unwrap();
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::close_period(),
+        vec![ledger_period()],
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .unwrap();
+
+    let audit = list_audit_rows(&pool)
+        .await
+        .expect("list_audit_rows should not error");
+
+    assert_eq!(audit.len(), 2);
+
+    // Causal order: post first, close second.
+    assert_eq!(audit[0].transformation_name, "post_simple_entry");
+    assert_eq!(audit[1].transformation_name, "close_period");
+
+    // JSONB columns decoded through the codec.
+    let first = &audit[0];
+    assert_eq!(
+        first.arguments.len(),
+        6,
+        "post_simple_entry takes 6 parameters"
+    );
+    assert_eq!(first.arguments[0], subj("entry_001"));
+    assert_eq!(
+        first.asserted_claims.len(),
+        3,
+        "1 JournalEntry + 2 JournalLine"
+    );
+    assert_eq!(first.retracted_claims.len(), 0);
+    assert_eq!(first.emitted_intents.len(), 1);
+    assert_eq!(first.emitted_intents[0].name, "JournalEntryPosted");
+    assert_eq!(first.invariant_epoch, 1);
+
+    // invariants_checked: every invariant active at admission, named with
+    // its version. The ledger example has three invariants.
+    assert_eq!(first.invariants_checked.len(), 3);
+    assert!(
+        first
+            .invariants_checked
+            .iter()
+            .any(|c| c.name == "balanced_posted_entry" && c.version == 1)
+    );
+
+    // close_period is a no-arg-shape transformation that asserts one
+    // PeriodClosed claim and emits one PeriodClosed intent.
+    let second = &audit[1];
+    assert_eq!(second.arguments, vec![ledger_period()]);
+    assert_eq!(second.asserted_claims.len(), 1);
+    assert_eq!(second.asserted_claims[0].predicate, "PeriodClosed");
+    assert_eq!(second.emitted_intents[0].name, "PeriodClosed");
+}
+
+#[tokio::test]
+async fn list_pending_outbox_returns_intents_in_enqueue_order() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_001"),
+            subj("d_2026_04_15"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .unwrap();
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::close_period(),
+        vec![ledger_period()],
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .unwrap();
+
+    let outbox = list_pending_outbox(&pool)
+        .await
+        .expect("list_pending_outbox should not error");
+
+    assert_eq!(outbox.len(), 2);
+    assert_eq!(outbox[0].intent_type, "JournalEntryPosted");
+    assert_eq!(outbox[1].intent_type, "PeriodClosed");
+
+    // Every pending row has the expected default fields.
+    for row in &outbox {
+        assert_eq!(row.status, "pending");
+        assert_eq!(row.attempt_count, 0);
+        assert!(!row.idempotency_key.is_empty());
+    }
+
+    // arguments decode through the codec.
+    assert_eq!(outbox[0].arguments, vec![subj("entry_001")]);
+    assert_eq!(outbox[1].arguments, vec![ledger_period()]);
+}
+
+#[tokio::test]
+async fn rejected_transformation_leaves_audit_and_outbox_empty() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Pre-state: period is already closed. A normal posting against it
+    // is rejected by `require not PeriodClosed`.
+    insert_pre_state(&pool, vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+
+    let outcome = propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_001"),
+            subj("d_2026_04_15"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+
+    // claims still contains only the pre-state PeriodClosed.
+    let claims = list_claims(&pool).await.unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].predicate, "PeriodClosed");
+
+    // audit and outbox are empty — rejected transformations leave no
+    // governed trace.
+    let audit = list_audit_rows(&pool).await.unwrap();
+    assert!(audit.is_empty(), "rejected transformation must not audit");
+
+    let outbox = list_pending_outbox(&pool).await.unwrap();
+    assert!(
+        outbox.is_empty(),
+        "rejected transformation must not enqueue intents"
+    );
 }
