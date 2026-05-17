@@ -1487,6 +1487,217 @@ impl ReplaySet {
     }
 }
 
+/// Outcome a [`Deliverer`] returns from a single delivery attempt.
+///
+/// The processor uses this to route the row through the
+/// delivery-state machine: `Delivered` -> `delivered`, `Transient`
+/// -> back to `pending` with the requested `next_attempt_at`,
+/// `NonRetryable` -> `failed` (and then optional compensation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryOutcome {
+    /// Delivery succeeded. The processor will mark the row
+    /// `delivered`.
+    Delivered,
+    /// Delivery failed but should be retried no sooner than
+    /// `next_attempt_at`. The processor returns the row to
+    /// `pending` and sets that timestamp; the claim helper will
+    /// then skip the row until the timestamp has passed. The
+    /// deliverer is responsible for backoff policy (constant,
+    /// exponential, jittered, etc.); the processor stores
+    /// whatever instant the deliverer chose.
+    Transient { next_attempt_at: DateTime<Utc> },
+    /// Delivery failed in a way that should not be retried (the
+    /// counterparty rejected the request authoritatively, the
+    /// recipient does not exist, etc.). The processor marks the
+    /// row `failed` with `reason` recorded. If the processor was
+    /// supplied a [`CompensationSpec`], it then tries to claim the
+    /// compensation lease via [`begin_compensation`] and run the
+    /// compensating transformation.
+    NonRetryable { reason: String },
+}
+
+/// A delivery target. Implementors define how to take one
+/// admitted-and-enqueued intent and push it to the external world.
+///
+/// The processor passes the full [`OutboxRow`] so implementors can
+/// access `arguments`, `attempt_count`, `enqueued_at`,
+/// `last_attempt_at`, etc. - enough context for retry/jitter
+/// decisions and for any per-target idempotency-key handling the
+/// receiver needs.
+///
+/// Implementors MUST NOT mutate any morpholog tables from within
+/// `deliver`. The processor owns the state machine; the deliverer
+/// owns only the external side effect.
+pub trait Deliverer {
+    fn deliver(&self, row: &OutboxRow) -> impl std::future::Future<Output = DeliveryOutcome>;
+}
+
+/// Configuration the processor consults when delivery returns
+/// `NonRetryable` and the row is moved to `failed`.
+///
+/// `args_from_row` is invoked AFTER [`begin_compensation`] has
+/// claimed the compensation lease on the row, so the row passed in
+/// is the one carrying `failure_reason` from the just-failed
+/// delivery attempt; the closure can read it to incorporate the
+/// reason into the compensating transformation's arguments.
+///
+/// The compensating transformation is invoked via
+/// [`propose_against_pg`] just like any other transformation - it
+/// goes through every invariant check, writes its own audit row,
+/// and stages its own outbox intents. The audit log then preserves
+/// the full lineage: original commit, the
+/// `compensation_transition_id` linkage on the failed outbox row,
+/// and the compensation's audit row.
+/// Closure mapping the just-failed outbox row to the arguments the
+/// compensating transformation should be invoked with. Wrapped in a
+/// `Box<dyn ...>` rather than expressed as a generic so that
+/// `process_one_outbox_row`'s `Option<&CompensationSpec>` parameter
+/// has a single concrete type (callers can pass `None` without an
+/// inference workaround).
+pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Send + Sync>;
+
+pub struct CompensationSpec {
+    pub transformation: Transformation,
+    pub invariants: Vec<Invariant>,
+    pub args_from_row: CompensationArgsFromRow,
+}
+
+/// Outcome of one [`process_one_outbox_row`] cycle. Surfaces enough
+/// information that operational tooling and tests can assert which
+/// branch was taken without re-querying the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessOutcome {
+    /// No row was claimable: the outbox has no pending or
+    /// expired-leased row of the requested `intent_type` whose
+    /// `next_attempt_at` is due. The processor did nothing.
+    NoRowAvailable,
+    /// Delivery succeeded; the row is now `delivered`.
+    Delivered { intent_id: Uuid },
+    /// Delivery returned `Transient`; the row is back to `pending`
+    /// with the supplied retry instant.
+    TransientRetry {
+        intent_id: Uuid,
+        next_attempt_at: DateTime<Utc>,
+    },
+    /// Delivery returned `NonRetryable` and no [`CompensationSpec`]
+    /// was supplied; the row is `failed`.
+    Failed { intent_id: Uuid, reason: String },
+    /// Delivery returned `NonRetryable` and a compensation was
+    /// configured, but another worker already holds the
+    /// compensation lease (or compensation already ran on this
+    /// row). The processor did not invoke the compensating
+    /// transformation. The row is `failed` (or further along) and
+    /// this processor cycle is done.
+    CompensationDeferred { intent_id: Uuid },
+    /// Compensation ran and committed. The row is back to `failed`
+    /// with `compensation_transition_id` pointing at the
+    /// compensation's audit row.
+    Compensated {
+        intent_id: Uuid,
+        compensation_transition_id: Uuid,
+    },
+    /// Compensation ran but was rejected by an invariant. The row
+    /// is in `compensation_failed`. This is the genuinely-broken
+    /// state requiring operator intervention.
+    CompensationFailed { intent_id: Uuid, reason: String },
+}
+
+/// Drive one outbox row through the full delivery-and-compensation
+/// state machine. Intended to be called in a loop by a worker
+/// process (one call = one row processed; the loop owns scheduling).
+///
+/// The cycle:
+/// 1. Claim a due row of the requested `intent_type` via
+///    [`claim_pending_outbox_row`]. If none is claimable, return
+///    [`ProcessOutcome::NoRowAvailable`].
+/// 2. Invoke `deliverer.deliver(&row).await`.
+/// 3. Route the [`DeliveryOutcome`]:
+///    - `Delivered` -> [`mark_outbox_delivered`].
+///    - `Transient` -> [`mark_outbox_transient_attempt`].
+///    - `NonRetryable` -> [`mark_outbox_failed`], then if a
+///      [`CompensationSpec`] is supplied, attempt
+///      [`begin_compensation`] + invoke the compensating
+///      transformation via [`propose_against_pg`] + resolve via
+///      [`complete_compensation`] or [`mark_compensation_failed`].
+///
+/// Concurrency: safe under concurrent invocation across processes.
+/// `claim_pending_outbox_row` uses `SELECT ... FOR UPDATE SKIP
+/// LOCKED` so at most one worker claims a given row;
+/// `begin_compensation` uses the same pattern so at most one worker
+/// invokes the compensating transformation for a given failed row.
+///
+/// The compensation race is closed under normal operation. A
+/// crashing worker between `propose_against_pg` commit and
+/// `complete_compensation` would leave the row in
+/// `compensation_in_progress`; the conservative reclaim policy
+/// (see [`begin_compensation`]'s docs) keeps such rows stuck and
+/// requires operator intervention rather than risking a duplicate
+/// compensation. Programs that need full immunity should
+/// additionally guard the compensating transformation with a
+/// `CompensationApplied(original_intent_id)` invariant.
+pub async fn process_one_outbox_row<D>(
+    pool: &PgPool,
+    worker_id: &str,
+    intent_type: &str,
+    lease_duration: std::time::Duration,
+    deliverer: &D,
+    compensation: Option<&CompensationSpec>,
+) -> Result<ProcessOutcome, PgError>
+where
+    D: Deliverer,
+{
+    let row = match claim_pending_outbox_row(pool, worker_id, intent_type, lease_duration).await? {
+        Some(r) => r,
+        None => return Ok(ProcessOutcome::NoRowAvailable),
+    };
+    let intent_id = row.intent_id;
+
+    match deliverer.deliver(&row).await {
+        DeliveryOutcome::Delivered => {
+            mark_outbox_delivered(pool, intent_id, worker_id).await?;
+            Ok(ProcessOutcome::Delivered { intent_id })
+        }
+        DeliveryOutcome::Transient { next_attempt_at } => {
+            mark_outbox_transient_attempt(pool, intent_id, worker_id, next_attempt_at).await?;
+            Ok(ProcessOutcome::TransientRetry {
+                intent_id,
+                next_attempt_at,
+            })
+        }
+        DeliveryOutcome::NonRetryable { reason } => {
+            mark_outbox_failed(pool, intent_id, worker_id, &reason).await?;
+            let Some(spec) = compensation else {
+                return Ok(ProcessOutcome::Failed { intent_id, reason });
+            };
+            // The lease was just released by mark_outbox_failed.
+            // Re-claim the right to compensate via the
+            // failed -> compensation_in_progress lease. Another
+            // worker may beat us here under a concurrent recovery
+            // scan; SKIP LOCKED ensures at most one wins.
+            let claimed = begin_compensation(pool, intent_id, worker_id, lease_duration).await?;
+            let Some(failed_row) = claimed else {
+                return Ok(ProcessOutcome::CompensationDeferred { intent_id });
+            };
+            let args = (spec.args_from_row)(&failed_row);
+            let outcome =
+                propose_against_pg(pool, &spec.transformation, args, &spec.invariants).await?;
+            match outcome {
+                PgProposalOutcome::Committed { transition_id, .. } => {
+                    complete_compensation(pool, intent_id, worker_id, transition_id).await?;
+                    Ok(ProcessOutcome::Compensated {
+                        intent_id,
+                        compensation_transition_id: transition_id,
+                    })
+                }
+                PgProposalOutcome::Rejected { reason } => {
+                    mark_compensation_failed(pool, intent_id, worker_id, &reason).await?;
+                    Ok(ProcessOutcome::CompensationFailed { intent_id, reason })
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_serialization_failure_code;
