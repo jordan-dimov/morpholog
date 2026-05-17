@@ -72,7 +72,7 @@ Early but not a toy. A synchronous semantic kernel and a working PostgreSQL pers
 ```bash
 cargo test -p morpholog-core --all-targets                              # 45 tests, in-memory
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 14 tests, durable
+  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 18 tests, durable
 ```
 
 First-time setup (skip if the schema is already applied):
@@ -82,7 +82,7 @@ createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
-Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`), `morpholog-cli` (version-printer skeleton; subcommands wait on surface syntax).
+Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims/audit/outbox), `morpholog-cli` (version-printer skeleton; subcommands wait on surface syntax).
 
 ## Deeper reading
 
