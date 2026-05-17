@@ -372,17 +372,15 @@ pub struct AuditRow {
 
 /// One row of `morpholog.outbox` decoded into typed runtime values.
 ///
-/// `attempt_count` and `last_attempt_at` are included because retry
-/// activity is part of the outbox contract — a `pending` row with
-/// `attempt_count > 0` and a non-NULL `last_attempt_at` is one a
-/// worker has tried and failed, not a fresh enqueue. Inspection
-/// helpers should surface that signal.
-///
-/// `delivered_at` is excluded: [`list_pending_outbox`] filters to
-/// `status = 'pending'`, and `delivered_at` is set only when status
-/// transitions to `'delivered'`, so it is structurally NULL for
-/// every row this helper returns. A future `list_all_outbox` or
-/// per-status query would surface it.
+/// Carries every column on the table. The delivery-state extensions
+/// (`failed_at`, `failure_reason`, `next_attempt_at`,
+/// `compensation_transition_id`, `locked_by`, `lock_expires_at`)
+/// are nullable in the schema and `Option<T>` here; they fill in as
+/// a row moves through the delivery state machine. `attempt_count`
+/// and `last_attempt_at` retain the original contract: a `pending`
+/// row with `attempt_count > 0` and a non-NULL `last_attempt_at` is
+/// one a worker has tried and failed (transiently), not a fresh
+/// enqueue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OutboxRow {
     pub intent_id: Uuid,
@@ -394,6 +392,32 @@ pub struct OutboxRow {
     pub attempt_count: i32,
     pub enqueued_at: DateTime<Utc>,
     pub last_attempt_at: Option<DateTime<Utc>>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub failed_at: Option<DateTime<Utc>>,
+    pub failure_reason: Option<String>,
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    pub compensation_transition_id: Option<Uuid>,
+    pub locked_by: Option<String>,
+    pub lock_expires_at: Option<DateTime<Utc>>,
+}
+
+/// Outcome of a state-mutating helper on a leased outbox row.
+///
+/// A worker that does not hold the current lease (because the lease
+/// expired and another worker took over, or because the worker
+/// supplied the wrong `worker_id`) cannot clobber the row's state.
+/// The helper does not error: lease loss is a normal operational
+/// condition for a worker that crashed mid-delivery and another
+/// worker now owns the row. But the helper does not silently lie
+/// about it either - the caller sees [`OutboxUpdate::LeaseLost`]
+/// and can choose to log, retry-after-reclaim, or move on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum OutboxUpdate {
+    /// The row was updated as requested.
+    Applied,
+    /// The lease was no longer held by the supplied `worker_id`
+    /// (expired, released, or never held). No change was made.
+    LeaseLost,
 }
 
 /// Return every currently-admitted claim from `morpholog.claims`.
@@ -541,56 +565,254 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 /// or status-filtered helper would surface them. v0 only exposes the
 /// in-flight queue.
 pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
-    type Row = (
-        Uuid,
-        Uuid,
-        String,
-        serde_json::Value,
-        String,
-        String,
-        i32,
-        DateTime<Utc>,
-        Option<DateTime<Utc>>,
-    );
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT intent_id, transition_id, intent_type, arguments,
-                idempotency_key, status, attempt_count, enqueued_at,
-                last_attempt_at
-         FROM morpholog.outbox
-         WHERE status = 'pending'
-         ORDER BY enqueued_at, intent_id",
+    let rows: Vec<OutboxRowRaw> = sqlx::query_as(OUTBOX_SELECT_ALL_COLUMNS)
+        .bind("pending")
+        .fetch_all(pool)
+        .await
+        .map_err(classify)?;
+    rows.into_iter().map(decode_outbox_row).collect()
+}
+
+/// The full column list returned by every outbox-row read in this
+/// module. Single source of truth so the `OutboxRowRaw` tuple shape,
+/// the `decode_outbox_row` helper, and the SQL all evolve together.
+const OUTBOX_SELECT_ALL_COLUMNS: &str = "SELECT intent_id, transition_id, intent_type, arguments,
+            idempotency_key, status, attempt_count, enqueued_at,
+            last_attempt_at, delivered_at, failed_at, failure_reason,
+            next_attempt_at, compensation_transition_id, locked_by,
+            lock_expires_at
+     FROM morpholog.outbox
+     WHERE status = $1
+     ORDER BY enqueued_at, intent_id";
+
+type OutboxRowRaw = (
+    Uuid,                  // intent_id
+    Uuid,                  // transition_id
+    String,                // intent_type
+    serde_json::Value,     // arguments
+    String,                // idempotency_key
+    String,                // status
+    i32,                   // attempt_count
+    DateTime<Utc>,         // enqueued_at
+    Option<DateTime<Utc>>, // last_attempt_at
+    Option<DateTime<Utc>>, // delivered_at
+    Option<DateTime<Utc>>, // failed_at
+    Option<String>,        // failure_reason
+    Option<DateTime<Utc>>, // next_attempt_at
+    Option<Uuid>,          // compensation_transition_id
+    Option<String>,        // locked_by
+    Option<DateTime<Utc>>, // lock_expires_at
+);
+
+fn decode_outbox_row(row: OutboxRowRaw) -> Result<OutboxRow, PgError> {
+    let (
+        intent_id,
+        transition_id,
+        intent_type,
+        args_json,
+        idempotency_key,
+        status,
+        attempt_count,
+        enqueued_at,
+        last_attempt_at,
+        delivered_at,
+        failed_at,
+        failure_reason,
+        next_attempt_at,
+        compensation_transition_id,
+        locked_by,
+        lock_expires_at,
+    ) = row;
+    Ok(OutboxRow {
+        intent_id,
+        transition_id,
+        intent_type,
+        arguments: serde_json::from_value(args_json)?,
+        idempotency_key,
+        status,
+        attempt_count,
+        enqueued_at,
+        last_attempt_at,
+        delivered_at,
+        failed_at,
+        failure_reason,
+        next_attempt_at,
+        compensation_transition_id,
+        locked_by,
+        lock_expires_at,
+    })
+}
+
+// ===========================================================================
+// Outbox delivery-state mutators
+// ===========================================================================
+//
+// Helpers that move an outbox row through the delivery state machine.
+// All `mark_*` helpers gate on the worker holding a valid lease
+// (`locked_by = worker_id AND lock_expires_at > now()`) and return
+// `OutboxUpdate::LeaseLost` if the lease has been taken over by
+// another worker. `record_compensation` is the only helper that
+// errors on contract violation (rather than returning `LeaseLost`),
+// because attempting to record compensation against a non-failed
+// row or a row that already has a compensation linked is a
+// programming bug, not an operational condition.
+
+/// Mark a successfully-delivered outbox row.
+///
+/// Transitions `status` to `'delivered'`, sets `delivered_at = now()`,
+/// increments `attempt_count`, and clears the lease fields (`locked_by`,
+/// `lock_expires_at`) so the row is unambiguously done.
+///
+/// Returns `Applied` on success, `LeaseLost` if the worker no longer
+/// holds the lease.
+pub async fn mark_outbox_delivered(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+) -> Result<OutboxUpdate, PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='delivered',
+             delivered_at=now(),
+             attempt_count=attempt_count+1,
+             locked_by=NULL,
+             lock_expires_at=NULL
+         WHERE intent_id=$1
+           AND locked_by=$2
+           AND lock_expires_at > now()",
     )
-    .fetch_all(pool)
+    .bind(intent_id)
+    .bind(worker_id)
+    .execute(pool)
     .await
     .map_err(classify)?;
+    Ok(if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    })
+}
 
-    rows.into_iter()
-        .map(
-            |(
-                intent_id,
-                transition_id,
-                intent_type,
-                args_json,
-                idempotency_key,
-                status,
-                attempt_count,
-                enqueued_at,
-                last_attempt_at,
-            )| {
-                Ok(OutboxRow {
-                    intent_id,
-                    transition_id,
-                    intent_type,
-                    arguments: serde_json::from_value(args_json)?,
-                    idempotency_key,
-                    status,
-                    attempt_count,
-                    enqueued_at,
-                    last_attempt_at,
-                })
-            },
-        )
-        .collect()
+/// Record a transient delivery failure: schedule the row for retry
+/// at `next_attempt_at`. The row goes back to `status='pending'`
+/// (released from its lease) so another worker can pick it up at
+/// the scheduled time, or the same worker can on its next claim.
+///
+/// `next_attempt_at` is a wall-clock instant the caller computes
+/// (current time plus retry-after plus jitter); the row stays
+/// invisible to claims until that moment.
+pub async fn mark_outbox_transient_attempt(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+    next_attempt_at: DateTime<Utc>,
+) -> Result<OutboxUpdate, PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='pending',
+             attempt_count=attempt_count+1,
+             last_attempt_at=now(),
+             next_attempt_at=$3,
+             locked_by=NULL,
+             lock_expires_at=NULL
+         WHERE intent_id=$1
+           AND locked_by=$2
+           AND lock_expires_at > now()",
+    )
+    .bind(intent_id)
+    .bind(worker_id)
+    .bind(next_attempt_at)
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    })
+}
+
+/// Mark a non-retryable delivery failure. The row moves to
+/// `status='failed'`, captures `failed_at` and `failure_reason`,
+/// and releases its lease. A compensating transformation can then
+/// be invoked and recorded via [`record_compensation`].
+pub async fn mark_outbox_failed(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+    reason: &str,
+) -> Result<OutboxUpdate, PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='failed',
+             failed_at=now(),
+             failure_reason=$3,
+             attempt_count=attempt_count+1,
+             last_attempt_at=now(),
+             locked_by=NULL,
+             lock_expires_at=NULL
+         WHERE intent_id=$1
+           AND locked_by=$2
+           AND lock_expires_at > now()",
+    )
+    .bind(intent_id)
+    .bind(worker_id)
+    .bind(reason)
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    })
+}
+
+/// Link a compensating transformation to a failed outbox row.
+///
+/// Gated by two preconditions, both enforced by the SQL `WHERE`:
+/// the row must be in `status='failed'`, and it must not already
+/// carry a `compensation_transition_id`. Violating either is a
+/// programming bug - attempting to attach compensation to a
+/// delivered or pending row, or double-recording compensation -
+/// and surfaces as [`PgError::InvalidState`] rather than a silent
+/// no-op.
+///
+/// `compensation_transition_id` must reference a row in
+/// `morpholog.audit` (foreign-key-enforced). The worker invokes
+/// the compensating transformation via [`propose_against_pg`] and
+/// passes the resulting `transition_id` here.
+///
+/// This helper does NOT gate on a lease. By the time the worker
+/// is recording compensation, the original delivery attempt is
+/// over and the row is in `failed`; the lease was already released
+/// by [`mark_outbox_failed`]. Concurrent double-compensation is
+/// guarded by the `compensation_transition_id IS NULL` predicate.
+pub async fn record_compensation(
+    pool: &PgPool,
+    intent_id: Uuid,
+    compensation_transition_id: Uuid,
+) -> Result<(), PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET compensation_transition_id=$2
+         WHERE intent_id=$1
+           AND status='failed'
+           AND compensation_transition_id IS NULL",
+    )
+    .bind(intent_id)
+    .bind(compensation_transition_id)
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    if rows.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(PgError::InvalidState(format!(
+            "record_compensation({intent_id}): row must be status='failed' \
+             with no existing compensation_transition_id; 0 rows matched"
+        )))
+    }
 }
 
 /// Enumerate a derived claim's extension against the current durable state.
