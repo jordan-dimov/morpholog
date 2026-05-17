@@ -67,6 +67,7 @@ CREATE TABLE outbox (
                                                   'in_progress',
                                                   'delivered',
                                                   'failed',
+                                                  'compensation_in_progress',
                                                   'compensation_failed'
                                               )),
     attempt_count                int          NOT NULL DEFAULT 0,
