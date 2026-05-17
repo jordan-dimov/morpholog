@@ -29,9 +29,9 @@ use chrono::{Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
-    CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
-    ProcessOutcome, list_audit_rows, list_pending_outbox, process_one_outbox_row,
-    propose_against_pg,
+    CompensationSpec, Deliverer, DeliveryOutcome, IntendedOutcome, OutboxRow, PgPool,
+    PgProposalOutcome, ProcessOutcome, list_audit_rows, list_pending_outbox,
+    process_one_outbox_row, propose_against_pg,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -120,6 +120,29 @@ impl Deliverer for AlwaysNonRetryable {
         DeliveryOutcome::NonRetryable {
             reason: self.reason.to_string(),
         }
+    }
+}
+
+/// Deliverer that forces its own lease to expire (via direct SQL)
+/// before returning the configured outcome. Used to exercise the
+/// processor's LeaseLost branches deterministically: by the time
+/// the mark_* helper runs, the row's lock_expires_at is in the
+/// past, so the helper returns OutboxUpdate::LeaseLost.
+struct ExpireLeaseThenReturn {
+    pool: PgPool,
+    outcome: DeliveryOutcome,
+}
+impl Deliverer for ExpireLeaseThenReturn {
+    async fn deliver(&self, row: &OutboxRow) -> DeliveryOutcome {
+        sqlx::query(
+            "UPDATE morpholog.outbox SET lock_expires_at = now() - interval '1 second'
+             WHERE intent_id=$1",
+        )
+        .bind(row.intent_id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        self.outcome.clone()
     }
 }
 
@@ -400,5 +423,111 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
     assert!(
         compensation_transition_id.is_none(),
         "no compensation transition committed; pointer must remain NULL"
+    );
+}
+
+// ============================================================
+// LeaseLost coverage
+// ============================================================
+//
+// Two tests force the lease to expire mid-deliver, exercising
+// the processor's LeaseLost return paths on different intended
+// outcomes. The third (LeaseLost on IntendedOutcome::Compensated)
+// would require a hook between begin_compensation and
+// complete_compensation that the current processor API does not
+// expose; the orphan-audit case is documented on the variant
+// itself but not pinned by an automated test in this PR.
+
+#[tokio::test]
+async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let _ = commit_post_simple_entry(&pool, "entry_001").await;
+
+    let outcome = process_one_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &ExpireLeaseThenReturn {
+            pool: pool.clone(),
+            outcome: DeliveryOutcome::Delivered,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ProcessOutcome::LeaseLost { intended, .. } => {
+            assert_eq!(intended, IntendedOutcome::Delivered);
+        }
+        other => panic!("expected LeaseLost {{ intended: Delivered }}, got {other:?}"),
+    }
+
+    // Row was NOT moved to `delivered`. It is still in_progress
+    // under the expired lease (an expired-lease reclaim by the
+    // next claim would set things right, but that has not yet
+    // happened in this test).
+    let (status, delivered_at): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, delivered_at FROM morpholog.outbox LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "in_progress");
+    assert!(
+        delivered_at.is_none(),
+        "mark_outbox_delivered must NOT have applied; row should look untouched"
+    );
+}
+
+#[tokio::test]
+async fn process_one_outbox_row_returns_lease_lost_on_failed_branch_when_lease_expires() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let _ = commit_post_simple_entry(&pool, "entry_001").await;
+    // A compensation spec is supplied here on purpose: the test
+    // pins that the early-return prevents the compensation arm
+    // from running when mark_outbox_failed itself was a no-op.
+    let spec = balanced_reversal_spec("entry_001");
+
+    let outcome = process_one_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &ExpireLeaseThenReturn {
+            pool: pool.clone(),
+            outcome: DeliveryOutcome::NonRetryable {
+                reason: "would-be terminal failure".to_string(),
+            },
+        },
+        Some(&spec),
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ProcessOutcome::LeaseLost { intended, .. } => {
+            assert_eq!(intended, IntendedOutcome::Failed);
+        }
+        other => panic!("expected LeaseLost {{ intended: Failed }}, got {other:?}"),
+    }
+
+    // Row was NOT moved to failed; the compensation arm was NOT
+    // entered (no second audit row written).
+    let (status, failure_reason): (String, Option<String>) =
+        sqlx::query_as("SELECT status, failure_reason FROM morpholog.outbox LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "in_progress");
+    assert!(failure_reason.is_none());
+    let audit_count: (i64,) = sqlx::query_as("SELECT count(*) FROM morpholog.audit")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_count.0, 1,
+        "only the original commit's audit row should exist; \
+         compensation must NOT have run when mark_outbox_failed was a no-op"
     );
 }

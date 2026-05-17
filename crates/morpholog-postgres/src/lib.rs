@@ -1095,10 +1095,15 @@ pub async fn complete_compensation(
 /// if the worker no longer holds the lease.
 ///
 /// `reason` is stored in the existing `failure_reason` column,
-/// overwriting the original delivery failure reason. (The original
-/// reason can still be reconstructed from the audit log of any
-/// `mark_outbox_failed` -> `begin_compensation` sequence; the
-/// `failure_reason` column reflects the most recent failure.)
+/// **overwriting** the original delivery failure reason. The
+/// original is then lost as far as morpholog tables are concerned:
+/// state mutators like `mark_outbox_failed` and `begin_compensation`
+/// do NOT write audit rows (only transformations do), so there is
+/// nothing in `morpholog.audit` to reconstruct from. If callers
+/// need both the delivery failure reason and the compensation
+/// rejection reason, they must capture the original externally
+/// (an `outbox_event` table, structured logs, etc.) before calling
+/// this helper.
 pub async fn mark_compensation_failed(
     pool: &PgPool,
     intent_id: Uuid,
@@ -1528,9 +1533,27 @@ pub enum DeliveryOutcome {
 /// Implementors MUST NOT mutate any morpholog tables from within
 /// `deliver`. The processor owns the state machine; the deliverer
 /// owns only the external side effect.
-pub trait Deliverer {
-    fn deliver(&self, row: &OutboxRow) -> impl std::future::Future<Output = DeliveryOutcome>;
+///
+/// The trait bakes in `Send + Sync` on the implementor and `Send`
+/// on the returned future so that polling loops that spawn one
+/// worker per intent_type (the shape forming in PR 3) can
+/// `tokio::spawn(deliverer.deliver(...))` against an arbitrary
+/// `D: Deliverer`. RPITIT (return position impl trait in trait)
+/// does not let callers add a `Send` bound on the anonymous
+/// future later, so the bound is fixed here rather than
+/// reintroduced as a breaking change.
+pub trait Deliverer: Send + Sync {
+    fn deliver(&self, row: &OutboxRow)
+    -> impl std::future::Future<Output = DeliveryOutcome> + Send;
 }
+
+/// Closure mapping the just-failed outbox row to the arguments the
+/// compensating transformation should be invoked with. Wrapped in
+/// a `Box<dyn ...>` rather than expressed as a generic so that
+/// `process_one_outbox_row`'s `Option<&CompensationSpec>` parameter
+/// has a single concrete type (callers can pass `None` without an
+/// inference workaround).
+pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Send + Sync>;
 
 /// Configuration the processor consults when delivery returns
 /// `NonRetryable` and the row is moved to `failed`.
@@ -1548,18 +1571,53 @@ pub trait Deliverer {
 /// the full lineage: original commit, the
 /// `compensation_transition_id` linkage on the failed outbox row,
 /// and the compensation's audit row.
-/// Closure mapping the just-failed outbox row to the arguments the
-/// compensating transformation should be invoked with. Wrapped in a
-/// `Box<dyn ...>` rather than expressed as a generic so that
-/// `process_one_outbox_row`'s `Option<&CompensationSpec>` parameter
-/// has a single concrete type (callers can pass `None` without an
-/// inference workaround).
-pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Send + Sync>;
-
 pub struct CompensationSpec {
     pub transformation: Transformation,
     pub invariants: Vec<Invariant>,
     pub args_from_row: CompensationArgsFromRow,
+}
+
+/// What the deliverer (or the processor's compensation arm) was
+/// trying to land when its lease was lost. Carried alongside
+/// [`ProcessOutcome::LeaseLost`] for observability: operational
+/// tooling can correlate orphan audit rows - especially in the
+/// `Compensated` case, where the compensating transformation
+/// committed but the outbox row's pointer was never set - with
+/// the worker that thought it had finished the work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntendedOutcome {
+    /// `mark_outbox_delivered` was the call whose lease was lost.
+    /// The row's actual state is whatever the new lease holder
+    /// (which reclaimed it via expired-lease pickup) did or will
+    /// do.
+    Delivered,
+    /// `mark_outbox_transient_attempt` was the call whose lease
+    /// was lost. The retry timestamp the deliverer chose was NOT
+    /// written.
+    TransientRetry,
+    /// `mark_outbox_failed` was the call whose lease was lost.
+    /// The row was not moved to `failed` by this worker; the
+    /// failure reason was NOT recorded.
+    Failed,
+    /// `complete_compensation` was the call whose lease was lost.
+    /// **The compensating transformation has already committed**
+    /// (the supplied `compensation_transition_id` is a real audit
+    /// row), but the outbox row's `compensation_transition_id`
+    /// pointer was never set. This is the orphan-audit-row case
+    /// that the lease pattern shrinks but cannot eliminate
+    /// entirely. Operator tooling should reconcile by either
+    /// force-setting the pointer (if the row can be moved back to
+    /// `failed` and the pointer applied) or by running the
+    /// program-level `CompensationApplied(original_intent_id)`
+    /// invariant guard to detect the duplicate at next attempt.
+    Compensated { compensation_transition_id: Uuid },
+    /// `mark_compensation_failed` was the call whose lease was
+    /// lost. The compensating transformation was rejected by an
+    /// invariant, but the row was not moved to
+    /// `compensation_failed` and the rejection reason was NOT
+    /// recorded. The row is stuck in `compensation_in_progress`
+    /// and requires operator intervention.
+    CompensationFailed,
 }
 
 /// Outcome of one [`process_one_outbox_row`] cycle. Surfaces enough
@@ -1600,6 +1658,23 @@ pub enum ProcessOutcome {
     /// is in `compensation_failed`. This is the genuinely-broken
     /// state requiring operator intervention.
     CompensationFailed { intent_id: Uuid, reason: String },
+    /// A state-mutating helper returned [`OutboxUpdate::LeaseLost`].
+    /// The deliverer (or the compensation arm) ran to completion,
+    /// but by the time the processor went to write the result the
+    /// lease had already expired and another worker had reclaimed
+    /// the row. `intended` names what this worker was trying to
+    /// land; see [`IntendedOutcome`] for the per-variant semantics
+    /// and recovery notes.
+    ///
+    /// LeaseLost is NOT an error. It is the honest answer when a
+    /// slow deliverer races the lease clock. Calling code should
+    /// log + alert (especially on
+    /// [`IntendedOutcome::Compensated`], the orphan-audit case)
+    /// and move on to the next row.
+    LeaseLost {
+        intent_id: Uuid,
+        intended: IntendedOutcome,
+    },
 }
 
 /// Drive one outbox row through the full delivery-and-compensation
@@ -1654,18 +1729,42 @@ where
 
     match deliverer.deliver(&row).await {
         DeliveryOutcome::Delivered => {
-            mark_outbox_delivered(pool, intent_id, worker_id).await?;
-            Ok(ProcessOutcome::Delivered { intent_id })
+            match mark_outbox_delivered(pool, intent_id, worker_id).await? {
+                OutboxUpdate::Applied => Ok(ProcessOutcome::Delivered { intent_id }),
+                OutboxUpdate::LeaseLost => Ok(ProcessOutcome::LeaseLost {
+                    intent_id,
+                    intended: IntendedOutcome::Delivered,
+                }),
+            }
         }
         DeliveryOutcome::Transient { next_attempt_at } => {
-            mark_outbox_transient_attempt(pool, intent_id, worker_id, next_attempt_at).await?;
-            Ok(ProcessOutcome::TransientRetry {
-                intent_id,
-                next_attempt_at,
-            })
+            match mark_outbox_transient_attempt(pool, intent_id, worker_id, next_attempt_at).await?
+            {
+                OutboxUpdate::Applied => Ok(ProcessOutcome::TransientRetry {
+                    intent_id,
+                    next_attempt_at,
+                }),
+                OutboxUpdate::LeaseLost => Ok(ProcessOutcome::LeaseLost {
+                    intent_id,
+                    intended: IntendedOutcome::TransientRetry,
+                }),
+            }
         }
         DeliveryOutcome::NonRetryable { reason } => {
-            mark_outbox_failed(pool, intent_id, worker_id, &reason).await?;
+            match mark_outbox_failed(pool, intent_id, worker_id, &reason).await? {
+                OutboxUpdate::LeaseLost => {
+                    // Row is no longer in our hands. Whatever the
+                    // new lease holder does next replaces what we
+                    // were trying to do. Compensation must not
+                    // run: begin_compensation requires status =
+                    // 'failed', and we never moved the row there.
+                    return Ok(ProcessOutcome::LeaseLost {
+                        intent_id,
+                        intended: IntendedOutcome::Failed,
+                    });
+                }
+                OutboxUpdate::Applied => {}
+            }
             let Some(spec) = compensation else {
                 return Ok(ProcessOutcome::Failed { intent_id, reason });
             };
@@ -1683,15 +1782,29 @@ where
                 propose_against_pg(pool, &spec.transformation, args, &spec.invariants).await?;
             match outcome {
                 PgProposalOutcome::Committed { transition_id, .. } => {
-                    complete_compensation(pool, intent_id, worker_id, transition_id).await?;
-                    Ok(ProcessOutcome::Compensated {
-                        intent_id,
-                        compensation_transition_id: transition_id,
-                    })
+                    match complete_compensation(pool, intent_id, worker_id, transition_id).await? {
+                        OutboxUpdate::Applied => Ok(ProcessOutcome::Compensated {
+                            intent_id,
+                            compensation_transition_id: transition_id,
+                        }),
+                        OutboxUpdate::LeaseLost => Ok(ProcessOutcome::LeaseLost {
+                            intent_id,
+                            intended: IntendedOutcome::Compensated {
+                                compensation_transition_id: transition_id,
+                            },
+                        }),
+                    }
                 }
                 PgProposalOutcome::Rejected { reason } => {
-                    mark_compensation_failed(pool, intent_id, worker_id, &reason).await?;
-                    Ok(ProcessOutcome::CompensationFailed { intent_id, reason })
+                    match mark_compensation_failed(pool, intent_id, worker_id, &reason).await? {
+                        OutboxUpdate::Applied => {
+                            Ok(ProcessOutcome::CompensationFailed { intent_id, reason })
+                        }
+                        OutboxUpdate::LeaseLost => Ok(ProcessOutcome::LeaseLost {
+                            intent_id,
+                            intended: IntendedOutcome::CompensationFailed,
+                        }),
+                    }
                 }
             }
         }

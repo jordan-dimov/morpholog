@@ -55,17 +55,21 @@ The crate depends on `morpholog-core` (for `EvalValue`, `Intent`, `Transformatio
 ### The `Deliverer` trait
 
 ```rust
-#[async_trait]
 pub trait Deliverer: Send + Sync {
-    async fn deliver(&self, intent: &IntentInstance) -> DeliveryOutcome;
+    fn deliver(
+        &self,
+        row: &OutboxRow,
+    ) -> impl std::future::Future<Output = DeliveryOutcome> + Send;
 }
 
 pub enum DeliveryOutcome {
     Delivered,
-    Transient { retry_after: Duration },
+    Transient { next_attempt_at: DateTime<Utc> },
     NonRetryable { reason: String },
 }
 ```
+
+The trait uses RPITIT (return position impl trait in trait) with explicit `Send + Sync` on the implementor and `+ Send` on the future so polling loops can `tokio::spawn(deliverer.deliver(...))` against an arbitrary `D: Deliverer`. `OutboxRow` rather than `IntentInstance` is passed so implementors can read `attempt_count`, `enqueued_at`, `last_attempt_at`, etc. for retry/jitter decisions. `Transient` carries an explicit retry instant (not a duration) so the deliverer chooses the absolute schedule.
 
 Three-way outcome borrowed from MassTransit / NServiceBus's vocabulary (their "systemic" / "poison" failure class is our `NonRetryable`). `Transient` carries an explicit retry hint so the worker doesn't have to guess. `NonRetryable` carries a reason that ends up in the failure audit trail.
 
