@@ -90,7 +90,6 @@ Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (asy
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics that the `morpholog-core` kernel realises.
 - [`docs/forced-by-examples.md`](docs/forced-by-examples.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
 - [`docs/mvp-cut.md`](docs/mvp-cut.md) - decision record for the MVP cut line and the PRs that crossed it.
-- [`docs/as-of-sketch.md`](docs/as-of-sketch.md) - design sketch for as-of evaluation (querying derived views and admitted state at a past `transition_id`). Accompanied by a hand-rolled spike test at `crates/morpholog-postgres/tests/as_of_spike.rs`. Not yet implemented; the doc records the open design questions that the implementation PR has to answer.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## Requirements

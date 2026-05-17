@@ -138,3 +138,32 @@ The clean reuse outcome is itself informative: the accumulated affordances from 
 **Pattern note:** Example 5 is the first time the sketch-then-implement two-PR pattern was used (rather than the design-pin pattern of the postgres-persistence-v0 doc). The pattern worked: PR #19's open questions reduced design ambiguity enough that PR #20's implementation was almost mechanical, with no late-stage surprises and no rework. Worth reaching for again when the next genuinely-IR-expanding example arrives.
 
 **Read-side surfacing (follow-on PR):** The PR after PR #20 added the minimum operational surface for derived claims: `list_derived(pool, &DerivedClaim) -> Vec<ClaimInstance>` on the PostgreSQL adapter and `morpholog inspect derived <program> <name>` on the CLI. Both are thin wrappers that load current claims via the existing read path, hand off to the synchronous `enumerate_derived` kernel primitive, and return JSON. No materialised storage, no PG-side projection, no recursion through derived claims. Worth noting because the work was *boring*: the keys/values/domain shape and the sync-kernel `enumerate_derived` boundary that the sketch chose held up without modification under the async I/O wrapper. A signal that the design conversation paid for itself in implementation simplicity twice over.
+
+### As-of evaluation (audit-log replay)
+
+**Forced by:** the realisation that derived claims answer "what can we compute from current admitted state?" but a regulated user needs the analogous question against historical state. An auditor at quarter-end does not care what the trial balance is now; they care what it was at the close of Q1, *before* the late restatement. Today's `list_derived` cannot answer that. The only escape was to write bespoke SQL outside Morpholog, which directly undermines the read-side legitimacy promise that derived claims started to deliver.
+
+**The design conversation:** PR #26 added a design sketch and a spike test that hand-rolled audit-log replay in user code. The sketch raised eight open design questions; review (Copilot + ChatGPT independently) flagged that the original wording of question #6 - "an unknown id larger than every committed one returns current state" - was a wrong-answer cliff. A mistyped id that coincidentally ordered past the latest transition would silently return current state instead of failing loudly. The polish commit on PR #26 settled the contract: every unknown id is an error.
+
+The other sketch leans that held into implementation:
+
+- **No kernel change.** `enumerate_derived(&State)` already takes the right shape. As-of is a question of which `State` you hand to the kernel; the adapter does temporal reconstruction and the kernel stays time-agnostic.
+- **Ordering by `(committed_at, transition_id)`**, not by UUIDv7 byte comparison. The implementation first looks up the target audit row by `transition_id`, then replays rows where `(committed_at, transition_id) <= (target.committed_at, target.transition_id)`. Avoids leaning on UUIDv7 byte-comparison for the semantic cut-off; stays correct under concurrent commits where wall-clock and UUID-generation order can disagree.
+- **Two functions, not one.** Public `reconstruct_state_at` returns the *full* historical state. Internal `reconstruct_state_at_for_predicates` returns a *partial* state filtered by a predicate set, used by `list_derived_at` to mirror PR #25's predicate-scoped loading. A single function with an optional `predicates` parameter would make the contract slippery; two functions, two clear contracts.
+
+**What landed in implementation:**
+
+- `PgError::TransitionNotFound(Uuid)` - new variant for the "as-of coordinate does not exist" failure mode.
+- `reconstruct_state_at(pool, transition_id) -> Result<State, PgError>` on `morpholog-postgres`. Public, full historical state.
+- `reconstruct_state_at_for_predicates(pool, transition_id, predicates) -> Result<State, PgError>` - `pub(crate)`, partial state filtered during the replay loop (not after).
+- `list_claims_at(pool, transition_id)` and `list_derived_at(pool, derived, transition_id)` - thin wrappers, the as-of analogues of `list_claims` and `list_derived`.
+- Eight integration tests covering: spike scenario via production helper, latest-tid equivalence with current, unknown-id error, scoped reconstruction correctness under noise, and the partial-state contract.
+
+**What was confirmed about the design conversation:** the keys lean held - no kernel change required, two-function shape was the right call, the `(committed_at, transition_id)` two-column comparison was straightforward to implement (PostgreSQL supports row comparison natively). The spike test was retired; its headline scenario became test #1 of the production integration suite. The single ambiguity from the sketch (question #6) was resolved by review *before* implementation, which is the value the sketch-then-implement pattern is supposed to capture.
+
+**Implication for future examples:** as-of is now reachable. The next natural pressure points:
+
+- A bench scenario that surfaces the replay cost at long-audit-log scale. The sketch documents the O(transitions up to T) cost; until a real workload bites, materialisation is speculative.
+- A CLI flag `--as-of <transition_id>` on the inspect subcommands. The adapter has the helpers; only argument parsing and threading remain.
+- A worked example that combines as-of with effective-time claims (`EffectiveFor(subject, period)`), which is how the four temporal axes - event time, admission time, effective time, knowledge time - become accessible without polluting any schema with bitemporal flags.
+- Write-path as-of (as a primitive inside invariants or transformations) remains explicitly deferred. The failure mode is much worse - a missed predicate in a write-path footprint analysis could let invalid commits through - so it gets its own forcing example and its own scrutiny when forced.
