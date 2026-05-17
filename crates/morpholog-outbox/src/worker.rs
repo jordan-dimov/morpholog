@@ -92,15 +92,30 @@ where
         self
     }
 
+    /// Set the base poll interval between drain passes. Must be
+    /// non-zero - a zero interval would busy-poll the database
+    /// continuously.
     pub fn with_base_interval(mut self, d: Duration) -> Self {
+        assert!(
+            !d.is_zero(),
+            "base_interval must be > 0; a zero interval would busy-poll the database"
+        );
         self.base_interval = d;
         self
     }
 
+    /// Set the jitter range `[low, high)` used to multiply the
+    /// base interval each iteration. Bounds must satisfy
+    /// `0 < low < high` (strict on both inequalities). Equal bounds
+    /// are not allowed because [`RandJitter`] samples the
+    /// half-open range `[low, high)`, which is empty when
+    /// `low == high` and would panic at runtime; if you want no
+    /// jitter, use a custom [`crate::JitterRng`] impl that returns
+    /// a constant (see [`crate::testing::FixedJitter`]).
     pub fn with_jitter(mut self, low: f64, high: f64) -> Self {
         assert!(
-            low > 0.0 && high >= low,
-            "jitter range must be (low > 0, high >= low)"
+            low > 0.0 && high > low,
+            "jitter range must be (low > 0, high > low strict); got [{low}, {high})"
         );
         self.jitter_low = low;
         self.jitter_high = high;
@@ -141,8 +156,24 @@ where
             tokio::select! {
                 _ = self.clock.sleep_for(sleep_dur) => {}
                 changed = shutdown.changed() => {
-                    if changed.is_ok() && *shutdown.borrow() {
-                        return Ok(());
+                    match changed {
+                        // The shutdown value changed - return iff
+                        // it changed to `true`.
+                        Ok(()) => {
+                            if *shutdown.borrow() {
+                                return Ok(());
+                            }
+                        }
+                        // All senders dropped. No further shutdown
+                        // signals possible; the caller has lost the
+                        // ability to stop us through this channel,
+                        // so termination is the only safe option.
+                        // Returning Ok(()) treats this as a clean
+                        // shutdown (the channel close is the
+                        // signal); returning Err would imply the
+                        // worker hit a database problem, which it
+                        // did not.
+                        Err(_) => return Ok(()),
                     }
                 }
             }

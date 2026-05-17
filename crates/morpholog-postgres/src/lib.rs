@@ -701,12 +701,29 @@ pub async fn mark_outbox_delivered(
 /// `next_attempt_at` is a wall-clock instant the caller computes
 /// (current time plus retry-after plus jitter); the row stays
 /// invisible to claims until that moment.
+///
+/// **Validation**: `next_attempt_at` must be strictly in the
+/// future (as of the worker's clock). A past or equal-now
+/// timestamp is rejected with [`PgError::InvalidState`]. Without
+/// this check, a deliverer that returns
+/// `Transient { next_attempt_at: now() }` would let the drain
+/// re-claim the same row immediately and loop forever, never
+/// reaching `NoRowAvailable` and never observing shutdown.
 pub async fn mark_outbox_transient_attempt(
     pool: &PgPool,
     intent_id: Uuid,
     worker_id: &str,
     next_attempt_at: DateTime<Utc>,
 ) -> Result<OutboxUpdate, PgError> {
+    let now = Utc::now();
+    if next_attempt_at <= now {
+        return Err(PgError::InvalidState(format!(
+            "mark_outbox_transient_attempt({intent_id}): next_attempt_at \
+             must be strictly in the future (got {next_attempt_at}, worker's \
+             now is {now}). A past or equal-now retry instant would let the \
+             drain re-claim the row immediately and loop forever."
+        )));
+    }
     let rows = sqlx::query(
         "UPDATE morpholog.outbox
          SET status='pending',

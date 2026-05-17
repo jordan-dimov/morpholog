@@ -391,3 +391,77 @@ async fn worker_uses_base_interval_when_no_pending_retries_exist() {
         );
     }
 }
+
+#[tokio::test]
+async fn worker_terminates_when_shutdown_channel_closes() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let clock = MockClock::new(Utc::now());
+
+    let worker = OutboxWorker::new(
+        pool,
+        "worker_a",
+        INTENT_TYPE,
+        AlwaysDelivers,
+        clock,
+        FixedJitter::new(1.0),
+    )
+    .with_base_interval(Duration::from_millis(20));
+
+    let handle = tokio::spawn(worker.run(shutdown_rx));
+    // Yield once so the worker reaches the select! and is
+    // awaiting shutdown.changed().
+    for _ in 0..3 {
+        tokio::task::yield_now().await;
+    }
+    // Drop the only Sender. The worker's shutdown.changed() must
+    // now return Err, which the worker must treat as termination
+    // rather than ignoring (the bug Copilot flagged: ignoring Err
+    // would cause changed() to be immediately ready every loop and
+    // burn CPU forever with no way to stop the worker).
+    drop(shutdown_tx);
+
+    // The worker must exit within a generous bound. If it ignored
+    // the closed channel, this await would hang and the test
+    // harness would time out, not pass.
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("worker did not terminate after shutdown channel closed")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+#[should_panic(expected = "base_interval must be > 0")]
+async fn with_base_interval_panics_on_zero() {
+    // PgPool is not used by the builder; the panic fires
+    // before any DB activity. connect_lazy requires a tokio
+    // context but never actually opens a connection, so it works
+    // here.
+    let _ = OutboxWorker::new(
+        sqlx::PgPool::connect_lazy("postgres:///does_not_matter")
+            .expect("lazy connect cannot fail"),
+        "worker_a",
+        INTENT_TYPE,
+        AlwaysDelivers,
+        MockClock::new(Utc::now()),
+        FixedJitter::new(1.0),
+    )
+    .with_base_interval(Duration::ZERO);
+}
+
+#[tokio::test]
+#[should_panic(expected = "jitter range must be")]
+async fn with_jitter_panics_on_equal_bounds() {
+    let _ = OutboxWorker::new(
+        sqlx::PgPool::connect_lazy("postgres:///does_not_matter")
+            .expect("lazy connect cannot fail"),
+        "worker_a",
+        INTENT_TYPE,
+        AlwaysDelivers,
+        MockClock::new(Utc::now()),
+        FixedJitter::new(1.0),
+    )
+    .with_jitter(0.5, 0.5);
+}

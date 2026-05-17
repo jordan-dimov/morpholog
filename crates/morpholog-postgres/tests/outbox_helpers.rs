@@ -192,6 +192,43 @@ async fn mark_outbox_transient_attempt_schedules_retry_and_releases_lease() {
 }
 
 #[tokio::test]
+async fn mark_outbox_transient_attempt_rejects_past_next_attempt_at() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_one_pending(&pool).await;
+    force_lease(&pool, intent_id, "worker_a", 30).await;
+
+    // A deliverer that hands us a retry instant in the past would
+    // let the drain reclaim the same row immediately and loop
+    // forever. The helper must refuse the write.
+    let past = Utc::now() - ChronoDuration::seconds(5);
+    let err = mark_outbox_transient_attempt(&pool, intent_id, "worker_a", past)
+        .await
+        .expect_err("past next_attempt_at must be rejected");
+    match err {
+        PgError::InvalidState(msg) => {
+            assert!(
+                msg.contains("strictly in the future"),
+                "error must explain the constraint, got: {msg}"
+            );
+        }
+        other => panic!("expected InvalidState, got {other:?}"),
+    }
+
+    // Row is unchanged: still in_progress with the original lease,
+    // no next_attempt_at written.
+    let row = fetch_row(&pool, intent_id).await;
+    assert_eq!(
+        row.0, "in_progress",
+        "row state unchanged after rejected call"
+    );
+    assert!(
+        row.5.is_none(),
+        "next_attempt_at must not have been written"
+    );
+}
+
+#[tokio::test]
 async fn mark_outbox_failed_captures_reason_and_releases_lease() {
     let pool = test_pool().await;
     reset_db(&pool).await;
