@@ -83,3 +83,9 @@ jobs:
       # PG integration tests share one schema and must run serially.
       - name: test (postgres, serial)
         run: cargo test -p morpholog-postgres --all-targets -- --test-threads=1
+
+      # morpholog-outbox integration tests also share the schema
+      # and must run serially. Same DB, same serial constraint as
+      # the postgres-adapter tests above.
+      - name: test (outbox, serial)
+        run: cargo test -p morpholog-outbox --all-targets -- --test-threads=1

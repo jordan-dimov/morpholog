@@ -297,13 +297,16 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
 async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // Commit a row, then directly set its status to `pending` (it
-    // already is) with a `next_attempt_at` 80ms in the future.
-    // The drain will return empty (the row is not due yet), and
-    // smart sleep should clamp the post-drain sleep to ~80ms even
-    // though the base interval is 5 seconds.
+    // Commit a row, then set its `next_attempt_at` 30 seconds in
+    // the future. The drain will return empty (the row is not due
+    // yet); smart sleep should clamp the post-drain sleep to ~30s
+    // rather than the 5-minute base interval.
+    //
+    // Generous offsets: 30s + 5min base + shutdown-after-first-
+    // sleep means the test cannot race past next_attempt_at even
+    // on a slow CI box.
     commit_simple_entry(&pool, "entry_001").await;
-    let future_retry = Utc::now() + ChronoDuration::milliseconds(80);
+    let future_retry = Utc::now() + ChronoDuration::seconds(30);
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$1 WHERE intent_type=$2")
         .bind(future_retry)
         .bind(INTENT_TYPE)
@@ -315,21 +318,25 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
     let clock = MockClock::new(Utc::now());
 
     let worker = OutboxWorker::new(
-        pool.clone(),
+        pool,
         "worker_a",
         INTENT_TYPE,
         AlwaysDelivers,
         clock.clone(),
         FixedJitter::new(1.0),
     )
-    .with_base_interval(Duration::from_secs(5));
+    .with_base_interval(Duration::from_secs(300));
 
     let handle = tokio::spawn(worker.run(shutdown_rx));
-    // Yield enough that the worker completes drain + smart-sleep
-    // computation + records the sleep on the mock clock. With
-    // MockClock the sleep resolves instantly, so the worker loops;
-    // we let it iterate several times then shut down.
-    for _ in 0..10 {
+    // Poll the mock clock until the worker records its first
+    // sleep, then shut it down. This avoids the race the earlier
+    // version had (waiting a fixed number of yields and hoping
+    // the worker got past drain + smart-sleep computation in
+    // time).
+    loop {
+        if !clock.sleeps().is_empty() {
+            break;
+        }
         tokio::task::yield_now().await;
     }
     shutdown_tx.send(true).unwrap();
@@ -337,20 +344,17 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
 
     let sleeps = clock.sleeps();
     assert!(!sleeps.is_empty(), "worker must have recorded sleeps");
-    // Every recorded sleep should be under the base interval - smart
-    // sleep clamped to ~80ms (the future next_attempt_at). We allow
-    // some slack for the few-ms gap between MockClock construction
-    // and the row's next_attempt_at insertion.
-    for s in &sleeps {
-        assert!(
-            *s < Duration::from_secs(5),
-            "smart sleep must clamp below base_interval; got {s:?}"
-        );
-        assert!(
-            *s < Duration::from_millis(200),
-            "smart sleep should be near the 80ms next_attempt_at, got {s:?}"
-        );
-    }
+    // The first recorded sleep is the smart-sleep value: must be
+    // clamped well below the 5-minute base_interval. The clamp
+    // target is ~30s; we assert below 60s to absorb the small gap
+    // between MockClock construction and the next_attempt_at row
+    // update without making the assertion meaningless.
+    assert!(
+        sleeps[0] < Duration::from_secs(60),
+        "first smart sleep must clamp below base_interval (300s) to roughly \
+         next_attempt_at (~30s); got {:?}",
+        sleeps[0]
+    );
 }
 
 #[tokio::test]
@@ -430,6 +434,55 @@ async fn worker_terminates_when_shutdown_channel_closes() {
         .expect("worker did not terminate after shutdown channel closed")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn worker_invokes_outcome_observer_for_every_drained_row() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_simple_entry(&pool, "entry_001").await;
+    commit_simple_entry(&pool, "entry_002").await;
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
+    let observed: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed_for_callback = Arc::clone(&observed);
+
+    let worker = OutboxWorker::new(
+        pool.clone(),
+        "worker_a",
+        INTENT_TYPE,
+        ShutdownAfterFirstDelivery {
+            shutdown: shutdown_tx.clone(),
+            call_count: 0.into(),
+        },
+        MockClock::new(Utc::now()),
+        FixedJitter::new(1.0),
+    )
+    .with_base_interval(Duration::from_millis(50))
+    .with_outcome_observer(Box::new(move |o| {
+        let label = match o {
+            morpholog_postgres::ProcessOutcome::Delivered { .. } => "Delivered".to_string(),
+            other => format!("{other:?}"),
+        };
+        observed_for_callback
+            .lock()
+            .expect("observer mutex")
+            .push(label);
+    }));
+
+    worker.run(shutdown_rx).await.unwrap();
+
+    let calls = observed.lock().expect("observer mutex").clone();
+    assert_eq!(
+        calls.len(),
+        2,
+        "observer must fire once per ProcessOutcome from the drain pass; got {calls:?}"
+    );
+    assert!(
+        calls.iter().all(|s| s == "Delivered"),
+        "both outcomes should be Delivered, got {calls:?}"
+    );
 }
 
 #[tokio::test]

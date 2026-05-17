@@ -9,6 +9,13 @@ use crate::clock::Clock;
 use crate::drain::process_available_outbox_rows;
 use crate::jitter::JitterRng;
 
+/// Optional callback invoked once per [`ProcessOutcome`] returned
+/// from a drain pass. Used by [`OutboxWorker`] to surface
+/// non-happy outcomes (LeaseLost, Failed, CompensationFailed,
+/// etc.) to deployed code that wants to log, alert, or feed
+/// metrics. Default is `None` (the worker silently drops outcomes).
+pub type ProcessOutcomeObserver = Box<dyn Fn(&ProcessOutcome) + Send + Sync>;
+
 /// Polling worker over the single-row outbox processor.
 ///
 /// The worker owns a loop that:
@@ -52,6 +59,7 @@ where
     compensation: Option<CompensationSpec>,
     clock: C,
     rng: R,
+    outcome_observer: Option<ProcessOutcomeObserver>,
 }
 
 impl<D, C, R> OutboxWorker<D, C, R>
@@ -84,6 +92,7 @@ where
             compensation: None,
             clock,
             rng,
+            outcome_observer: None,
         }
     }
 
@@ -127,6 +136,24 @@ where
         self
     }
 
+    /// Install a callback invoked once per [`ProcessOutcome`] the
+    /// worker observes on each drain pass. Useful for logging,
+    /// alerting, or feeding metrics: variants like
+    /// [`ProcessOutcome::LeaseLost`] (especially with
+    /// [`morpholog_postgres::IntendedOutcome::Compensated`], the
+    /// orphan-audit case) and [`ProcessOutcome::CompensationFailed`]
+    /// signal conditions a deployment usually wants to surface.
+    ///
+    /// The observer is called inline on the worker's task between
+    /// the drain and the post-drain sleep, so a slow observer
+    /// extends the worker's loop latency. Keep observer bodies
+    /// non-blocking (push to a channel, increment a counter, log a
+    /// line).
+    pub fn with_outcome_observer(mut self, observer: ProcessOutcomeObserver) -> Self {
+        self.outcome_observer = Some(observer);
+        self
+    }
+
     /// Run the polling loop until `shutdown` is set to `true`.
     ///
     /// Consumes `self` so the worker cannot be accidentally reused
@@ -149,6 +176,11 @@ where
                 self.compensation.as_ref(),
             )
             .await?;
+            if let Some(observer) = &self.outcome_observer {
+                for outcome in &outcomes {
+                    observer(outcome);
+                }
+            }
 
             let factor = self.rng.jitter_factor(self.jitter_low, self.jitter_high);
             let base_dur = self.base_interval.mul_f64(factor);
