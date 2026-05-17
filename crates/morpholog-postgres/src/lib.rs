@@ -49,6 +49,15 @@ pub enum PgError {
     /// matched zero rows when exactly one was expected).
     #[error("invalid persistent state: {0}")]
     InvalidState(String),
+    /// A supplied `transition_id` does not name an existing audit row.
+    /// Returned by the as-of helpers ([`reconstruct_state_at`],
+    /// [`list_claims_at`], [`list_derived_at`]) when the caller asks
+    /// for state at a coordinate that does not correspond to any
+    /// committed transition. The contract is "exists or error" -
+    /// every unknown id, smaller, larger, or between known ids, is
+    /// rejected with this variant.
+    #[error("transition_id {0} not found in morpholog.audit")]
+    TransitionNotFound(Uuid),
 }
 
 /// The result of proposing a transformation against PostgreSQL.
@@ -632,6 +641,192 @@ pub async fn list_derived(
     let state = State::from_claims(claims);
     let rows = enumerate_derived(derived, &state)?;
     Ok(rows)
+}
+
+// ===========================================================================
+// As-of helpers - audit-log replay to recover historical state
+// ===========================================================================
+//
+// These helpers reconstruct the `State` that existed immediately after a
+// chosen `transition_id` committed, by replaying every audit row up to and
+// including that transition in causal order. The kernel does not change;
+// `enumerate_derived(&State)` is unchanged. As-of evaluation is a question
+// of which `State` you hand to the kernel.
+//
+// The coordinate is "as of *this actual committed transition*". An
+// unknown id - smaller, larger, or between known ids - is rejected with
+// `PgError::TransitionNotFound`. There is no magical fallback to current
+// state for ids that happen to order past every committed transition.
+//
+// Replay is O(transitions up to T). v0 ships full replay; materialisation
+// is the next-forced optimisation if a bench scenario shows the cost.
+
+/// Reconstruct the full [`State`] that existed immediately after
+/// `transition_id` committed.
+///
+/// Two queries: first looks up the target audit row to obtain its
+/// `(committed_at, transition_id)` pair (and to verify the
+/// transition exists); second replays every audit row whose
+/// `(committed_at, transition_id)` tuple is less than or equal to
+/// the target's tuple, in causal order.
+///
+/// Within each replayed transition, retractions are applied before
+/// assertions - matching the kernel's `build_candidate_state`
+/// semantics. Assertions are set-valued: asserting an already-present
+/// claim is an idempotent no-op (matches the PG adapter's
+/// `INSERT ... ON CONFLICT DO NOTHING` on commit).
+///
+/// Errors:
+/// - [`PgError::TransitionNotFound`] if `transition_id` does not name
+///   an existing audit row.
+/// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
+///   queries.
+///
+/// Replay cost is O(transitions up to T). For long audit logs this
+/// becomes painful; snapshotting / materialisation is the next-forced
+/// optimisation but is deliberately out of scope in v0.
+pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
+    reconstruct_inner(pool, transition_id, None).await
+}
+
+/// Like [`reconstruct_state_at`] but only retains claims whose
+/// predicate is in `predicates`. Used internally by
+/// [`list_derived_at`] to load only the predicates the derived
+/// claim's body references - the as-of analogue of
+/// [`list_claims_for_predicates`].
+///
+/// The contract is intentionally distinct from the public
+/// [`reconstruct_state_at`]: the resulting [`State`] is **partial**.
+/// Callers downstream of this function must not query predicates
+/// outside the supplied set against the returned state - the kernel
+/// would correctly report zero matches because those claims were
+/// never added, not because they do not exist.
+///
+/// Empty `predicates` returns a `State` containing zero claims (the
+/// target transition must still exist or this is an error).
+pub(crate) async fn reconstruct_state_at_for_predicates(
+    pool: &PgPool,
+    transition_id: Uuid,
+    predicates: &[String],
+) -> Result<State, PgError> {
+    reconstruct_inner(pool, transition_id, Some(predicates)).await
+}
+
+/// Returns the claims that were admitted at `transition_id`, in
+/// causal first-asserted order (the construction order produced by
+/// the replay loop). Differs from [`list_claims`] in two ways: the
+/// state is historical, not current; and the ordering is replay
+/// causality rather than `(asserted_at, predicate_name, args)`.
+///
+/// Errors propagate from [`reconstruct_state_at`].
+pub async fn list_claims_at(
+    pool: &PgPool,
+    transition_id: Uuid,
+) -> Result<Vec<ClaimInstance>, PgError> {
+    let state = reconstruct_state_at(pool, transition_id).await?;
+    Ok(state.claims().to_vec())
+}
+
+/// Enumerate a derived claim's extension against the state that
+/// existed immediately after `transition_id` committed.
+///
+/// Mirrors [`list_derived`] but against historical state: the
+/// derived claim's predicate footprint is computed via
+/// [`morpholog_core::predicates_referenced_by_derived`], the audit
+/// log is replayed up to `transition_id` keeping only claims of
+/// those predicates, and `enumerate_derived` runs against the
+/// resulting partial state.
+///
+/// Output is byte-identical to what [`list_derived`] would have
+/// returned at the moment `transition_id` committed.
+pub async fn list_derived_at(
+    pool: &PgPool,
+    derived: &DerivedClaim,
+    transition_id: Uuid,
+) -> Result<Vec<ClaimInstance>, PgError> {
+    let footprint: Vec<String> = predicates_referenced_by_derived(derived)
+        .into_iter()
+        .collect();
+    let state = reconstruct_state_at_for_predicates(pool, transition_id, &footprint).await?;
+    let rows = enumerate_derived(derived, &state)?;
+    Ok(rows)
+}
+
+/// Shared implementation behind [`reconstruct_state_at`] (full state)
+/// and [`reconstruct_state_at_for_predicates`] (partial state). The
+/// `predicates` parameter is `None` for the full case and
+/// `Some(slice)` for the scoped case; the loop checks membership
+/// during replay and skips both asserts and retracts whose predicate
+/// is not in the set, so the scoped case never materialises
+/// out-of-footprint claims in memory.
+async fn reconstruct_inner(
+    pool: &PgPool,
+    transition_id: Uuid,
+    predicates: Option<&[String]>,
+) -> Result<State, PgError> {
+    // Resolve the target transition's (committed_at, transition_id)
+    // tuple. Missing target -> TransitionNotFound; this is the
+    // contract that lets every other unknown id also be an error.
+    let target: Option<(DateTime<Utc>, Uuid)> = sqlx::query_as(
+        "SELECT committed_at, transition_id FROM morpholog.audit WHERE transition_id = $1",
+    )
+    .bind(transition_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify)?;
+    let (target_committed_at, target_transition_id) =
+        target.ok_or(PgError::TransitionNotFound(transition_id))?;
+
+    // Replay every transition with a `(committed_at, transition_id)`
+    // tuple less than or equal to the target's. PostgreSQL row
+    // comparison (`(a, b) <= (c, d)`) is lexicographic; ordering by
+    // the same two columns guarantees a deterministic replay.
+    type Row = (serde_json::Value, serde_json::Value);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT asserted_claims, retracted_claims
+         FROM morpholog.audit
+         WHERE (committed_at, transition_id) <= ($1, $2)
+         ORDER BY committed_at, transition_id",
+    )
+    .bind(target_committed_at)
+    .bind(target_transition_id)
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+
+    let mut claims: Vec<ClaimInstance> = Vec::new();
+    for (asserted_json, retracted_json) in rows {
+        let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
+        let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
+
+        // Within each transition: retractions first, then assertions.
+        // Matches build_candidate_state in the kernel.
+        for r in &retracted {
+            if !predicate_in_scope(&r.predicate, predicates) {
+                continue;
+            }
+            claims.retain(|c| c != r);
+        }
+        for a in &asserted {
+            if !predicate_in_scope(&a.predicate, predicates) {
+                continue;
+            }
+            // Set-valued: skip if already present.
+            if !claims.iter().any(|c| c == a) {
+                claims.push(a.clone());
+            }
+        }
+    }
+    Ok(State::from_claims(claims))
+}
+
+/// Predicate-scope check. `None` (full reconstruction) accepts
+/// everything; `Some(slice)` accepts only predicates in the slice.
+fn predicate_in_scope(predicate: &str, scope: Option<&[String]>) -> bool {
+    match scope {
+        None => true,
+        Some(set) => set.iter().any(|p| p == predicate),
+    }
 }
 
 #[cfg(test)]

@@ -23,7 +23,10 @@
 //! parser, no user-supplied program loading (`propose` and `inspect
 //! derived` only accept built-in programs from
 //! `morpholog_core::examples::all_programs()`), no outbox-delivery
-//! worker, no filtering or pagination DSL, no as-of evaluation, no
+//! worker, no filtering or pagination DSL, no CLI surface for as-of
+//! evaluation yet (the adapter has it via `reconstruct_state_at`,
+//! `list_claims_at`, and `list_derived_at`; a `--as-of <transition_id>`
+//! flag on the inspect subcommands is the obvious follow-on), no
 //! materialised derived-claim storage.
 
 use anyhow::{Context, anyhow};
