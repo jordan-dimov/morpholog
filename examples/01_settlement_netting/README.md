@@ -32,13 +32,13 @@ The program is executed as Rust IR (no parser yet). Two layers of tests prove th
 cargo test -p morpholog-core propose_
 ```
 
-Three tests:
+Three scenarios:
 
 1. **Happy path** - approved, non-netted lines with a correct sum. Commits.
 2. **`require` failure** - a line is already netted. Rolls back *before* any assertions stage. No claims change.
 3. **Invariant failure on the candidate state** - pre-state contains an orphan `SettlementLine` for one of the inputs (inconsistent legacy data, no `Netted` claim). The `require` checks all pass, but the candidate state would have two `SettlementLine` claims for the same line under different nets. `no_double_netting` catches it. Atomic rollback. No claims change. No audit. No outbox.
 
-The third test is the load-bearing one. It proves invariants check the *candidate* state, not just the pre-state - so a transformation that *would* amplify inconsistency cannot commit, even when its preconditions individually look fine.
+The third one is the load-bearing test. It proves invariants check the *candidate* state, not just the pre-state - so a transformation that *would* amplify inconsistency cannot commit, even when its preconditions individually look fine.
 
 ### Durable (PostgreSQL adapter)
 
@@ -53,9 +53,9 @@ DATABASE_URL=postgres:///morpholog_dev \
     settlement_netting require_failure invariant_violation
 ```
 
-The three filter words (`settlement_netting`, `require_failure`, `invariant_violation`) each match one of the three settlement-related tests below; cargo's test runner includes any test whose name contains any of the listed substrings.
+The filter words (`settlement_netting`, `require_failure`, `invariant_violation`) each match one of the settlement-related tests below; cargo's test runner includes any test whose name contains any of the listed substrings.
 
-Three integration tests in `crates/morpholog-postgres/tests/integration.rs`:
+The corresponding integration tests in `crates/morpholog-postgres/tests/integration.rs`:
 
 - `settlement_netting_happy_path_commits_claims_audit_and_outbox` - the happy path, durable. Verifies that on commit the claim mutations, the audit row, and the outbox intent all land in one PostgreSQL `SERIALIZABLE` transaction.
 - `require_failure_writes_nothing` - durable counterpart of the in-memory `require` failure case. All three tables unchanged.

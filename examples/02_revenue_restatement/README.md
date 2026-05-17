@@ -57,7 +57,7 @@ The same scenario is proven at two layers - in-memory through the sync kernel, a
 cargo test -p morpholog-core full_restatement_chain
 ```
 
-The chain test runs four transformations in sequence and verifies the final state has exactly seven claims:
+The chain test runs the full transformation sequence and verifies the final state matches:
 
 ```
 IndependentlyVerifiedRevenue(asset_a, p, 92, ver_001)     ← original
@@ -90,9 +90,9 @@ DATABASE_URL=postgres:///morpholog_dev \
     revenue_restatement correct_verification
 ```
 
-Two integration tests in `crates/morpholog-postgres/tests/integration.rs`:
+The corresponding integration tests in `crates/morpholog-postgres/tests/integration.rs`:
 
-- `revenue_restatement_full_chain_preserves_history_and_moves_pointer` - the full four-step chain (admit → recognise → correct → restate), end-to-end through `propose_against_pg`. Verifies all seven final claims are in `morpholog.claims`, four audit rows are recorded, four outbox intents are enqueued in causal order, the `CurrentBankRecognition(_, _, rec_001)` pointer is gone, and the historical `BankRecognisedRevenue(92, rec_001)` survives.
+- `revenue_restatement_full_chain_preserves_history_and_moves_pointer` - the full chain (admit → recognise → correct → restate), end-to-end through `propose_against_pg`. Verifies the final claim set lands in `morpholog.claims`, the audit rows are recorded, the outbox intents are enqueued in causal order, the `CurrentBankRecognition(_, _, rec_001)` pointer is gone, and the historical `BankRecognisedRevenue(92, rec_001)` survives.
 - `correct_verification_with_no_prior_rejects_and_writes_nothing` - a `correct_independent_verification` call with no matching prior verification fails its `require` and leaves all three tables empty.
 
 This is the example that proves the *contested legitimacy* philosophy survives the durable boundary, not just the in-memory kernel: historical claims persist across PostgreSQL commits, current-standing pointers move via retraction in one atomic transaction, and supersession lineage is recorded as ordinary claims.

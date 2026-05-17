@@ -263,8 +263,8 @@ impl Program {
 /// to [`State.claims`], *not* visible to invariants or
 /// transformations, *not* persisted by the PostgreSQL adapter, and
 /// *not* recursively referenceable from another derived claim's body.
-/// See `docs/derived-claims-sketch.md` for the design history; see
-/// `docs/forced-by-examples.md` for what Example 5 forced.
+/// See `docs/forced-by-examples.md` for the Example 5 retrospective
+/// and what derived claims forced into the IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedClaim {
     pub predicate: String,

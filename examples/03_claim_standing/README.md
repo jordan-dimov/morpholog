@@ -60,9 +60,9 @@ The decision transformations embed their target purpose (`bank_debt_service`, `i
 cargo test -p morpholog-core -- standing revocation cannot_admit
 ```
 
-The three filter words (`standing`, `revocation`, `cannot_admit`) each match one or more of the five tests below; the substring filters are forwarded to the libtest binary after `--`, and cargo's positional `TESTNAME` argument is left unset.
+The filter words (`standing`, `revocation`, `cannot_admit`) each match one or more of the tests below; the substring filters are forwarded to the libtest binary after `--`, and cargo's positional `TESTNAME` argument is left unset.
 
-Five in-memory tests:
+In-memory tests:
 
 1. **`standing_is_purpose_specific`** - Bank standing only; debt-service decision accepted, investor report rejected. Proves the basic admissibility-for-purpose split.
 2. **`parallel_standings_permit_corresponding_decisions`** - Both bank and investor standings granted on the same verification; both decision types accepted. Proves that multiple parallel `AdmissibleFor` claims can attach to the same underlying claim.
@@ -70,7 +70,10 @@ Five in-memory tests:
 4. **`wrong_amount_rejected_even_with_valid_standing`** - Verified amount is 91; decision claiming 92 against the same verification id is rejected by the IV-match `require`. Standing alone is not enough; the cited number must match the verification.
 5. **`cannot_admit_decision_without_iv`** - Standing granted on a verification id that has no underlying `IndependentlyVerifiedRevenue`. The grant succeeds (standing is its own claim); the decision fails when it tries to find the matching IV.
 
-The PostgreSQL durability proof for this example is intentionally deferred to a follow-up PR, matching the development pattern that worked for Example 2.
+The durable PostgreSQL counterparts in `crates/morpholog-postgres/tests/integration.rs`:
+
+- `claim_standing_full_chain_through_pg` - the full standing-acquired-then-revoked chain via `propose_against_pg`. Verifies the claims, audit rows, and outbox intents land in the expected causal order.
+- `decision_after_revocation_rejects_and_writes_nothing` - durable counterpart of the revocation test. The rejected decision leaves all three tables untouched.
 
 ---
 

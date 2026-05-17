@@ -37,10 +37,12 @@ Preserve this ontology unless a change clearly earns an extension. The canonical
 
 ## Worked examples
 
-The two examples are the test of whether the ontology survives real pressure:
+The worked examples are the test of whether the ontology survives real pressure. Each lives in its own directory under `examples/`; the per-directory README is the authoritative description:
 
 - `examples/01_settlement_netting` - clean kernel proof: existence, equality-via-aggregation, exclusion.
 - `examples/02_revenue_restatement` - temporal correction without claim metadata, using a separate `CurrentBankRecognition` pointer claim and `Supersedes` lineage claim.
+- `examples/03_claim_standing` - admissibility-for-purpose: which admitted claims may be used for which decisions, and how that standing is acquired and lost without mutating the underlying claims.
+- `examples/04_double_entry_ledger` - posted-balance invariants, closed-period rejection, restatement-with-supersession. Also hosts the Example 5 trial-balance derived claim.
 
 When reviewing changes to the IR, evaluator, or `propose()` runtime, ask whether the existing tests for these examples still pass *and* whether new semantic ground is being added - not just plumbing.
 
@@ -69,4 +71,4 @@ cargo test --workspace --all-targets
 
 CI runs these exact three commands (`.github/workflows/ci.yml`). If they pass locally, CI should pass.
 
-If PostgreSQL is involved (sqlx integration is the next milestone, not yet present), assume local system PostgreSQL may be used during development unless the task states otherwise.
+The PostgreSQL adapter (`morpholog-postgres`, via `sqlx`) is shipping; integration tests require a running PostgreSQL 17+ with `crates/morpholog-core/sql/schema.sql` applied. Local system PostgreSQL is assumed for development; see the top-level README for setup.

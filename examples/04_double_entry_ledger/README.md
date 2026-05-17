@@ -56,7 +56,7 @@ The same scenario is proven at two layers - in-memory through the sync kernel, a
 cargo test -p morpholog-core --test double_entry_ledger
 ```
 
-Eight tests:
+In-memory tests:
 
 1. **`simple_entry_balances_and_commits`** - happy path: cash debit 100, revenue credit 100. Final state has 1 `JournalEntry` and 2 `JournalLine`s.
 2. **`split_entry_balances_and_commits`** - cash debit 100, revenue credit 70 + deferred revenue credit 30. Balance holds; final state has 1 `JournalEntry` and 3 `JournalLine`s.
@@ -84,9 +84,9 @@ DATABASE_URL=postgres:///morpholog_dev \
     double_entry ledger_closed_period
 ```
 
-Two integration tests in `crates/morpholog-postgres/tests/integration.rs`:
+The corresponding integration tests in `crates/morpholog-postgres/tests/integration.rs`:
 
-- `double_entry_full_chain_through_pg` - the full post → close → restate sequence through `propose_against_pg`. Verifies final DB state: 8 claims, 3 audit rows, 3 outbox intents in causal order, original entry and lines preserved, restatement entry and lines present, `Supersedes` link recorded.
+- `double_entry_full_chain_through_pg` - the full post → close → restate sequence through `propose_against_pg`. Verifies the final DB state: claim set, audit rows, outbox intents in causal order, original entry and lines preserved, restatement entry and lines present, `Supersedes` link recorded.
 - `ledger_closed_period_rejects_new_entry_and_writes_nothing` - pre-state with `PeriodClosed` admitted; a new posting against the closed period is rejected and leaves all three tables at their pre-state row counts.
 
 ---
@@ -119,4 +119,4 @@ The `restate_entry` transformation deliberately does *not* check whether the per
 
 ### Where this fits in the arc
 
-Examples 1-3 each forced a specific semantic or kernel addition (the runtime, then bitemporal correction, then standing plus `Value::Subject`). Example 4 forces nothing. That is itself informative: the accumulated affordances are now sufficient to express a textbook accounting workflow. The next semantic frontier - derived claims for read-side projections like trial balance - is what Example 5 will push on.
+Examples 1-3 each forced a specific semantic or kernel addition (the runtime, then bitemporal correction, then standing plus `Value::Subject`). Example 4 forces nothing on the write side. That is itself informative: the accumulated affordances are now sufficient to express a textbook accounting workflow. Example 5 (the trial-balance derived claim, attached to this same ledger) then forced the read-side primitives - `DerivedClaim`, `enumerate_derived`, `Expr::Sub`; see `docs/forced-by-examples.md`.
