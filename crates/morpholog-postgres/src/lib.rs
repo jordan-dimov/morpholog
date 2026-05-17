@@ -898,23 +898,33 @@ impl ReplaySet {
     /// semantics the kernel pins; an `INSERT ... ON CONFLICT DO
     /// NOTHING` on the write side).
     ///
-    /// One clone in the worst case (when inserting the entry into
-    /// the HashMap key); zero clones on the live-flip path. The
-    /// clone of a `ClaimInstance` is cheap relative to the
-    /// JSON-decode that produced the input.
+    /// Clone counts:
+    /// - Re-assertion of an already-seen claim (live or retracted):
+    ///   **zero clones**. The `index.get(claim)` borrows the input;
+    ///   only the `live` bit is touched.
+    /// - First-time assertion: **two clones**. One into the `claims`
+    ///   vector (we need owned storage there) and one into the
+    ///   `index` HashMap as the key (HashMap keys must be owned).
+    ///   Single-clone is not reachable without `Rc`/`Arc` or
+    ///   borrow-checker gymnastics; the dual storage is the cost of
+    ///   keeping `claims` as a contiguous Vec.
+    ///
+    /// The clone of a `ClaimInstance` is cheap relative to the
+    /// JSON-decode that produced the input; for the common
+    /// asserts-only audit log every claim takes the two-clone path,
+    /// which is what the bench measures.
     fn assert(&mut self, claim: &ClaimInstance) {
-        use std::collections::hash_map::Entry;
-        match self.index.entry(claim.clone()) {
-            Entry::Vacant(e) => {
-                let i = self.claims.len();
-                self.claims.push(claim.clone());
-                self.live.push(true);
-                e.insert(i);
-            }
-            Entry::Occupied(e) => {
-                let i = *e.get();
-                self.live[i] = true;
-            }
+        if let Some(&i) = self.index.get(claim) {
+            // Already seen: re-activate the existing slot. Zero
+            // clones; just a HashMap lookup and a Vec index write.
+            self.live[i] = true;
+        } else {
+            // First time seen: two clones (one for the Vec, one for
+            // the HashMap key).
+            let i = self.claims.len();
+            self.claims.push(claim.clone());
+            self.live.push(true);
+            self.index.insert(claim.clone(), i);
         }
     }
 
@@ -935,7 +945,7 @@ impl ReplaySet {
         let claims: Vec<ClaimInstance> = self
             .claims
             .into_iter()
-            .zip(self.live.into_iter())
+            .zip(self.live)
             .filter_map(|(c, alive)| alive.then_some(c))
             .collect();
         State::from_claims(claims)
