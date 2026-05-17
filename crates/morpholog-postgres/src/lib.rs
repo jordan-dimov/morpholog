@@ -8,8 +8,8 @@
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State, Transformation,
-    propose,
+    ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
+    Transformation, enumerate_derived, propose,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -540,6 +540,40 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
             },
         )
         .collect()
+}
+
+/// Enumerate a derived claim's extension against the current durable state.
+///
+/// Loads every admitted claim from `morpholog.claims` (via [`list_claims`]),
+/// wraps it in an in-memory [`State`], and calls the synchronous
+/// [`enumerate_derived`] kernel primitive. The result is a [`ClaimInstance`]
+/// per distinct key binding the derived claim's `domain` produces, with
+/// each `DerivedValue` evaluated and appended to the key positions.
+///
+/// Read-only: no claims are written, no audit row is produced, no outbox
+/// row is enqueued. Repeated calls compute the result from scratch — there
+/// is no materialised view in v0.
+///
+/// Errors:
+/// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
+///   `list_claims` call.
+/// - [`PgError::Kernel`] if the kernel rejects the derived claim's body
+///   (type mismatch in a `DerivedValue.expr`, unbound variable in
+///   `domain`, etc.). Each is a programmer error in the derived claim's
+///   definition, not a runtime data condition.
+///
+/// Output ordering matches the kernel's contract: sorted by the
+/// concatenated `(keys ++ computed values)` tuple under structural
+/// `EvalValue` ordering, so results are deterministic across runs for a
+/// given state.
+pub async fn list_derived(
+    pool: &PgPool,
+    derived: &DerivedClaim,
+) -> Result<Vec<ClaimInstance>, PgError> {
+    let claims = list_claims(pool).await?;
+    let state = State { claims };
+    let rows = enumerate_derived(derived, &state)?;
+    Ok(rows)
 }
 
 #[cfg(test)]
