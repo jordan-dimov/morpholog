@@ -80,8 +80,12 @@ enum DeliveryOutcome {
     /// A future implementation will retry after `retry_after_ms`;
     /// the spike does not exercise this branch.
     #[allow(dead_code)]
-    Transient { retry_after_ms: u64 },
-    NonRetryable { reason: String },
+    Transient {
+        retry_after_ms: u64,
+    },
+    NonRetryable {
+        reason: String,
+    },
 }
 
 /// A stand-in for the production `Deliverer` trait. Function
@@ -389,12 +393,11 @@ async fn outbox_spike_marks_delivered_on_success() {
         "no rows should be pending after successful delivery"
     );
 
-    let (status, delivered_at): (String, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
-        "SELECT status, delivered_at FROM morpholog.outbox LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (status, delivered_at): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, delivered_at FROM morpholog.outbox LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(status, "delivered");
     assert!(
         delivered_at.is_some(),
