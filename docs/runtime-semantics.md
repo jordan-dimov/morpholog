@@ -2,14 +2,14 @@
 
 Status: design doctrine. The IR and runtime are implemented in `crates/morpholog-core`; surface syntax and parser commitments remain deferred. This document is the authoritative source for the semantics; the code is one realisation of them.
 
-Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become — and to [`forced-by-examples.md`](forced-by-examples.md), which records (retrospectively) which specific examples forced which design decisions.
+Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`forced-by-examples.md`](forced-by-examples.md), which records (retrospectively) which specific examples forced which design decisions.
 
 ## Conceptual core
 
 Morpholog has exactly two first-class concepts:
 
-1. **Invariant** — a predicate that defines admissible state.
-2. **Transformation** — a named, parameterised proposal to change state.
+1. **Invariant** - a predicate that defines admissible state.
+2. **Transformation** - a named, parameterised proposal to change state.
 
 Everything that follows is **implementation machinery**, present only because something has to execute. It is strictly subordinate. Nothing below is promoted to the public language surface unless we are forced to.
 
@@ -23,7 +23,7 @@ Nothing else.
 
 ## Claims
 
-A Morpholog `Claim` is an **admitted assertion** — not objective reality:
+A Morpholog `Claim` is an **admitted assertion** - not objective reality:
 
 > A statement admitted into governed state under a specific authority, epoch, and transformation.
 
@@ -128,7 +128,7 @@ External side effects fire only after commit, delivered by workers reading the o
 
 ## Atomicity boundary
 
-Steps 1–7 are atomic. Post-commit, outbox intents deliver at-least-once via workers running outside the transaction. External effects are never rolled back — only retried or compensated.
+Steps 1-7 are atomic. Post-commit, outbox intents deliver at-least-once via workers running outside the transaction. External effects are never rolled back - only retried or compensated.
 
 ## Explicit non-goals for v0
 
@@ -145,7 +145,7 @@ Steps 1–7 are atomic. Post-commit, outbox intents deliver at-least-once via wo
 The settlement netting program, constructed directly as IR data, executes such that:
 
 1. A valid `create_net_settlement` commits, writes one audit record, and enqueues one outbox row.
-2. An invariant-violating attempt (a double-netted line, or an amount mismatch, or a settlement with zero lines) rolls back atomically — no claims changed, no audit written, no outbox row.
+2. An invariant-violating attempt (a double-netted line, or an amount mismatch, or a settlement with zero lines) rolls back atomically - no claims changed, no audit written, no outbox row.
 3. The intent in the outbox row does not fire inside the database transaction.
 
 Status (2026-05-16): items 1 and 2 are proved in memory via `propose()` and the netting test suite. Item 3 is structurally satisfied (intents stage as IR data, never resolved to actual side effects) but is not yet wired to PostgreSQL.
