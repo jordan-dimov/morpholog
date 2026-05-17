@@ -1549,6 +1549,104 @@ async fn list_derived_on_empty_state_returns_no_rows() {
 }
 
 #[tokio::test]
+async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
+    // Black-box equivalence test for predicate-scoped loading. The
+    // `trial_balance_row` derived claim references only the
+    // `JournalLine` predicate. After this test inserts both the
+    // ledger fixture AND a large pile of unrelated
+    // `IndependentlyVerifiedRevenue` claims, `list_derived` must:
+    //
+    // 1. Return the exact same trial-balance rows as it would
+    //    against a state containing only the ledger fixture (the
+    //    noise must not change the answer).
+    // 2. Implicitly skip the noise rows during the PG fetch step
+    //    (the predicate footprint analysis names only "JournalLine",
+    //    so the WHERE clause in `list_claims_for_predicates`
+    //    excludes everything else - we cannot directly observe that
+    //    here without an instrumented harness, but the correctness
+    //    of (1) under heavy noise is the load-bearing property).
+    //
+    // If `predicates_referenced_by_derived` ever started missing a
+    // predicate the kernel actually reads, (1) would fail because
+    // the read path would silently skip needed claims. This is the
+    // safety net for the analysis at runtime; the exhaustive `match`
+    // is the safety net at compile time.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Real ledger fixture: 1 entry, 2 journal lines.
+    let invariants = double_entry_ledger::all_invariants();
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_001"),
+            subj("d_2026_04_15"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("entry should commit");
+
+    // Noise: 200 unrelated claims of a predicate the trial-balance
+    // derived claim does not reference. The predicate
+    // (`IndependentlyVerifiedRevenue`) is borrowed from the
+    // revenue-restatement example so the predicate exists
+    // semantically, but the rows are not referenced anywhere in
+    // `trial_balance_row()`'s body.
+    let noise: Vec<ClaimInstance> = (0..200)
+        .map(|i| {
+            claim(
+                "IndependentlyVerifiedRevenue",
+                vec![
+                    subj(&format!("noise_asset_{i}")),
+                    subj("p_noise"),
+                    dec(i),
+                    subj(&format!("noise_ver_{i}")),
+                ],
+            )
+        })
+        .collect();
+    insert_pre_state(&pool, noise).await;
+
+    // Sanity: the noise really is present and dominates the claims
+    // table.
+    let total_claims = list_claims(&pool).await.unwrap();
+    assert!(
+        total_claims.len() > 200,
+        "fixture sanity: noise should have been inserted alongside the ledger \
+         claims, got {} total",
+        total_claims.len()
+    );
+
+    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
+        .await
+        .expect("list_derived under noise should not error");
+
+    // The trial balance for one cash/revenue entry is exactly two
+    // rows. Under the noise, the answer must be byte-identical.
+    assert_eq!(
+        rows,
+        vec![
+            ClaimInstance {
+                predicate: "TrialBalanceRow".to_string(),
+                args: vec![subj("account_cash"), dec(100)],
+            },
+            ClaimInstance {
+                predicate: "TrialBalanceRow".to_string(),
+                args: vec![subj("account_revenue"), dec(-100)],
+            },
+        ],
+        "predicate-scoped loading must return the same derived rows whether \
+         or not unrelated noise claims are present"
+    );
+}
+
+#[tokio::test]
 async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     let pool = test_pool().await;
     reset_db(&pool).await;

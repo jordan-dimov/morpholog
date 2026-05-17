@@ -37,17 +37,19 @@ Run on a developer workstation against a local `morpholog_dev` database. Indicat
 
 ### Read path phase split
 
-The read scenario now reports `list_claims`, `build_state`, and `enumerate` separately. At `N = 100 000` (300 000 claims):
+The read scenario reports `list_scoped`, `build_state`, and `enumerate` separately. `list_scoped` fetches only claims for predicates the derived claim's body references (computed via `predicates_referenced_by_derived`); for `trial_balance_row` that means JournalLine only. At `N = 100 000` (300 000 total claims, 200 000 JournalLine):
 
-| K | list_claims | build_state | enumerate | derived rows |
+| K | list_scoped | build_state | enumerate | derived rows |
 |--:|--:|--:|--:|--:|
-| 2 | 1 151 ms | 239 ms | 364 ms | 2 |
-| 100 | 1 171 ms | 230 ms | 282 ms | 100 |
+| 2 | ~1 100-1 400 ms | ~210 ms | ~460 ms | 2 |
+| 100 | ~1 200 ms | ~210 ms | ~410 ms | 100 |
+
+`list_scoped` fetches 200 000 rows instead of 300 000 (~33% fewer) since the scoped query is `WHERE predicate_name = ANY(['JournalLine'])`. The wall-clock saving is more modest than the row-count saving because JournalLine rows are bigger (4 args vs JournalEntry's 3), so the JSONB decode share per row is larger; skipping the smaller JournalEntry rows saves rows but proportionally less time. The ledger fixture is also nearly the worst case for this optimisation - only two distinct predicate types exist in the data, and the derived needs one of them. In a real workload with many unrelated predicates (e.g. claims from other examples co-existing in one database), the win compounds: the noise-claims correctness test in `morpholog-postgres/tests/integration.rs` verifies that 200 unrelated claims do not affect the answer; in production it would be the bench-visible time difference.
 
 Observations:
 
-- `list_claims` dominates (~65% of read time). That's the PostgreSQL fetch + JSONB decode for every claim in the table. **This is the next forced optimization.** The structurally-aware fix is predicate-scoped loading: load only the claims for predicates the derived claim's body actually references. A `SELECT ... WHERE predicate_name = ANY($1)` for the relevant set would skip most of the table for narrow workloads.
-- `build_state` is ~14% (~240 ms for 300 000 claims). Builds both indexes from scratch. Linear in claim count and constant per claim.
+- `list_scoped` still dominates (~65% of read time even after scoping). The next direction would be either a `--noise-claims K` axis on the bench to make the predicate-scoping win obvious at workload scales typical of multi-program databases, or a deeper PG-side optimisation (e.g. an index on `predicate_name`, or streaming the fetch).
+- `build_state` is ~14% (~210 ms for 200 000 claims). Builds both indexes from scratch. Linear in claim count and constant per claim.
 - `enumerate` is ~20%. Slightly *cheaper* at K=100 than at K=2, which is a positive signal about the argument-position index: the per-account `Sum` for each of 100 accounts touches roughly `2N/K` lines (so K=100 sums each touch ~6 000 lines instead of K=2 sums each touching ~300 000 lines). The argument-position index on `JournalLine[1] = account` is what makes this scale; without it, K=100 would be ~100x slower than K=2 for the enumerate phase.
 
 ### Write path
@@ -63,6 +65,6 @@ Linear in `N` and essentially independent of `K`. The remaining cost on `propose
 
 ### History
 
-The write path used to be **structurally quadratic**: an early version of this bench surfaced 31 seconds per propose at `N = 10 000`. The predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x. The full history is preserved in the PRs themselves: `#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix; the next PR (this one) added the `--accounts K` axis and the read-path phase split.
+The write path used to be **structurally quadratic**: an early version of this bench surfaced 31 seconds per propose at `N = 10 000`. The predicate-and-argument-position indexed `State` PR that followed brought it down by ~200x. The full history is preserved in the PRs themselves: `#22` introduced this bench and recorded the original quadratic; `#23` indexed `State` and recorded the fix; `#24` added the `--accounts K` axis and the read-path phase split; the next PR (this one) wired the read path to load only the predicates the derived claim references, and updated this bench to mirror that.
 
 The next bench enhancement worth doing would be a workload with many distinct predicates (the current ledger has only `JournalEntry` and `JournalLine`), so the predicate index's narrowing effect becomes visible separately from the argument-position index. Until that scenario exists, the predicate index's value is theoretical for this bench - the argument-position index does all the visible work.

@@ -9,7 +9,7 @@
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
-    Transformation, enumerate_derived, propose,
+    Transformation, enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -418,6 +418,49 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
         .collect()
 }
 
+/// Return every currently-admitted claim whose `predicate_name` is in
+/// `predicates`. Empty `predicates` short-circuits to `Ok(vec![])`
+/// without issuing a query; an empty input set means the caller has
+/// no predicate footprint to read, which is meaningful (e.g. a
+/// derived claim whose domain is a no-op) and is not an error.
+///
+/// Used by [`list_derived`] to load only the claims relevant to the
+/// derived claim's footprint - which avoids fetching and decoding the
+/// rest of `morpholog.claims` when the derived only needs a few
+/// predicates. The footprint analysis lives in
+/// [`morpholog_core::predicates_referenced_by_derived`].
+///
+/// Order matches [`list_claims`]: `(asserted_at, predicate_name,
+/// arguments::text)`. Deterministic across runs.
+pub async fn list_claims_for_predicates(
+    pool: &PgPool,
+    predicates: &[String],
+) -> Result<Vec<ClaimInstance>, PgError> {
+    if predicates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT predicate_name, arguments
+         FROM morpholog.claims
+         WHERE predicate_name = ANY($1)
+         ORDER BY asserted_at, predicate_name, arguments::text",
+    )
+    .bind(predicates)
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+
+    rows.into_iter()
+        .map(|(predicate, args_json)| {
+            Ok(ClaimInstance {
+                predicate,
+                args: serde_json::from_value(args_json)?,
+            })
+        })
+        .collect()
+}
+
 /// Return every committed audit row from `morpholog.audit`, ordered by
 /// `(committed_at, transition_id)` — causal commit order with the
 /// `transition_id` PRIMARY KEY (UUIDv7, time-ordered) as the stable
@@ -544,19 +587,31 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
 
 /// Enumerate a derived claim's extension against the current durable state.
 ///
-/// Loads every admitted claim from `morpholog.claims` (via [`list_claims`]),
-/// wraps it in an in-memory [`State`], and calls the synchronous
-/// [`enumerate_derived`] kernel primitive. The result is a [`ClaimInstance`]
-/// per distinct key binding the derived claim's `domain` produces, with
-/// each `DerivedValue` evaluated and appended to the key positions.
+/// Loads only the admitted claims for predicates the derived claim's
+/// body actually references (via [`list_claims_for_predicates`] and
+/// [`morpholog_core::predicates_referenced_by_derived`]), wraps them
+/// in an in-memory [`State`], and calls the synchronous
+/// [`enumerate_derived`] kernel primitive. The result is a
+/// [`ClaimInstance`] per distinct key binding the derived claim's
+/// `domain` produces, with each `DerivedValue` evaluated and
+/// appended to the key positions.
 ///
-/// Read-only: no claims are written, no audit row is produced, no outbox
-/// row is enqueued. Repeated calls compute the result from scratch — there
-/// is no materialised view in v0.
+/// Read-only: no claims are written, no audit row is produced, no
+/// outbox row is enqueued. Repeated calls compute the result from
+/// scratch - there is no materialised view in v0.
+///
+/// The predicate-scoped load is safe because the kernel only reads
+/// claims whose predicate matches an `Expr::Claim`, `Expr::ValueOf`,
+/// or other predicate-referencing expression node inside the
+/// derived's body. If a future PR adds a new `Expr` variant that
+/// references a predicate, `predicates_referenced_by_expr`'s
+/// exhaustive match will fail to compile until the new variant is
+/// handled - which prevents this read path from silently producing
+/// wrong answers under a partial state.
 ///
 /// Errors:
 /// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
-///   `list_claims` call.
+///   `list_claims_for_predicates` call.
 /// - [`PgError::Kernel`] if the kernel rejects the derived claim's body
 ///   (type mismatch in a `DerivedValue.expr`, unbound variable in
 ///   `domain`, etc.). Each is a programmer error in the derived claim's
@@ -570,7 +625,10 @@ pub async fn list_derived(
     pool: &PgPool,
     derived: &DerivedClaim,
 ) -> Result<Vec<ClaimInstance>, PgError> {
-    let claims = list_claims(pool).await?;
+    let footprint: Vec<String> = predicates_referenced_by_derived(derived)
+        .into_iter()
+        .collect();
+    let claims = list_claims_for_predicates(pool, &footprint).await?;
     let state = State::from_claims(claims);
     let rows = enumerate_derived(derived, &state)?;
     Ok(rows)

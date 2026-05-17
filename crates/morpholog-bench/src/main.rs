@@ -30,8 +30,13 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use morpholog_core::{EvalValue, State, enumerate_derived, examples::double_entry_ledger};
-use morpholog_postgres::{PgPool, PgProposalOutcome, list_claims, propose_against_pg};
+use morpholog_core::{
+    EvalValue, State, enumerate_derived, examples::double_entry_ledger,
+    predicates_referenced_by_derived,
+};
+use morpholog_postgres::{
+    PgPool, PgProposalOutcome, list_claims_for_predicates, propose_against_pg,
+};
 use rust_decimal::Decimal;
 use std::time::Instant;
 use uuid::Uuid;
@@ -189,17 +194,27 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
 
     // The read scenario bypasses `list_derived` and runs the three
     // phases inline so each can be timed separately. The kernel
-    // semantics are identical to what `list_derived` does (load all
-    // current claims via the PG read helper, wrap in `State`, call
-    // `enumerate_derived`); the split is purely diagnostic and lets
-    // us see which layer dominates as N and K grow.
+    // semantics are identical to what `list_derived` does:
+    // compute the derived claim's predicate footprint, load only
+    // claims of those predicates via `list_claims_for_predicates`,
+    // wrap in `State`, call `enumerate_derived`. The split is
+    // purely diagnostic and lets us see which layer dominates as N
+    // and K grow.
+    let derived = double_entry_ledger::trial_balance_row();
+    let footprint: Vec<String> = predicates_referenced_by_derived(&derived)
+        .into_iter()
+        .collect();
+
     let t = Instant::now();
-    let claims = list_claims(&pool).await.context("list_claims")?;
+    let claims = list_claims_for_predicates(&pool, &footprint)
+        .await
+        .context("list_claims_for_predicates")?;
     let n_claims = claims.len();
     println!(
-        "  list_claims:    {:>8} ms  ({} claims)",
+        "  list_scoped:    {:>8} ms  ({} claims, predicates={:?})",
         t.elapsed().as_millis(),
-        n_claims
+        n_claims,
+        footprint
     );
 
     let t = Instant::now();
@@ -207,8 +222,7 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     println!("  build_state:    {:>8} ms", t.elapsed().as_millis());
 
     let t = Instant::now();
-    let rows = enumerate_derived(&double_entry_ledger::trial_balance_row(), &state)
-        .context("enumerate_derived")?;
+    let rows = enumerate_derived(&derived, &state).context("enumerate_derived")?;
     println!(
         "  enumerate:      {:>8} ms  ({} derived rows)",
         t.elapsed().as_millis(),
