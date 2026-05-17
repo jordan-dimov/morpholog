@@ -12,7 +12,9 @@ The architectural answer - phrased crisply by a recent strategic review - is **M
 
 - Morpholog stays a strict local transactional gatekeeper. The IR does not learn about networks, retries, or distributed consensus. If it did, the language would stop being decidable and start being a worse-than-Camunda workflow engine.
 - An outside coordinator (the outbox worker) owns the asynchronous conversation with the real world. It tries to deliver, retries on transient failure, gives up on systemic failure.
-- When delivery fails terminally, the coordinator reconciles by invoking a Morpholog *compensating transformation* - a normal Morpholog transformation that goes through every invariant check and writes its own audit row. The ledger never lies; it just learns later that reality went a different way, and corrects itself through the same invariant-governed path as everything else.
+- When delivery fails terminally, the coordinator reconciles by invoking a Morpholog *compensating transformation* - a normal Morpholog transformation that goes through every invariant check and writes its own audit row.
+
+The mental model worth being precise about: **the original transition was a locally legitimate admission**. The runtime knew what it knew at the time, an invariant gate cleared, a claim was admitted. Then the external world contradicted the intended side effect. Morpholog does not pretend the original transition never happened - claims are admitted assertions, not objective facts; that distinction is load-bearing throughout the runtime. Instead, the runtime records the later contradiction (status flips to `failed`; the reason is preserved) and the compensation (a new transition through the same invariant-governed path) as further admitted facts. An auditor reading the audit log sees the full sequence: legitimate admission, evidence of external failure, governed correction.
 
 This sketch pins how the coordinator works.
 
@@ -29,9 +31,20 @@ Reuses the audit log directly; uses local fixtures rather than polluting any wor
 
 That is the full pattern. The spike test in this PR exercises it end-to-end. The happy path - deliverer returns `Delivered`, row marked, no compensation - is exercised as a second test for symmetry.
 
-## Likely API shape
+## Sequencing the implementation
 
-Pins what the implementation PR will build. None of this lives in `morpholog-core`.
+This is genuinely too much for one PR. The spike makes a tempting "build the whole worker stack" picture look reachable; that picture is the trap. The discipline that has carried other parts of the runtime (smallest forced step; validate; then the next forced step) applies here too. Three PRs at least, probably four:
+
+1. **Durable outbox state vocabulary.** No worker loop. No `Deliverer` trait. No HTTP. No supervisor. Just the schema additions (`failed_at`, `failure_reason`, `compensation_transition_id`, probably `next_attempt_at` if `Transient` is real) and explicit helper functions on `morpholog-postgres`: `mark_outbox_delivered`, `mark_outbox_transient_attempt`, `mark_outbox_failed`, `record_compensation`. The spike currently hand-updates `status='failed'` without storing the reason or the compensation linkage because the schema cannot yet express either; this PR fixes that substrate. The shape of "what does the database track about delivery" gets pinned without yet pinning "what code does the tracking."
+2. **Single-row processor + `DeliveryOutcome` type.** A standalone function: given a `&PgPool`, a pending row, a `Deliverer` (trait now), and an optional `CompensationSpec`, do one cycle. No polling. No supervision. Callers (and the existing spike) drive it. Compensation invokes `propose_against_pg` and records the resulting `transition_id` via the helper from PR 1.
+3. **Polling loop + per-target worker.** One tokio task per intent type. Lease/claim pattern (see "Locking" below), poll-with-jitter, retry on `Transient` honoring `retry_after`. Still no HTTP, no supervisor, no circuit breaker.
+4. **Supervisor + circuit breaker + first real `Deliverer` impl.** `JoinSet`-based restart-with-intensity. `failsafe-rs` per-target breaker. `StdoutDeliverer` as the canonical first impl; `HttpDeliverer` later as its own PR.
+
+Anything below the "Likely API shape" line is the *eventual* shape; it does not all land at once. The boxes-and-arrows below are the destination, not the next merge.
+
+## Likely API shape (eventual)
+
+Pins what the worker will *eventually* look like, across the four PRs above. None of this lives in `morpholog-core`.
 
 ### A new crate `morpholog-outbox`
 
@@ -92,25 +105,53 @@ This shape:
 
 One supervised tokio task per *delivery target* (i.e., one task per registered intent_type). Each task:
 
-- Polls `morpholog.outbox` for pending rows of its intent_type, ordered by `enqueued_at`, with `SELECT ... FOR UPDATE SKIP LOCKED` (borrowed from `sqlxmq`'s pattern) so multiple workers can run safely.
-- Calls its `Deliverer`. Routes the outcome.
-- On `Delivered`: update outbox row `status='delivered'`, `delivered_at=now()`.
-- On `Transient`: leave `status='pending'`, increment `attempt_count`, set `last_attempt_at`, defer next attempt by `retry_after` with jitter.
-- On `NonRetryable`: update `status='failed'`, `failed_at=now()`; invoke the compensating transformation via `propose_against_pg`; record the compensation's `transition_id` in a new `compensation_transition_id` column for lineage.
+- Claims one pending row for its intent_type using a lease pattern (see "Locking" below).
+- Calls its `Deliverer` **outside any database transaction**. Routes the outcome.
+- On `Delivered`: update outbox row `status='delivered'`, `delivered_at=now()`, using the lease token.
+- On `Transient`: increment `attempt_count`, set `last_attempt_at` and `next_attempt_at = now() + retry_after`, release the lease.
+- On `NonRetryable`: update `status='failed'`, `failed_at=now()`, `failure_reason=...`; invoke the compensating transformation via `propose_against_pg`; record the compensation's `transition_id` in the `compensation_transition_id` column for lineage.
 
 The supervisor (root tokio task) owns the per-target tasks via `tokio::task::JoinSet`. On panic, restart the failed task with bounded restart-intensity (borrowing `ractor-supervisor`'s algorithm but re-implementing rather than depending on a full actor framework). Per-target circuit breakers via `failsafe-rs` short-circuit deliveries to a target that has been failing repeatedly, so one misbehaving target doesn't burn the others' budget.
 
+### Locking: lease, not held transaction
+
+A naive read of `sqlxmq` suggests `SELECT ... FOR UPDATE SKIP LOCKED` is the whole answer. It is not, for this workload: holding a PG transaction open across a network call (the deliverer) leaves a row locked for the duration of the network round-trip, creates long-held locks, makes failure behaviour worse than the alternative, and burns connection pool slots. Acceptable for a toy worker; bad production habit.
+
+The right shape is a two-step lease:
+
+1. **Claim:** atomically pick one pending row, mark it `status='in_progress'` with `locked_by=<worker_id>` and `lock_expires_at=now()+<timeout>`, returning the row. The atomic claim itself uses `FOR UPDATE SKIP LOCKED` inside an UPDATE-RETURNING with a subquery; the surrounding transaction is short. Commit the claim.
+2. **Deliver:** invoke the deliverer with **no transaction held**.
+3. **Resolve:** UPDATE the row using the lease token (`WHERE locked_by=<worker_id> AND lock_expires_at > now()`), transitioning to `delivered` / `pending+retry` / `failed`. If the lease expired, the worker discards the result silently; another worker has already taken over.
+
+This adds two columns (`locked_by`, `lock_expires_at`) to the schema additions list - sequencing PR 1 should include them.
+
+`SKIP LOCKED` is great for the *claim* step (so two workers do not contend for the same row); it is the wrong tool for "hold the row across delivery."
+
 ### Idempotency for compensation
 
-The existing `idempotency_key` column on outbox rows covers the forward intent. For compensation, the worker derives a key by hashing `(original_idempotency_key, "compensation")`, included in the args of the compensating `propose_against_pg` call (so the kernel's idempotency contract still applies). Retries of the compensation step are therefore safe.
+Worth being precise: **`propose_against_pg` does not enforce transformation-level idempotency from arguments**. Every accepted transformation writes a new audit row. The existing `idempotency_key` column is for *outbox intents* (so a retried delivery does not produce two outbox rows), not for transformations.
+
+So compensation needs explicit guarding against duplicate application. Two honest mechanisms:
+
+1. **Check the outbox row's `compensation_transition_id` before invoking.** If it is already set, skip - compensation has run. Requires the `compensation_transition_id` column from sequencing step 1, plus an atomic "claim-the-compensation" step (probably via the same lease pattern used for delivery) so a crash between "compensation committed" and "compensation_transition_id written" does not produce a duplicate.
+2. **Design the compensating transformation to be invariant-guarded against duplicate application.** For example, the compensation asserts a `CompensationApplied(original_intent_id, key)` claim, and an invariant rejects any second compensation against the same `original_intent_id`. The kernel then refuses the duplicate at admission time.
+
+Mechanism 1 is the simpler v0 path: the worker is responsible for not double-invoking. Mechanism 2 is more robust but requires per-program design discipline (every compensable program has to think about its own compensation-uniqueness predicate).
+
+The implementation PR sequencing in this doc commits to mechanism 1 for the first cut, with mechanism 2 available as a deeper guard the user can layer on top in their own programs.
 
 ### Schema additions
 
-Three new nullable columns on `morpholog.outbox`:
+New nullable columns on `morpholog.outbox`:
 
 - `failed_at: timestamptz` - set when `status='failed'`.
 - `failure_reason: text` - the `NonRetryable.reason` from the deliverer.
 - `compensation_transition_id: uuid` - the audit row of the compensating transformation, for lineage.
+- `next_attempt_at: timestamptz` - set on `Transient` outcomes; the claim query filters on `next_attempt_at <= now()` so a row with pending retry is not picked up early.
+- `locked_by: text` - the worker id holding the current lease (or NULL if unclaimed).
+- `lock_expires_at: timestamptz` - when the lease becomes reclaimable by another worker.
+
+Status string also gains an `in_progress` value (currently the CHECK allows `pending|delivered|failed`; `in_progress` is the leased state).
 
 No new tables. The original intent stays findable from the compensation (via `compensation_transition_id`), and vice versa (`SELECT FROM outbox WHERE compensation_transition_id = ...`).
 
@@ -146,10 +187,14 @@ The implementation PR(s) have to answer these explicitly. The spike does not com
 ## What this PR delivers
 
 - This document.
-- A spike test (`crates/morpholog-postgres/tests/outbox_spike.rs`) demonstrating the full compensation flow + happy path via hand-rolled in-test code. The spike defines local compensable + compensation transformation fixtures (so the worked examples stay focused on their own business stories). It uses a mock deliverer and a hand-rolled consumer loop. The semantics of compensation - that it goes through `propose_against_pg` and writes its own audit row - are pinned by the spike's assertions on the audit log.
+- A spike test (`crates/morpholog-postgres/tests/outbox_spike.rs`) demonstrating the full compensation flow + happy path via hand-rolled in-test code. The spike uses existing ledger transformations (so the worked examples stay focused on their own business stories). It uses a mock deliverer and a hand-rolled consumer loop. The semantics of compensation - that it goes through `propose_against_pg` and writes its own audit row - are pinned by the spike's assertions on the audit log.
 - A README pointer.
 
-The spike is meant to be ugly. Every caller wanting outbox delivery + compensation has to write something like it today. That ugliness is the case for the implementation PR.
+The spike is meant to be ugly. Every caller wanting outbox delivery + compensation has to write something like it today. That ugliness is the case for the implementation PR(s).
+
+### A note on the spike's compensation choice
+
+The spike uses `post_simple_entry` with debit/credit accounts swapped as the compensation. That is structurally correct (balanced under the same invariant; goes through every gate; writes its own audit row), but it has a real-system implication worth surfacing: the compensation **emits its own `JournalEntryPosted` intent**, which the next consumer pass would try to deliver. In a real ledger this might be the wrong shape - the reversal should probably emit `JournalEntryReversed` (or no external intent at all) rather than re-broadcast as a fresh posting. The compensating transformation is ordinary; what the chosen compensating transformation *emits* is a design call the program author has to make deliberately. The spike does not adjudicate that; it just notes the duplication.
 
 ## What this PR does NOT deliver
 
