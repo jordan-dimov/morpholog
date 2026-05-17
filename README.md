@@ -1,10 +1,10 @@
 # Morpholog
 
-There comes a moment in every serious business when someone — an auditor, a regulator, a board director who has not been having a great quarter — asks you to *prove* a number. Why is it what it is. Who decided it should be. What it looked like before the restatement. Whether the rule it had to satisfy actually held at the moment it was admitted.
+There comes a moment in every serious business when someone - an auditor, a regulator, a board director who has not been having a great quarter - asks you to *prove* a number. Why is it what it is. Who decided it should be. What it looked like before the restatement. Whether the rule it had to satisfy actually held at the moment it was admitted.
 
 In most systems, those answers come from detective work. You pull logs, reconcile parallel files, ask the people who happened to be on call. Sometimes the answer is good enough. Sometimes the books just stop tying out, and everyone learns to live with that.
 
-Morpholog is a programming language and runtime that takes those questions out of detective territory. You write down the rules your records have to satisfy. The language only lets you express rules the runtime can guarantee, and the runtime checks every one on every change. Anything that breaks a rule never gets in. Everything that does get in carries enough provenance that you can reconstruct exactly what the books said at any past point in the audit log — no bitemporal columns, no shadow tables, no overnight reconciliation scripts.
+Morpholog is a programming language and runtime that takes those questions out of detective territory. You write down the rules your records have to satisfy. The language only lets you express rules the runtime can guarantee, and the runtime checks every one on every change. Anything that breaks a rule never gets in. Everything that does get in carries enough provenance that you can reconstruct exactly what the books said at any past point in the audit log - no bitemporal columns, no shadow tables, no overnight reconciliation scripts.
 
 The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
 
@@ -14,9 +14,9 @@ The point is to make *"how do you know?"* answerable by *"because the system cou
 - *Who admitted this entry, and under what authority?*
 - *If that authority was rescinded yesterday, was yesterday's decision still valid?*
 - *What did the books say on the last day of Q1, under the close rules in force then?*
-- *Did this trade conform to our exposure limits when it was booked? Not now — then?*
+- *Did this trade conform to our exposure limits when it was booked? Not now - then?*
 
-Morpholog answers a meaningful subset of these today, against a real PostgreSQL database, through a small CLI. The trial-balance worked example handles question 1 and question 4 directly. The claim-standing worked example handles 2 and 3. Question 5 needs an exposure-limit program that doesn't exist yet, but the runtime would handle it the same way — that is the point of writing the runtime first.
+Morpholog answers a meaningful subset of these today, against a real PostgreSQL database, through a small CLI. The trial-balance worked example handles question 1 and question 4 directly. The claim-standing worked example handles 2 and 3. Question 5 needs an exposure-limit program that doesn't exist yet, but the runtime would handle it the same way - that is the point of writing the runtime first.
 
 ## How it works
 
@@ -24,7 +24,7 @@ There are two first-class constructs. Everything else is built from these.
 
 An **invariant** says what must always be true of admitted records. A **transformation** is the only path that gets to change them. It proposes additions, removals, and outbound notifications; the runtime checks every active invariant against the proposed result; if anything fails, nothing happens. No record written. No notification sent. The state is exactly what it was before you asked.
 
-Here is what that looks like, in the double-entry ledger example (surface syntax is illustrative — the parser is on the roadmap; programs today are constructed as Rust IR):
+Here is what that looks like, in the double-entry ledger example (surface syntax is illustrative - the parser is on the roadmap; programs today are constructed as Rust IR):
 
 ```
 invariant balanced_posted_entry:
@@ -55,7 +55,7 @@ psql my_books -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL=postgres:///my_books
 ```
 
-Post a journal entry — debit $100 to cash, credit $100 to revenue:
+Post a journal entry - debit $100 to cash, credit $100 to revenue:
 
 ```bash
 morpholog propose double_entry_ledger post_simple_entry --args '[
@@ -97,37 +97,37 @@ morpholog inspect derived double_entry_ledger TrialBalanceRow
 ]
 ```
 
-Post another entry — say, $200 between the same two accounts — and look again. Cash is at 300; revenue at -300. Fine. Now ask for the trial balance *as it stood right after the first transition*:
+Post another entry - say, $200 between the same two accounts - and look again. Cash is at 300; revenue at -300. Fine. Now ask for the trial balance *as it stood right after the first transition*:
 
 ```bash
 morpholog inspect derived double_entry_ledger TrialBalanceRow \
     --as-of 019231ab-...-...-...-...-...
 ```
 
-Cash is back at 100. Revenue is back at -100. The report is exactly what an auditor would have seen if they had run it at that exact moment — frozen in time, recomputed from the audit log, with no bitemporal columns or shadow tables anywhere in your schema.
+Cash is back at 100. Revenue is back at -100. The report is exactly what an auditor would have seen if they had run it at that exact moment - frozen in time, recomputed from the audit log, with no bitemporal columns or shadow tables anywhere in your schema.
 
-If you had tried to post an unbalanced entry — say, debit 100 against credits totalling 95 — the receipt would have come back as `{"status":"rejected","reason":"balanced_posted_entry invariant did not hold"}`, and your database would look exactly the way it did before you tried. That is the whole point.
+If you had tried to post an unbalanced entry - say, debit 100 against credits totalling 95 - the receipt would have come back as `{"status":"rejected","reason":"balanced_posted_entry invariant did not hold"}`, and your database would look exactly the way it did before you tried. That is the whole point.
 
 ## Worked examples
 
 Each runs both in memory (against the kernel) and durably (against PostgreSQL). The integration tests exercise the same audit log the CLI does; nothing is mocked.
 
-- [**Bilateral settlement netting**](examples/01_settlement_netting/) — proves invariants check the *candidate state*, not just the pre-state. A transformation that would create an inconsistency by combining individually-valid inputs is rejected before any commit.
-- [**Revenue restatement**](examples/02_revenue_restatement/) — proves contested legitimacy. Historical records survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims. Three months from now, the original number is still in the database and still findable.
-- [**Claim standing**](examples/03_claim_standing/) — proves admissibility-for-purpose. The same underlying claim can carry different standing for different decisions, granted by different authorities, lost without mutating the underlying claim itself. The shape regulated lending and statutory reporting need.
-- [**Double-entry ledger with period close**](examples/04_double_entry_ledger/) — the accounting equation enforced as an invariant; period close as an admission gate; closed periods corrected by restatement that preserves the original record. Hosts the `TrialBalanceRow` derived claim used in the tour above.
+- [**Bilateral settlement netting**](examples/01_settlement_netting/) - proves invariants check the *candidate state*, not just the pre-state. A transformation that would create an inconsistency by combining individually-valid inputs is rejected before any commit.
+- [**Revenue restatement**](examples/02_revenue_restatement/) - proves contested legitimacy. Historical records survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims. Three months from now, the original number is still in the database and still findable.
+- [**Claim standing**](examples/03_claim_standing/) - proves admissibility-for-purpose. The same underlying claim can carry different standing for different decisions, granted by different authorities, lost without mutating the underlying claim itself. The shape regulated lending and statutory reporting need.
+- [**Double-entry ledger with period close**](examples/04_double_entry_ledger/) - the accounting equation enforced as an invariant; period close as an admission gate; closed periods corrected by restatement that preserves the original record. Hosts the `TrialBalanceRow` derived claim used in the tour above.
 
-Morpholog isn't the whole stack — UIs, dashboards, dataloaders, ML pipelines all stay in the normal tools. What it owns is the line where "may this be admitted as a valid record?" needs a definite answer. That line is a small fraction of any real business system, and the fraction that, when it fails, makes the news. The framing of what Morpholog should grow into, and what it must never become, lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
+Morpholog isn't the whole stack - UIs, dashboards, dataloaders, ML pipelines all stay in the normal tools. What it owns is the line where "may this be admitted as a valid record?" needs a definite answer. That line is a small fraction of any real business system, and the fraction that, when it fails, makes the news. The framing of what Morpholog should grow into, and what it must never become, lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
 
 ---
 
 ## Project status
 
-Active. Kernel, PostgreSQL adapter, CLI, and worked examples all work and are tested. Writes scale linearly: about 1.6 seconds per commit against a 100,000-entry ledger. As-of replay is currently quadratic in claim count for asserts-only workloads; the bench surfaced this in the last shipped PR, and the next optimisation will fix it. See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the running performance story.
+Active. Kernel, PostgreSQL adapter, CLI, and worked examples all work and are tested. Writes scale linearly: about 1.6 seconds per commit against a 100,000-entry ledger. As-of replay also scales linearly: about 1.5 seconds to reconstruct state from a 100,000-transition audit log (was quadratic until recently; a `ReplaySet` working set replaced the linear-scan dedupe loop). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the running performance story.
 
 Not in the box yet: a parser (programs are constructed as Rust IR; the CLI accepts built-in programs only); an outbox worker (rows are enqueued; nobody consumes them yet); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
 
-Built in Rust on modern PostgreSQL (17+). The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation (SSI) and JSONB so an entire commit — `claims`, `audit`, and `outbox` rows — lands atomically in one transaction or not at all.
+Built in Rust on modern PostgreSQL (17+). The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation (SSI) and JSONB so an entire commit - `claims`, `audit`, and `outbox` rows - lands atomically in one transaction or not at all.
 
 To run the tests:
 
@@ -141,10 +141,9 @@ The workspace splits into `morpholog-core` (synchronous kernel, no I/O), `morpho
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) — what Morpholog is for, the language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
-- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) — semantics the `morpholog-core` kernel realises.
-- [`docs/forced-by-examples.md`](docs/forced-by-examples.md) — retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
-- [`docs/mvp-cut.md`](docs/mvp-cut.md) — decision record for the MVP cut line and the PRs that crossed it.
+- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
+- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics the `morpholog-core` kernel realises.
+- [`docs/forced-by-examples.md`](docs/forced-by-examples.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_revenue_restatement/`](examples/02_revenue_restatement/), [`examples/03_claim_standing/`](examples/03_claim_standing/), [`examples/04_double_entry_ledger/`](examples/04_double_entry_ledger/).
 
 ## License

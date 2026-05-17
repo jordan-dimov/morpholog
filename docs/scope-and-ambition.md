@@ -155,11 +155,12 @@ Standing first (the next semantic frontier already named in the README), then de
 Proven by:
 - **Example 3 - Claim standing.** `AdmissibleFor(claim, purpose)` as the central pattern: which admitted claims may be used for which decisions, and how that standing is acquired and lost without mutating the claims themselves. (Landed; forced `Value::Subject` and the require-vs-invariant distinction.)
 - **Example 4 - Double-entry ledger with period close.** Whether Xero-like accounting cores are a credible target. Posted-balance invariants, closed-period rejection, restatement-with-supersession for prior periods. (Landed; reused existing affordances without forcing new ones.)
-- **Example 5 - Trial balance as a derived claim.** Whether read-side projections can be governed by the same model as admitted state. (Landed; forced `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`. Materialisation, provenance, recursion, and as-of evaluation remain deferred.)
+- **Example 5 - Trial balance as a derived claim.** Whether read-side projections can be governed by the same model as admitted state. (Landed; forced `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`. Materialisation, provenance, and recursion through other derived claims remain deferred.)
+- **As-of evaluation.** (Landed in subsequent PRs.) `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`.
 
-The remaining ETRM-shaped pressure (position / exposure / as-of evaluation of derived views over long audit logs) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
+The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; actor authority and approval-limit invariants for regulated workflows) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
 
-Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. As-of and actor context likely follow from a future temporal-correction example and from Example 3 respectively.
+Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor context likely follows from a worked example that needs `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims.
 
 ### Level 3 - Governed external and integration provenance
 

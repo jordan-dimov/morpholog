@@ -58,7 +58,7 @@ If a proposed invariant would force cascade-retraction of historical claims when
 
 **The pattern:** both use the same lower-level mechanic (a separate claim that confers a property on another claim, retractable independently of that other claim). The verifier's correction in Example 2 retracts a `CurrentBankRecognition`; the authority's revocation in Example 3 retracts an `AdmissibleFor`. In both, the underlying append-only claim is never touched.
 
-**Pattern for future examples:** when modelling *"which X is canonical for purpose Y at time Z?"* the first question is whether currentness alone is enough, or whether purpose-specific standing is needed. Examples 4 and 5 will likely both apply - period-closed accounting state has currentness *and* admissibility-for-purpose questions (current journal entry vs admissible-for-statutory-report).
+**Pattern for future examples:** when modelling *"which X is canonical for purpose Y at time Z?"* the first question is whether currentness alone is enough, or whether purpose-specific standing is needed. Examples 4 and 5 both confirmed this - period-closed accounting state has currentness *and* admissibility-for-purpose questions (current journal entry vs admissible-for-statutory-report).
 
 ### History-as-append-only
 
@@ -84,11 +84,11 @@ The discipline: *content* claims (what was admitted) are append-only; *pointer* 
 
 **Why this is intentional in v0:** the runtime has no predicate type system that would let `grant_standing` enforce *"the supplied subject names a verification claim, not something else."* `AdmissibleFor` is a generic relation by design - the same shape applies to verifications, journal entries, curve snapshots, audit artefacts, valuation reports, and other claim kinds we may add later.
 
-**Future trigger:** a fourth or fifth example that finds this looseness too loose will force the introduction of typed predicate declarations - declaring that a predicate's *n*th argument is a subject identifying a specific claim kind. Until then, generic standing is the honest position. `scope-and-ambition.md` already lists *typed predicate declarations* as one of the four candidate language affordances for this reason.
+**Future trigger:** a later example that finds this looseness too loose will force the introduction of typed predicate declarations - declaring that a predicate's *n*th argument is a subject identifying a specific claim kind. Until then, generic standing is the honest position. `scope-and-ambition.md` already lists *typed predicate declarations* as a candidate language affordance for this reason.
 
 ## What deliberately stayed minimal
 
-Each entry below was actively considered during one of the three examples and deferred. They are listed here so the reasoning survives the conversation.
+Each entry below was actively considered during one of the early examples and deferred. They are listed here so the reasoning survives the conversation.
 
 | Considered | Why deferred |
 |---|---|
@@ -98,7 +98,7 @@ Each entry below was actively considered during one of the three examples and de
 | Actor context on transformations | Mentioned in `scope-and-ambition.md`. No example yet needs it. |
 | Cascading retraction of historical decisions on standing revocation | Considered as option B for Example 3's design; rejected because it contradicts the "history is preserved" rule. |
 | Sharing IR fixture helpers across example modules | The `morpholog_core::examples::*` modules each re-declare their own IR fixtures; they happen to use the same predicate names (e.g. `IndependentlyVerifiedRevenue` in Examples 2 and 3) without sharing constructor code. Keeps examples independent. |
-| Per-example PostgreSQL schemas | All three examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
+| Per-example PostgreSQL schemas | All examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
 
 ## Example 4: double-entry ledger reused everything, forced nothing
 

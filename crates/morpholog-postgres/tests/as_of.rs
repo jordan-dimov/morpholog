@@ -1,18 +1,14 @@
 //! Integration tests for as-of evaluation.
 //!
-//! These tests cover the four production helpers introduced for
-//! audit-log replay: `reconstruct_state_at`, `list_claims_at`,
-//! `list_derived_at`, and the internal
-//! `reconstruct_state_at_for_predicates` (exercised indirectly via
-//! `list_derived_at`). The scenario each test reuses is the
-//! double-entry ledger restatement chain that the original spike
-//! introduced: post entry_001 at 100, post entry_002 at 200, restate
-//! entry_001 to 150. Three distinct trial balances exist in the same
-//! database, and only the last one is reachable through the existing
-//! `list_derived`. The as-of helpers must recover the other two.
-//!
-//! The previous standalone spike (`tests/as_of_spike.rs`) is deleted
-//! in this PR; its headline scenario lives as test #1 below.
+//! These tests cover the production helpers `reconstruct_state_at`,
+//! `list_claims_at`, `list_derived_at`, and (indirectly via the
+//! last) the internal `reconstruct_state_at_for_predicates`. The
+//! scenario most tests share is the double-entry-ledger restatement
+//! chain: post entry_001 at 100, post entry_002 at 200, restate
+//! entry_001 to 150. Three distinct trial balances exist in the
+//! same database; only the last is reachable through the
+//! current-state `list_derived`. The as-of helpers must recover
+//! the other two.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

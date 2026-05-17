@@ -142,10 +142,10 @@ Steps 1-7 are atomic. Post-commit, outbox intents deliver at-least-once via work
 
 ## Success criterion
 
-The settlement netting program, constructed directly as IR data, executes such that:
+For every worked example, both in memory (via `propose()` and the kernel test suite) and durably (via `propose_against_pg`):
 
-1. A valid `create_net_settlement` commits, writes one audit record, and enqueues one outbox row.
-2. An invariant-violating attempt (a double-netted line, or an amount mismatch, or a settlement with zero lines) rolls back atomically - no claims changed, no audit written, no outbox row.
-3. The intent in the outbox row does not fire inside the database transaction.
+1. Valid transformations commit, writing one audit row and one outbox row per emitted intent in a single SERIALIZABLE transaction.
+2. Invariant-violating attempts roll back atomically - no claims changed, no audit row written, no outbox row enqueued.
+3. Outbox intents stage at commit but do not fire inside the database transaction; an external worker (deliberately not built yet) is the only path that delivers them.
 
-Status: all three items hold both in memory (via `propose()` and the netting test suite) and durably (via `propose_against_pg`). The PostgreSQL adapter commits asserted/retracted claims, the audit row, and the outbox row in one SERIALIZABLE transaction; the intent in the outbox row is staged for an external worker that has not yet been built.
+These hold for the settlement-netting, revenue-restatement, claim-standing, and double-entry-ledger examples; see each example's `tests/integration.rs` block for the durable proofs.

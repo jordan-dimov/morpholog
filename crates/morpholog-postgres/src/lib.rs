@@ -341,15 +341,14 @@ pub fn compute_idempotency_key(
 }
 
 // ===========================================================================
-// Read API — current-state inspection
+// Read API - current-state inspection
 // ===========================================================================
 //
 // These helpers expose the durable substrate for inspection without
-// requiring callers to write raw SQL. They return *current* state only:
-// no as-of evaluation, no derived claims, no projection. A caller that
-// needs "what did the state look like at transition T" must build that
-// by replay over `list_audit_rows`; the kernel does not yet support
-// historical reconstruction directly.
+// requiring callers to write raw SQL. They return *current* state.
+// Historical state ("what did the books look like at transition T?")
+// is reachable through the as-of helpers further down in this file:
+// `reconstruct_state_at`, `list_claims_at`, `list_derived_at`.
 
 /// One row of `morpholog.audit` decoded into typed runtime values.
 ///
