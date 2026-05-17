@@ -139,29 +139,50 @@ fn trial_balance_today_requires_manual_evaluator_glue() {
 fn trial_balance_as_derived_claim() {
     // TARGET BEHAVIOUR (pseudocode; does not compile or run today).
     //
+    // The exact `DerivedClaim` struct shape is genuinely open. The
+    // sketch doc records two candidates, and the current lean is the
+    // second:
+    //
+    //   - `DerivedClaim { predicate, parameters, body }` (naive).
+    //   - `DerivedClaim { predicate, keys, values, domain }` where
+    //     `keys` are enumerated, `values` are computed, and `domain`
+    //     enumerates distinct key bindings (current lean).
+    //
+    // The pseudocode below uses the second shape but should not be
+    // read as committing the implementation PR to it; if a third
+    // shape turns out to fit better, both this test and the sketch
+    // doc should be revised in the same PR that lands the kernel
+    // change.
+    //
     // The double-entry ledger program would expose a derived claim
     // alongside its invariants and transformations:
     //
     //     pub fn trial_balance_row() -> DerivedClaim {
     //         DerivedClaim {
     //             predicate: "TrialBalanceRow".to_string(),
-    //             parameters: vec!["account".to_string(),
-    //                              "balance".to_string()],
-    //             body: Expr::Eq(
-    //                 Box::new(Expr::Term(var("balance"))),
-    //                 // Either Sub(Sum, Sum) - if we go with
-    //                 // adding Expr::Sub - or a single Sum over
-    //                 // an expression value - if we extend Sum's
-    //                 // value position. The spike does not
-    //                 // commit to one shape; the design doc lists
-    //                 // both as open questions.
-    //                 todo!("Expr::Sub or extended Sum"),
-    //             ),
+    //             keys: vec!["account".to_string()],
+    //             values: vec![DerivedValue {
+    //                 name: "balance".to_string(),
+    //                 expr: Expr::Sub(
+    //                     // sum { d | JournalLine(_, account, d, _) }
+    //                     Box::new(Expr::Sum { /* debits */ }),
+    //                     // sum { c | JournalLine(_, account, _, c) }
+    //                     Box::new(Expr::Sum { /* credits */ }),
+    //                 ),
+    //             }],
+    //             domain: Expr::Claim {
+    //                 predicate: "JournalLine".to_string(),
+    //                 args: vec![Term::Wildcard, var("account"),
+    //                            Term::Wildcard, Term::Wildcard],
+    //             },
     //         }
     //     }
     //
-    // The CLI / external caller would then evaluate the derived
-    // claim against state and receive grounded ClaimInstances:
+    // The current lean assumes a new `Expr::Sub(Box<Expr>, Box<Expr>)`
+    // landing in the same PR; see the sketch doc's open question 1.
+    //
+    // The caller would then evaluate the derived claim against state
+    // and receive grounded ClaimInstances:
     //
     //     let state = small_ledger_state();
     //     let trial_balance = double_entry_ledger::trial_balance_row();
@@ -181,15 +202,14 @@ fn trial_balance_as_derived_claim() {
     //         args: vec![subj("account_expenses"), dec(30)],
     //     }));
     //
-    // What the spike forces the implementation PR to decide (per
-    // docs/derived-claims-sketch.md):
-    //
-    //   - DerivedClaim struct shape and where it lives in the IR.
-    //   - Subtraction primitive: Expr::Sub vs extended Sum value.
-    //   - Enumeration semantics: how does the runtime know to iterate
-    //     "one row per distinct account"?
-    //   - The enumerate_derived signature itself.
-    //   - Whether derived claims are added to Program or live elsewhere.
+    // The returned ClaimInstances have the same shape as admitted
+    // claims, but in v0 they are NOT added to State.claims, NOT
+    // visible to invariants, NOT visible to transformations, and NOT
+    // persisted. They are computed views over admitted state, surfaced
+    // for the caller. The full interchangeability question (can
+    // invariants quantify over derived; can transformations require)
+    // is deferred until a second derived-claims example forces it.
+    // See the "What derived claims are NOT" section of the sketch.
 
     panic!(
         "Spike test: kernel does not yet support derived claims. \
