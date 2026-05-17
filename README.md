@@ -82,7 +82,7 @@ createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
-Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims, audit, outbox, and for enumerating derived claims), `morpholog-cli` (`morpholog inspect ...` for read-side inspection - claims, audit, outbox, derived - and `morpholog propose <program> <transformation>` for running a named transformation from a built-in program; JSON output throughout).
+Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims, audit, outbox, and for enumerating derived claims), `morpholog-cli` (`morpholog inspect ...` for read-side inspection - claims, audit, outbox, derived - and `morpholog propose <program> <transformation>` for running a named transformation from a built-in program; JSON output throughout), `morpholog-bench` (synthetic scale-pressure benchmark for the write and read paths; see [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md)).
 
 ## Deeper reading
 

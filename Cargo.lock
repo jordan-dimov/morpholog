@@ -977,6 +977,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "morpholog-bench"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "morpholog-core",
+ "morpholog-postgres",
+ "rust_decimal",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "morpholog-cli"
 version = "0.0.1"
 dependencies = [
