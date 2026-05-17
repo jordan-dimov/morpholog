@@ -13,9 +13,15 @@ use morpholog_core::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use std::collections::HashSet;
 use uuid::Uuid;
+
+/// Re-export of `sqlx::PgPool` so downstream crates (notably
+/// `morpholog-cli`) can use the connection-pool type that the public
+/// async functions in this crate take, without pulling `sqlx` in as a
+/// direct dependency.
+pub use sqlx::PgPool;
 
 /// Errors returned by the PostgreSQL adapter.
 ///
@@ -160,6 +166,9 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>) -> Result<State, PgError
 /// per committed transformation: the invariant `name` plus the `version`
 /// active at admission time. Self-describing audit data is preferred over
 /// tuple compactness.
+///
+/// `Serialize` is derived so the CLI can re-emit audit rows as JSON
+/// without an intermediate hand-rolled mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvariantCheck {
     pub name: String,
@@ -332,7 +341,7 @@ pub fn compute_idempotency_key(
 /// `retracted_claims`, `emitted_intents`) are decoded through the same
 /// codec that wrote them, so the round-trip is exact for any value the
 /// kernel can represent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditRow {
     pub transition_id: Uuid,
     pub transformation_name: String,
@@ -358,7 +367,7 @@ pub struct AuditRow {
 /// transitions to `'delivered'`, so it is structurally NULL for
 /// every row this helper returns. A future `list_all_outbox` or
 /// per-status query would surface it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OutboxRow {
     pub intent_id: Uuid,
     pub transition_id: Uuid,

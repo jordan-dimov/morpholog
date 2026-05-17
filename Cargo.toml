@@ -11,7 +11,7 @@ repository = "https://github.com/jordan-dimov/morpholog"
 
 [workspace.dependencies]
 rust_decimal = { version = "1", features = ["serde-with-str"] }
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "rust_decimal", "json", "chrono"] }
@@ -19,6 +19,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 thiserror = "2"
 sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
