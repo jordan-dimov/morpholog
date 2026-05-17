@@ -22,22 +22,20 @@ fn correct_independent_verification_retracts_dependent_current_pointer() {
         revenue_restatement::at_most_one_direct_successor(),
     ];
 
-    let pre = State {
-        claims: vec![
-            claim_instance(
-                "IndependentlyVerifiedRevenue",
-                &[subj("asset_a"), subj("p_2026_04"), dec(92), subj("ver_001")],
-            ),
-            claim_instance(
-                "BankRecognisedRevenue",
-                &[subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")],
-            ),
-            claim_instance(
-                "CurrentBankRecognition",
-                &[subj("asset_a"), subj("p_2026_04"), subj("rec_001")],
-            ),
-        ],
-    };
+    let pre = State::from_claims(vec![
+        claim_instance(
+            "IndependentlyVerifiedRevenue",
+            &[subj("asset_a"), subj("p_2026_04"), dec(92), subj("ver_001")],
+        ),
+        claim_instance(
+            "BankRecognisedRevenue",
+            &[subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")],
+        ),
+        claim_instance(
+            "CurrentBankRecognition",
+            &[subj("asset_a"), subj("p_2026_04"), subj("rec_001")],
+        ),
+    ]);
 
     let args = vec![
         subj("asset_a"),
@@ -82,36 +80,34 @@ fn correct_independent_verification_retracts_dependent_current_pointer() {
 
     // Historical BankRecognisedRevenue must still be in candidate state.
     assert!(
-        candidate_state.claims.iter().any(|c| {
-            c.predicate == "BankRecognisedRevenue"
-                && c.args == vec![subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")]
-        }),
+        candidate_state
+            .claims_for("BankRecognisedRevenue")
+            .any(|c| c.args == vec![subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")]),
         "historical BankRecognisedRevenue must be preserved"
     );
 
     // CurrentBankRecognition must be gone.
     assert!(
-        !candidate_state
-            .claims
-            .iter()
-            .any(|c| c.predicate == "CurrentBankRecognition"),
+        candidate_state
+            .claims_for("CurrentBankRecognition")
+            .next()
+            .is_none(),
         "current bank recognition pointer must be retracted"
     );
 
     // New verification must be present.
     assert!(
-        candidate_state.claims.iter().any(|c| {
-            c.predicate == "IndependentlyVerifiedRevenue"
-                && c.args == vec![subj("asset_a"), subj("p_2026_04"), dec(91), subj("ver_002")]
-        }),
+        candidate_state
+            .claims_for("IndependentlyVerifiedRevenue")
+            .any(|c| c.args == vec![subj("asset_a"), subj("p_2026_04"), dec(91), subj("ver_002")]),
         "new IndependentlyVerifiedRevenue must be present"
     );
 
     // Supersession recorded.
     assert!(
-        candidate_state.claims.iter().any(|c| {
-            c.predicate == "Supersedes" && c.args == vec![subj("ver_002"), subj("ver_001")]
-        }),
+        candidate_state
+            .claims_for("Supersedes")
+            .any(|c| c.args == vec![subj("ver_002"), subj("ver_001")]),
         "Supersedes(ver_002, ver_001) must be recorded"
     );
 }
@@ -176,7 +172,7 @@ fn full_restatement_chain_preserves_history_and_updates_pointer() {
     );
 
     // Final state: 2 IV + 2 BR + 2 Supersedes + 1 Current = 7 claims.
-    assert_eq!(s4.claims.len(), 7);
+    assert_eq!(s4.len(), 7);
 
     assert!(has_claim(
         &s4,

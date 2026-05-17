@@ -168,9 +168,8 @@ fn derived_claims_do_not_pollute_admitted_state() {
     // Also verify (post-call) that no derived predicate name has
     // leaked into the live state, in case future refactoring routes
     // results through some other side channel.
-    let predicates_after: Vec<&str> = state.claims.iter().map(|c| c.predicate.as_str()).collect();
     assert!(
-        !predicates_after.contains(&"TrialBalanceRow"),
+        state.claims_for("TrialBalanceRow").next().is_none(),
         "TrialBalanceRow must not appear among admitted claims after enumeration"
     );
 }
@@ -193,11 +192,10 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     // that yields one key binding.
     use morpholog_core::Value;
 
-    let mut state = State::default();
-    state.claims.push(ClaimInstance {
+    let state = State::from_claims(vec![ClaimInstance {
         predicate: "Tag".to_string(),
         args: vec![subj("only")],
-    });
+    }]);
 
     let derived_decimal_ok = DerivedClaim {
         predicate: "DecimalSub".to_string(),

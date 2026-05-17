@@ -33,7 +33,7 @@ fn simple_entry_balances_and_commits() {
         &double_entry_ledger::all_invariants(),
     );
 
-    assert_eq!(state.claims.len(), 3, "1 JournalEntry + 2 JournalLine");
+    assert_eq!(state.len(), 3, "1 JournalEntry + 2 JournalLine");
     assert!(has_claim(
         &state,
         "JournalEntry",
@@ -73,7 +73,7 @@ fn split_entry_balances_and_commits() {
         &double_entry_ledger::all_invariants(),
     );
 
-    assert_eq!(state.claims.len(), 4, "1 JournalEntry + 3 JournalLine");
+    assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
     // Three lines: 100 debit cash, 70 credit revenue, 30 credit deferred.
     assert!(has_claim(
         &state,
@@ -242,7 +242,7 @@ fn restatement_into_closed_period_preserves_original() {
     //  - the PeriodClosed claim
     //  - the Supersedes(entry_002, entry_001) link
     // Total: 8 claims.
-    assert_eq!(s3.claims.len(), 8);
+    assert_eq!(s3.len(), 8);
 
     // Original entry preserved.
     assert!(
@@ -297,12 +297,10 @@ fn lone_journal_entry_without_lines_violates_invariant() {
     // assert at least two lines), so this test evaluates the
     // invariant directly against a hand-crafted state that no
     // legitimate path could reach.
-    let state = State {
-        claims: vec![ClaimInstance {
-            predicate: "JournalEntry".to_string(),
-            args: vec![subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
-        }],
-    };
+    let state = State::from_claims(vec![ClaimInstance {
+        predicate: "JournalEntry".to_string(),
+        args: vec![subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
+    }]);
     let inv = double_entry_ledger::journal_entry_has_lines();
     let holds = eval_invariant(&inv, &state).expect("evaluation should not error");
     assert!(
