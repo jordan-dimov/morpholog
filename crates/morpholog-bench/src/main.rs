@@ -30,8 +30,8 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use morpholog_core::{EvalValue, examples::double_entry_ledger};
-use morpholog_postgres::{PgPool, PgProposalOutcome, list_derived, propose_against_pg};
+use morpholog_core::{EvalValue, State, enumerate_derived, examples::double_entry_ledger};
+use morpholog_postgres::{PgPool, PgProposalOutcome, list_claims, propose_against_pg};
 use rust_decimal::Decimal;
 use std::time::Instant;
 use uuid::Uuid;
@@ -60,6 +60,20 @@ struct ScenarioArgs {
     /// `3 * N` claims total (one JournalEntry plus two JournalLines
     /// per entry).
     n: usize,
+
+    /// Number of distinct accounts to spread the journal lines across.
+    /// Each entry `i` debits `account_{i mod K}` and credits
+    /// `account_{(i + 1) mod K}` for the same amount; the fixture is
+    /// always self-balancing per entry. Default is `2`, which
+    /// preserves the original K=2 baseline (entries alternate cash
+    /// and revenue) so older numbers remain comparable.
+    ///
+    /// The trial-balance derived claim produces one row per distinct
+    /// account, so K is the number of derived rows expected on the
+    /// read scenario. Larger K stresses `enumerate_derived`'s grouping
+    /// and the per-account `Sum` lookups.
+    #[arg(long, default_value_t = 2)]
+    accounts: usize,
 
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
@@ -90,6 +104,20 @@ fn require_reset_ack(args: &ScenarioArgs) -> Result<()> {
     Ok(())
 }
 
+/// `--accounts 0` would break the fixture's modulo-K distribution
+/// (`i % 0` is undefined in PostgreSQL and meaningless conceptually -
+/// there must be at least one account for any journal line to land on).
+fn require_positive_k(args: &ScenarioArgs) -> Result<()> {
+    if args.accounts == 0 {
+        return Err(anyhow!(
+            "--accounts must be at least 1 (got 0); the fixture distributes \
+             journal lines across K accounts via modular arithmetic, so K=0 \
+             has no meaning"
+        ));
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -101,14 +129,15 @@ async fn main() -> Result<()> {
 
 async fn run_write(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
+    require_positive_k(&args)?;
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
-    println!("scenario=write n={}", args.n);
+    println!("scenario=write n={} accounts={}", args.n, args.accounts);
 
     let t = Instant::now();
     reset_db(&pool).await?;
-    insert_n_entries(&pool, args.n).await?;
+    insert_n_entries(&pool, args.n, args.accounts).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     let t = Instant::now();
@@ -141,36 +170,76 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
 
 async fn run_read(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
+    require_positive_k(&args)?;
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
-    println!("scenario=read n={}", args.n);
+    println!("scenario=read n={} accounts={}", args.n, args.accounts);
 
     let t = Instant::now();
     reset_db(&pool).await?;
-    insert_n_entries(&pool, args.n).await?;
+    insert_n_entries(&pool, args.n, args.accounts).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
+    // The read scenario bypasses `list_derived` and runs the three
+    // phases inline so each can be timed separately. The kernel
+    // semantics are identical to what `list_derived` does (load all
+    // current claims via the PG read helper, wrap in `State`, call
+    // `enumerate_derived`); the split is purely diagnostic and lets
+    // us see which layer dominates as N and K grow.
     let t = Instant::now();
-    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
-        .await
-        .context("list_derived")?;
-    println!("  list_derived:   {:>8} ms", t.elapsed().as_millis());
-    println!("  derived_rows:   {}", rows.len());
+    let claims = list_claims(&pool).await.context("list_claims")?;
+    let n_claims = claims.len();
+    println!(
+        "  list_claims:    {:>8} ms  ({} claims)",
+        t.elapsed().as_millis(),
+        n_claims
+    );
 
-    // n=0 is a legitimate baseline (measures load_state + enumerate
-    // cost against an empty state); the fixture inserts no
-    // JournalLine claims so the domain enumerates to zero key
-    // bindings and the derived extension is empty. For n>0 every
-    // entry hits the same two accounts (cash, revenue), so the
-    // expected row count is exactly two regardless of n.
-    let expected = if args.n == 0 { 0 } else { 2 };
-    if rows.len() != expected {
-        return Err(anyhow!(
-            "expected {expected} derived row(s) for n={}, got {}",
-            args.n,
-            rows.len()
-        ));
+    let t = Instant::now();
+    let state = State::from_claims(claims);
+    println!("  build_state:    {:>8} ms", t.elapsed().as_millis());
+
+    let t = Instant::now();
+    let rows = enumerate_derived(&double_entry_ledger::trial_balance_row(), &state)
+        .context("enumerate_derived")?;
+    println!(
+        "  enumerate:      {:>8} ms  ({} derived rows)",
+        t.elapsed().as_millis(),
+        rows.len()
+    );
+
+    // Bounds on the derived-row count given the fixture shape:
+    // - n=0: no JournalLine claims, so 0 rows.
+    // - n>0: each entry contributes lines on two distinct accounts.
+    //   The exact count is `min(k, distinct accounts actually
+    //   touched)`, which is `k` when `n` is large enough to wrap
+    //   around the K-account modular cycle and a bit less when not.
+    //   Assert the loose `0 < rows <= k` bound rather than pin an
+    //   exact count, so the bench accepts any well-formed (n, k).
+    if args.n == 0 {
+        if !rows.is_empty() {
+            return Err(anyhow!(
+                "expected 0 derived rows for n=0, got {}",
+                rows.len()
+            ));
+        }
+    } else {
+        if rows.is_empty() {
+            return Err(anyhow!(
+                "expected at least one derived row for n={} k={}, got none",
+                args.n,
+                args.accounts
+            ));
+        }
+        if rows.len() > args.accounts {
+            return Err(anyhow!(
+                "derived rows ({}) exceeded the K-account ceiling ({}); \
+                 fixture distribution is broken",
+                rows.len(),
+                args.accounts
+            ));
+        }
     }
     Ok(())
 }
@@ -189,21 +258,28 @@ async fn reset_db(pool: &PgPool) -> Result<()> {
 /// fixture lands in `O(1)` round-trips regardless of `n`; the cost is
 /// in the planner and the JSONB construction, not in the wire.
 ///
-/// All entries debit `account_cash` for 100 and credit `account_revenue`
-/// for 100. Period is `p_bench`. No `PeriodClosed` claim is inserted, so
-/// the require in `post_simple_entry` passes.
+/// Lines are distributed across `k` accounts via modular arithmetic:
+/// entry `i` debits `account_{i mod k}` and credits
+/// `account_{(i + 1) mod k}` for the same amount, so every entry is
+/// self-balancing (`balanced_posted_entry` invariant holds). Period
+/// is `p_bench`; no `PeriodClosed` claim is inserted, so the require
+/// in `post_simple_entry` passes for any follow-up `write` propose.
 ///
 /// `asserted_in` uses `Uuid::nil()` as a synthetic fixture transition id
 /// (the same pattern the integration-test fixtures use). This row does
 /// not appear in the `audit` table; the schema does not enforce
 /// referential integrity from `claims.asserted_in` to `audit.transition_id`.
-async fn insert_n_entries(pool: &PgPool, n: usize) -> Result<()> {
+async fn insert_n_entries(pool: &PgPool, n: usize, k: usize) -> Result<()> {
     let n_i: i64 = n
         .try_into()
         .map_err(|_| anyhow!("n={n} too large for i64"))?;
+    let k_i: i64 = k
+        .try_into()
+        .map_err(|_| anyhow!("accounts={k} too large for i64"))?;
     let fixture_id = Uuid::nil();
 
-    // JournalEntry(entry_id, posting_date, period)
+    // JournalEntry(entry_id, posting_date, period). One per entry,
+    // independent of K.
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'JournalEntry',
@@ -221,13 +297,13 @@ async fn insert_n_entries(pool: &PgPool, n: usize) -> Result<()> {
     .await
     .context("insert JournalEntry fixture rows")?;
 
-    // JournalLine(entry_id, account_cash, 100, 0)  - debit side
+    // JournalLine(entry_id, account_{i % k}, 100, 0)  - debit side
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'JournalLine',
                 jsonb_build_array(
                     jsonb_build_object('type','subject','value','entry_bench_' || i),
-                    jsonb_build_object('type','subject','value','account_cash'),
+                    jsonb_build_object('type','subject','value','account_' || (i % $3)),
                     jsonb_build_object('type','decimal','value','100'),
                     jsonb_build_object('type','decimal','value','0')
                 ),
@@ -236,17 +312,18 @@ async fn insert_n_entries(pool: &PgPool, n: usize) -> Result<()> {
     )
     .bind(fixture_id)
     .bind(n_i)
+    .bind(k_i)
     .execute(pool)
     .await
     .context("insert JournalLine debit-side fixture rows")?;
 
-    // JournalLine(entry_id, account_revenue, 0, 100)  - credit side
+    // JournalLine(entry_id, account_{(i+1) % k}, 0, 100)  - credit side
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'JournalLine',
                 jsonb_build_array(
                     jsonb_build_object('type','subject','value','entry_bench_' || i),
-                    jsonb_build_object('type','subject','value','account_revenue'),
+                    jsonb_build_object('type','subject','value','account_' || ((i + 1) % $3)),
                     jsonb_build_object('type','decimal','value','0'),
                     jsonb_build_object('type','decimal','value','100')
                 ),
@@ -255,6 +332,7 @@ async fn insert_n_entries(pool: &PgPool, n: usize) -> Result<()> {
     )
     .bind(fixture_id)
     .bind(n_i)
+    .bind(k_i)
     .execute(pool)
     .await
     .context("insert JournalLine credit-side fixture rows")?;

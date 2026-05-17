@@ -379,7 +379,22 @@ impl State {
     pub fn from_claims(claims: Vec<ClaimInstance>) -> Self {
         let mut by_predicate: HashMap<String, PredicateIndex> = HashMap::new();
         for (i, c) in claims.iter().enumerate() {
-            let entry = by_predicate.entry(c.predicate.clone()).or_default();
+            // Avoid cloning `c.predicate` on every claim when the
+            // predicate is already present in the index. On stable
+            // Rust there is no `HashMap::entry` variant that accepts
+            // `&str`; the standard workaround is `contains_key` (no
+            // alloc) followed by `insert` (allocates only on first
+            // sight) and then `get_mut` (no alloc). For workloads
+            // with many claims and few distinct predicates - which
+            // is the common shape - this skips ~`N - K` string
+            // allocations during construction.
+            if !by_predicate.contains_key(c.predicate.as_str()) {
+                by_predicate.insert(c.predicate.clone(), PredicateIndex::default());
+            }
+            let Some(entry) = by_predicate.get_mut(c.predicate.as_str()) else {
+                // Unreachable: we just ensured the key exists.
+                continue;
+            };
             entry.all.push(i);
             if entry.by_arg.len() < c.args.len() {
                 entry.by_arg.resize_with(c.args.len(), HashMap::new);
