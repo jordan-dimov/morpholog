@@ -167,7 +167,7 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>) -> Result<State, PgError
         let args: Vec<EvalValue> = serde_json::from_value(args_json)?;
         claims.push(ClaimInstance { predicate, args });
     }
-    Ok(State { claims })
+    Ok(State::from_claims(claims))
 }
 
 /// One entry in an audit row's `invariants_checked` JSONB array. Recorded
@@ -571,7 +571,7 @@ pub async fn list_derived(
     derived: &DerivedClaim,
 ) -> Result<Vec<ClaimInstance>, PgError> {
     let claims = list_claims(pool).await?;
-    let state = State { claims };
+    let state = State::from_claims(claims);
     let rows = enumerate_derived(derived, &state)?;
     Ok(rows)
 }

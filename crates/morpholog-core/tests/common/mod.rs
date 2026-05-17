@@ -47,8 +47,5 @@ pub fn must_accept(
 }
 
 pub fn has_claim(state: &State, predicate: &str, args: &[EvalValue]) -> bool {
-    state
-        .claims
-        .iter()
-        .any(|c| c.predicate == predicate && c.args == args)
+    state.claims_for(predicate).any(|c| c.args == args)
 }

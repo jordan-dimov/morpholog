@@ -122,22 +122,20 @@ fn for_body_contains_let_and_two_asserts() {
 // ============================================================
 
 fn netting_state(amount: i64) -> State {
-    State {
-        claims: vec![
-            ClaimInstance {
-                predicate: "NetSettlement".to_string(),
-                args: vec![subj("net1"), subj("party_a"), subj("party_b"), dec(amount)],
-            },
-            ClaimInstance {
-                predicate: "SettlementLine".to_string(),
-                args: vec![subj("l1"), subj("net1"), dec(60)],
-            },
-            ClaimInstance {
-                predicate: "SettlementLine".to_string(),
-                args: vec![subj("l2"), subj("net1"), dec(40)],
-            },
-        ],
-    }
+    State::from_claims(vec![
+        ClaimInstance {
+            predicate: "NetSettlement".to_string(),
+            args: vec![subj("net1"), subj("party_a"), subj("party_b"), dec(amount)],
+        },
+        ClaimInstance {
+            predicate: "SettlementLine".to_string(),
+            args: vec![subj("l1"), subj("net1"), dec(60)],
+        },
+        ClaimInstance {
+            predicate: "SettlementLine".to_string(),
+            args: vec![subj("l2"), subj("net1"), dec(40)],
+        },
+    ])
 }
 
 #[test]
@@ -195,7 +193,7 @@ fn netting_pre_state(extra: Vec<ClaimInstance>) -> State {
         },
     ];
     claims.extend(extra);
-    State { claims }
+    State::from_claims(claims)
 }
 
 fn netting_args() -> Vec<EvalValue> {

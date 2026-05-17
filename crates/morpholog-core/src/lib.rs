@@ -328,9 +328,72 @@ pub struct ClaimInstance {
 /// proposed. State is set-valued: identity is `(predicate, args)`. The
 /// PG adapter persists this set as rows in `morpholog.claims`; this
 /// in-memory representation is what the kernel evaluates against.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Internally indexed by predicate name. Construct via
+/// [`State::from_claims`] or [`State::default`]; mutation is not part
+/// of the API (the index would otherwise go stale). The public
+/// accessors are [`State::claims`] (all admitted claims, in
+/// construction order) and [`State::claims_for`] (`O(1)` lookup of all
+/// claims for a given predicate).
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct State {
-    pub claims: Vec<ClaimInstance>,
+    claims: Vec<ClaimInstance>,
+    by_predicate: HashMap<String, Vec<usize>>,
+}
+
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("State")
+            .field("claims", &self.claims)
+            .finish_non_exhaustive()
+    }
+}
+
+impl State {
+    /// Build a `State` from a vector of admitted claims, indexing them
+    /// by predicate name. `claims` is the construction-order list;
+    /// the index records, for each predicate name, the positions of
+    /// that predicate's claims within the list.
+    pub fn from_claims(claims: Vec<ClaimInstance>) -> Self {
+        let mut by_predicate: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, c) in claims.iter().enumerate() {
+            by_predicate.entry(c.predicate.clone()).or_default().push(i);
+        }
+        Self {
+            claims,
+            by_predicate,
+        }
+    }
+
+    /// All admitted claims, in the order supplied to
+    /// [`State::from_claims`]. Read-only.
+    pub fn claims(&self) -> &[ClaimInstance] {
+        &self.claims
+    }
+
+    /// Iterator over every admitted claim whose predicate name matches
+    /// `predicate`. `O(1)` to find the bucket; iteration is linear in
+    /// the bucket's size. Returns an empty iterator when no claims of
+    /// that predicate are admitted.
+    pub fn claims_for<'a>(
+        &'a self,
+        predicate: &str,
+    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        self.by_predicate
+            .get(predicate)
+            .map(|positions| positions.iter().map(|&i| &self.claims[i]))
+            .into_iter()
+            .flatten()
+    }
+
+    /// Total number of admitted claims across all predicates.
+    pub fn len(&self) -> usize {
+        self.claims.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.claims.is_empty()
+    }
 }
 
 /// Variable bindings used during expression evaluation and
@@ -595,8 +658,8 @@ fn find_claim_matches(
     base: &Bindings,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut out = vec![];
-    for claim in &state.claims {
-        if claim.predicate != predicate || claim.args.len() != args.len() {
+    for claim in state.claims_for(predicate) {
+        if claim.args.len() != args.len() {
             continue;
         }
         if let Some(b) = unify_args(args, &claim.args, base) {
@@ -735,11 +798,9 @@ fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue,
                             EvalError::TypeMismatch("ValueOf requires a wildcard arg".into())
                         })?;
                     let claim = state
-                        .claims
-                        .iter()
+                        .claims_for(predicate)
                         .find(|f| {
-                            f.predicate == *predicate
-                                && f.args.len() == args.len()
+                            f.args.len() == args.len()
                                 && unify_args(args, &f.args, bindings).is_some()
                         })
                         .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.clone()))?;
@@ -913,8 +974,8 @@ fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            for claim in &pre_state.claims {
-                if claim.predicate != *predicate || claim.args.len() != args.len() {
+            for claim in pre_state.claims_for(predicate) {
+                if claim.args.len() != args.len() {
                     continue;
                 }
                 if unify_args(args, &claim.args, bindings).is_some() {
@@ -989,14 +1050,14 @@ fn build_candidate_state(
     asserted: &[ClaimInstance],
     retracted: &[ClaimInstance],
 ) -> State {
-    let mut claims = pre.claims.clone();
+    let mut claims = pre.claims().to_vec();
     claims.retain(|f| !retracted.iter().any(|r| r == f));
     for a in asserted {
         if !claims.iter().any(|f| f == a) {
             claims.push(a.clone());
         }
     }
-    State { claims }
+    State::from_claims(claims)
 }
 
 #[cfg(test)]
@@ -1050,5 +1111,49 @@ mod tests {
 
         let wrong_kind = vec![EvalValue::Decimal(Decimal::new(1, 0))];
         assert!(unify_args(&pattern, &wrong_kind, &Bindings::new()).is_none());
+    }
+
+    /// Pins the contract of `State::claims_for`: it returns *only*
+    /// claims whose predicate matches the requested name, it returns
+    /// them with arg values intact, it returns an empty iterator for
+    /// predicates that have no admitted claims, and it does not
+    /// interfere with `State::claims` returning the construction-order
+    /// list.
+    #[test]
+    fn claims_for_returns_only_matching_predicate() {
+        let a1 = ClaimInstance {
+            predicate: "A".to_string(),
+            args: vec![EvalValue::Subject("a1".to_string())],
+        };
+        let b1 = ClaimInstance {
+            predicate: "B".to_string(),
+            args: vec![EvalValue::Decimal(Decimal::new(42, 0))],
+        };
+        let a2 = ClaimInstance {
+            predicate: "A".to_string(),
+            args: vec![EvalValue::Subject("a2".to_string())],
+        };
+        let state = State::from_claims(vec![a1.clone(), b1.clone(), a2.clone()]);
+
+        let a_rows: Vec<&ClaimInstance> = state.claims_for("A").collect();
+        assert_eq!(a_rows.len(), 2, "two A claims admitted");
+        assert!(a_rows.iter().all(|c| c.predicate == "A"));
+        assert!(a_rows.contains(&&a1));
+        assert!(a_rows.contains(&&a2));
+
+        let b_rows: Vec<&ClaimInstance> = state.claims_for("B").collect();
+        assert_eq!(b_rows, vec![&b1], "single B claim, args intact");
+
+        let absent: Vec<&ClaimInstance> = state.claims_for("Nope").collect();
+        assert!(
+            absent.is_empty(),
+            "no claims for an unknown predicate, not an error"
+        );
+
+        assert_eq!(
+            state.claims(),
+            &[a1, b1, a2],
+            "claims() preserves construction order across all predicates"
+        );
     }
 }
