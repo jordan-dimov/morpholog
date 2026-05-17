@@ -875,17 +875,7 @@ pub async fn claim_pending_outbox_row(
     intent_type: &str,
     lease_duration: std::time::Duration,
 ) -> Result<Option<OutboxRow>, PgError> {
-    let lease_secs: i64 = lease_duration
-        .as_secs()
-        .try_into()
-        .map_err(|_| PgError::InvalidState("lease_duration too large for i64".to_string()))?;
-    if lease_secs < 1 {
-        return Err(PgError::InvalidState(format!(
-            "lease_duration must be at least 1 second (got {lease_duration:?}); \
-             a sub-second lease would expire before the claiming worker could \
-             call any mark_* helper, leaving the row effectively un-updatable"
-        )));
-    }
+    let lease_secs = lease_duration_to_secs(lease_duration)?;
     let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
         "UPDATE morpholog.outbox
          SET status='in_progress',
@@ -947,6 +937,188 @@ pub async fn release_outbox_claim(
     )
     .bind(intent_id)
     .bind(worker_id)
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    })
+}
+
+fn lease_duration_to_secs(lease_duration: std::time::Duration) -> Result<i64, PgError> {
+    let lease_secs: i64 = lease_duration
+        .as_secs()
+        .try_into()
+        .map_err(|_| PgError::InvalidState("lease_duration too large for i64".to_string()))?;
+    if lease_secs < 1 {
+        return Err(PgError::InvalidState(format!(
+            "lease_duration must be at least 1 second (got {lease_duration:?}); \
+             a sub-second lease would expire before the claiming worker could \
+             call any mark_* / complete_* helper, leaving the row effectively \
+             un-updatable"
+        )));
+    }
+    Ok(lease_secs)
+}
+
+/// Atomically claim the right to run a compensating transformation
+/// for a previously-failed outbox row.
+///
+/// Eligible rows are `status='failed' AND compensation_transition_id
+/// IS NULL`. The claim transitions the row to `compensation_in_progress`
+/// and sets `locked_by` + `lock_expires_at`. Once held, the worker is
+/// expected to invoke the compensating transformation via
+/// [`propose_against_pg`] and then resolve the row through one of:
+/// - [`complete_compensation`] on `PgProposalOutcome::Committed`
+///   (transitions back to `failed` with the
+///   `compensation_transition_id` set);
+/// - [`mark_compensation_failed`] on `PgProposalOutcome::Rejected`
+///   (transitions to `compensation_failed`, the genuinely-broken
+///   state requiring operator intervention).
+///
+/// The `SELECT ... FOR UPDATE SKIP LOCKED` wrapping the row UPDATE
+/// guarantees at most one worker holds the compensation lease for a
+/// given row at any moment. Returns `Ok(None)` if no eligible row
+/// exists for the supplied `intent_id` (either the row is missing,
+/// is not in `failed`, has already been compensated, or is currently
+/// locked by another worker mid-claim).
+///
+/// **Important: this helper does NOT transparently reclaim
+/// expired-lease compensation_in_progress rows**, unlike
+/// [`claim_pending_outbox_row`]'s reclaim of expired in_progress
+/// leases. Transparent reclaim would risk duplicate compensation if
+/// a previous worker crashed *after* committing the compensating
+/// transformation but *before* calling `complete_compensation`. The
+/// safer default is: a stuck `compensation_in_progress` row
+/// requires operator intervention rather than automatic recovery.
+/// The lease pattern reduces the duplicate-compensation race to a
+/// narrow window (between `propose_against_pg` commit and
+/// `complete_compensation` call); programs that need full immunity
+/// should additionally guard the compensating transformation with
+/// a `CompensationApplied(original_intent_id)` invariant, per the
+/// two-mechanism discussion in `docs/outbox-sketch.md`.
+pub async fn begin_compensation(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+    lease_duration: std::time::Duration,
+) -> Result<Option<OutboxRow>, PgError> {
+    let lease_secs = lease_duration_to_secs(lease_duration)?;
+    let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
+        "UPDATE morpholog.outbox
+         SET status='compensation_in_progress',
+             locked_by=$1,
+             lock_expires_at=now() + ($2 * interval '1 second')
+         WHERE intent_id = (
+             SELECT intent_id
+             FROM morpholog.outbox
+             WHERE intent_id=$3
+               AND status='failed'
+               AND compensation_transition_id IS NULL
+             FOR UPDATE SKIP LOCKED
+         )
+         RETURNING intent_id, transition_id, intent_type, arguments,
+                   idempotency_key, status, attempt_count, enqueued_at,
+                   last_attempt_at, delivered_at, failed_at, failure_reason,
+                   next_attempt_at, compensation_transition_id, locked_by,
+                   lock_expires_at",
+    )
+    .bind(worker_id)
+    .bind(lease_secs)
+    .bind(intent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify)?;
+
+    row_opt.map(decode_outbox_row).transpose()
+}
+
+/// Resolve a compensation_in_progress row on success: transitions
+/// it back to `failed` with the supplied `compensation_transition_id`
+/// recorded, and releases the lease.
+///
+/// Gated by `status='compensation_in_progress' AND locked_by=$worker
+/// AND lock_expires_at > now()`. Returns `OutboxUpdate::LeaseLost`
+/// if the worker no longer holds the lease (expired or never
+/// acquired).
+///
+/// The `compensation_transition_id` must reference a row in
+/// `morpholog.audit` (foreign-key-enforced); typically it is the
+/// `transition_id` returned by [`propose_against_pg`] when the
+/// compensating transformation committed.
+pub async fn complete_compensation(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+    compensation_transition_id: Uuid,
+) -> Result<OutboxUpdate, PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='failed',
+             compensation_transition_id=$3,
+             locked_by=NULL,
+             lock_expires_at=NULL
+         WHERE intent_id=$1
+           AND status='compensation_in_progress'
+           AND locked_by=$2
+           AND lock_expires_at > now()",
+    )
+    .bind(intent_id)
+    .bind(worker_id)
+    .bind(compensation_transition_id)
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    })
+}
+
+/// Resolve a compensation_in_progress row on failure: transitions
+/// it to `compensation_failed` with the supplied `reason` recorded,
+/// and releases the lease.
+///
+/// Use this when the compensating transformation itself was
+/// rejected by an invariant (i.e., [`propose_against_pg`] returned
+/// `PgProposalOutcome::Rejected`). This is the genuinely-broken
+/// state: the original delivery failed, AND the compensation
+/// designed to undo its business effect cannot be admitted. No
+/// automatic recovery; the row stays in `compensation_failed` until
+/// operator intervention (out of v0 scope).
+///
+/// Gated by `status='compensation_in_progress' AND locked_by=$worker
+/// AND lock_expires_at > now()`. Returns `OutboxUpdate::LeaseLost`
+/// if the worker no longer holds the lease.
+///
+/// `reason` is stored in the existing `failure_reason` column,
+/// overwriting the original delivery failure reason. (The original
+/// reason can still be reconstructed from the audit log of any
+/// `mark_outbox_failed` -> `begin_compensation` sequence; the
+/// `failure_reason` column reflects the most recent failure.)
+pub async fn mark_compensation_failed(
+    pool: &PgPool,
+    intent_id: Uuid,
+    worker_id: &str,
+    reason: &str,
+) -> Result<OutboxUpdate, PgError> {
+    let rows = sqlx::query(
+        "UPDATE morpholog.outbox
+         SET status='compensation_failed',
+             failure_reason=$3,
+             locked_by=NULL,
+             lock_expires_at=NULL
+         WHERE intent_id=$1
+           AND status='compensation_in_progress'
+           AND locked_by=$2
+           AND lock_expires_at > now()",
+    )
+    .bind(intent_id)
+    .bind(worker_id)
+    .bind(reason)
     .execute(pool)
     .await
     .map_err(classify)?;
