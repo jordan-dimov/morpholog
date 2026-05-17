@@ -50,19 +50,44 @@ CREATE INDEX audit_committed_at ON audit (committed_at);
 -- Post-commit intents. Workers poll, deliver at-least-once,
 -- update status. Duplicate delivery is the workers' problem
 -- to tolerate via idempotency_key.
+--
+-- Delivery-state columns (failed_at, failure_reason, next_attempt_at,
+-- compensation_transition_id, locked_by, lock_expires_at) are nullable;
+-- they fill in as a row moves through the delivery state machine.
+-- See docs/outbox-sketch.md for the sequencing.
 CREATE TABLE outbox (
-    intent_id        uuid         PRIMARY KEY,                 -- UUIDv7
-    transition_id    uuid         NOT NULL REFERENCES audit(transition_id),
-    intent_type      text         NOT NULL,
-    arguments        jsonb        NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
-    idempotency_key  text         NOT NULL UNIQUE,
-    status           text         NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('pending','delivered','failed')),
-    attempt_count    int          NOT NULL DEFAULT 0,
-    enqueued_at      timestamptz  NOT NULL DEFAULT now(),
-    last_attempt_at  timestamptz,
-    delivered_at     timestamptz
+    intent_id                    uuid         PRIMARY KEY,
+    transition_id                uuid         NOT NULL REFERENCES audit(transition_id),
+    intent_type                  text         NOT NULL,
+    arguments                    jsonb        NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
+    idempotency_key              text         NOT NULL UNIQUE,
+    status                       text         NOT NULL DEFAULT 'pending'
+                                              CHECK (status IN (
+                                                  'pending',
+                                                  'in_progress',
+                                                  'delivered',
+                                                  'failed',
+                                                  'compensation_failed'
+                                              )),
+    attempt_count                int          NOT NULL DEFAULT 0,
+    enqueued_at                  timestamptz  NOT NULL DEFAULT now(),
+    last_attempt_at              timestamptz,
+    delivered_at                 timestamptz,
+    -- Delivery-state extensions (see docs/outbox-sketch.md).
+    failed_at                    timestamptz,
+    failure_reason               text,
+    next_attempt_at              timestamptz,
+    compensation_transition_id   uuid         REFERENCES audit(transition_id),
+    locked_by                    text,
+    lock_expires_at              timestamptz
 );
 
--- Workers poll: oldest pending first.
+-- Workers poll: oldest pending first. The `next_attempt_at`
+-- column is also consulted at claim time so a row whose retry is
+-- not yet due is skipped.
 CREATE INDEX outbox_pending ON outbox (enqueued_at) WHERE status = 'pending';
+
+-- Workers claim only rows whose `next_attempt_at` is due. This
+-- index supports that filter cheaply for the pending+due case.
+CREATE INDEX outbox_due_pending ON outbox (next_attempt_at)
+    WHERE status = 'pending';
