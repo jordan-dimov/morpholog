@@ -458,17 +458,24 @@ pub fn enumerate_derived(
 }
 
 /// `EvalValue` does not derive `Ord`. Wrap it in a newtype that
-/// implements `Ord` via its JSON serialisation so we can deduplicate
-/// key tuples in a `BTreeSet` without committing the kernel's
-/// runtime-value type to a sort order. Used only inside
+/// implements `Ord` *structurally* so we can deduplicate key tuples
+/// in a `BTreeSet` without committing the kernel's runtime-value
+/// type to a sort order externally. Used only inside
 /// [`enumerate_derived`]; not exposed.
 ///
-/// Serialisation is the same shape as the JSON codec (tagged enum,
-/// decimals as strings), so the resulting order is decimal-string
-/// lexicographic rather than numeric, but it is *deterministic* and
-/// the only contract `enumerate_derived` makes about output order is
-/// determinism. Callers that need a specific business ordering should
-/// sort the result themselves.
+/// The ordering is infallible and `Eq`-consistent:
+/// - Variants order as `Decimal < Subject < Bool < Collection`.
+/// - Within `Decimal`, the natural decimal ordering applies (so
+///   `100` sorts before `200`, not lexicographic on the string).
+/// - Within `Subject`, the natural string ordering applies.
+/// - Within `Bool`, `false < true` (the derived `Ord` on `bool`).
+/// - Within `Collection`, lexicographic on elements with the same
+///   structural ordering applied recursively; shorter tuples
+///   sort before longer when one is a prefix of the other.
+///
+/// The contract that `enumerate_derived` makes about output order
+/// is *determinism*. Callers that need a specific business ordering
+/// should sort the result themselves.
 #[derive(Clone)]
 struct EvalValueOrd(EvalValue);
 
@@ -487,12 +494,34 @@ impl PartialOrd for EvalValueOrd {
 
 impl Ord for EvalValueOrd {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // serde_json is already a workspace dep; this only runs at
-        // enumeration time and the values are small. Two failing
-        // serialisations are treated as equal so the sort is total.
-        let a = serde_json::to_string(&self.0).unwrap_or_default();
-        let b = serde_json::to_string(&other.0).unwrap_or_default();
-        a.cmp(&b)
+        use std::cmp::Ordering;
+
+        /// Variant discriminant for cross-variant comparisons.
+        /// Order is arbitrary but stable.
+        fn discriminant(v: &EvalValue) -> u8 {
+            match v {
+                EvalValue::Decimal(_) => 0,
+                EvalValue::Subject(_) => 1,
+                EvalValue::Bool(_) => 2,
+                EvalValue::Collection(_) => 3,
+            }
+        }
+
+        match (&self.0, &other.0) {
+            (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
+            (EvalValue::Subject(a), EvalValue::Subject(b)) => a.cmp(b),
+            (EvalValue::Bool(a), EvalValue::Bool(b)) => a.cmp(b),
+            (EvalValue::Collection(a), EvalValue::Collection(b)) => {
+                for (l, r) in a.iter().zip(b.iter()) {
+                    let ord = EvalValueOrd(l.clone()).cmp(&EvalValueOrd(r.clone()));
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                }
+                a.len().cmp(&b.len())
+            }
+            (l, r) => discriminant(l).cmp(&discriminant(r)),
+        }
     }
 }
 

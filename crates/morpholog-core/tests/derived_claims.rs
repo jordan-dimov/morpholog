@@ -119,13 +119,14 @@ fn trial_balance_returns_deterministic_order() {
 
     // Two back-to-back evaluations must return rows in the same order.
     // The ordering is contracted as deterministic; the specific order
-    // is whatever the dedup BTreeSet produces (key-tuple ascending by
-    // JSON serialisation, per the kernel docstring on EvalValueOrd).
+    // is whatever the dedup BTreeSet produces under EvalValueOrd's
+    // structural ordering (Subject values compare by their inner
+    // String).
     assert_eq!(a, b, "enumerate_derived must be deterministic across runs");
 
-    // Spot-check the actual order is the JSON-ordering on the subject
-    // strings. The three accounts sort as cash < expenses < revenue
-    // (alphabetic on the codec's `{"type":"subject","value":"..."}`).
+    // Spot-check the actual order. Per EvalValueOrd's structural
+    // contract, Subject keys sort by their String content, so the
+    // three accounts sort alphabetically: cash < expenses < revenue.
     let order: Vec<&str> = a
         .iter()
         .map(|r| match &r.args[0] {
@@ -146,25 +147,31 @@ fn derived_claims_do_not_pollute_admitted_state() {
     // runtime adds it to state.claims. Pin this explicitly so any
     // future refactor that tries to "be helpful" by integrating
     // derived rows into State has to break a test.
-    let state_before = small_ledger_state();
-    let claim_count_before = state_before.claims.len();
-    let predicates_before: Vec<&str> = state_before
-        .claims
-        .iter()
-        .map(|c| c.predicate.as_str())
-        .collect();
+    //
+    // The current type signature (`&State`, not `&mut State`) makes
+    // direct mutation impossible in safe Rust; the test mostly
+    // documents the intent. Clone the state up front so we can
+    // assert byte-equality after the call: a future refactor that
+    // tried to weaken the signature to `&mut State` would fail
+    // either compilation or this assertion.
+    let state = small_ledger_state();
+    let snapshot = state.clone();
 
-    let _rows = enumerate_derived(&double_entry_ledger::trial_balance_row(), &state_before)
+    let _rows = enumerate_derived(&double_entry_ledger::trial_balance_row(), &state)
         .expect("enumerate_derived should not error");
 
-    // The state passed in is by reference (`&State`); even if it were
-    // not, the function does not mutate. Verify both: the same state
-    // value still has the same claim count and no `TrialBalanceRow`
-    // predicate has snuck in.
-    assert_eq!(state_before.claims.len(), claim_count_before);
+    assert_eq!(
+        state, snapshot,
+        "enumerate_derived must not mutate the input State"
+    );
+
+    // Also verify (post-call) that no derived predicate name has
+    // leaked into the live state, in case future refactoring routes
+    // results through some other side channel.
+    let predicates_after: Vec<&str> = state.claims.iter().map(|c| c.predicate.as_str()).collect();
     assert!(
-        !predicates_before.contains(&"TrialBalanceRow"),
-        "TrialBalanceRow must not appear among admitted claims"
+        !predicates_after.contains(&"TrialBalanceRow"),
+        "TrialBalanceRow must not appear among admitted claims after enumeration"
     );
 }
 
