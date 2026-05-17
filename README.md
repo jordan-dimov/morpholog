@@ -48,7 +48,7 @@ Consider questions a controller, auditor, or risk officer might ask of any serio
 
 In conventional software these get answered by detective work - searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog the raw material is preserved by construction: claims, transformations, audit rows, and supersession lineage are all governed state, never overwritten by accident. The query and projection machinery that would turn that raw material into reproducible reports - derived claims, as-of evaluation - is named on the roadmap (see [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md)) and is what the next worked examples will push on.
 
-Four worked examples already in this repository show the pattern in increasing depth:
+The worked examples in this repository show the pattern in increasing depth:
 
 - [**Bilateral settlement netting**](examples/01_settlement_netting/) - invariants that catch arithmetic and exclusion errors before any state changes.
 - [**Revenue restatement**](examples/02_revenue_restatement/) - historical claims survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims.
@@ -67,12 +67,12 @@ Measured in lines of code, that is always a small fraction of a real business sy
 
 ## Project status
 
-Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. Four worked examples are proven both in-memory and durably against PostgreSQL. The CLI offers read-only inspection only (`morpholog inspect {claims,audit,outbox}`); there is no parser, no transformation-driving CLI commands, and no outbox worker. These are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
+Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. The worked examples are proven both in-memory and durably against PostgreSQL. The CLI can both inspect current state and run named transformations from a built-in program against a database (`morpholog inspect ...` and `morpholog propose ...`). There is no parser yet, no support for user-supplied programs (built-in examples only), and no outbox worker. These are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
 
 ```bash
-cargo test -p morpholog-core --all-targets                              # 45 tests, in-memory
+cargo test -p morpholog-core --all-targets
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres --all-targets -- --test-threads=1   # 18 tests, durable
+  cargo test -p morpholog-postgres --all-targets -- --test-threads=1
 ```
 
 First-time setup (skip if the schema is already applied):
@@ -82,7 +82,7 @@ createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
-Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims/audit/outbox), `morpholog-cli` (`morpholog inspect {claims,audit,outbox}` JSON-dumping inspection commands over the read helpers; transformation/posting subcommands wait on surface syntax).
+Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims/audit/outbox), `morpholog-cli` (`morpholog inspect ...` for read-side inspection and `morpholog propose <program> <transformation>` for running a named transformation from a built-in program; JSON output throughout).
 
 ## Deeper reading
 
