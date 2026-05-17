@@ -828,8 +828,9 @@ pub async fn record_compensation(
         Ok(())
     } else {
         Err(PgError::InvalidState(format!(
-            "record_compensation({intent_id}): row must be status='failed' \
-             with no existing compensation_transition_id; 0 rows matched"
+            "record_compensation({intent_id}): 0 rows matched. The outbox \
+             row was either not found, not in status='failed', or already \
+             carries a compensation_transition_id."
         )))
     }
 }
@@ -878,11 +879,18 @@ pub async fn claim_pending_outbox_row(
         .as_secs()
         .try_into()
         .map_err(|_| PgError::InvalidState("lease_duration too large for i64".to_string()))?;
+    if lease_secs < 1 {
+        return Err(PgError::InvalidState(format!(
+            "lease_duration must be at least 1 second (got {lease_duration:?}); \
+             a sub-second lease would expire before the claiming worker could \
+             call any mark_* helper, leaving the row effectively un-updatable"
+        )));
+    }
     let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
         "UPDATE morpholog.outbox
          SET status='in_progress',
              locked_by=$1,
-             lock_expires_at=now() + ($2 || ' seconds')::interval
+             lock_expires_at=now() + ($2 * interval '1 second')
          WHERE intent_id = (
              SELECT intent_id
              FROM morpholog.outbox
@@ -904,7 +912,7 @@ pub async fn claim_pending_outbox_row(
                    lock_expires_at",
     )
     .bind(worker_id)
-    .bind(lease_secs.to_string())
+    .bind(lease_secs)
     .bind(intent_type)
     .fetch_optional(pool)
     .await

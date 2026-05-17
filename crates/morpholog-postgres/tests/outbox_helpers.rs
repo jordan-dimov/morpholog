@@ -343,3 +343,28 @@ async fn record_compensation_errors_on_double_record() {
     let row = fetch_row(&pool, intent_id).await;
     assert_eq!(row.6, Some(comp_tid_a));
 }
+
+#[tokio::test]
+async fn record_compensation_errors_when_intent_does_not_exist() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    // No outbox row at all; just try to record compensation against
+    // a random UUID. The helper should surface the not-found case
+    // explicitly rather than blaming status only.
+    // Any UUID that is not in the outbox suffices; nil is convenient
+    // and matches the no-FK-needed pattern used elsewhere in this file.
+    let missing_intent_id = Uuid::nil();
+    let any_transition_id = Uuid::nil();
+    let err = record_compensation(&pool, missing_intent_id, any_transition_id)
+        .await
+        .expect_err("must error when intent_id does not exist");
+    match err {
+        PgError::InvalidState(msg) => {
+            assert!(
+                msg.contains("not found"),
+                "error message should name the not-found possibility, got: {msg}"
+            );
+        }
+        other => panic!("expected InvalidState, got {other:?}"),
+    }
+}

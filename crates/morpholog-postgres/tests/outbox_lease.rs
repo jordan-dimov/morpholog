@@ -15,7 +15,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
-    OutboxUpdate, PgPool, PgProposalOutcome, claim_pending_outbox_row, propose_against_pg,
+    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row, propose_against_pg,
     release_outbox_claim,
 };
 use rust_decimal::Decimal;
@@ -276,6 +276,29 @@ async fn release_returns_row_to_pending_and_clears_lease() {
         .expect("released row must be re-claimable");
     assert_eq!(reclaimed.intent_id, intent_id);
     assert_eq!(reclaimed.locked_by, Some("worker_b".to_string()));
+}
+
+#[tokio::test]
+async fn claim_rejects_sub_second_lease_duration() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    // A pending row is irrelevant - the validation happens before
+    // any SQL is issued.
+    let _ = enqueue_pending(&pool, "entry_001").await;
+
+    // A zero-duration lease would expire before the worker could
+    // ever call mark_*, leaving the row effectively un-updatable.
+    let zero = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, Duration::ZERO)
+        .await
+        .expect_err("zero-second lease must be rejected explicitly");
+    assert!(matches!(zero, PgError::InvalidState(_)));
+
+    // Sub-second durations get truncated by as_secs() to 0 and are
+    // also rejected.
+    let half = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, Duration::from_millis(500))
+        .await
+        .expect_err("sub-second lease must be rejected explicitly");
+    assert!(matches!(half, PgError::InvalidState(_)));
 }
 
 #[tokio::test]
