@@ -58,7 +58,7 @@ If a proposed invariant would force cascade-retraction of historical claims when
 
 **The pattern:** both use the same lower-level mechanic (a separate claim that confers a property on another claim, retractable independently of that other claim). The verifier's correction in Example 2 retracts a `CurrentBankRecognition`; the authority's revocation in Example 3 retracts an `AdmissibleFor`. In both, the underlying append-only claim is never touched.
 
-**Pattern for future examples:** when modelling *"which X is canonical for purpose Y at time Z?"* the first question is whether currentness alone is enough, or whether purpose-specific standing is needed. Examples 4 and 5 will likely both apply - period-closed accounting state has currentness *and* admissibility-for-purpose questions (current journal entry vs admissible-for-statutory-report).
+**Pattern for future examples:** when modelling *"which X is canonical for purpose Y at time Z?"* the first question is whether currentness alone is enough, or whether purpose-specific standing is needed. Examples 4 and 5 both confirmed this - period-closed accounting state has currentness *and* admissibility-for-purpose questions (current journal entry vs admissible-for-statutory-report).
 
 ### History-as-append-only
 
@@ -84,11 +84,11 @@ The discipline: *content* claims (what was admitted) are append-only; *pointer* 
 
 **Why this is intentional in v0:** the runtime has no predicate type system that would let `grant_standing` enforce *"the supplied subject names a verification claim, not something else."* `AdmissibleFor` is a generic relation by design - the same shape applies to verifications, journal entries, curve snapshots, audit artefacts, valuation reports, and other claim kinds we may add later.
 
-**Future trigger:** a fourth or fifth example that finds this looseness too loose will force the introduction of typed predicate declarations - declaring that a predicate's *n*th argument is a subject identifying a specific claim kind. Until then, generic standing is the honest position. `scope-and-ambition.md` already lists *typed predicate declarations* as one of the four candidate language affordances for this reason.
+**Future trigger:** a later example that finds this looseness too loose will force the introduction of typed predicate declarations - declaring that a predicate's *n*th argument is a subject identifying a specific claim kind. Until then, generic standing is the honest position. `scope-and-ambition.md` already lists *typed predicate declarations* as a candidate language affordance for this reason.
 
 ## What deliberately stayed minimal
 
-Each entry below was actively considered during one of the three examples and deferred. They are listed here so the reasoning survives the conversation.
+Each entry below was actively considered during one of the early examples and deferred. They are listed here so the reasoning survives the conversation.
 
 | Considered | Why deferred |
 |---|---|
@@ -98,7 +98,7 @@ Each entry below was actively considered during one of the three examples and de
 | Actor context on transformations | Mentioned in `scope-and-ambition.md`. No example yet needs it. |
 | Cascading retraction of historical decisions on standing revocation | Considered as option B for Example 3's design; rejected because it contradicts the "history is preserved" rule. |
 | Sharing IR fixture helpers across example modules | The `morpholog_core::examples::*` modules each re-declare their own IR fixtures; they happen to use the same predicate names (e.g. `IndependentlyVerifiedRevenue` in Examples 2 and 3) without sharing constructor code. Keeps examples independent. |
-| Per-example PostgreSQL schemas | All three examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
+| Per-example PostgreSQL schemas | All examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
 
 ## Example 4: double-entry ledger reused everything, forced nothing
 
@@ -161,9 +161,29 @@ The other sketch leans that held into implementation:
 
 **What was confirmed about the design conversation:** the keys lean held - no kernel change required, two-function shape was the right call, the `(committed_at, transition_id)` two-column comparison was straightforward to implement (PostgreSQL supports row comparison natively). The spike test was retired; its headline scenario became test #1 of the production integration suite. The single ambiguity from the sketch (question #6) was resolved by review *before* implementation, which is the value the sketch-then-implement pattern is supposed to capture.
 
-**Implication for future examples:** as-of is now reachable. The next natural pressure points:
+**Implication for future examples:** as-of is now reachable. The next natural pressure points (most have since landed; see the entries below for the actual retrospectives):
 
-- A bench scenario that surfaces the replay cost at long-audit-log scale. The sketch documents the O(transitions up to T) cost; until a real workload bites, materialisation is speculative.
-- A CLI flag `--as-of <transition_id>` on the inspect subcommands. The adapter has the helpers; only argument parsing and threading remain.
-- A worked example that combines as-of with effective-time claims (`EffectiveFor(subject, period)`), which is how the four temporal axes - event time, admission time, effective time, knowledge time - become accessible without polluting any schema with bitemporal flags.
+- A bench scenario that surfaces the replay cost at long-audit-log scale. **Landed in PR #28**, which also surfaced an O(N^2) pathology in `reconstruct_inner` that the next PR fixed. See the `ReplaySet` entry below.
+- A CLI flag `--as-of <transition_id>` on the inspect subcommands. **Landed in PR #28**.
+- A worked example that combines as-of with effective-time claims (`EffectiveFor(subject, period)`), which is how the four temporal axes - event time, admission time, effective time, knowledge time - become accessible without polluting any schema with bitemporal flags. **Still open** as of the latest entry below.
 - Write-path as-of (as a primitive inside invariants or transformations) remains explicitly deferred. The failure mode is much worse - a missed predicate in a write-path footprint analysis could let invalid commits through - so it gets its own forcing example and its own scrutiny when forced.
+
+### `ReplaySet` (audit-log replay working set)
+
+**Forced by:** the `morpholog-bench as-of` scenario added in PR #28 - the first benchmark to exercise audit replay at scale, and the first to surface a quadratic in `reconstruct_inner`.
+
+**The pressure:** at N = 10 000 audit transitions, `reconstruct_state_at` took ~4.6 seconds; at N = 100 000 the projected ~8-minute cost was untenable. Same family of pathology as the original write-path quadratic from PR #22: a linear-scan dedupe loop (`claims.iter().any(|c| c == a)`) over a growing `Vec<ClaimInstance>` for every asserted claim, summing to O(N^2) over the full replay. The corresponding retraction loop (`claims.retain(|c| c != r)`) is independently O(|claims|) per retraction, although the bench's asserts-only fixture did not exercise that branch.
+
+**The fix:** a dedicated `ReplaySet` struct inside `morpholog-postgres`, used only by `reconstruct_inner`. Internals:
+
+- `claims: Vec<ClaimInstance>` - every claim ever asserted during replay, in the order it was first asserted.
+- `index: HashMap<ClaimInstance, usize>` - maps each claim to its position in the vector.
+- `live: Vec<bool>` - `live[i]` is `true` iff `claims[i]` is currently asserted.
+
+`assert` becomes a single `HashMap::entry()` lookup that either inserts (first-time observation) or flips a live bit (re-assertion after retraction). `retract` is a single `HashMap::get()` followed by setting `live[i] = false`. The final `into_state()` walks `claims` once and keeps only the live entries, preserving first-asserted order. `ClaimInstance` derives `Hash` to support this (children - String, Vec<EvalValue>, with EvalValue's Hash from PR #23 - already compose).
+
+**What was confirmed:** every existing test in the as-of suite passed unchanged - the semantic contract was preserved. Bench numbers: N=10 000 dropped from ~4 600 ms to ~140 ms (~33x). N=100 000 became feasible for the first time at ~1 500 ms; scaling is now linear (~13x for 10x N at the small sizes, ~11x at the larger ones - both consistent with linear plus HashMap rehashing overhead).
+
+**Pattern note:** this is the third instance of the same shape: a hot path used a `Vec` with linear scans for membership; replacing the membership check with a HashMap-backed structure made it amortised O(1). PR #23's predicate index on `State`, PR #25's predicate-scoped loading working set, and now PR #28-followup's `ReplaySet`. The pattern is the same; the venue moves with the workload. Worth recognising rather than re-discovering each time.
+
+**Implication for future examples:** the audit-replay path now scales for any workload that fits in memory (~300K claims at the current per-claim size is ~50 MB working state). Further scale concerns are about *fetching* the audit rows (Copilot #5: streaming sqlx queries instead of `fetch_all`), about *re-replaying* large logs repeatedly (snapshots / materialisation), or about retraction-heavy workloads (the ReplaySet already handles them O(1); the bench should add a retraction-heavy fixture to confirm empirically). None of these is forced today.

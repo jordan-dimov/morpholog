@@ -1,10 +1,8 @@
 //! Integration tests for derived claims (Example 5).
 //!
-//! Replaces the earlier `tests/derived_claims_spike.rs` from PR #19,
-//! whose purpose was to document the target API before any kernel
-//! support existed. With `DerivedClaim`, `DerivedValue`, `Expr::Sub`,
-//! and `enumerate_derived` now in `morpholog-core`, the trial balance
-//! over the double-entry ledger is expressible and testable.
+//! `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`
+//! make the trial balance over the double-entry ledger expressible
+//! and testable.
 //!
 //! Tests:
 //!
@@ -63,7 +61,7 @@ fn post(
     )
 }
 
-/// The small ledger used in the spike test and now in the real test:
+/// The small ledger fixture used by the tests below:
 ///   1. cash debit 100 / revenue credit 100
 ///   2. cash debit  50 / revenue credit  50
 ///   3. expenses debit 30 / cash credit 30

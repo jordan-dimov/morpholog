@@ -14,7 +14,7 @@ use morpholog_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// Re-export of `sqlx::PgPool` so downstream crates (notably
@@ -341,15 +341,14 @@ pub fn compute_idempotency_key(
 }
 
 // ===========================================================================
-// Read API — current-state inspection
+// Read API - current-state inspection
 // ===========================================================================
 //
 // These helpers expose the durable substrate for inspection without
-// requiring callers to write raw SQL. They return *current* state only:
-// no as-of evaluation, no derived claims, no projection. A caller that
-// needs "what did the state look like at transition T" must build that
-// by replay over `list_audit_rows`; the kernel does not yet support
-// historical reconstruction directly.
+// requiring callers to write raw SQL. They return *current* state.
+// Historical state ("what did the books look like at transition T?")
+// is reachable through the as-of helpers further down in this file:
+// `reconstruct_state_at`, `list_claims_at`, `list_derived_at`.
 
 /// One row of `morpholog.audit` decoded into typed runtime values.
 ///
@@ -818,7 +817,7 @@ async fn reconstruct_inner(
     .await
     .map_err(classify)?;
 
-    let mut claims: Vec<ClaimInstance> = Vec::new();
+    let mut replay = ReplaySet::new();
     for (asserted_json, retracted_json) in rows {
         let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
         let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
@@ -829,19 +828,16 @@ async fn reconstruct_inner(
             if !predicate_in_scope_set(&r.predicate, scope_set.as_ref()) {
                 continue;
             }
-            claims.retain(|c| c != r);
+            replay.retract(r);
         }
         for a in &asserted {
             if !predicate_in_scope_set(&a.predicate, scope_set.as_ref()) {
                 continue;
             }
-            // Set-valued: skip if already present.
-            if !claims.iter().any(|c| c == a) {
-                claims.push(a.clone());
-            }
+            replay.assert(a);
         }
     }
-    Ok(State::from_claims(claims))
+    Ok(replay.into_state())
 }
 
 /// Predicate-scope check. `None` (full reconstruction) accepts
@@ -852,6 +848,106 @@ fn predicate_in_scope_set(predicate: &str, scope: Option<&HashSet<&str>>) -> boo
     match scope {
         None => true,
         Some(set) => set.contains(predicate),
+    }
+}
+
+/// Working state for audit-log replay. Keeps claims in
+/// first-asserted order (matching the contract `list_claims_at`
+/// documents) while making both `assert` and `retract` `O(1)`
+/// amortised.
+///
+/// Earlier replay used a plain `Vec<ClaimInstance>` with
+/// `iter().any` for dedupe and `retain` for retraction; each was
+/// `O(|claims|)` per operation, summing to `O(N^2)` over a full
+/// replay. That pathology surfaced in the `morpholog-bench as-of`
+/// scenario (PR #28): N=10K reconstruction took ~4.6 s. This
+/// structure replaces both linear scans with hash-keyed lookups.
+///
+/// Internals:
+/// - `claims` holds every claim ever asserted during this replay,
+///   in the order it was first asserted. Never shrinks during
+///   replay; compacted once at the end via [`into_state`].
+/// - `index` maps `claim -> position in claims`. Used by both
+///   `assert` (to detect re-assertion of a previously-seen claim)
+///   and `retract` (to find the entry to mark dead).
+/// - `live[i]` is `true` iff `claims[i]` is currently asserted.
+///   Retraction flips it to `false`; re-assertion flips it back.
+///
+/// The compaction in [`into_state`] walks `claims` once and keeps
+/// only the live entries, preserving original insertion order.
+struct ReplaySet {
+    claims: Vec<ClaimInstance>,
+    index: HashMap<ClaimInstance, usize>,
+    live: Vec<bool>,
+}
+
+impl ReplaySet {
+    fn new() -> Self {
+        Self {
+            claims: Vec::new(),
+            index: HashMap::new(),
+            live: Vec::new(),
+        }
+    }
+
+    /// Assert a claim. If it has never been asserted before, append
+    /// it to `claims` and mark it live. If it has been seen (whether
+    /// currently live or retracted), flip its existing slot back to
+    /// live. Re-asserting an already-live claim is a no-op (the set
+    /// semantics the kernel pins; an `INSERT ... ON CONFLICT DO
+    /// NOTHING` on the write side).
+    ///
+    /// Clone counts:
+    /// - Re-assertion of an already-seen claim (live or retracted):
+    ///   **zero clones**. The `index.get(claim)` borrows the input;
+    ///   only the `live` bit is touched.
+    /// - First-time assertion: **two clones**. One into the `claims`
+    ///   vector (we need owned storage there) and one into the
+    ///   `index` HashMap as the key (HashMap keys must be owned).
+    ///   Single-clone is not reachable without `Rc`/`Arc` or
+    ///   borrow-checker gymnastics; the dual storage is the cost of
+    ///   keeping `claims` as a contiguous Vec.
+    ///
+    /// The clone of a `ClaimInstance` is cheap relative to the
+    /// JSON-decode that produced the input; for the common
+    /// asserts-only audit log every claim takes the two-clone path,
+    /// which is what the bench measures.
+    fn assert(&mut self, claim: &ClaimInstance) {
+        if let Some(&i) = self.index.get(claim) {
+            // Already seen: re-activate the existing slot. Zero
+            // clones; just a HashMap lookup and a Vec index write.
+            self.live[i] = true;
+        } else {
+            // First time seen: two clones (one for the Vec, one for
+            // the HashMap key).
+            let i = self.claims.len();
+            self.claims.push(claim.clone());
+            self.live.push(true);
+            self.index.insert(claim.clone(), i);
+        }
+    }
+
+    /// Retract a claim by marking its `live` slot `false`. If the
+    /// claim was never asserted in this replay, the call is a no-op
+    /// (matches the kernel's `Stmt::Retract` semantics: retracting
+    /// a non-existent claim is an idempotent no-op).
+    fn retract(&mut self, claim: &ClaimInstance) {
+        if let Some(&i) = self.index.get(claim) {
+            self.live[i] = false;
+        }
+    }
+
+    /// Compact into a `State` containing only the live claims, in
+    /// their first-asserted order. Runs once at the end of replay;
+    /// O(|all-ever-asserted|).
+    fn into_state(self) -> State {
+        let claims: Vec<ClaimInstance> = self
+            .claims
+            .into_iter()
+            .zip(self.live)
+            .filter_map(|(c, alive)| alive.then_some(c))
+            .collect();
+        State::from_claims(claims)
     }
 }
 
