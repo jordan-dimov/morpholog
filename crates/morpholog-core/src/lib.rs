@@ -317,7 +317,7 @@ pub enum EvalValue {
 /// a CHECK constraint that requires `jsonb_typeof(arguments) = 'array'`,
 /// so writing the full object there would fail. The `claim_args_serialise_as_a_json_array`
 /// test pins this contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClaimInstance {
     pub predicate: String,
     pub args: Vec<EvalValue>,

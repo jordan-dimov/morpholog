@@ -167,3 +167,23 @@ The other sketch leans that held into implementation:
 - A CLI flag `--as-of <transition_id>` on the inspect subcommands. The adapter has the helpers; only argument parsing and threading remain.
 - A worked example that combines as-of with effective-time claims (`EffectiveFor(subject, period)`), which is how the four temporal axes - event time, admission time, effective time, knowledge time - become accessible without polluting any schema with bitemporal flags.
 - Write-path as-of (as a primitive inside invariants or transformations) remains explicitly deferred. The failure mode is much worse - a missed predicate in a write-path footprint analysis could let invalid commits through - so it gets its own forcing example and its own scrutiny when forced.
+
+### `ReplaySet` (audit-log replay working set)
+
+**Forced by:** the `morpholog-bench as-of` scenario added in PR #28 - the first benchmark to exercise audit replay at scale, and the first to surface a quadratic in `reconstruct_inner`.
+
+**The pressure:** at N = 10 000 audit transitions, `reconstruct_state_at` took ~4.6 seconds; at N = 100 000 the projected ~8-minute cost was untenable. Same family of pathology as the original write-path quadratic from PR #22: a linear-scan dedupe loop (`claims.iter().any(|c| c == a)`) over a growing `Vec<ClaimInstance>` for every asserted claim, summing to O(N^2) over the full replay. The corresponding retraction loop (`claims.retain(|c| c != r)`) is independently O(|claims|) per retraction, although the bench's asserts-only fixture did not exercise that branch.
+
+**The fix:** a dedicated `ReplaySet` struct inside `morpholog-postgres`, used only by `reconstruct_inner`. Internals:
+
+- `claims: Vec<ClaimInstance>` - every claim ever asserted during replay, in the order it was first asserted.
+- `index: HashMap<ClaimInstance, usize>` - maps each claim to its position in the vector.
+- `live: Vec<bool>` - `live[i]` is `true` iff `claims[i]` is currently asserted.
+
+`assert` becomes a single `HashMap::entry()` lookup that either inserts (first-time observation) or flips a live bit (re-assertion after retraction). `retract` is a single `HashMap::get()` followed by setting `live[i] = false`. The final `into_state()` walks `claims` once and keeps only the live entries, preserving first-asserted order. `ClaimInstance` derives `Hash` to support this (children - String, Vec<EvalValue>, with EvalValue's Hash from PR #23 - already compose).
+
+**What was confirmed:** every existing test in the as-of suite passed unchanged - the semantic contract was preserved. Bench numbers: N=10 000 dropped from ~4 600 ms to ~140 ms (~33x). N=100 000 became feasible for the first time at ~1 500 ms; scaling is now linear (~13x for 10x N at the small sizes, ~11x at the larger ones - both consistent with linear plus HashMap rehashing overhead).
+
+**Pattern note:** this is the third instance of the same shape: a hot path used a `Vec` with linear scans for membership; replacing the membership check with a HashMap-backed structure made it amortised O(1). PR #23's predicate index on `State`, PR #25's predicate-scoped loading working set, and now PR #28-followup's `ReplaySet`. The pattern is the same; the venue moves with the workload. Worth recognising rather than re-discovering each time.
+
+**Implication for future examples:** the audit-replay path now scales for any workload that fits in memory (~300K claims at the current per-claim size is ~50 MB working state). Further scale concerns are about *fetching* the audit rows (Copilot #5: streaming sqlx queries instead of `fetch_all`), about *re-replaying* large logs repeatedly (snapshots / materialisation), or about retraction-heavy workloads (the ReplaySet already handles them O(1); the bench should add a retraction-heavy fixture to confirm empirically). None of these is forced today.
