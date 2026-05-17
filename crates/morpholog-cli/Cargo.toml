@@ -10,5 +10,13 @@ repository.workspace = true
 name = "morpholog"
 path = "src/main.rs"
 
+[dependencies]
+morpholog-postgres = { path = "../morpholog-postgres" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 [lints]
 workspace = true
