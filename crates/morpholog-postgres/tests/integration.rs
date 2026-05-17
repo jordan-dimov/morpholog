@@ -16,8 +16,8 @@ use morpholog_core::examples::{
 };
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
-    PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_pending_outbox,
-    propose_against_pg,
+    PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_derived,
+    list_pending_outbox, propose_against_pg,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -1436,6 +1436,116 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     // arguments decode through the codec.
     assert_eq!(outbox[0].arguments, vec![subj("entry_001")]);
     assert_eq!(outbox[1].arguments, vec![ledger_period()]);
+}
+
+#[tokio::test]
+async fn list_derived_trial_balance_over_pg_ledger_state() {
+    // Posts two simple ledger entries through the PG adapter, then
+    // enumerates the trial-balance derived claim against the durable
+    // state. Proves the round trip: claims persisted by
+    // `propose_against_pg` are visible to `list_derived`, are passed
+    // through the sync kernel's `enumerate_derived`, and produce one
+    // row per distinct account with the expected debit-minus-credit
+    // balance.
+    //
+    // Pinning behaviour rather than just the count: a regression that
+    // dropped a row, computed the wrong balance, or ordered rows
+    // non-deterministically would all fail here.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = double_entry_ledger::all_invariants();
+
+    // Entry 1: cash debit 100, revenue credit 100.
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_001"),
+            subj("d_2026_04_15"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("entry 1 should commit");
+
+    // Entry 2: cash debit 50, revenue credit 50. Same accounts, so the
+    // two rows accumulate rather than producing four distinct rows.
+    propose_against_pg(
+        &pool,
+        &double_entry_ledger::post_simple_entry(),
+        vec![
+            subj("entry_002"),
+            subj("d_2026_04_16"),
+            ledger_period(),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(50),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("entry 2 should commit");
+
+    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
+        .await
+        .expect("list_derived should not error");
+
+    // Two distinct accounts -> two rows. Structural Subject ordering
+    // (natural string order on the inner UUID/name) sorts
+    // `account_cash` before `account_revenue`, so the order is stable.
+    assert_eq!(
+        rows,
+        vec![
+            ClaimInstance {
+                predicate: "TrialBalanceRow".to_string(),
+                args: vec![subj("account_cash"), dec(150)],
+            },
+            ClaimInstance {
+                predicate: "TrialBalanceRow".to_string(),
+                args: vec![subj("account_revenue"), dec(-150)],
+            },
+        ],
+        "trial balance over two posted entries must list each account once \
+         with debits-minus-credits balance"
+    );
+
+    // Sanity: list_derived must not have mutated admitted state. The
+    // claims table still contains exactly what the two entries asserted
+    // (1 JournalEntry + 2 JournalLine per entry = 6 claims), and no
+    // TrialBalanceRow has leaked into it.
+    let claims = list_claims(&pool).await.unwrap();
+    assert_eq!(
+        claims.len(),
+        6,
+        "list_derived must not write claims back to the table"
+    );
+    assert!(
+        !claims.iter().any(|c| c.predicate == "TrialBalanceRow"),
+        "derived rows must not be admitted as claims"
+    );
+}
+
+#[tokio::test]
+async fn list_derived_on_empty_state_returns_no_rows() {
+    // Mirrors the in-memory empty-state test: with no JournalLine
+    // claims admitted, the `domain` enumerates no key bindings, so
+    // the derived extension is empty. Pins that the empty case is
+    // structural (zero domain bindings -> zero rows), not an error.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
+        .await
+        .expect("list_derived against an empty state should not error");
+    assert!(
+        rows.is_empty(),
+        "empty domain produces no derived rows, got {rows:?}"
+    );
 }
 
 #[tokio::test]

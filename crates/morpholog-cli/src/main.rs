@@ -3,7 +3,9 @@
 //! v0 exposes two surfaces:
 //!
 //! - `inspect` dumps the durable substrate (current claims, audit
-//!   rows, pending outbox intents) as JSON. Read-only.
+//!   rows, pending outbox intents) as JSON, and enumerates derived
+//!   claims declared by a built-in program against the current state
+//!   (`inspect derived <program> <name>`). Read-only.
 //! - `propose` runs a named transformation from a built-in [`Program`]
 //!   against a Morpholog PostgreSQL database, with arguments supplied
 //!   as a JSON array of `EvalValue`s. Outcome is JSON on stdout, with
@@ -18,15 +20,16 @@
 //! `serde_json::to_string_pretty`.
 //!
 //! The CLI is still deliberately narrow. Explicit non-goals: no
-//! parser, no user-supplied program loading (`propose` only accepts
-//! built-in programs from `morpholog_core::examples::all_programs()`),
-//! no outbox-delivery worker, no filtering or pagination DSL, no
-//! as-of evaluation, no derived-claim machinery.
+//! parser, no user-supplied program loading (`propose` and `inspect
+//! derived` only accept built-in programs from
+//! `morpholog_core::examples::all_programs()`), no outbox-delivery
+//! worker, no filtering or pagination DSL, no as-of evaluation, no
+//! materialised derived-claim storage.
 
 use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_postgres::{
-    PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_pending_outbox,
+    PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_derived, list_pending_outbox,
     propose_against_pg,
 };
 use serde::Serialize;
@@ -67,6 +70,28 @@ enum Inspect {
     Audit(InspectArgs),
     /// List every pending outbox intent, in enqueue order.
     Outbox(InspectArgs),
+    /// Enumerate a derived claim from a built-in program against the
+    /// current state. Read-only: no claims are written, no audit row
+    /// is produced. Result is one row per distinct key binding, with
+    /// each computed `DerivedValue` evaluated and appended.
+    Derived(InspectDerivedArgs),
+}
+
+/// Arguments for `inspect derived`.
+#[derive(clap::Args, Debug)]
+struct InspectDerivedArgs {
+    /// Built-in program name (e.g. `double_entry_ledger`). The same
+    /// registry that `propose` uses.
+    program: String,
+
+    /// Derived claim predicate name (e.g. `TrialBalanceRow`). Looked
+    /// up against the program's `derived_claims` by `predicate`.
+    derived: String,
+
+    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
+    /// environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
 }
 
 /// Shared arguments for every `inspect` subcommand.
@@ -133,6 +158,9 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .context("list_pending_outbox failed")?;
                 print_json(&rows)?;
+            }
+            Inspect::Derived(args) => {
+                inspect_derived(args).await?;
             }
         },
         Command::Propose(args) => {
@@ -231,6 +259,67 @@ async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run the `inspect derived` subcommand end-to-end: look up the named
+/// program and derived claim, connect, and enumerate the derived
+/// extension against the current durable state via [`list_derived`].
+///
+/// Errors:
+/// - Unknown program: surfaces the list of available built-in programs
+///   in the error message.
+/// - Unknown derived claim: surfaces the list of derived predicates
+///   declared on the matched program.
+/// - Connection failure or kernel error from `list_derived`: propagated
+///   via anyhow context.
+///
+/// Output: pretty-printed JSON array of `ClaimInstance`s. The ordering
+/// matches the kernel contract (sorted by `(keys ++ values)` under
+/// structural `EvalValue` ordering), so the output is deterministic
+/// for a given state.
+async fn inspect_derived(args: InspectDerivedArgs) -> anyhow::Result<()> {
+    let programs = morpholog_core::examples::all_programs();
+    let program = programs
+        .iter()
+        .find(|p| p.name == args.program)
+        .ok_or_else(|| {
+            let available = programs
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "program `{}` not found. Available built-in programs: {}",
+                args.program,
+                available
+            )
+        })?;
+
+    let derived = program.derived_claim(&args.derived).ok_or_else(|| {
+        let available = program
+            .derived_claims
+            .iter()
+            .map(|d| d.predicate.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if available.is_empty() {
+            anyhow!("program `{}` declares no derived claims", args.program)
+        } else {
+            anyhow!(
+                "derived claim `{}` not found in program `{}`. Available: {}",
+                args.derived,
+                args.program,
+                available
+            )
+        }
+    })?;
+
+    let pool = connect(&args.database_url).await?;
+    let rows = list_derived(&pool, derived)
+        .await
+        .context("list_derived failed")?;
+    print_json(&rows)?;
+    Ok(())
+}
+
 async fn connect(url: &str) -> anyhow::Result<PgPool> {
     // The URL is deliberately NOT included in error context: a typical
     // PostgreSQL connection string is `postgres://user:password@host/db`,
@@ -277,6 +366,13 @@ mod tests {
         match what {
             Inspect::Claims(args) | Inspect::Audit(args) | Inspect::Outbox(args) => {
                 args.database_url
+            }
+            Inspect::Derived(_) => {
+                // `Inspect::Derived` has its own arg struct; the other
+                // helper tests cover it directly. Reaching this arm
+                // here means a test passed `inspect derived` argv into
+                // `parsed_url`, which is a test bug.
+                panic!("use the dedicated inspect-derived parse tests, not parsed_url")
             }
         }
     }
@@ -375,6 +471,45 @@ mod tests {
             "postgres:///morpholog_dev",
         ])
         .expect_err("missing positional should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn inspect_derived_with_all_args_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "derived",
+            "double_entry_ledger",
+            "TrialBalanceRow",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Inspect { what } = cli.command else {
+            panic!("expected Inspect, got {:?}", cli.command);
+        };
+        let Inspect::Derived(args) = what else {
+            panic!("expected Inspect::Derived, got {what:?}");
+        };
+        assert_eq!(args.program, "double_entry_ledger");
+        assert_eq!(args.derived, "TrialBalanceRow");
+        assert_eq!(args.database_url, "postgres:///morpholog_dev");
+    }
+
+    #[test]
+    fn inspect_derived_missing_derived_name_errors() {
+        // Two positionals are required (program + derived name). Omit
+        // the derived name; clap must surface MissingRequiredArgument
+        // rather than silently taking the flag as the missing arg.
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "inspect",
+            "derived",
+            "double_entry_ledger",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ])
+        .expect_err("missing derived positional should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 

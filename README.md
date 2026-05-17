@@ -67,7 +67,7 @@ Measured in lines of code, that is always a small fraction of a real business sy
 
 ## Project status
 
-Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. The worked examples are proven both in-memory and durably against PostgreSQL. The CLI can both inspect current state and run named transformations from a built-in program against a database (`morpholog inspect ...` and `morpholog propose ...`). There is no parser yet, no support for user-supplied programs (built-in examples only), and no outbox worker. These are deliberately deferred until the next semantic frontiers (derived claims and as-of evaluation) have been pushed harder.
+Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. The worked examples are proven both in-memory and durably against PostgreSQL. The CLI can inspect current state (including enumerating derived claims declared by a built-in program via `morpholog inspect derived <program> <name>`) and run named transformations from a built-in program against a database (`morpholog propose ...`). There is no parser yet, no support for user-supplied programs (built-in examples only), and no outbox worker. These are deliberately deferred until the next semantic frontiers (materialised derived claims and as-of evaluation) have been pushed harder.
 
 ```bash
 cargo test -p morpholog-core --all-targets
@@ -82,7 +82,7 @@ createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
-Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims/audit/outbox), `morpholog-cli` (`morpholog inspect ...` for read-side inspection and `morpholog propose <program> <transformation>` for running a named transformation from a built-in program; JSON output throughout).
+Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims, audit, outbox, and for enumerating derived claims), `morpholog-cli` (`morpholog inspect ...` for read-side inspection - claims, audit, outbox, derived - and `morpholog propose <program> <transformation>` for running a named transformation from a built-in program; JSON output throughout).
 
 ## Deeper reading
 

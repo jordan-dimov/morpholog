@@ -123,7 +123,7 @@ Worth pinning explicitly so the implementation PR does not drift into being some
 - **Not visible to invariants.** v0 invariants quantify over admitted claims only. Asking whether an invariant should be allowed to reference a derived claim is a real question, but it pulls in evaluation-order and recursion concerns that should wait for the second derived-claims example to force the shape.
 - **Not visible to transformations.** v0 transformations cannot `require` a derived claim, cannot iterate over one in a `for` loop, and cannot assert one. Their world is admitted claims only.
 - **Not persisted in PostgreSQL.** No new tables, no materialised views. The PG adapter's read API (`list_claims`, `list_audit_rows`, `list_pending_outbox`) is unchanged. Enumeration is on-demand against the in-memory `State` loaded from the adapter.
-- **Not exposed via the CLI.** `morpholog inspect derived <program> <name>` is a follow-on after the kernel work proves out.
+- **Not exposed via the CLI.** ~~`morpholog inspect derived <program> <name>` is a follow-on after the kernel work proves out.~~ This non-goal lapsed: the follow-on PR after Example 5 added `morpholog inspect derived <program> <name>` and a thin `list_derived` helper on the PostgreSQL adapter that recomputes the extension on each call. Still no materialised storage, no PG-side index, no recursion through derived claims, no invariant or transformation visibility.
 - **Not recursive.** A derived claim's body cannot reference another derived claim. When a later example needs layered projections (an aged-receivables view computed from an account-balance view), the recursion semantics can be designed against that real pressure.
 - **Not as-of.** Current state only.
 
