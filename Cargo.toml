@@ -4,6 +4,7 @@ members = [
     "crates/morpholog-bench",
     "crates/morpholog-cli",
     "crates/morpholog-core",
+    "crates/morpholog-outbox",
     "crates/morpholog-postgres",
 ]
 
