@@ -123,3 +123,29 @@ Specifics:
 - **The three-bucket append-only / retractable / append-only classification holds completely** for Example 4: every predicate is content (`JournalEntry`, `JournalLine`), terminal state (`PeriodClosed`), or lineage (`Supersedes`). No retractable pointers were needed - callers walk the `Supersedes` chain instead of consulting a current pointer.
 
 The clean reuse outcome is itself informative: the accumulated affordances from Examples 1-3 are sufficient to express a textbook accounting workflow. The next semantic frontier - *derived claims* for read-side projections like trial balance and account-balance lookups - is what Example 5 will push on. That is where new pressure is expected to surface; Examples 1-4 give a stable baseline for the write/admission boundary, but "stable baseline" is not the same as "finished," and later examples may yet stress admission via derived state or as-of evaluation in ways the current shape cannot express.
+
+### `DerivedClaim`, `DerivedValue`, and `Expr::Sub`
+
+**Forced by:** Example 5 - derived claims (trial balance over the double-entry ledger).
+
+**The pressure:** the Example 4 prediction above named derived claims as the next frontier. Concretely, "what is the balance of every account?" had no expression in the v0 runtime. A caller could iterate `state.claims` in plain Rust and compute the trial balance by hand, but that logic lived outside the governed model. There was no way to say "trial balance is part of the ledger program and these are the rules that define it" alongside the invariants and transformations.
+
+**The design conversation:** PR #19 added a design sketch (`docs/derived-claims-sketch.md`) and a spike test that pinned the target API before any kernel code. The sketch raised eight open design questions; review (recorded in PR #19's polish commit) narrowed the four most consequential ones:
+
+- The naive `DerivedClaim { predicate, parameters, body }` shape was rejected. It conflated *enumerated* keys (`account`) with *computed* values (`balance`), leaving the evaluator without a principled way to tell them apart.
+- The revised shape splits the two explicitly: `DerivedClaim { predicate, keys, values, domain }` with `DerivedValue { name, expr }` for each computed value, and a separate `domain` expression that enumerates distinct key bindings.
+- For subtraction, lean was `Expr::Sub` rather than extending `Sum`'s value position into an expression sublanguage. More general (arithmetic outside aggregation), smaller semantic step.
+- v0 derived claims should *not* be visible to invariants or transformations, not added to `State.claims`, not persisted, not exposed via CLI, not recursive, and not as-of. Each was a deferred design question listed explicitly.
+
+**What landed in implementation:**
+
+- `Expr::Sub(Box<Expr>, Box<Expr>)` for decimal subtraction. Both operands evaluate as decimals; the result is `EvalValue::Decimal(a - b)`. Non-decimal operands surface as `EvalError::TypeMismatch`. Deliberately the only arithmetic primitive: no addition, multiplication, or division until a real example forces them.
+- `DerivedClaim { predicate, keys, values, domain }` and `DerivedValue { name, expr }` exactly as the revised sketch proposed. `Program` gains a `derived_claims: Vec<DerivedClaim>` field; existing example programs declare it as `vec![]`.
+- `enumerate_derived(derived, state) -> Result<Vec<ClaimInstance>, EvalError>` reuses the existing `find_matches` to enumerate raw bindings from the domain, then deduplicates by key tuple via a `BTreeSet<EvalValueOrd>` (a private newtype that gives `EvalValue` a JSON-based ordering for stable iteration). For each unique key tuple, each `DerivedValue.expr` is evaluated via `eval_value` and the results are appended to the key tuple as the output `ClaimInstance.args`.
+- `double_entry_ledger::trial_balance_row()` is the worked example. Keys: `["account"]`. Values: one `balance = Sub(Sum(debits), Sum(credits))`. Domain: `JournalLine(_, account, _, _)`.
+
+**What was confirmed about the design conversation:** every prediction from the sketch held. No new helper beyond `find_matches` was needed for binding enumeration. The keys/values/domain shape was structurally sound and the evaluator's algorithm was the small mechanical one the sketch described. The v0 boundaries (not in State, not visible to invariants/transformations) are pinned by a dedicated test (`derived_claims_do_not_pollute_admitted_state`).
+
+**Implication for future examples:** derived claims are now a tool in the kit. When a future example asks "what is the X for each Y?" the answer is a `DerivedClaim` with `Y` as the key and `X` as the computed value. Recursion (one derived claim's body referencing another), interchangeability with admitted state (so invariants can quantify over derived claims), materialisation (caching results in a table), and provenance (tracking which admitted claims contributed to each row) all remain explicitly deferred. The first of those that some example genuinely forces is the right next move; speculatively adding any of them now would expand the surface beyond what the existing customer needs.
+
+**Pattern note:** Example 5 is the first time the sketch-then-implement two-PR pattern was used (rather than the design-pin pattern of the postgres-persistence-v0 doc). The pattern worked: PR #19's open questions reduced design ambiguity enough that PR #20's implementation was almost mechanical, with no late-stage surprises and no rework. Worth reaching for again when the next genuinely-IR-expanding example arrives.

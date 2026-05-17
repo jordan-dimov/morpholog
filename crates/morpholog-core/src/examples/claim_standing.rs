@@ -338,5 +338,6 @@ pub fn program() -> crate::Program {
             admit_debt_service_revenue(),
             admit_investor_reported_revenue(),
         ],
+        derived_claims: vec![],
     }
 }

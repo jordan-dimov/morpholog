@@ -363,8 +363,64 @@ pub fn all_invariants() -> Vec<Invariant> {
     ]
 }
 
-/// The double-entry-ledger example as a [`crate::Program`]: four
-/// transformations and three invariants. Stable identifier:
+/// Trial balance derived from the posted `JournalLine` claims. One
+/// row per distinct account; the balance is debits minus credits.
+///
+/// This is the worked example for Example 5 (derived claims). The
+/// derived claim is enumerable via [`crate::enumerate_derived`]; in
+/// v0 it is not added to admitted state, not visible to invariants
+/// or transformations, not persisted by the PostgreSQL adapter, and
+/// not exposed through the CLI. See `docs/derived-claims-sketch.md`
+/// for the design history and `docs/forced-by-examples.md` for the
+/// retrospective on what Example 5 forced.
+///
+/// Shape:
+///
+///     keys:    [account]
+///     values:  [balance = sum(debits for account) - sum(credits for account)]
+///     domain:  JournalLine(_, account, _, _)
+pub fn trial_balance_row() -> crate::DerivedClaim {
+    crate::DerivedClaim {
+        predicate: "TrialBalanceRow".to_string(),
+        keys: vec!["account".to_string()],
+        values: vec![crate::DerivedValue {
+            name: "balance".to_string(),
+            expr: Expr::Sub(
+                // sum { d | JournalLine(_, account, d, _) }
+                Box::new(Expr::Sum {
+                    value: var("d"),
+                    binding: "d".to_string(),
+                    body: Box::new(Expr::Claim {
+                        predicate: "JournalLine".to_string(),
+                        args: vec![Term::Wildcard, var("account"), var("d"), Term::Wildcard],
+                    }),
+                }),
+                // sum { c | JournalLine(_, account, _, c) }
+                Box::new(Expr::Sum {
+                    value: var("c"),
+                    binding: "c".to_string(),
+                    body: Box::new(Expr::Claim {
+                        predicate: "JournalLine".to_string(),
+                        args: vec![Term::Wildcard, var("account"), Term::Wildcard, var("c")],
+                    }),
+                }),
+            ),
+        }],
+        domain: Expr::Claim {
+            predicate: "JournalLine".to_string(),
+            args: vec![
+                Term::Wildcard,
+                var("account"),
+                Term::Wildcard,
+                Term::Wildcard,
+            ],
+        },
+    }
+}
+
+/// The double-entry-ledger example as a [`crate::Program`]: posting
+/// and restatement transformations, balance and lineage invariants,
+/// and the trial-balance derived claim. Stable identifier:
 /// `"double_entry_ledger"`.
 pub fn program() -> crate::Program {
     crate::Program {
@@ -376,5 +432,6 @@ pub fn program() -> crate::Program {
             close_period(),
             restate_entry(),
         ],
+        derived_claims: vec![trial_balance_row()],
     }
 }

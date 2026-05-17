@@ -275,5 +275,6 @@ pub fn program() -> crate::Program {
             correct_independent_verification(),
             restate_bank_revenue(),
         ],
+        derived_claims: vec![],
     }
 }

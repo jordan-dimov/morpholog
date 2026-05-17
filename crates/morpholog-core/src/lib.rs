@@ -41,11 +41,12 @@ pub struct Invariant {
 /// as a predicate) or a value (when used in value position).
 ///
 /// The variants are deliberately narrow: predicate composition (`And`,
-/// `Not`, `Implies`, `Exists`, `Forall`), claim and inequality matching
-/// (`Claim`, `Neq`, `Eq`), one bounded aggregation (`Sum`), one collection
-/// primitive (`In`), one functional-lookup primitive (`ValueOf`), and
-/// `Term`-as-value lifting. Anything that cannot be expressed within this
-/// set is, by design, not yet a runtime concern.
+/// `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
+/// (`Claim`, `Neq`, `Eq`), one bounded aggregation (`Sum`), one decimal
+/// arithmetic primitive (`Sub`), one collection primitive (`In`), one
+/// functional-lookup primitive (`ValueOf`), and `Term`-as-value lifting.
+/// Anything that cannot be expressed within this set is, by design, not
+/// yet a runtime concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Claim {
@@ -65,6 +66,15 @@ pub enum Expr {
     Neq(Term, Term),
     Term(Term),
     Eq(Box<Expr>, Box<Expr>),
+    /// Decimal subtraction. Both operands must evaluate to
+    /// `EvalValue::Decimal`; the result is the left minus the right.
+    /// Added in Example 5 (derived claims) so that
+    /// `balance == sum(debits) - sum(credits)` can be expressed without
+    /// extending `Sum`'s value position into an expression sublanguage.
+    /// Deliberately the only decimal-arithmetic primitive in v0; no
+    /// addition, multiplication, or division until a real example
+    /// forces them.
+    Sub(Box<Expr>, Box<Expr>),
     Sum {
         value: Term,
         binding: String,
@@ -213,6 +223,7 @@ pub struct Program {
     pub name: String,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,
+    pub derived_claims: Vec<DerivedClaim>,
 }
 
 impl Program {
@@ -227,6 +238,50 @@ impl Program {
     pub fn invariant(&self, name: &str) -> Option<&Invariant> {
         self.invariants.iter().find(|i| i.name == name)
     }
+
+    /// Look up a derived claim by predicate name. Returns `None` if no
+    /// derived claim in the program has that name. Symmetric with
+    /// [`Program::transformation`] and [`Program::invariant`].
+    pub fn derived_claim(&self, name: &str) -> Option<&DerivedClaim> {
+        self.derived_claims.iter().find(|d| d.predicate == name)
+    }
+}
+
+/// A computed view over admitted state, packaged as part of a
+/// [`Program`]. The shape is keys-and-values: `keys` are the
+/// enumerated/grouping dimensions, `values` are the per-key computed
+/// expressions, and `domain` is the expression whose satisfying
+/// bindings define the set of distinct keys.
+///
+/// Evaluating a derived claim against a [`State`] (via
+/// [`enumerate_derived`]) produces one [`ClaimInstance`] per distinct
+/// key tuple: its `predicate` is the derived claim's `predicate`, and
+/// its `args` are the key values followed by the computed value
+/// expressions evaluated under the per-key bindings.
+///
+/// In v0 a derived claim's output [`ClaimInstance`]s are *not* added
+/// to [`State.claims`], *not* visible to invariants or
+/// transformations, *not* persisted by the PostgreSQL adapter, and
+/// *not* recursively referenceable from another derived claim's body.
+/// See `docs/derived-claims-sketch.md` for the design history; see
+/// `docs/forced-by-examples.md` for what Example 5 forced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedClaim {
+    pub predicate: String,
+    pub keys: Vec<String>,
+    pub values: Vec<DerivedValue>,
+    pub domain: Expr,
+}
+
+/// One computed value in a [`DerivedClaim`]. `name` is the variable
+/// name within the derived claim's scope (used only for documentation
+/// today; the output [`ClaimInstance`] is positional, key values
+/// followed by computed values in declaration order). `expr` is a
+/// value-producing [`Expr`] that runs once per distinct key binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedValue {
+    pub name: String,
+    pub expr: Expr,
 }
 
 // ===========================================================================
@@ -338,6 +393,109 @@ pub fn eval_invariant(inv: &Invariant, state: &State) -> Result<bool, EvalError>
     Ok(!matches.is_empty())
 }
 
+/// Enumerate a derived claim against current admitted state. Returns
+/// one [`ClaimInstance`] per distinct key tuple, in deterministic key
+/// order.
+///
+/// Algorithm:
+///
+/// 1. Run `find_matches` on `derived.domain` to get every binding that
+///    satisfies the domain expression.
+/// 2. Project each binding onto the `derived.keys` and deduplicate.
+///    The deduplication uses a `BTreeSet`, which also gives the output
+///    a stable ordering by key tuple.
+/// 3. For each distinct key binding, evaluate each
+///    [`DerivedValue.expr`] in [`eval_value`] under that binding.
+///    Append the resulting values to the key tuple to form the
+///    output `ClaimInstance`.
+///
+/// Errors propagate from the underlying evaluator: a non-decimal
+/// `Sub`, a missing key binding, a malformed body expression, etc.
+///
+/// Returned `ClaimInstance`s are *not* added to `state.claims`. The
+/// caller decides what to do with them; in v0 nothing else in the
+/// runtime sees them.
+pub fn enumerate_derived(
+    derived: &DerivedClaim,
+    state: &State,
+) -> Result<Vec<ClaimInstance>, EvalError> {
+    use std::collections::BTreeSet;
+
+    let raw_bindings = find_matches(&derived.domain, state, &Bindings::new())?;
+
+    let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
+    for b in &raw_bindings {
+        let mut tuple = Vec::with_capacity(derived.keys.len());
+        for k in &derived.keys {
+            let v = b.get(k).ok_or_else(|| {
+                EvalError::UnboundVariable(format!(
+                    "derived claim `{}`: key `{}` not bound by domain expression",
+                    derived.predicate, k
+                ))
+            })?;
+            tuple.push(EvalValueOrd(v.clone()));
+        }
+        key_tuples.insert(tuple);
+    }
+
+    let mut out: Vec<ClaimInstance> = Vec::with_capacity(key_tuples.len());
+    for tuple in key_tuples {
+        let mut per_key = Bindings::new();
+        for (k, v) in derived.keys.iter().zip(tuple.iter()) {
+            per_key.insert(k.clone(), v.0.clone());
+        }
+        let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
+        for value_def in &derived.values {
+            let v = eval_value(&value_def.expr, state, &per_key)?;
+            args.push(v);
+        }
+        out.push(ClaimInstance {
+            predicate: derived.predicate.clone(),
+            args,
+        });
+    }
+    Ok(out)
+}
+
+/// `EvalValue` does not derive `Ord`. Wrap it in a newtype that
+/// implements `Ord` via its JSON serialisation so we can deduplicate
+/// key tuples in a `BTreeSet` without committing the kernel's
+/// runtime-value type to a sort order. Used only inside
+/// [`enumerate_derived`]; not exposed.
+///
+/// Serialisation is the same shape as the JSON codec (tagged enum,
+/// decimals as strings), so the resulting order is decimal-string
+/// lexicographic rather than numeric, but it is *deterministic* and
+/// the only contract `enumerate_derived` makes about output order is
+/// determinism. Callers that need a specific business ordering should
+/// sort the result themselves.
+#[derive(Clone)]
+struct EvalValueOrd(EvalValue);
+
+impl PartialEq for EvalValueOrd {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for EvalValueOrd {}
+
+impl PartialOrd for EvalValueOrd {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EvalValueOrd {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // serde_json is already a workspace dep; this only runs at
+        // enumeration time and the values are small. Two failing
+        // serialisations are treated as equal so the sort is total.
+        let a = serde_json::to_string(&self.0).unwrap_or_default();
+        let b = serde_json::to_string(&other.0).unwrap_or_default();
+        a.cmp(&b)
+    }
+}
+
 /// `find_matches` is the predicate-evaluation primitive. It returns the
 /// set of binding extensions under which the expression holds. An empty
 /// vector means the expression fails; a non-empty vector means it succeeds
@@ -395,7 +553,9 @@ fn find_matches(e: &Expr, state: &State, base: &Bindings) -> Result<Vec<Bindings
             Ok(if l != r { vec![base.clone()] } else { vec![] })
         }
         Expr::In(elem, coll) => find_in_matches(elem, coll, base),
-        Expr::Term(_) | Expr::Sum { .. } | Expr::ValueOf { .. } => Err(EvalError::NotPredicate),
+        Expr::Term(_) | Expr::Sub(_, _) | Expr::Sum { .. } | Expr::ValueOf { .. } => {
+            Err(EvalError::NotPredicate)
+        }
     }
 }
 
@@ -506,6 +666,16 @@ fn find_in_matches(elem: &Term, coll: &Term, base: &Bindings) -> Result<Vec<Bind
 fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue, EvalError> {
     match e {
         Expr::Term(t) => resolve_term(t, bindings),
+        Expr::Sub(lhs, rhs) => {
+            let l = eval_value(lhs, state, bindings)?;
+            let r = eval_value(rhs, state, bindings)?;
+            match (l, r) {
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a - b)),
+                _ => Err(EvalError::TypeMismatch(
+                    "Sub expects decimal operands".into(),
+                )),
+            }
+        }
         Expr::Sum {
             value,
             binding: _,
