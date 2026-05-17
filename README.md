@@ -129,6 +129,8 @@ Active. Kernel, PostgreSQL adapter, CLI, and worked examples all work and are te
 
 Not in the box yet: a parser (programs are constructed as Rust IR; the CLI accepts built-in programs only); an outbox worker (rows are enqueued; nobody consumes them yet); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
 
+Built in Rust on modern PostgreSQL (17+). The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation (SSI) and JSONB so an entire commit — `claims`, `audit`, and `outbox` rows — lands atomically in one transaction or not at all.
+
 To run the tests:
 
 ```bash
