@@ -88,13 +88,30 @@ The implementation PR has to answer these explicitly. The spike test does not co
 
 3. **Ordering: `transition_id` byte order or `committed_at`?** They usually agree (UUIDv7's prefix is the timestamp) but diverge under concurrent commits where the wall-clock interleaves differently from the per-client generation. Lean: order by `committed_at`, tie-break on `transition_id`. This matches `list_audit_rows`'s existing contract, and matches the strict commit-time chronology the audit log promises.
 
+   Concretely, the implementation should not use `WHERE transition_id <= $1` (the shape the spike uses for brevity). Instead:
+
+   1. Look up the target audit row by `transition_id` to obtain its `(committed_at, transition_id)` pair.
+   2. Replay rows where `(committed_at, transition_id) <= (target.committed_at, target.transition_id)`.
+   3. Order by `committed_at, transition_id`.
+
+   This avoids leaning on UUIDv7 byte-comparison for the semantic cut-off and stays correct under concurrent commits where the wall-clock and the per-client UUID generator disagree on order.
+
 4. **Replay performance / when does materialisation become forced?** v0 ships full replay. The bench will need a new scenario - long audit log, single as-of query - to show the cost. Once it does, the optimisation is either incremental snapshots, materialised views, or kernel-side incremental state delta caching. Each has trade-offs; pick the one the bench forces.
 
 5. **Invariant version at T.** v0 invariants are all `version: 1`, so the choice does not bite yet. But the API has to commit: when an as-of evaluation involves invariant checks (which, today, it does not - as-of is read-only), should the invariant version active *at T* govern (per `audit.invariant_epoch`) or the *current* version? Lean: at-T for audit-style queries; deferred until invariant versioning is actually live.
 
-6. **Failure mode for an unknown `transition_id`.** Reconstructing as-of a `transition_id` that does not exist in `audit` is an error. Reconstructing as-of `Uuid::nil()` (or the all-zero UUID, smaller than every real UUIDv7) is the empty state, which is meaningful. Reconstructing as-of a `transition_id` larger than any committed one is the current state. The implementation should commit to all three behaviours explicitly.
+6. **Failure mode for an unknown `transition_id`.** For v0, `reconstruct_state_at` requires the `transition_id` to exist in `morpholog.audit`. Every other id is an error - smaller, larger, or between known transitions. The earlier draft of this sketch leaned on "any id larger than every committed one returns current state" as a convenience; that introduces a wrong-answer cliff where a mistyped id coincidentally orders past every committed transition and silently returns current state instead of failing loudly. The coordinate is "as of *this actual committed transition*", not "as of some abstract UUID position in the ordering". Empty state (before any transition) and current state remain reachable through other helpers: `list_claims` / `list_derived` for current; a dedicated `reconstruct_empty_state()` or `reconstruct_state_before(transition_id)` helper later, if forced.
 
-7. **Interaction with predicate-scoped loading (PR #25).** `list_derived` was just rewired to load only the predicates a derived claim references. The as-of version should preserve that property - i.e. `list_derived_at` should walk the audit log but only retain claims whose predicate is in the derived's footprint. The implementation has to thread `predicates_referenced_by_derived` into the replay loop and discard out-of-footprint claims as they appear. Not hard, but needs explicit handling.
+7. **Interaction with predicate-scoped loading (PR #25).** `list_derived` was just rewired to load only the predicates a derived claim references. The as-of version should preserve that property.
+
+   The cleanest shape is two separate functions, not one with an optional `predicates` parameter:
+
+   - `reconstruct_state_at(pool, transition_id) -> Result<State, PgError>` promises a **full** historical `State`. Generic; no predicate footprint.
+   - Internal `reconstruct_state_at_for_predicates(pool, transition_id, predicates) -> Result<State, PgError>` returns a **partial** historical `State` containing only claims whose predicate is in the supplied set. Used by `list_derived_at`.
+
+   Having a single function that is "sometimes full, sometimes partial depending on whether you pass a footprint" makes the contract slippery: a caller who passed a footprint by accident might silently get a partial state and not realise their downstream query sees less than it should. Two functions, two clear contracts.
+
+   The implementation has to thread `predicates_referenced_by_derived` into the replay loop and discard out-of-footprint claims as they appear (rather than retaining everything and filtering at the end, which would defeat the optimisation).
 
 8. **CLI exit codes and JSON shape.** `morpholog inspect ... --as-of <transition_id>` against a missing transition should fail with a clear error (exit 1, stderr message). Against a valid transition the output shape should be byte-identical to the current `inspect` output. No special JSON envelope advertising "this is an as-of result" - the caller asked for it; the output is just the answer.
 
