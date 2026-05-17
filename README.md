@@ -1,22 +1,31 @@
 # Morpholog
 
-An experimental runtime for business systems where the rules that decide what may legitimately enter the records are enforced by the language itself - not by code somebody remembered to write.
+A runtime that owns the legitimacy boundary of your business records. Every entry that enters governed state is checked against every active rule by the language itself - not by validators someone remembered to write, not by reconciliation scripts run nightly, not by tribal knowledge in the heads of senior staff. If the rules say no, nothing is written and nothing is sent. If they say yes, the record is part of an append-only audit log that any auditor can query, including as it stood after any committed transition.
 
-## The failure it addresses
+## The questions Morpholog answers
 
-Anyone who has worked closely with a serious business system - a trading book, a general ledger, a regulated lending platform, a settlement engine - knows the family of bugs Morpholog targets. The records and the reports disagree. Yesterday's number is no longer today's number, and nobody can explain when it changed. The audit trail can show *what* happened, but not whether what happened was *legitimate under the rules in force at the time*. The rules themselves are scattered across validation layers, ORM hooks, stored procedures, reconciliation scripts, and tribal knowledge. Decades of business software have tried to make that legitimacy guarantee from the outside, and the long-tail failures are what operators learn to live with.
+A controller, an auditor, or a risk officer asks these questions of every serious business system. Most systems answer them poorly:
 
-Morpholog moves the legitimacy boundary *into* the language. State is a set of **claims** - typed assertions admitted into governed state under a specific authority, at a specific moment, by a specific transformation. The rules that must always hold are **invariants**. The only way claims change is through a **transformation**, which proposes a set of additions, removals, and outbound effects; the runtime checks every active invariant against the proposed result, and if any fails the transformation is rejected atomically - nothing is written and nothing is sent.
+- *Why does this report differ from the one we filed three months ago?*
+- *Who authorised this entry, and under what limit?*
+- *If the authorisation we relied on was rescinded yesterday, was yesterday's decision still legitimate?*
+- *What did the books say at quarter-end, under the close rules in force then?*
+- *Did this trade conform to our exposure limits at the moment it was booked - not now, then?*
 
-There are no entities, classes, ad-hoc validators, or reconciliation scripts. The discipline is exact:
+Conventional answers involve detective work: searching log tables, reconciling parallel systems, asking colleagues who happened to be on shift. Some questions never get a clean answer; the books just stop tying out, and accountants learn to live with that.
 
-> Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.
+Morpholog makes those answers part of the substrate. The current runtime answers the worked-example versions of these questions today: it can show admitted claims, audit history, derived views such as trial balance, and those same views as they stood after any committed transition. The broader production forms - actor authority, exposure limits, end-to-end regulated workflows - are the direction of the project, not yet a packaged product surface. The substrate is the same in both cases: the audit log is the chronological record; derived views read only from admitted state (so they inherit the legitimacy of the source claims and cannot reflect records that an invariant rejected); and as-of evaluation reconstructs historical state from the audit log without any bitemporal flags polluting the schema.
 
-That is the entire surface area.
+## How it works
 
-## What it looks like
+Two language constructs are first-class. Everything else is built from them:
 
-Surface syntax is illustrative - the parser is deliberately deferred. The shape, drawn from the double-entry ledger example, is small enough to read in a sitting:
+- An **invariant** is a rule that must always hold over admitted state.
+- A **transformation** is the only path by which state may change. It proposes a set of additions, removals, and outbound effects.
+
+The runtime checks every active invariant against the proposed result. If any fails, the transformation is rejected atomically - nothing is written, nothing is sent. Records that survive are **claims**: typed assertions admitted under a specific authority, at a specific moment, by a specific transformation. The audit log is append-only; current claim-state changes by asserted and retracted claims, with corrections preserving history through supersession rather than overwriting prior audit records. The originals stay findable forever, even after restatement.
+
+Surface syntax is illustrative (the parser is on the roadmap; programs today are constructed as Rust IR). The shape, drawn from the double-entry ledger example, fits on one screen:
 
 ```
 invariant balanced_posted_entry:
@@ -35,39 +44,57 @@ transformation post_simple_entry(
     emit JournalEntryPosted(entry_id)
 ```
 
-The invariant says what must be true of state - debits and credits balance for every posted entry. The transformation is the only path by which a journal entry can enter state, and it is admitted only if the period is open and the result satisfies every active invariant. If anything fails, no claim is written and no `JournalEntryPosted` notification is sent. The fundamental accounting equation is not a check the application code performs - it is a property of the runtime.
+The fundamental accounting equation is not a check the application code performs - it is a property of the runtime. The same applies to every other invariant: bilateral netting integrity, supersession lineage, admissibility-for-purpose, period-close gates.
 
-## Why this matters
+## Running it today
 
-Consider questions a controller, auditor, or risk officer might ask of any serious business system:
+The CLI works end-to-end against a real PostgreSQL database. Sample session:
 
-- *Why does this report differ from the one we filed three months ago?*
-- *Who authorised this entry, and under what limit?*
-- *If the authorisation we relied on was rescinded yesterday, was yesterday's decision still legitimate?*
-- *What did the books say at quarter-end, under the close rules in force then?*
+```bash
+# Run a governed transformation. The runtime checks every invariant
+# before committing; rejection is atomic.
+morpholog propose double_entry_ledger post_simple_entry \
+    --args '[{"type":"subject","value":"entry_001"}, ... ]' \
+    --database-url postgres:///my_db
 
-In conventional software these get answered by detective work - searching log tables, reconciling parallel systems, asking long-tenured colleagues, accepting that some questions never get a clean answer. In Morpholog the raw material is preserved by construction: claims, transformations, audit rows, and supersession lineage are all governed state, never overwritten by accident. The query and projection machinery that would turn that raw material into reproducible reports - derived claims, as-of evaluation - is named on the roadmap (see [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md)) and is what the next worked examples will push on.
+# Inspect current admitted claims, audit log, or derived views.
+morpholog inspect claims     --database-url postgres:///my_db
+morpholog inspect audit      --database-url postgres:///my_db
+morpholog inspect derived double_entry_ledger TrialBalanceRow \
+    --database-url postgres:///my_db
 
-The worked examples in this repository show the pattern in increasing depth:
+# Ask the same questions as of a past transition. Auditors love this.
+morpholog inspect claims --as-of <transition_id> ...
+morpholog inspect derived double_entry_ledger TrialBalanceRow \
+    --as-of <transition_id> ...
+```
 
-- [**Bilateral settlement netting**](examples/01_settlement_netting/) - invariants that catch arithmetic and exclusion errors before any state changes.
-- [**Revenue restatement**](examples/02_revenue_restatement/) - historical claims survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims.
-- [**Claim standing**](examples/03_claim_standing/) - the same underlying claim can carry different admissibility for different decisions, granted by different authorities, lost without mutating the claim itself.
-- [**Double-entry ledger with period close**](examples/04_double_entry_ledger/) - the fundamental accounting equation enforced as an invariant; period close as an admission gate; closed periods corrected by restatement that preserves the original record.
+The as-of query is the one most directly recognizable to anyone who has had to defend the books: it reconstructs the exact state that existed at any past transition by replaying the audit log, with no bitemporal `valid_from`/`valid_to` columns required.
 
-Each is proven both in-memory and durably against PostgreSQL.
+## Worked examples (each proven against PostgreSQL)
 
-## Where Morpholog ends
+- [**Bilateral settlement netting**](examples/01_settlement_netting/) - shows that invariants catch arithmetic and exclusion errors against the candidate state, not just the pre-state. A transformation that would *create* an inconsistency by combining valid inputs is rejected before any commit.
+- [**Revenue restatement**](examples/02_revenue_restatement/) - shows contested legitimacy: historical records survive correction; current-standing pointers move via retraction; supersession lineage is recorded as ordinary claims. Three months from now, the original number is still in the database and is still findable.
+- [**Claim standing**](examples/03_claim_standing/) - shows admissibility-for-purpose. The same underlying claim can carry different standing for different decisions, granted by different authorities, lost without mutating the underlying claim itself. Exactly the shape regulated lending and statutory reporting need.
+- [**Double-entry ledger with period close**](examples/04_double_entry_ledger/) - the fundamental accounting equation enforced as an invariant; period close as an admission gate; closed periods corrected by restatement that preserves the original record. Plus a `TrialBalanceRow` derived claim that turns the raw journal lines into a query-shaped report row, computed only from claims that have already passed the ledger's invariants.
 
-Morpholog is deliberately not the language you write a whole business system in. User interfaces, market data, reports, dashboards, search, machine learning, optimisation, integrations - all of this lives outside Morpholog and uses normal tools. What Morpholog owns is the *legitimacy surface*: the part of the system where the question "may this be admitted as legitimate?" must have a definite answer.
+Each example has integration tests that exercise both the in-memory kernel and the durable PostgreSQL commit path. The as-of evaluation that the CLI exposes runs against the same audit log the integration tests produce; nothing is mocked.
 
-Measured in lines of code, that is always a small fraction of a real business system. Measured in failure modes prevented, it can be most of what matters. The deeper framing - what the project is for, what it should grow into, and what it must never become - lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
+## Where Morpholog stays out
+
+Morpholog is not the language you write a whole business system in. User interfaces, market data, dashboards, search, ML, optimisation, integrations - all of this lives outside and uses normal tools. Morpholog owns the part of the system where the question *"may this be admitted as legitimate?"* must have a definite answer. Measured in lines of code, that is always a small fraction of any real business system. Measured in failure modes prevented, it is most of what matters.
+
+The framing of what Morpholog should grow into, and what it must never become, lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
 
 ---
 
 ## Project status
 
-Early but not a toy. A synchronous semantic kernel and a working PostgreSQL persistence adapter ship today. The worked examples are proven both in-memory and durably against PostgreSQL. The CLI can inspect current state (including enumerating derived claims declared by a built-in program via `morpholog inspect derived <program> <name>`) and run named transformations from a built-in program against a database (`morpholog propose ...`). There is no parser yet, no support for user-supplied programs (built-in examples only), and no outbox worker. These are deliberately deferred until the next semantic frontiers (materialised derived claims and as-of evaluation) have been pushed harder.
+Active project, solo-built, shipping incremental milestones. The semantic kernel, the PostgreSQL persistence adapter, the CLI, and the worked examples are all functional and tested. Performance characteristics are bench-measured: writes scale linearly to 100K-entry ledgers (~1.6s per commit at 100K pre-existing entries after the indexed-`State` work); as-of replay is currently O(N^2) in claim count and is the next-forced optimisation. See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the running performance story.
+
+What's not yet in the box: a parser (programs are constructed as Rust IR; the CLI accepts built-in programs only); an outbox-delivery worker (rows are enqueued, deliberately not yet consumed); user-supplied program loading; materialised derived claims. Each is on the roadmap and will be added when a worked example forces the shape.
+
+To run the tests yourself:
 
 ```bash
 cargo test -p morpholog-core --all-targets
@@ -82,11 +109,11 @@ createdb morpholog_dev
 psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 ```
 
-Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current claims, audit, outbox, and for enumerating derived claims), `morpholog-cli` (`morpholog inspect ...` for read-side inspection - claims, audit, outbox, derived - and `morpholog propose <program> <transformation>` for running a named transformation from a built-in program; JSON output throughout), `morpholog-bench` (synthetic scale-pressure benchmark for the write and read paths; see [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md)).
+Crates: `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter over `propose_against_pg`, plus read helpers for inspecting current and historical claims, audit, outbox, and derived enumerations), `morpholog-cli` (`morpholog inspect ...` / `morpholog propose <program> <transformation>` with `--as-of` for historical queries), `morpholog-bench` (scale-pressure benchmark for write, read, and as-of replay paths).
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the four language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
+- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics that the `morpholog-core` kernel realises.
 - [`docs/forced-by-examples.md`](docs/forced-by-examples.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
 - [`docs/mvp-cut.md`](docs/mvp-cut.md) - decision record for the MVP cut line and the PRs that crossed it.

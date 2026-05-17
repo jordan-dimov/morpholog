@@ -19,23 +19,29 @@
 //! error. Output is pretty-printed JSON via
 //! `serde_json::to_string_pretty`.
 //!
+//! `inspect claims` and `inspect derived` both accept an optional
+//! `--as-of <transition_id>` flag. With it, the inspection runs
+//! against the state reconstructed from the audit log at that past
+//! transition; without it, the current state is returned. `inspect
+//! audit` and `inspect outbox` do not accept `--as-of` (audit IS
+//! the chronological record; outbox is delivery state, not claim
+//! state).
+//!
 //! The CLI is still deliberately narrow. Explicit non-goals: no
 //! parser, no user-supplied program loading (`propose` and `inspect
 //! derived` only accept built-in programs from
 //! `morpholog_core::examples::all_programs()`), no outbox-delivery
-//! worker, no filtering or pagination DSL, no CLI surface for as-of
-//! evaluation yet (the adapter has it via `reconstruct_state_at`,
-//! `list_claims_at`, and `list_derived_at`; a `--as-of <transition_id>`
-//! flag on the inspect subcommands is the obvious follow-on), no
-//! materialised derived-claim storage.
+//! worker, no filtering or pagination DSL, no materialised
+//! derived-claim storage.
 
 use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_postgres::{
-    PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_derived, list_pending_outbox,
-    propose_against_pg,
+    PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_claims_at, list_derived,
+    list_derived_at, list_pending_outbox, propose_against_pg,
 };
 use serde::Serialize;
+use uuid::Uuid;
 
 /// Top-level Morpholog CLI.
 #[derive(Parser, Debug)]
@@ -67,17 +73,47 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum Inspect {
-    /// List every currently-admitted claim.
-    Claims(InspectArgs),
-    /// List every committed audit row, in commit order.
+    /// List currently-admitted claims, or claims as they were at a
+    /// past `transition_id` via `--as-of`.
+    Claims(InspectClaimsArgs),
+    /// List every committed audit row, in commit order. `--as-of`
+    /// does not apply here: the audit table IS the chronological
+    /// record. Callers who want a time-bounded audit view should
+    /// query `morpholog.audit` directly with their own predicate -
+    /// the same `(committed_at, transition_id) <= target` shape the
+    /// adapter's `reconstruct_state_at` uses internally, not
+    /// `transition_id <= T` alone (which can include or exclude the
+    /// wrong rows when commit order and UUID order diverge under
+    /// concurrent commits).
     Audit(InspectArgs),
-    /// List every pending outbox intent, in enqueue order.
+    /// List every pending outbox intent, in enqueue order. `--as-of`
+    /// does not apply: outbox is delivery state, not claim state.
     Outbox(InspectArgs),
     /// Enumerate a derived claim from a built-in program against the
-    /// current state. Read-only: no claims are written, no audit row
-    /// is produced. Result is one row per distinct key binding, with
-    /// each computed `DerivedValue` evaluated and appended.
+    /// current state, or against the state at a past `transition_id`
+    /// via `--as-of`. Read-only: no claims are written, no audit row
+    /// is produced.
     Derived(InspectDerivedArgs),
+}
+
+/// Arguments for `inspect claims`. Same shape as the shared
+/// `InspectArgs` but with an optional `--as-of` for historical
+/// claim listing.
+#[derive(clap::Args, Debug)]
+struct InspectClaimsArgs {
+    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
+    /// environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Optional: list claims as they were at this past
+    /// `transition_id` (UUIDv7). Without this flag, the current
+    /// admitted claim set is returned. With it, the adapter replays
+    /// the audit log up to the named transition and returns the
+    /// historical claim set. Unknown ids return an error
+    /// (`TransitionNotFound`).
+    #[arg(long)]
+    as_of: Option<Uuid>,
 }
 
 /// Arguments for `inspect derived`.
@@ -95,9 +131,18 @@ struct InspectDerivedArgs {
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
+
+    /// Optional: enumerate the derived claim against the state at
+    /// this past `transition_id` (UUIDv7) instead of current state.
+    /// Same predicate-scoped replay as the current-state version;
+    /// unknown ids return `TransitionNotFound`.
+    #[arg(long)]
+    as_of: Option<Uuid>,
 }
 
-/// Shared arguments for every `inspect` subcommand.
+/// Shared arguments for the `inspect` subcommands that do NOT
+/// accept `--as-of` (audit, outbox). `inspect claims` uses its own
+/// `InspectClaimsArgs` to expose the optional flag.
 ///
 /// Clap's `env` attribute falls back to the `DATABASE_URL` environment
 /// variable when `--database-url` is not supplied. If neither is set,
@@ -145,7 +190,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Inspect { what } => match what {
             Inspect::Claims(args) => {
                 let pool = connect(&args.database_url).await?;
-                let claims = list_claims(&pool).await.context("list_claims failed")?;
+                let claims = match args.as_of {
+                    Some(tid) => list_claims_at(&pool, tid)
+                        .await
+                        .context("list_claims_at failed")?,
+                    None => list_claims(&pool).await.context("list_claims failed")?,
+                };
                 print_json(&claims)?;
             }
             Inspect::Audit(args) => {
@@ -316,9 +366,14 @@ async fn inspect_derived(args: InspectDerivedArgs) -> anyhow::Result<()> {
     })?;
 
     let pool = connect(&args.database_url).await?;
-    let rows = list_derived(&pool, derived)
-        .await
-        .context("list_derived failed")?;
+    let rows = match args.as_of {
+        Some(tid) => list_derived_at(&pool, derived, tid)
+            .await
+            .context("list_derived_at failed")?,
+        None => list_derived(&pool, derived)
+            .await
+            .context("list_derived failed")?,
+    };
     print_json(&rows)?;
     Ok(())
 }
@@ -360,16 +415,16 @@ mod tests {
     use clap::error::ErrorKind;
 
     /// Helper: parse the argv into our `Cli` and return the `database_url`
-    /// that landed on the resulting `InspectArgs`.
+    /// that landed on the resulting `InspectArgs` (or
+    /// `InspectClaimsArgs` for claims).
     fn parsed_url(argv: &[&str]) -> String {
         let cli = Cli::parse_from(argv);
         let Command::Inspect { what } = cli.command else {
             panic!("expected Command::Inspect, got {:?}", cli.command);
         };
         match what {
-            Inspect::Claims(args) | Inspect::Audit(args) | Inspect::Outbox(args) => {
-                args.database_url
-            }
+            Inspect::Claims(args) => args.database_url,
+            Inspect::Audit(args) | Inspect::Outbox(args) => args.database_url,
             Inspect::Derived(_) => {
                 // `Inspect::Derived` has its own arg struct; the other
                 // helper tests cover it directly. Reaching this arm
@@ -414,6 +469,139 @@ mod tests {
             "postgres:///morpholog_dev",
         ]);
         assert_eq!(url, "postgres:///morpholog_dev");
+    }
+
+    /// `inspect claims` without `--as-of` parses to `as_of = None`.
+    /// Pins that the optional flag is genuinely optional.
+    #[test]
+    fn inspect_claims_without_as_of_parses_to_none() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Inspect {
+            what: Inspect::Claims(args),
+        } = cli.command
+        else {
+            panic!("expected Inspect::Claims, got {:?}", cli.command);
+        };
+        assert!(args.as_of.is_none(), "as_of must be None without the flag");
+    }
+
+    /// `inspect claims --as-of <uuid>` parses the UUID into the
+    /// optional field.
+    #[test]
+    fn inspect_claims_with_as_of_parses_uuid() {
+        let tid = "0192e000-0000-7000-8000-000000000001";
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            tid,
+        ]);
+        let Command::Inspect {
+            what: Inspect::Claims(args),
+        } = cli.command
+        else {
+            panic!("expected Inspect::Claims, got {:?}", cli.command);
+        };
+        assert_eq!(
+            args.as_of,
+            Some(Uuid::parse_str(tid).unwrap()),
+            "--as-of must parse into Some(Uuid)"
+        );
+    }
+
+    /// `inspect claims --as-of <garbage>` is rejected by clap's
+    /// `FromStr` parser before any async work happens.
+    #[test]
+    fn inspect_claims_with_bad_as_of_errors_at_parse_time() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            "not-a-uuid",
+        ])
+        .expect_err("bad UUID must surface a clap parse error");
+        // clap classifies FromStr failures as ValueValidation in
+        // recent versions; older versions used a different kind.
+        // Accept either as a signal that parsing rejected the input.
+        assert!(
+            matches!(
+                err.kind(),
+                ErrorKind::ValueValidation | ErrorKind::InvalidValue
+            ),
+            "expected a value-validation/invalid-value error, got {:?}",
+            err.kind()
+        );
+    }
+
+    /// `inspect derived --as-of <uuid>` parses the optional flag.
+    #[test]
+    fn inspect_derived_with_as_of_parses_uuid() {
+        let tid = "0192e000-0000-7000-8000-000000000002";
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "derived",
+            "double_entry_ledger",
+            "TrialBalanceRow",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            tid,
+        ]);
+        let Command::Inspect {
+            what: Inspect::Derived(args),
+        } = cli.command
+        else {
+            panic!("expected Inspect::Derived, got {:?}", cli.command);
+        };
+        assert_eq!(args.as_of, Some(Uuid::parse_str(tid).unwrap()));
+    }
+
+    /// `inspect audit --as-of <uuid>` is rejected by clap because
+    /// `Inspect::Audit` uses `InspectArgs`, which does not declare
+    /// the `--as-of` flag. Pins the design decision that as-of does
+    /// not apply to the audit subcommand.
+    #[test]
+    fn inspect_audit_rejects_as_of_flag() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "inspect",
+            "audit",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            "0192e000-0000-7000-8000-000000000001",
+        ])
+        .expect_err("inspect audit must not accept --as-of");
+        assert_eq!(err.kind(), ErrorKind::UnknownArgument);
+    }
+
+    /// Same for `inspect outbox`.
+    #[test]
+    fn inspect_outbox_rejects_as_of_flag() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "inspect",
+            "outbox",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            "0192e000-0000-7000-8000-000000000001",
+        ])
+        .expect_err("inspect outbox must not accept --as-of");
+        assert_eq!(err.kind(), ErrorKind::UnknownArgument);
     }
 
     /// Sanity-check that `Cli::try_parse_from` *can* surface a
