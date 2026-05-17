@@ -57,7 +57,15 @@ pub enum PgError {
 /// claims have been mutated, one audit row written, and one outbox row
 /// per emitted intent. On `Rejected`, the transaction has been rolled
 /// back and no governed state has changed.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` is derived with serde's internally-tagged enum
+/// representation so the CLI can emit outcomes directly as JSON with
+/// a `status` discriminant. A committed outcome serialises as
+/// `{"status":"committed","transition_id":"...","asserted_claims":[...],
+/// "retracted_claims":[...],"emitted_intents":[...]}`; a rejected one as
+/// `{"status":"rejected","reason":"..."}`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum PgProposalOutcome {
     Committed {
         transition_id: Uuid,

@@ -18,3 +18,21 @@ pub mod claim_standing;
 pub mod double_entry_ledger;
 pub mod revenue_restatement;
 pub mod settlement_netting;
+
+/// All built-in worked example programs, in the order they were
+/// developed. Returned as owned [`crate::Program`] values so callers
+/// can iterate, look up a specific one by `name`, or hand each to
+/// `propose_against_pg`.
+///
+/// Used by the CLI's `propose` subcommand to resolve a program name
+/// supplied on the command line to its [`crate::Program`] value. The
+/// list is the canonical built-in registry; future user-supplied
+/// programs (post-parser) would live alongside, not replace, these.
+pub fn all_programs() -> Vec<crate::Program> {
+    vec![
+        settlement_netting::program(),
+        revenue_restatement::program(),
+        claim_standing::program(),
+        double_entry_ledger::program(),
+    ]
+}

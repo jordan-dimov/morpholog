@@ -11,12 +11,16 @@ name = "morpholog"
 path = "src/main.rs"
 
 [dependencies]
+morpholog-core = { path = "../morpholog-core" }
 morpholog-postgres = { path = "../morpholog-postgres" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
 
 [lints]
 workspace = true
