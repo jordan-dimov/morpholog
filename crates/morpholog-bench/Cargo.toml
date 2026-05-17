@@ -1,0 +1,26 @@
+[package]
+name = "morpholog-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "morpholog-bench"
+path = "src/main.rs"
+
+[dependencies]
+morpholog-core = { path = "../morpholog-core" }
+morpholog-postgres = { path = "../morpholog-postgres" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true
