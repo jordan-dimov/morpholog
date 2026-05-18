@@ -11,9 +11,9 @@ use morpholog_postgres::{Deliverer, DeliveryOutcome, OutboxRow};
 use serde_json::json;
 
 /// Prints each outbox intent as a single JSON line to stdout.
-/// Returns `Delivered` on a successful write, `NonRetryable` if
-/// the stdout sink is broken (e.g., the downstream pipe was
-/// closed).
+/// Returns `Delivered` on a successful write-and-flush,
+/// `NonRetryable` if the stdout sink is broken (e.g., the
+/// downstream pipe was closed).
 ///
 /// The serialized shape is:
 ///
@@ -23,23 +23,26 @@ use serde_json::json;
 ///   "transition_id": "<uuid>",
 ///   "intent_type": "<name>",
 ///   "arguments": [...],
+///   "idempotency_key": "<string>",
 ///   "attempt_count": <int>
 /// }
 /// ```
 ///
 /// Newline-terminated so log-line-oriented consumers can parse
-/// each delivery as a discrete record. Use this for development,
-/// smoke tests, or as a baseline reference when implementing a
-/// real downstream-aware deliverer.
+/// each delivery as a discrete record. The `idempotency_key` is
+/// included so downstream consumers can deduplicate redelivered
+/// intents (the outbox is at-least-once). Use this for
+/// development, smoke tests, or as a baseline reference when
+/// implementing a real downstream-aware deliverer.
 ///
 /// **NOT a production delivery path.** Stdout has no
 /// backpressure, no acknowledgement, no idempotency guarantee
 /// beyond what the consumer pipeline provides. The deliverer
-/// reports `Delivered` as soon as bytes leave the process, which
-/// is at-most-once with respect to whatever downstream actually
-/// processes the line. Suitable for demos and smoke tests; a real
-/// downstream (HTTP receiver, Kafka producer, etc.) will
-/// eventually arrive as its own concrete `Deliverer` impl.
+/// flushes stdout before reporting `Delivered` (so bytes have
+/// left this process's buffer), but downstream behavior past that
+/// is whatever the pipeline does. Suitable for demos and smoke
+/// tests; a real downstream (HTTP receiver, Kafka producer, etc.)
+/// will eventually arrive as its own concrete `Deliverer` impl.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StdoutDeliverer;
 
@@ -54,11 +57,21 @@ impl Deliverer for StdoutDeliverer {
             "attempt_count": row.attempt_count,
         });
         let mut stdout = io::stdout().lock();
-        match writeln!(stdout, "{payload}") {
-            Ok(()) => DeliveryOutcome::Delivered,
-            Err(e) => DeliveryOutcome::NonRetryable {
+        if let Err(e) = writeln!(stdout, "{payload}") {
+            return DeliveryOutcome::NonRetryable {
                 reason: format!("StdoutDeliverer: writeln to stdout failed: {e}"),
-            },
+            };
         }
+        // Flush before reporting Delivered: writeln! may leave
+        // bytes in stdout's buffer (especially when piped to a
+        // log collector). If the process crashes between
+        // returning Delivered and the buffer flush, the intent
+        // is lost; we promised at-least-once.
+        if let Err(e) = stdout.flush() {
+            return DeliveryOutcome::NonRetryable {
+                reason: format!("StdoutDeliverer: flush failed: {e}"),
+            };
+        }
+        DeliveryOutcome::Delivered
     }
 }

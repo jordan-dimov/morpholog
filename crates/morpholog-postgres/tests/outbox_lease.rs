@@ -15,8 +15,8 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
-    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row, propose_against_pg,
-    release_outbox_claim,
+    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row,
+    claim_pending_outbox_row_before, propose_against_pg, release_outbox_claim,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -320,4 +320,48 @@ async fn release_returns_lease_lost_when_worker_does_not_hold_lease() {
     let (status, locked_by) = row_status_and_lease(&pool, intent_id).await;
     assert_eq!(status, "in_progress");
     assert_eq!(locked_by, Some("worker_a".to_string()));
+}
+
+#[tokio::test]
+async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
+    // The pass-boundary variant treats next_attempt_at <= claim_before
+    // as eligible, but anything scheduled later is invisible -
+    // even if wall-clock time has moved past the row's
+    // next_attempt_at by the time of the query. This is the loop
+    // safety the drain relies on against deliverers that schedule
+    // sub-second retries.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_pending(&pool, "entry_001").await;
+
+    // Schedule the row for "now plus a tiny window".
+    let scheduled = Utc::now() + ChronoDuration::milliseconds(50);
+    sqlx::query("UPDATE morpholog.outbox SET next_attempt_at = $1 WHERE intent_id = $2")
+        .bind(scheduled)
+        .bind(intent_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Pretend the pass started just before that schedule. The
+    // row's next_attempt_at > claim_before, so the claim must
+    // return None even though wall-clock has presumably moved
+    // forward by the time the query runs.
+    let pass_start = scheduled - ChronoDuration::milliseconds(1);
+    let claimed =
+        claim_pending_outbox_row_before(&pool, "worker_a", INTENT_TYPE, LEASE, pass_start)
+            .await
+            .unwrap();
+    assert!(
+        claimed.is_none(),
+        "row scheduled after pass_start must not be claimable in this pass; got {claimed:?}"
+    );
+
+    // With a later pass_start (after the schedule), the same row
+    // is claimable.
+    let claimed = claim_pending_outbox_row_before(&pool, "worker_a", INTENT_TYPE, LEASE, scheduled)
+        .await
+        .unwrap()
+        .expect("row scheduled at-or-before pass_start must be claimable");
+    assert_eq!(claimed.intent_id, intent_id);
 }

@@ -180,6 +180,56 @@ async fn drain_does_not_redeliver_transient_row_in_same_pass() {
 }
 
 #[tokio::test]
+async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
+    // Each deliver() call returns a retry instant only 1ms in the
+    // future. By the time the drain loops back and calls the SQL
+    // claim again, the live database `now()` has moved past that
+    // 1ms (a real round-trip takes longer than 1ms). Without the
+    // pass-boundary fix in claim_pending_outbox_row_before, the
+    // same row would be re-claimed indefinitely, producing many
+    // TransientRetry outcomes per row and never reaching
+    // NoRowAvailable - the loop pathology Copilot flagged. With
+    // the fix, each row is deferred exactly once per pass because
+    // the new next_attempt_at is > pass_start.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let _ = commit_simple_entry(&pool, "entry_001").await;
+    let _ = commit_simple_entry(&pool, "entry_002").await;
+
+    struct SubsecondTransient;
+    impl Deliverer for SubsecondTransient {
+        async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
+            DeliveryOutcome::Transient {
+                next_attempt_at: Utc::now() + ChronoDuration::milliseconds(1),
+            }
+        }
+    }
+
+    let outcomes = process_available_outbox_rows(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &SubsecondTransient,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcomes.len(),
+        2,
+        "drain must process each row exactly once per pass, even when \
+         next_attempt_at is sub-second; got {outcomes:?}"
+    );
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| matches!(o, ProcessOutcome::TransientRetry { .. })),
+        "every outcome should be TransientRetry, got {outcomes:?}"
+    );
+}
+
+#[tokio::test]
 async fn drain_continues_through_lease_lost_outcomes() {
     let pool = test_pool().await;
     reset_db(&pool).await;

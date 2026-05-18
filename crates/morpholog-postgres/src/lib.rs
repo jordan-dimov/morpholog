@@ -702,28 +702,21 @@ pub async fn mark_outbox_delivered(
 /// (current time plus retry-after plus jitter); the row stays
 /// invisible to claims until that moment.
 ///
-/// **Validation**: `next_attempt_at` must be strictly in the
-/// future (as of the worker's clock). A past or equal-now
-/// timestamp is rejected with [`PgError::InvalidState`]. Without
-/// this check, a deliverer that returns
-/// `Transient { next_attempt_at: now() }` would let the drain
-/// re-claim the same row immediately and loop forever, never
-/// reaching `NoRowAvailable` and never observing shutdown.
+/// **No upfront validation of `next_attempt_at`**: a past or
+/// equal-now retry instant is accepted by this helper. The drain
+/// loop's protection against re-claiming the same row in the same
+/// pass lives at [`claim_pending_outbox_row_before`]'s
+/// `claim_before` upper bound, not here. Adding a validation here
+/// would conflict with the helper contract (lease loss must
+/// surface as [`OutboxUpdate::LeaseLost`], not as a [`PgError`])
+/// and would spuriously fail a slow legitimate delivery whose
+/// retry instant elapses during transit.
 pub async fn mark_outbox_transient_attempt(
     pool: &PgPool,
     intent_id: Uuid,
     worker_id: &str,
     next_attempt_at: DateTime<Utc>,
 ) -> Result<OutboxUpdate, PgError> {
-    let now = Utc::now();
-    if next_attempt_at <= now {
-        return Err(PgError::InvalidState(format!(
-            "mark_outbox_transient_attempt({intent_id}): next_attempt_at \
-             must be strictly in the future (got {next_attempt_at}, worker's \
-             now is {now}). A past or equal-now retry instant would let the \
-             drain re-claim the row immediately and loop forever."
-        )));
-    }
     let rows = sqlx::query(
         "UPDATE morpholog.outbox
          SET status='pending',
@@ -892,6 +885,44 @@ pub async fn claim_pending_outbox_row(
     intent_type: &str,
     lease_duration: std::time::Duration,
 ) -> Result<Option<OutboxRow>, PgError> {
+    claim_pending_outbox_row_before(pool, worker_id, intent_type, lease_duration, Utc::now()).await
+}
+
+/// Same as [`claim_pending_outbox_row`], but treats rows as
+/// claimable only if their `next_attempt_at` is at or before the
+/// supplied `claim_before` instant (instead of the database's live
+/// `now()`).
+///
+/// **Why this exists**: a drain loop that processes rows one at a
+/// time using `claim_pending_outbox_row` can spin indefinitely if a
+/// deliverer keeps returning [`DeliveryOutcome::Transient`] with a
+/// `next_attempt_at` that is technically in the future but becomes
+/// due before the next iteration of the loop (e.g., `now() + 1ms`,
+/// or any retry instant that elapses while the worker is calling
+/// `mark_outbox_transient_attempt`). Each iteration re-claims the
+/// same row, increments the attempt counter, and never reaches
+/// [`ProcessOutcome::NoRowAvailable`], so the worker never sleeps
+/// and never observes shutdown.
+///
+/// The pass-boundary contract is the fix: the drain captures
+/// `Utc::now()` once at the top of the pass and passes it as
+/// `claim_before` for every iteration. A row deferred to any
+/// instant strictly after the pass started is invisible until the
+/// next pass, regardless of whether wall-clock time has moved past
+/// its `next_attempt_at`. The drain terminates; sub-second retries
+/// are honored on the *next* tick, after the worker has slept and
+/// (in the smart-sleep case) woken at the right moment.
+///
+/// Lease-expiry reclaim of `in_progress` rows still uses live
+/// `now()` - those are dead-worker recoveries, not scheduling
+/// decisions, and there is no loop pathology to defend against.
+pub async fn claim_pending_outbox_row_before(
+    pool: &PgPool,
+    worker_id: &str,
+    intent_type: &str,
+    lease_duration: std::time::Duration,
+    claim_before: DateTime<Utc>,
+) -> Result<Option<OutboxRow>, PgError> {
     let lease_secs = lease_duration_to_secs(lease_duration)?;
     let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
         "UPDATE morpholog.outbox
@@ -904,7 +935,7 @@ pub async fn claim_pending_outbox_row(
              WHERE intent_type=$3
                AND (
                    (status='pending'
-                    AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
+                    AND (next_attempt_at IS NULL OR next_attempt_at <= $4))
                 OR (status='in_progress'
                     AND lock_expires_at < now())
                )
@@ -921,6 +952,7 @@ pub async fn claim_pending_outbox_row(
     .bind(worker_id)
     .bind(lease_secs)
     .bind(intent_type)
+    .bind(claim_before)
     .fetch_optional(pool)
     .await
     .map_err(classify)?;
@@ -1770,7 +1802,51 @@ pub async fn process_one_outbox_row<D>(
 where
     D: Deliverer,
 {
-    let row = match claim_pending_outbox_row(pool, worker_id, intent_type, lease_duration).await? {
+    process_one_outbox_row_before(
+        pool,
+        worker_id,
+        intent_type,
+        lease_duration,
+        deliverer,
+        compensation,
+        Utc::now(),
+    )
+    .await
+}
+
+/// Same as [`process_one_outbox_row`], but uses
+/// [`claim_pending_outbox_row_before`] with the supplied
+/// `claim_before` instead of live `now()` for the claim eligibility
+/// check.
+///
+/// A drain loop calls this in a tight cycle until it observes
+/// [`ProcessOutcome::NoRowAvailable`]; passing a `claim_before`
+/// captured once at the top of the pass ensures rows deferred
+/// *during* the pass (via [`mark_outbox_transient_attempt`] with a
+/// sub-second `next_attempt_at`) do not re-appear in the same pass.
+/// See [`claim_pending_outbox_row_before`] for the rationale.
+#[allow(clippy::too_many_arguments)]
+pub async fn process_one_outbox_row_before<D>(
+    pool: &PgPool,
+    worker_id: &str,
+    intent_type: &str,
+    lease_duration: std::time::Duration,
+    deliverer: &D,
+    compensation: Option<&CompensationSpec>,
+    claim_before: DateTime<Utc>,
+) -> Result<ProcessOutcome, PgError>
+where
+    D: Deliverer,
+{
+    let row = match claim_pending_outbox_row_before(
+        pool,
+        worker_id,
+        intent_type,
+        lease_duration,
+        claim_before,
+    )
+    .await?
+    {
         Some(r) => r,
         None => return Ok(ProcessOutcome::NoRowAvailable),
     };

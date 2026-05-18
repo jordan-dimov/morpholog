@@ -214,30 +214,31 @@ where
 
     /// Decide how long to sleep before the next drain pass.
     ///
-    /// Default is the jittered base interval. The smart-sleep
-    /// shortcut applies ONLY when the drain just returned no
-    /// terminal work (`outcomes` is empty or contains only
-    /// `TransientRetry` outcomes, both of which indicate "no due
-    /// work to deliver right now"). In that case we ask
-    /// [`earliest_pending_retry`] for the soonest future
-    /// `next_attempt_at`; if it is sooner than `base_dur`, the
-    /// worker sleeps until that instant instead, so a scheduled
-    /// retry becomes claimable as soon as it is due.
+    /// The drain always ends on
+    /// [`ProcessOutcome::NoRowAvailable`], which means "no row of
+    /// this `intent_type` is currently claimable" - regardless of
+    /// what the pass delivered or failed earlier. So after every
+    /// drain we ask [`earliest_pending_retry`] for the soonest
+    /// future `next_attempt_at`; if it is sooner than `base_dur`,
+    /// the worker sleeps until that instant instead, so a
+    /// scheduled retry becomes claimable as soon as it is due.
+    /// This holds even for mixed passes like
+    /// `[Delivered, TransientRetry(now+100ms)]` - the transient
+    /// retry's wake instant is honored regardless of the
+    /// `Delivered` in the same pass.
     ///
     /// The base interval remains the ceiling: even if the next
     /// retry is hours away, we still wake up after `base_dur` to
     /// catch newly-enqueued immediately-due rows.
+    ///
+    /// `outcomes` is currently unused but kept in the signature
+    /// for future extensions (e.g., backoff-on-burst when a pass
+    /// produces many `Failed` outcomes).
     async fn smart_sleep_duration(
         &self,
-        outcomes: &[ProcessOutcome],
+        _outcomes: &[ProcessOutcome],
         base_dur: Duration,
     ) -> Result<Duration, PgError> {
-        let only_deferred = outcomes
-            .iter()
-            .all(|o| matches!(o, ProcessOutcome::TransientRetry { .. }));
-        if !only_deferred {
-            return Ok(base_dur);
-        }
         let Some(next) = earliest_pending_retry(&self.pool, &self.intent_type).await? else {
             return Ok(base_dur);
         };
