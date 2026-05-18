@@ -33,4 +33,4 @@ pub use clock::{Clock, RealClock};
 pub use deliverers::StdoutDeliverer;
 pub use drain::process_available_outbox_rows;
 pub use jitter::{JitterRng, RandJitter};
-pub use worker::{OutboxWorker, ProcessOutcomeObserver};
+pub use worker::OutboxWorker;

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use morpholog_postgres::{
-    CompensationSpec, Deliverer, PgError, PgPool, ProcessOutcome, process_one_outbox_row_before,
+    CompensationSpec, Deliverer, PgError, PgPool, ProcessOutcome, process_one_outbox_row,
 };
 use std::time::Duration;
 
@@ -8,11 +8,11 @@ use std::time::Duration;
 /// `intent_type` in one pass.
 ///
 /// Repeatedly invokes
-/// [`morpholog_postgres::process_one_outbox_row_before`], appending
-/// each returned [`ProcessOutcome`] to the result vector, until the
-/// processor returns [`ProcessOutcome::NoRowAvailable`]. The
-/// NoRowAvailable result itself is NOT appended - it is a stop
-/// signal, not work.
+/// [`morpholog_postgres::process_one_outbox_row`] with a captured
+/// pass-start instant, appending each returned [`ProcessOutcome`]
+/// to the result vector, until the processor returns
+/// [`ProcessOutcome::NoRowAvailable`]. The NoRowAvailable result
+/// itself is NOT appended - it is a stop signal, not work.
 ///
 /// **Pass-boundary semantics**: the drain captures `Utc::now()`
 /// once at the top and uses it as the `claim_before` upper bound
@@ -57,7 +57,7 @@ where
     let pass_start = Utc::now();
     let mut outcomes = Vec::new();
     loop {
-        let outcome = process_one_outbox_row_before(
+        let outcome = process_one_outbox_row(
             pool,
             worker_id,
             intent_type,

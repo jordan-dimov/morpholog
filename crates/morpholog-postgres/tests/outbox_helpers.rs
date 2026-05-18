@@ -195,7 +195,7 @@ async fn mark_outbox_transient_attempt_schedules_retry_and_releases_lease() {
 async fn mark_outbox_transient_attempt_accepts_past_next_attempt_at() {
     // The helper does NOT validate that next_attempt_at is in the
     // future. Loop-safety against same-pass reclaim lives at
-    // `claim_pending_outbox_row_before`'s pass boundary; adding a
+    // `claim_pending_outbox_row`'s pass boundary; adding a
     // validation here would conflict with the lease-loss-as-signal
     // contract and would spuriously fail a slow legitimate
     // delivery whose retry instant elapsed during transit.

@@ -150,6 +150,8 @@ The implementation PR sequencing in this doc commits to mechanism 1 for the firs
 
 The narrow window that remains: a crash between `propose_against_pg` commit and `complete_compensation` call. The lease pattern does not eliminate that window; it just shrinks it from "always racy" to "racy only during crash recovery." Programs that need full immunity should layer mechanism 2 on top - the compensating transformation asserts a `CompensationApplied(original_intent_id)` claim and an invariant rejects duplicates at admission time. The runtime supports this today; no further substrate is needed.
 
+**Doctrine tension worth naming.** What we shipped is mechanism 1: idempotency lives in *runtime state-machine columns* (`compensation_in_progress`, `compensation_failed`, `compensation_transition_id`) on `morpholog.outbox`. That is operationally fine, but it sits awkwardly against the project thesis - "only invariants and transformations are first-class" - which would prefer mechanism 2: idempotency expressed as a `CompensationApplied(original_intent_id)` claim, governed by an invariant the kernel checks at admission time. Mechanism 1 is convenient because no example yet forces a compensation; we built runtime substrate against a sketch. When a worked example actually drives compensation end-to-end (a wire-dispatch program with a real reversal transformation, say), it will be the right moment to revisit whether the lease-machinery scaffolding earns its keep or whether the invariant-driven shape replaces it. Until then, the columns stay; the tension is noted, not resolved.
+
 ### Schema additions
 
 New nullable columns on `morpholog.outbox`:

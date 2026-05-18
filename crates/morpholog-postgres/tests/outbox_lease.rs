@@ -15,8 +15,8 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
-    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row,
-    claim_pending_outbox_row_before, propose_against_pg, release_outbox_claim,
+    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row, propose_against_pg,
+    release_outbox_claim,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -135,7 +135,7 @@ async fn claim_returns_first_pending_row_and_sets_lease() {
     reset_db(&pool).await;
     let enqueued = enqueue_pending(&pool, "entry_001").await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap()
         .expect("must return Some when a pending row is available");
@@ -162,7 +162,7 @@ async fn claim_returns_none_when_no_pending_row_exists() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap();
     assert!(
@@ -179,9 +179,15 @@ async fn claim_respects_intent_type_filter() {
 
     // The pending row's intent_type is JournalEntryPosted; a worker
     // dedicated to a different intent_type must not pick it up.
-    let claimed = claim_pending_outbox_row(&pool, "worker_wire", "WireTransferRequested", LEASE)
-        .await
-        .unwrap();
+    let claimed = claim_pending_outbox_row(
+        &pool,
+        "worker_wire",
+        "WireTransferRequested",
+        LEASE,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     assert!(
         claimed.is_none(),
         "worker filtering on a different intent_type must not claim the row"
@@ -198,7 +204,7 @@ async fn claim_returns_oldest_pending_row_first() {
     tokio::time::sleep(Duration::from_millis(15)).await;
     let _second = enqueue_pending(&pool, "entry_002").await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap()
         .expect("must return the oldest pending row");
@@ -217,7 +223,7 @@ async fn claim_skips_row_with_future_next_attempt_at() {
     // scheduled to retry well in the future.
     set_next_attempt_at(&pool, intent_id, Utc::now() + ChronoDuration::hours(1)).await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap();
     assert!(
@@ -233,7 +239,7 @@ async fn claim_reclaims_row_whose_lease_has_expired() {
     let intent_id = enqueue_pending(&pool, "entry_001").await;
     force_expired_lease(&pool, intent_id, "worker_crashed").await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap()
         .expect("expired-lease row must be reclaimable");
@@ -255,7 +261,7 @@ async fn release_returns_row_to_pending_and_clears_lease() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let intent_id = enqueue_pending(&pool, "entry_001").await;
-    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap()
         .expect("claim must succeed");
@@ -270,7 +276,7 @@ async fn release_returns_row_to_pending_and_clears_lease() {
     assert!(locked_by.is_none(), "lease must be cleared");
 
     // And the row is once again claimable by a different worker.
-    let reclaimed = claim_pending_outbox_row(&pool, "worker_b", INTENT_TYPE, LEASE)
+    let reclaimed = claim_pending_outbox_row(&pool, "worker_b", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap()
         .expect("released row must be re-claimable");
@@ -288,16 +294,22 @@ async fn claim_rejects_sub_second_lease_duration() {
 
     // A zero-duration lease would expire before the worker could
     // ever call mark_*, leaving the row effectively un-updatable.
-    let zero = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, Duration::ZERO)
+    let zero = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, Duration::ZERO, Utc::now())
         .await
         .expect_err("zero-second lease must be rejected explicitly");
     assert!(matches!(zero, PgError::InvalidState(_)));
 
     // Sub-second durations get truncated by as_secs() to 0 and are
     // also rejected.
-    let half = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, Duration::from_millis(500))
-        .await
-        .expect_err("sub-second lease must be rejected explicitly");
+    let half = claim_pending_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        Duration::from_millis(500),
+        Utc::now(),
+    )
+    .await
+    .expect_err("sub-second lease must be rejected explicitly");
     assert!(matches!(half, PgError::InvalidState(_)));
 }
 
@@ -306,7 +318,7 @@ async fn release_returns_lease_lost_when_worker_does_not_hold_lease() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let intent_id = enqueue_pending(&pool, "entry_001").await;
-    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE)
+    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
         .await
         .unwrap()
         .expect("claim must succeed");
@@ -348,10 +360,9 @@ async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
     // return None even though wall-clock has presumably moved
     // forward by the time the query runs.
     let pass_start = scheduled - ChronoDuration::milliseconds(1);
-    let claimed =
-        claim_pending_outbox_row_before(&pool, "worker_a", INTENT_TYPE, LEASE, pass_start)
-            .await
-            .unwrap();
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, pass_start)
+        .await
+        .unwrap();
     assert!(
         claimed.is_none(),
         "row scheduled after pass_start must not be claimable in this pass; got {claimed:?}"
@@ -359,7 +370,7 @@ async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
 
     // With a later pass_start (after the schedule), the same row
     // is claimable.
-    let claimed = claim_pending_outbox_row_before(&pool, "worker_a", INTENT_TYPE, LEASE, scheduled)
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, scheduled)
         .await
         .unwrap()
         .expect("row scheduled at-or-before pass_start must be claimable");

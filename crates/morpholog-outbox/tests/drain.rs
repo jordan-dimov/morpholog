@@ -185,7 +185,7 @@ async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
     // future. By the time the drain loops back and calls the SQL
     // claim again, the live database `now()` has moved past that
     // 1ms (a real round-trip takes longer than 1ms). Without the
-    // pass-boundary fix in claim_pending_outbox_row_before, the
+    // pass-boundary fix in claim_pending_outbox_row, the
     // same row would be re-claimed indefinitely, producing many
     // TransientRetry outcomes per row and never reaching
     // NoRowAvailable - the loop pathology Copilot flagged. With

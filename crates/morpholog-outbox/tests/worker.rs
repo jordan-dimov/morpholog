@@ -437,55 +437,6 @@ async fn worker_terminates_when_shutdown_channel_closes() {
 }
 
 #[tokio::test]
-async fn worker_invokes_outcome_observer_for_every_drained_row() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    commit_simple_entry(&pool, "entry_001").await;
-    commit_simple_entry(&pool, "entry_002").await;
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let shutdown_tx = Arc::new(shutdown_tx);
-    let observed: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let observed_for_callback = Arc::clone(&observed);
-
-    let worker = OutboxWorker::new(
-        pool.clone(),
-        "worker_a",
-        INTENT_TYPE,
-        ShutdownAfterFirstDelivery {
-            shutdown: shutdown_tx.clone(),
-            call_count: 0.into(),
-        },
-        MockClock::new(Utc::now()),
-        FixedJitter::new(1.0),
-    )
-    .with_base_interval(Duration::from_millis(50))
-    .with_outcome_observer(Box::new(move |o| {
-        let label = match o {
-            morpholog_postgres::ProcessOutcome::Delivered { .. } => "Delivered".to_string(),
-            other => format!("{other:?}"),
-        };
-        observed_for_callback
-            .lock()
-            .expect("observer mutex")
-            .push(label);
-    }));
-
-    worker.run(shutdown_rx).await.unwrap();
-
-    let calls = observed.lock().expect("observer mutex").clone();
-    assert_eq!(
-        calls.len(),
-        2,
-        "observer must fire once per ProcessOutcome from the drain pass; got {calls:?}"
-    );
-    assert!(
-        calls.iter().all(|s| s == "Delivered"),
-        "both outcomes should be Delivered, got {calls:?}"
-    );
-}
-
-#[tokio::test]
 #[should_panic(expected = "base_interval must be > 0")]
 async fn with_base_interval_panics_on_zero() {
     // PgPool is not used by the builder; the panic fires
