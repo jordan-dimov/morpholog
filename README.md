@@ -58,14 +58,16 @@ export DATABASE_URL=postgres:///my_books
 Post a journal entry - debit $100 to cash, credit $100 to revenue:
 
 ```bash
-morpholog propose double_entry_ledger post_simple_entry --args '[
-  {"type":"subject","value":"entry_001"},
-  {"type":"subject","value":"2026-04-15"},
-  {"type":"subject","value":"q1_2026"},
-  {"type":"subject","value":"account_cash"},
-  {"type":"subject","value":"account_revenue"},
-  {"type":"decimal","value":"100"}
-]'
+morpholog propose double_entry_ledger post_simple_entry \
+  --actor jordan \
+  --args '[
+    {"type":"subject","value":"entry_001"},
+    {"type":"subject","value":"2026-04-15"},
+    {"type":"subject","value":"q1_2026"},
+    {"type":"subject","value":"account_cash"},
+    {"type":"subject","value":"account_revenue"},
+    {"type":"decimal","value":"100"}
+  ]'
 ```
 
 The runtime checks every invariant, commits the transaction, and prints a receipt:
@@ -74,11 +76,14 @@ The runtime checks every invariant, commits the transaction, and prints a receip
 {
   "status": "committed",
   "transition_id": "019231ab-...-...-...-...-...",
+  "actor": {"type":"subject","value":"jordan"},
   "asserted_claims": [ /* the journal entry and its two lines */ ],
   "retracted_claims": [],
   "emitted_intents": [ {"name":"JournalEntryPosted","args":[...]} ]
 }
 ```
+
+The `--actor` records, under whose authority, the transition was proposed. It lands in the audit row alongside the transformation name, arguments, and invariants that governed admission; three months from now the answer to "who admitted this?" is the row that wrote it.
 
 Write down that `transition_id`. You will want it shortly. Now look at the trial balance:
 
@@ -135,9 +140,9 @@ Morpholog isn't the whole stack - UIs, dashboards, dataloaders, ML pipelines all
 
 ## Project status
 
-Active. Kernel, PostgreSQL adapter, CLI, and worked examples all work and are tested. Writes scale linearly: about 1.6 seconds per commit against a 100,000-entry ledger. As-of replay also scales linearly: about 1.5 seconds to reconstruct state from a 100,000-transition audit log (was quadratic until recently; a `ReplaySet` working set replaced the linear-scan dedupe loop). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the running performance story.
+Active. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples all work and are tested. Every committed transition records the actor under whose authority it was proposed. Writes scale linearly: about 1.6 seconds per commit against a 100,000-entry ledger. As-of replay also scales linearly: about 1.5 seconds to reconstruct state from a 100,000-transition audit log (was quadratic until recently; a `ReplaySet` working set replaced the linear-scan dedupe loop). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the running performance story.
 
-Not in the box yet: a parser (programs are constructed as Rust IR; the CLI accepts built-in programs only); a worker supervisor with circuit breakers and an HTTP-aware deliverer (a polling worker exists in `morpholog-outbox` with a `StdoutDeliverer`, but driving multiple workers under restart-with-intensity is PR-after-next); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
+Not in the box yet: a parser (programs are constructed as Rust IR; the CLI accepts built-in programs only); a worker supervisor with circuit breakers and an HTTP-aware deliverer (a polling worker exists in `morpholog-outbox` with a `StdoutDeliverer`, but driving multiple workers under restart-with-intensity is PR-after-next); authority invariants that consult the actor (identity is plumbed; the consultation primitive is not); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
 
 Built in Rust on modern PostgreSQL (17+). The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation (SSI) and JSONB so an entire commit - `claims`, `audit`, and `outbox` rows - lands atomically in one transaction or not at all.
 
@@ -158,7 +163,7 @@ The workspace splits into `morpholog-core` (synchronous kernel, no I/O), `morpho
 The runtime today is operationally complete enough to defend a number; the next arc is making it operationally complete enough to defend an *organisation*. The roadmap, framed in business shapes rather than feature names:
 
 - **A worker supervisor with circuit breakers and an HTTP-aware deliverer.** The outbox substrate (delivery state machine, compensation lease, single-row processor) and a polling worker driving it are in tree as of PR #34 - the worker runs one tokio task per intent type, drains all currently-claimable rows on each tick, sleeps the smaller of the jittered base interval or the soonest scheduled retry, and shuts down cleanly on a watch signal. A `StdoutDeliverer` is shipped as the canonical first concrete deliverer. What is left is the supervisor (`JoinSet`-based restart-with-intensity across multiple workers), per-target circuit breakers (`failsafe-rs`), and the first non-stdout deliverer (`HttpDeliverer` that POSTs intents to a configured URL and routes 5xx/connection errors to `Transient`, 4xx non-rate-limit to `NonRetryable`).
-- **Actor authority and approval limits.** "Who admitted this entry, and under what authority?" is one of the questions the runtime promises to answer; closing it fully requires `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims and an invariant that gates admission on the actor's standing. A worked example is the right forcing function.
+- **Actor authority and approval limits.** "Who admitted this entry, and under what authority?" is one of the questions the runtime promises to answer; the *who* half landed in PR #35 (every committed transition records its actor in the audit log). The *authority* half - `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims and an invariant that gates admission on the actor's standing - is the next forced step. A worked example is the right forcing function.
 - **Effective time as a first-class temporal axis.** As-of evaluation already gives knowledge time (what did we believe at moment T). Effective time (the day a contract becomes binding; the period a posting reflects) is expressible as ordinary claims; combining the two gives full bitemporal addressability without ever introducing `valid_from`/`valid_to` columns to any schema.
 - **A surface syntax and parser.** Programs are constructed as Rust IR today; the CLI accepts built-in programs only. A parser commits to file layout, module system, error spans, literal syntax, and a dozen other things that should be ratified by a real outside user, not pre-decided. The parser arrives when an outside collaborator is genuinely blocked by its absence - not before.
 - **Materialised derived claims.** Trial balance and similar reads are recomputed on demand today. For long audit logs and frequent queries, materialised snapshots will become forced. The benchmark is the regression test that will reveal when.
