@@ -1,74 +1,49 @@
-# Copilot Instructions for Morpholog
+# Copilot review instructions for Morpholog
 
-Morpholog is an experimental language and runtime for invariant-governed business systems.
+Morpholog is a programming language and runtime for **invariant-governed
+business systems** (finance, trading, regulated workflows). It is **not**
+a CRUD application, ORM, generic rules engine, or web framework. Treat
+proposed changes accordingly.
 
-Treat this repository as a language/runtime design project, not a conventional CRUD application, ORM, rules engine, or web framework.
+The canonical sources of doctrine are:
 
-## Core ontology
+- [`README.md`](../README.md) - what Morpholog is for, what it answers.
+- [`docs/scope-and-ambition.md`](../docs/scope-and-ambition.md) - what's in scope, what's deliberately out.
+- [`docs/runtime-semantics.md`](../docs/runtime-semantics.md) - IR + runtime kernel semantics.
+- [`docs/design-history.md`](../docs/design-history.md) - which worked example forced which IR primitive.
+- Per-example `README.md` under `examples/`.
 
-The conceptual core is intentionally tiny:
+If a change interacts with the IR (`Invariant`, `Transformation`, `Stmt`,
+`Expr`, `Term`, `Value`, `Claim`, `Intent`, `DerivedClaim`, `Transition`),
+the runtime kernel, or the persistence adapter, prefer reading these
+docs over inferring intent from surrounding code.
 
-- **Invariant** - defines admissible governed state.
-- **Transformation** - the only lawful way governed state may change.
-- **Claim** - runtime substrate; an admitted assertion candidate, not objective truth.
+## A few rules code review doesn't get from the linter
 
-Preserve this ontology unless a change clearly earns an extension. The canonical statement of the semantic model is `docs/runtime-semantics.md`.
+- **Terminology: "claims," not "facts."** A `Claim` is an *admitted
+  assertion*, viewpoint-dependent, not objective truth. PR text and
+  doc comments that say "fact" are drifting and should be flagged.
+- **Never `skip_validation`, `force`, or bypass flags.** Exceptions,
+  when needed, must be first-class typed claims with full audit
+  standing.
+- **ASCII-only dashes** in all prose (docs, comments, commit messages,
+  PR bodies). No em-dashes (U+2014) or en-dashes (U+2013). Use `-`.
+- **Don't pin counts that change** ("the four examples," "the three
+  invariants") in docs or doc comments. List the names, or omit the
+  count. Test assertions on counts are fine; prose is not.
+- **`unsafe_code = "forbid"`** at the workspace level - any
+  introduction is a structural change requiring justification.
 
-## Design principles
+## Validation
 
-- Prefer the smallest semantic step that teaches something concrete.
-- Push complexity into the runtime/compiler, not onto users.
-- Avoid premature concepts: entities, services, repositories, object models, workflows, metadata systems, parser syntax, projections, or read-side frameworks unless the current task explicitly requires them.
-- Treat **"claims about claims"** as the first modelling move for standing, currentness, lineage, and authority. Use claim metadata only when claims cannot express the concept cleanly.
-- Never introduce `skip_validation`, `force`, or bypass flags. Exceptions, when eventually needed, must be first-class typed claims carrying reason, approver, scope, and audit trail.
-- Keep examples semantically meaningful. Prefer examples that stress admissibility, correction, supersession, current pointers, aggregation, exclusion, or candidate-state rejection.
-- Be sceptical: the highest-value review is one that catches concept creep early.
-
-## Current semantic commitments (locked)
-
-- Reads are **snapshot-based** - no read-your-writes inside a transformation.
-- Writes are staged as asserted/retracted claims and emitted intents.
-- Invariants evaluate against the **candidate post-state**, not the snapshot.
-- Rejected transformations must not change governed state.
-- The atomic guarantee stops at the database commit. Post-commit outbox intents deliver at-least-once with deterministic idempotency keys; external effects are retried or compensated, never "rolled back."
-- Historical claims may remain admitted while current-standing pointer claims move (see `examples/02_revenue_restatement`).
-- Financial values are decimal-first via `rust_decimal`. No floating point in business arithmetic.
-- Subjects are opaque `uuid::Uuid::now_v7()`. No types over subjects in the surface language.
-
-## Worked examples
-
-The worked examples are the test of whether the ontology survives real pressure. Each lives in its own directory under `examples/`; the per-directory README is the authoritative description:
-
-- `examples/01_settlement_netting` - clean kernel proof: existence, equality-via-aggregation, exclusion.
-- `examples/02_revenue_restatement` - temporal correction without claim metadata, using a separate `CurrentBankRecognition` pointer claim and `Supersedes` lineage claim.
-- `examples/03_claim_standing` - admissibility-for-purpose: which admitted claims may be used for which decisions, and how that standing is acquired and lost without mutating the underlying claims.
-- `examples/04_double_entry_ledger` - posted-balance invariants, closed-period rejection, restatement-with-supersession. Also hosts the Example 5 trial-balance derived claim.
-
-When reviewing changes to the IR, evaluator, or `propose()` runtime, ask whether the existing tests for these examples still pass *and* whether new semantic ground is being added - not just plumbing.
-
-## Review checklist
-
-When reviewing PRs, ask:
-
-- Does this preserve the invariant/transformation core?
-- Does this introduce a new concept before it is proven necessary?
-- Does the change make invalid state harder or easier to admit?
-- Are rejected paths tested, not just happy paths? Does at least one test prove an invariant *would* reject a candidate state?
-- Is terminology precise? `Claim`, not `Fact`. `Transformation`, not service/action/mutation.
-- Does the implementation stay small enough to support rapid learning?
-
-Support fast iteration, but protect semantic clarity. Do not request broad architecture, polish, or extra subsystems unless they are necessary for the current milestone.
-
-## Validation commands
-
-For Rust changes, the working set is:
+CI is `.github/workflows/ci.yml`. The local equivalent is:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test -p morpholog-core -p morpholog-examples -p morpholog-cli --all-targets --locked
+
+# Against a local PostgreSQL 17+ with crates/morpholog-core/sql/schema.sql applied:
+DATABASE_URL=postgres:///morpholog_dev \
+  cargo test -p morpholog-postgres -p morpholog-outbox --all-targets --locked -- --test-threads=1
 ```
-
-CI runs these exact three commands (`.github/workflows/ci.yml`). If they pass locally, CI should pass.
-
-The PostgreSQL adapter (`morpholog-postgres`, via `sqlx`) is shipping; integration tests require a running PostgreSQL 17+ with `crates/morpholog-core/sql/schema.sql` applied. Local system PostgreSQL is assumed for development; see the top-level README for setup.
