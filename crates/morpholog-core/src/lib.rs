@@ -496,7 +496,10 @@ pub enum EvalError {
     /// the functional-lookup contract requires exactly one match.
     ValueOfMultipleMatches(String),
     /// `Term::Actor` was referenced in a context that has no transition
-    /// in scope - most commonly an invariant body. Authority checks
+    /// in scope - any path that calls into the evaluator with
+    /// `actor = None`. The common cases are invariant bodies and
+    /// derived-claim bodies (both evaluate against admitted state, not
+    /// against any specific proposing transition). Authority checks
     /// belong in `require`, not in invariants; this error makes that
     /// doctrine enforceable rather than convention.
     UnboundActor,
@@ -517,7 +520,7 @@ impl std::fmt::Display for EvalError {
             }
             EvalError::UnboundActor => write!(
                 f,
-                "Term::Actor referenced with no transition in scope (likely used inside an invariant body; authority checks belong in `require`)"
+                "Term::Actor referenced with no transition in scope (likely used outside a transformation body - e.g., inside an invariant or derived-claim body; authority checks belong in `require`)"
             ),
         }
     }
