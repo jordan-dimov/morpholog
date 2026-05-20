@@ -16,6 +16,8 @@ Two patterns weave through one programme. Each handles a different shape of cont
 
 **Where they meet.** When the verifier corrects the figure, every standing granted on the prior verification is retracted by pattern - the authorities must re-issue standing if they accept the correction. **But every historical decision admitted under the prior standing survives in admitted state.** A debt-service-coverage covenant test computed on June 30 against the then-valid figure stays a valid record of what the bank decided that day, even after the verifier corrects the figure on July 15. The legitimacy of a *past* decision was established when it was made; revocation prevents *future* decisions, not past ones.
 
+After correction, the prior verification remains queryable as history but cannot receive new standing - the runtime requires `grant_standing` to attach to a verification that is *currently* in force. Future reliance must attach to the current figure. The whole doctrine in one sentence: **correction does not erase the old figure, does not erase old decisions, does remove future standing from the old figure, and requires future reliance to be re-granted on the current figure.**
+
 ## The program
 
 See [`verified_revenue.morph`](verified_revenue.morph) for the (illustrative) surface syntax.
@@ -52,7 +54,7 @@ The append-only / retractable split is total. Content claims (verification figur
 | --- | --- |
 | `admit_independent_verification(asset, period, amount, verification_id)` | First admission for an (asset, period). Asserts both the IV claim and the `CurrentVerification` pointer. Rejected if a current verification already exists - use `correct_independent_verification` to replace. |
 | `correct_independent_verification(asset, period, new_amount, new_verification_id, prior_verification_id)` | The combined-doctrine transformation. Asserts the new IV and `Supersedes` lineage; retracts the prior `CurrentVerification` pointer AND every `AdmissibleFor` on the prior verification (pattern-based retraction); asserts the new pointer. Historical decisions survive. |
-| `grant_standing(verification_id, purpose, authority, grant_id)` | Grants `purpose` standing on the verification, recorded with authority and grant provenance. Rejected if the (verification, purpose) pair has been revoked (terminal) or already has active admissibility. |
+| `grant_standing(verification_id, purpose, authority, grant_id)` | Grants `purpose` standing on the verification, recorded with authority and grant provenance. Rejected if (a) no `IndependentlyVerifiedRevenue` claim references the supplied `verification_id` (phantom id), (b) the verification is not currently in force (superseded by correction), (c) the (verification, purpose) pair has been revoked (terminal), or (d) the pair already has active admissibility. |
 | `revoke_standing(verification_id, purpose, revocation_id)` | Requires the standing to be currently active; retracts `AdmissibleFor`; asserts `StandingRevoked` (terminal). The historical `StandingGrantedBy` survives. |
 | `admit_debt_service_revenue(asset, period, amount, decision_id, verification_id)` | Requires a matching IV claim AND `AdmissibleFor(verification_id, bank_debt_service)`. The purpose is embedded as a literal in the require, so the transformation is intrinsically tied to its purpose. |
 | `admit_investor_reported_revenue(asset, period, amount, report_id, verification_id)` | Same shape, but the embedded purpose is `investor_reporting` and the asserted predicate is `InvestorReportedRevenue`. |

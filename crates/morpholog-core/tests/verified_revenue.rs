@@ -372,6 +372,75 @@ fn cannot_regrant_after_revocation() {
     assert!(matches!(outcome, Outcome::Rejected { .. }));
 }
 
+#[test]
+fn cannot_grant_standing_on_nonexistent_verification() {
+    // grant_standing's first require: the verification_id must
+    // reference a real IndependentlyVerifiedRevenue claim. Phantom
+    // ids are rejected at admission time. This is what attaches the
+    // word "standing" to a real admitted figure rather than just a
+    // shape in the database.
+    let outcome = common::propose_with_test_actor(
+        &verified_revenue::grant_standing(),
+        vec![
+            subj("ver_phantom"),
+            subj(verified_revenue::BANK_DEBT_SERVICE),
+            subj("credit_committee"),
+            subj("grant_001"),
+        ],
+        &State::default(),
+        &invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn cannot_grant_standing_on_superseded_verification() {
+    // After correction, ver_001 is admitted but no longer current.
+    // grant_standing requires CurrentVerification - new standing must
+    // attach to the live figure (ver_002), not the historical one.
+    let pre = admit_iv(State::default(), 91, "ver_001");
+    let pre = must_accept(
+        &verified_revenue::correct_independent_verification(),
+        vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
+        pre,
+        &invariants(),
+    );
+
+    // Attempt to grant standing on the now-superseded ver_001.
+    let outcome = common::propose_with_test_actor(
+        &verified_revenue::grant_standing(),
+        vec![
+            subj("ver_001"),
+            subj(verified_revenue::BANK_DEBT_SERVICE),
+            subj("credit_committee"),
+            subj("grant_001"),
+        ],
+        &pre,
+        &invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+
+    // But standing CAN be granted on ver_002 (the current figure).
+    let post = must_accept(
+        &verified_revenue::grant_standing(),
+        vec![
+            subj("ver_002"),
+            subj(verified_revenue::BANK_DEBT_SERVICE),
+            subj("credit_committee"),
+            subj("grant_002"),
+        ],
+        pre,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &post,
+        "AdmissibleFor",
+        &[subj("ver_002"), subj(verified_revenue::BANK_DEBT_SERVICE)],
+    ));
+}
+
 // ============================================================
 // Combined: correction retracts standing
 // ============================================================

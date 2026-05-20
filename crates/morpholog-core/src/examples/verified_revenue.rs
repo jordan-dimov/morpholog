@@ -251,9 +251,23 @@ pub fn correct_independent_verification() -> Transformation {
 
 /// Grant `purpose` standing on `verification_id`, recording
 /// `authority` as the granting party and `grant_id` as the provenance
-/// handle. Rejected if the (verification, purpose) pair has been
-/// revoked (revocation is terminal in v0) or already has active
-/// admissibility.
+/// handle.
+///
+/// Admission requires four things in order:
+///
+/// 1. **The verification exists.** Some `IndependentlyVerifiedRevenue`
+///    claim references the supplied `verification_id`. Standing
+///    cannot be granted on a phantom id.
+/// 2. **The verification is current.** It is the active
+///    `CurrentVerification` for its `(asset, period)`. Standing on a
+///    superseded verification is forbidden - future reliance must
+///    attach to the current figure. (Historical decisions admitted
+///    when the verification *was* current survive separately; they
+///    are decisions on the record, not future standing.)
+/// 3. **No revocation.** The `(verification, purpose)` pair has not
+///    been revoked - revocation is terminal in v0.
+/// 4. **No double-grant.** The pair does not already have active
+///    admissibility.
 pub fn grant_standing() -> Transformation {
     Transformation {
         name: "grant_standing".to_string(),
@@ -264,6 +278,19 @@ pub fn grant_standing() -> Transformation {
             "grant_id".to_string(),
         ],
         body: vec![
+            Stmt::Require(Expr::Claim {
+                predicate: "IndependentlyVerifiedRevenue".to_string(),
+                args: vec![
+                    Term::Wildcard,
+                    Term::Wildcard,
+                    Term::Wildcard,
+                    var("verification_id"),
+                ],
+            }),
+            Stmt::Require(Expr::Claim {
+                predicate: "CurrentVerification".to_string(),
+                args: vec![Term::Wildcard, Term::Wildcard, var("verification_id")],
+            }),
             Stmt::Require(Expr::Not(Box::new(Expr::Exists {
                 binding: "r".to_string(),
                 body: Box::new(Expr::Claim {

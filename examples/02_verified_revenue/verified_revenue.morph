@@ -73,9 +73,16 @@ transformation correct_independent_verification(
     emit VerificationCorrected(new_verification_id, prior_verification_id)
 
 
+-- Standing may only be granted on a verification that exists AND is
+-- current. After a verifier corrects a figure, no new standing can
+-- attach to the superseded one - future reliance must attach to the
+-- live verification. Historical decisions admitted under earlier
+-- standings survive separately.
 transformation grant_standing(
     verification_id, purpose, authority, grant_id
 ):
+    require IndependentlyVerifiedRevenue(_, _, _, verification_id)
+    require CurrentVerification(_, _, verification_id)
     require not StandingRevoked(verification_id, purpose, _)
     require not AdmissibleFor(verification_id, purpose)
     assert StandingGrantedBy(verification_id, purpose, authority, grant_id)
