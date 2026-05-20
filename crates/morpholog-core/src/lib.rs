@@ -1607,6 +1607,8 @@ mod tests {
             Expr::Not(Box::new(claim("P_not_body"))),
             // Eq operates on two sub-expressions.
             Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
+            // Le operates on two sub-expressions.
+            Expr::Le(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
             // Sub operates on two sub-expressions.
             Expr::Sub(
                 Box::new(claim("P_sub_left")),
@@ -1647,6 +1649,8 @@ mod tests {
             "P_not_body",
             "P_eq_left",
             "P_eq_right",
+            "P_le_left",
+            "P_le_right",
             "P_sub_left",
             "P_sub_right",
             "P_sum_body",
