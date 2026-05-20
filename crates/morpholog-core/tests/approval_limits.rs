@@ -15,7 +15,7 @@ mod common;
 
 use common::{dec, has_claim, must_accept, must_accept_as, propose_as, subj};
 use morpholog_core::examples::approval_limits;
-use morpholog_core::{Invariant, Outcome, State};
+use morpholog_core::{ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State};
 
 fn empty_invariants() -> Vec<Invariant> {
     approval_limits::all_invariants()
@@ -170,6 +170,59 @@ fn multiple_grants_take_the_satisfying_one() {
         "LimitedApproval",
         &[subj("inv_3k"), subj("invoice"), dec(3000), subj("jordan")],
     ));
+}
+
+#[test]
+fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
+    // Doctrine: ill-typed admitted claims are structural corruption,
+    // not business rejection. An `ApprovalLimit($actor, doc_type, X)`
+    // where `X` is not a decimal causes `Expr::Le(amount, limit)` to
+    // raise `EvalError::TypeMismatch` when the require evaluates it.
+    //
+    // The runtime cannot currently prevent such a claim from being
+    // admitted - predicate-typed parameters are not yet in the IR.
+    // Until typed predicates land, the right behaviour is honest:
+    // surface the structural error rather than paper over it.
+    //
+    // Important: even if a *valid* decimal limit also exists, the
+    // malformed one is encountered first (or last) during the And's
+    // sequential evaluation, and the EvalError short-circuits the
+    // whole require. Today this is the price of not having typed
+    // predicates yet; an example that needs typed predicates is the
+    // forcing function for the next step.
+    let pre = State::from_claims(vec![ClaimInstance {
+        predicate: "ApprovalLimit".to_string(),
+        args: vec![
+            subj("jordan"),
+            subj("invoice"),
+            EvalValue::Subject("not_a_decimal".to_string()),
+        ],
+    }]);
+
+    let transition = common::test_transition(
+        &approval_limits::approve_within_limit(),
+        vec![subj("inv_001"), subj("invoice"), dec(100)],
+    );
+    let mut transition = transition;
+    transition.actor = subj("jordan");
+
+    let err = morpholog_core::propose(
+        &approval_limits::approve_within_limit(),
+        &transition,
+        &pre,
+        &empty_invariants(),
+    )
+    .expect_err("non-decimal limit must surface as EvalError, not Rejected");
+
+    match err {
+        EvalError::TypeMismatch(msg) => {
+            assert!(
+                msg.contains("Le"),
+                "TypeMismatch should mention Le; got `{msg}`",
+            );
+        }
+        other => panic!("expected TypeMismatch, got {other:?}"),
+    }
 }
 
 #[test]

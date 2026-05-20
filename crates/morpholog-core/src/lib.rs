@@ -42,11 +42,11 @@ pub struct Invariant {
 ///
 /// The variants are deliberately narrow: predicate composition (`And`,
 /// `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
-/// (`Claim`, `Neq`, `Eq`), one bounded aggregation (`Sum`), one decimal
-/// arithmetic primitive (`Sub`), one collection primitive (`In`), one
-/// functional-lookup primitive (`ValueOf`), and `Term`-as-value lifting.
-/// Anything that cannot be expressed within this set is, by design, not
-/// yet a runtime concern.
+/// (`Claim`, `Neq`, `Eq`), one decimal-comparison primitive (`Le`), one
+/// bounded aggregation (`Sum`), one decimal-arithmetic primitive (`Sub`),
+/// one collection primitive (`In`), one functional-lookup primitive
+/// (`ValueOf`), and `Term`-as-value lifting. Anything that cannot be
+/// expressed within this set is, by design, not yet a runtime concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Claim {

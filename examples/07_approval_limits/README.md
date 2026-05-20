@@ -73,6 +73,14 @@ The PG test exercises the chain end-to-end through `propose_against_pg`: grant, 
 - **`Expr::Le(Box<Expr>, Box<Expr>)`** - decimal less-than-or-equal. Predicate-shaped: returns the binding set unchanged when true, the empty set when false. Both operands must evaluate to `EvalValue::Decimal`; anything else surfaces as `EvalError::TypeMismatch`.
 - The single comparison primitive added in this PR. `Lt`, `Gt`, `Ge` are not yet here. Each lands when an example forces it; for approval ceilings, `<=` is the natural shape (you may approve up to and including the limit) and is sufficient.
 
+### Typing assumption (a real v0 doctrine point)
+
+`approve_within_limit` evaluates `amount <= limit` against the binding for `limit` produced by the `ApprovalLimit` claim. **`Expr::Le` requires both operands to evaluate to `EvalValue::Decimal`.** If either is a different kind (a subject, a bool, a collection), the require raises `EvalError::TypeMismatch`, which surfaces from `propose_against_pg` as `PgError::Kernel(EvalError)` - **not** as `PgProposalOutcome::Rejected`.
+
+That distinction matters. A non-decimal `limit` admitted into `ApprovalLimit` is *structural corruption* of the model, not lawful business rejection. The runtime is honest about which it is: a malformed claim that was admitted (perhaps before the program had its current shape, perhaps by direct insertion bypassing the kernel) makes some admission gates fail loudly rather than silently misbehave. The pinning test `non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch` makes this explicit.
+
+A complete fix - rejecting non-decimal limits *at admission time* on the `grant_approval_limit` transformation - is the work of **typed predicate declarations**, which `docs/scope-and-ambition.md` already lists as a candidate language affordance. Until an example forces typed predicates, this example assumes its callers admit decimal values for `amount` and `limit`, and treats violations as kernel errors rather than business rejections.
+
 ### What this example deliberately does not cover
 
 1. **Strict comparison (`<`, `>`, `>=`).** Add when an example needs them. A "must be strictly under daily exposure cap" rule, for instance.
