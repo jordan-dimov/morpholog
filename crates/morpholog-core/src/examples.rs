@@ -15,10 +15,9 @@
 //! as teaching fixtures, not a contract.
 
 pub mod approval_controls;
-pub mod claim_standing;
 pub mod double_entry_ledger;
-pub mod revenue_restatement;
 pub mod settlement_netting;
+pub mod verified_revenue;
 
 /// All built-in worked example programs, in the order they were
 /// developed. Returned as owned [`crate::Program`] values so callers
@@ -32,8 +31,7 @@ pub mod settlement_netting;
 pub fn all_programs() -> Vec<crate::Program> {
     vec![
         settlement_netting::program(),
-        revenue_restatement::program(),
-        claim_standing::program(),
+        verified_revenue::program(),
         double_entry_ledger::program(),
         approval_controls::program(),
     ]

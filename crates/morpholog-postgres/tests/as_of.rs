@@ -12,7 +12,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::{double_entry_ledger, revenue_restatement};
+use morpholog_core::examples::{double_entry_ledger, verified_revenue};
 use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, list_claims, list_claims_at, list_derived, list_derived_at,
@@ -313,16 +313,16 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let trial_balance = double_entry_ledger::trial_balance_row();
     let baseline = list_derived_at(&pool, &trial_balance, tid3).await.unwrap();
 
-    // Commit an unrelated transformation (revenue restatement's
+    // Commit an unrelated transformation (verified_revenue's
     // admit_independent_verification). This adds an
     // IndependentlyVerifiedRevenue claim and a new audit row, none of
     // which the trial-balance derived references. Capture the new
     // tid; ask for the trial balance as of THIS tid.
-    let invariants = revenue_restatement::all_invariants();
+    let invariants = verified_revenue::all_invariants();
     let new_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &revenue_restatement::admit_independent_verification(),
+            &verified_revenue::admit_independent_verification(),
             vec![
                 subj("noise_asset"),
                 subj("p_noise"),
@@ -398,19 +398,19 @@ async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() 
 /// (`post_simple_entry`, `restate_entry`) - neither retracts
 /// anything, so the replay loop's `claims.retain(|c| c != r)`
 /// branch is never tickled by realistic data. This test uses
-/// `revenue_restatement::correct_independent_verification`, which
-/// **retracts** `CurrentBankRecognition` as part of its body. The
-/// scenario:
+/// `verified_revenue::correct_independent_verification`, which
+/// **retracts** the `CurrentVerification` pointer as part of its
+/// body. The scenario:
 ///
-/// 1. `admit_independent_verification` (IV1)        -> tid1
-/// 2. `recognise_bank_revenue`                       -> tid2 (asserts
-///    `BankRecognisedRevenue` and `CurrentBankRecognition`)
-/// 3. `correct_independent_verification`             -> tid3 (asserts
-///    new IV2 + `Supersedes`; **retracts** the `CurrentBankRecognition`
-///    that step 2 created)
+/// 1. `admit_independent_verification` (IV1, asserts also
+///    `CurrentVerification(asset, period, ver_001)`)   -> tid1
+/// 2. `correct_independent_verification`               -> tid2 (asserts
+///    new IV2 + `Supersedes`; **retracts** the `CurrentVerification`
+///    that step 1 created and asserts a new one for ver_002)
 ///
-/// As-of tid2: `CurrentBankRecognition` IS present.
-/// As-of tid3: `CurrentBankRecognition` is GONE.
+/// As-of tid1: `CurrentVerification(_, _, ver_001)` IS present.
+/// As-of tid2: `CurrentVerification(_, _, ver_001)` is GONE;
+///             `CurrentVerification(_, _, ver_002)` is present.
 ///
 /// A regression that broke the retraction branch of the replay loop
 /// (e.g. ignored retractions, or applied them after assertions
@@ -422,15 +422,15 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let invariants = revenue_restatement::all_invariants();
+    let invariants = verified_revenue::all_invariants();
     let asset = subj("asset_a");
     let period = subj("p_2026_04");
 
-    // Step 1: admit IV at 92.
-    let _tid1 = expect_committed(
+    // Step 1: admit IV at 92. Asserts IV + CurrentVerification(ver_001).
+    let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &revenue_restatement::admit_independent_verification(),
+            &verified_revenue::admit_independent_verification(),
             vec![asset.clone(), period.clone(), dec(92), subj("ver_001")],
             &invariants,
         )
@@ -438,25 +438,13 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
         .unwrap(),
     );
 
-    // Step 2: recognise bank revenue at 92, with rec_001.
+    // Step 2: correct the verification to 91 (ver_002). This
+    // transformation retracts CurrentVerification(ver_001) and
+    // asserts CurrentVerification(ver_002) plus Supersedes.
     let tid2 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &revenue_restatement::recognise_bank_revenue(),
-            vec![asset.clone(), period.clone(), dec(92), subj("rec_001")],
-            &invariants,
-        )
-        .await
-        .unwrap(),
-    );
-
-    // Step 3: correct the verification to 91 (ver_002). This
-    // transformation retracts CurrentBankRecognition as part of its
-    // body - the contested-legitimacy semantics from PR #6.
-    let tid3 = expect_committed(
-        common::propose_pg_with_test_actor(
-            &pool,
-            &revenue_restatement::correct_independent_verification(),
+            &verified_revenue::correct_independent_verification(),
             vec![asset, period, dec(91), subj("ver_002"), subj("ver_001")],
             &invariants,
         )
@@ -464,38 +452,47 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
         .unwrap(),
     );
 
-    // At tid2: CurrentBankRecognition IS present.
-    let claims_at_tid2 = list_claims_at(&pool, tid2).await.unwrap();
-    let current_at_tid2 = claims_at_tid2
+    // At tid1: CurrentVerification(_, _, ver_001) IS present.
+    let claims_at_tid1 = list_claims_at(&pool, tid1).await.unwrap();
+    let pointer_at_tid1 = claims_at_tid1
         .iter()
-        .filter(|c| c.predicate == "CurrentBankRecognition")
+        .filter(|c| c.predicate == "CurrentVerification" && c.args[2] == subj("ver_001"))
         .count();
     assert_eq!(
-        current_at_tid2, 1,
-        "CurrentBankRecognition should be admitted as of tid2"
+        pointer_at_tid1, 1,
+        "CurrentVerification(ver_001) should be present as of tid1"
     );
 
-    // At tid3 (after the retraction): CurrentBankRecognition is GONE.
-    let claims_at_tid3 = list_claims_at(&pool, tid3).await.unwrap();
-    let current_at_tid3 = claims_at_tid3
+    // At tid2 (after the retraction): the ver_001 pointer is gone and
+    // the ver_002 pointer is present.
+    let claims_at_tid2 = list_claims_at(&pool, tid2).await.unwrap();
+    let stale_pointer_at_tid2 = claims_at_tid2
         .iter()
-        .filter(|c| c.predicate == "CurrentBankRecognition")
+        .filter(|c| c.predicate == "CurrentVerification" && c.args[2] == subj("ver_001"))
+        .count();
+    let new_pointer_at_tid2 = claims_at_tid2
+        .iter()
+        .filter(|c| c.predicate == "CurrentVerification" && c.args[2] == subj("ver_002"))
         .count();
     assert_eq!(
-        current_at_tid3, 0,
-        "CurrentBankRecognition should be gone as of tid3 (retracted by correct_independent_verification)"
+        stale_pointer_at_tid2, 0,
+        "CurrentVerification(ver_001) should be retracted as of tid2"
+    );
+    assert_eq!(
+        new_pointer_at_tid2, 1,
+        "CurrentVerification(ver_002) should be present as of tid2"
     );
 
     // The historical IV1 must survive the correction (history is
     // append-only); both verifications should be in admitted state
-    // at tid3.
-    let iv_at_tid3 = claims_at_tid3
+    // at tid2.
+    let iv_at_tid2 = claims_at_tid2
         .iter()
         .filter(|c| c.predicate == "IndependentlyVerifiedRevenue")
         .count();
     assert_eq!(
-        iv_at_tid3, 2,
-        "both IV1 (original 92) and IV2 (corrected 91) should be admitted at tid3"
+        iv_at_tid2, 2,
+        "both IV1 (original 92) and IV2 (corrected 91) should be admitted at tid2"
     );
 }
 

@@ -17,7 +17,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::examples::{
-    claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
+    approval_controls, double_entry_ledger, settlement_netting, verified_revenue,
 };
 
 #[test]
@@ -36,34 +36,20 @@ fn settlement_netting_program_has_expected_shape() {
 }
 
 #[test]
-fn revenue_restatement_program_has_expected_shape() {
-    let p = revenue_restatement::program();
-    assert_eq!(p.name, "revenue_restatement");
-    assert_eq!(p.invariants.len(), 3);
-    assert_eq!(p.transformations.len(), 4);
+fn verified_revenue_program_has_expected_shape() {
+    let p = verified_revenue::program();
+    assert_eq!(p.name, "verified_revenue");
+    assert_eq!(p.invariants.len(), 4);
+    assert_eq!(p.transformations.len(), 6);
 
+    // Restatement-side transformations.
     assert!(p.transformation("admit_independent_verification").is_some());
-    assert!(p.transformation("recognise_bank_revenue").is_some());
     assert!(
         p.transformation("correct_independent_verification")
             .is_some()
     );
-    assert!(p.transformation("restate_bank_revenue").is_some());
 
-    assert!(
-        p.invariant("current_recognition_matches_current_verification")
-            .is_some()
-    );
-}
-
-#[test]
-fn claim_standing_program_has_expected_shape() {
-    let p = claim_standing::program();
-    assert_eq!(p.name, "claim_standing");
-    assert_eq!(p.invariants.len(), 2);
-    assert_eq!(p.transformations.len(), 5);
-
-    assert!(p.transformation("admit_independent_verification").is_some());
+    // Standing-side transformations.
     assert!(p.transformation("grant_standing").is_some());
     assert!(p.transformation("revoke_standing").is_some());
     assert!(p.transformation("admit_debt_service_revenue").is_some());
@@ -72,8 +58,14 @@ fn claim_standing_program_has_expected_shape() {
             .is_some()
     );
 
+    // All four invariants present.
     assert!(p.invariant("admissibility_has_provenance").is_some());
     assert!(p.invariant("admissibility_excludes_revocation").is_some());
+    assert!(
+        p.invariant("at_most_one_current_verification_per_asset_period")
+            .is_some()
+    );
+    assert!(p.invariant("at_most_one_direct_successor").is_some());
 }
 
 #[test]
@@ -141,9 +133,9 @@ fn all_programs_registry_contains_every_per_example_program() {
 
     for expected_name in [
         settlement_netting::program().name.as_str(),
-        revenue_restatement::program().name.as_str(),
-        claim_standing::program().name.as_str(),
+        verified_revenue::program().name.as_str(),
         double_entry_ledger::program().name.as_str(),
+        approval_controls::program().name.as_str(),
     ] {
         assert!(
             registry_names.contains(&expected_name),

@@ -1,0 +1,115 @@
+-- Verified revenue (v0).
+--
+-- Two patterns woven through one programme. Together they are how a
+-- regulated business defends a contested number over time.
+--
+-- 1. Currentness with restatement. A verifier admits a revenue figure
+--    for an asset / period; later they may correct it. The original
+--    stays admitted as the record of what was filed; `Supersedes`
+--    records the lineage; a singleton `CurrentVerification` pointer
+--    moves to the corrected figure.
+--
+-- 2. Admissibility-for-purpose. Different authorities (a bank's
+--    credit committee, an investor-relations office) grant *standing*
+--    for the verification to be relied on for *their* decisions
+--    (debt-service-coverage, investor reporting). Standing can be
+--    revoked; the verification itself is never mutated; decisions
+--    admitted under valid standing survive any later revocation.
+--
+-- The combined doctrine: when a verification is corrected, the
+-- standings granted on the prior verification are retracted by
+-- pattern - the authorities must re-issue standing if they accept
+-- the correction. Historical decisions admitted under the prior
+-- standing are preserved by construction (no invariant ties decisions
+-- to live standing).
+
+
+invariant admissibility_has_provenance:
+    AdmissibleFor(v, p) implies StandingGrantedBy(v, p, _, _)
+
+
+invariant admissibility_excludes_revocation:
+    AdmissibleFor(v, p) implies not exists { StandingRevoked(v, p, _) }
+
+
+invariant at_most_one_current_verification_per_asset_period:
+    CurrentVerification(asset, period, a)
+    and CurrentVerification(asset, period, b)
+        implies a == b
+
+
+invariant at_most_one_direct_successor:
+    Supersedes(new_a, old)
+    and Supersedes(new_b, old)
+        implies new_a == new_b
+
+
+-- First admission. Asserts both the underlying IV claim and the
+-- singleton CurrentVerification pointer. Rejected if there is already
+-- a current verification for this (asset, period).
+transformation admit_independent_verification(
+    asset, period, amount, verification_id
+):
+    require not CurrentVerification(asset, period, _)
+    assert IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    assert CurrentVerification(asset, period, verification_id)
+    emit IndependentVerificationAdmitted(verification_id)
+
+
+-- Correction. The original IV stays in admitted state; the new IV is
+-- admitted; lineage recorded; the pointer moves; every active
+-- standing on the prior verification is retracted by pattern.
+-- Historical decisions admitted under those standings survive.
+transformation correct_independent_verification(
+    asset, period, new_amount, new_verification_id, prior_verification_id
+):
+    require IndependentlyVerifiedRevenue(asset, period, _, prior_verification_id)
+    require not Supersedes(_, prior_verification_id)
+    assert IndependentlyVerifiedRevenue(asset, period, new_amount, new_verification_id)
+    assert Supersedes(new_verification_id, prior_verification_id)
+    retract CurrentVerification(asset, period, prior_verification_id)
+    retract AdmissibleFor(prior_verification_id, _)
+    assert CurrentVerification(asset, period, new_verification_id)
+    emit VerificationCorrected(new_verification_id, prior_verification_id)
+
+
+-- Standing may only be granted on a verification that exists AND is
+-- current. After a verifier corrects a figure, no new standing can
+-- attach to the superseded one - future reliance must attach to the
+-- live verification. Historical decisions admitted under earlier
+-- standings survive separately.
+transformation grant_standing(
+    verification_id, purpose, authority, grant_id
+):
+    require IndependentlyVerifiedRevenue(_, _, _, verification_id)
+    require CurrentVerification(_, _, verification_id)
+    require not StandingRevoked(verification_id, purpose, _)
+    require not AdmissibleFor(verification_id, purpose)
+    assert StandingGrantedBy(verification_id, purpose, authority, grant_id)
+    assert AdmissibleFor(verification_id, purpose)
+    emit StandingGranted(grant_id)
+
+
+transformation revoke_standing(verification_id, purpose, revocation_id):
+    require AdmissibleFor(verification_id, purpose)
+    retract AdmissibleFor(verification_id, purpose)
+    assert StandingRevoked(verification_id, purpose, revocation_id)
+    emit StandingRevocationAdmitted(revocation_id)
+
+
+transformation admit_debt_service_revenue(
+    asset, period, amount, decision_id, verification_id
+):
+    require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    require AdmissibleFor(verification_id, bank_debt_service)
+    assert DebtServiceRevenue(asset, period, amount, decision_id, verification_id)
+    emit DebtServiceRevenueAdmitted(decision_id)
+
+
+transformation admit_investor_reported_revenue(
+    asset, period, amount, report_id, verification_id
+):
+    require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    require AdmissibleFor(verification_id, investor_reporting)
+    assert InvestorReportedRevenue(asset, period, amount, report_id, verification_id)
+    emit InvestorReportedRevenueAdmitted(report_id)

@@ -12,7 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::examples::{
-    approval_controls, claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
+    approval_controls, double_entry_ledger, settlement_netting, verified_revenue,
 };
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
@@ -488,274 +488,55 @@ async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> boo
     n > 0
 }
 
-#[tokio::test]
-async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-
-    let invariants = revenue_restatement::all_invariants();
-
-    // 1. Admit initial independent verification at 92.
-    let outcome = common::propose_pg_with_test_actor(
-        &pool,
-        &revenue_restatement::admit_independent_verification(),
-        vec![asset(), period(), dec(92), subj("ver_001")],
-        &invariants,
-    )
-    .await
-    .expect("step 1 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        emitted_intents, ..
-    } = outcome
-    else {
-        panic!("step 1 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
-
-    // 2. Bank recognises 92, rec_001. I1 holds against the current verification.
-    let outcome = common::propose_pg_with_test_actor(
-        &pool,
-        &revenue_restatement::recognise_bank_revenue(),
-        vec![asset(), period(), dec(92), subj("rec_001")],
-        &invariants,
-    )
-    .await
-    .expect("step 2 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        emitted_intents, ..
-    } = outcome
-    else {
-        panic!("step 2 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(emitted_intents[0].name, "BankRevenueRecognised");
-
-    // 3. Verifier corrects to 91 (ver_002 supersedes ver_001). The verifier's
-    //    transformation body also retracts CurrentBankRecognition, so I1 is
-    //    vacuously satisfied (no current pointer remains until the bank
-    //    restates).
-    let outcome = common::propose_pg_with_test_actor(
-        &pool,
-        &revenue_restatement::correct_independent_verification(),
-        vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
-        &invariants,
-    )
-    .await
-    .expect("step 3 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        retracted_claims,
-        emitted_intents,
-        ..
-    } = outcome
-    else {
-        panic!("step 3 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(retracted_claims.len(), 1);
-    assert_eq!(retracted_claims[0].predicate, "CurrentBankRecognition");
-    assert_eq!(emitted_intents[0].name, "VerificationCorrected");
-
-    // 4. Bank restates to 91 with rec_002. New current pointer; new Supersedes.
-    let outcome = common::propose_pg_with_test_actor(
-        &pool,
-        &revenue_restatement::restate_bank_revenue(),
-        vec![asset(), period(), dec(91), subj("rec_002"), subj("rec_001")],
-        &invariants,
-    )
-    .await
-    .expect("step 4 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        emitted_intents, ..
-    } = outcome
-    else {
-        panic!("step 4 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(emitted_intents[0].name, "BankRevenueRestated");
-
-    // Final DB shape: 2 IV + 2 BR + 2 Supersedes + 1 Current = 7 claims.
-    assert_eq!(count(&pool, "claims").await, 7);
-    assert_eq!(count(&pool, "audit").await, 4);
-    assert_eq!(count(&pool, "outbox").await, 4);
-
-    // Historical IV remains; new IV present; supersession recorded.
-    assert!(
-        claim_exists(
-            &pool,
-            "IndependentlyVerifiedRevenue",
-            &[asset(), period(), dec(92), subj("ver_001")],
-        )
-        .await,
-        "historical IV(92, ver_001) must be preserved"
-    );
-    assert!(
-        claim_exists(
-            &pool,
-            "IndependentlyVerifiedRevenue",
-            &[asset(), period(), dec(91), subj("ver_002")],
-        )
-        .await
-    );
-    assert!(
-        claim_exists(&pool, "Supersedes", &[subj("ver_002"), subj("ver_001")]).await,
-        "verification lineage must persist"
-    );
-
-    // Historical BR preserved; new BR + supersession recorded.
-    assert!(
-        claim_exists(
-            &pool,
-            "BankRecognisedRevenue",
-            &[asset(), period(), dec(92), subj("rec_001")],
-        )
-        .await,
-        "historical BR(92, rec_001) must be preserved"
-    );
-    assert!(
-        claim_exists(
-            &pool,
-            "BankRecognisedRevenue",
-            &[asset(), period(), dec(91), subj("rec_002")],
-        )
-        .await
-    );
-    assert!(
-        claim_exists(&pool, "Supersedes", &[subj("rec_002"), subj("rec_001")]).await,
-        "recognition lineage must persist"
-    );
-
-    // Current pointer moved to rec_002; rec_001 pointer gone.
-    assert!(
-        claim_exists(
-            &pool,
-            "CurrentBankRecognition",
-            &[asset(), period(), subj("rec_002")],
-        )
-        .await,
-        "current pointer must be rec_002"
-    );
-    assert!(
-        !claim_exists(
-            &pool,
-            "CurrentBankRecognition",
-            &[asset(), period(), subj("rec_001")],
-        )
-        .await,
-        "old current pointer must have been retracted"
-    );
-
-    // Outbox carries one intent per committed step, in causal order.
-    let intent_types: Vec<String> = sqlx::query_scalar(
-        "SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at, intent_id",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        intent_types,
-        vec![
-            "IndependentVerificationAdmitted".to_string(),
-            "BankRevenueRecognised".to_string(),
-            "VerificationCorrected".to_string(),
-            "BankRevenueRestated".to_string(),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn correct_verification_with_no_prior_rejects_and_writes_nothing() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-
-    // No pre-state: there is no IndependentlyVerifiedRevenue for the
-    // (asset, period, _, prior_verification_id) tuple, so the first
-    // `require` in correct_independent_verification fails. The proposal
-    // must be rejected and leave all three tables empty.
-    let outcome = common::propose_pg_with_test_actor(
-        &pool,
-        &revenue_restatement::correct_independent_verification(),
-        vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
-        &revenue_restatement::all_invariants(),
-    )
-    .await
-    .expect("propose_against_pg should not error");
-
-    let PgProposalOutcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
-    assert!(reason.contains("require"), "got reason: {reason}");
-
-    assert_eq!(count(&pool, "claims").await, 0);
-    assert_eq!(count(&pool, "audit").await, 0);
-    assert_eq!(count(&pool, "outbox").await, 0);
-}
-
 // ============================================================
-// Claim standing (Example 3) — durable proof of
-// admissibility-for-purpose through propose_against_pg.
-//
-// Mirrors the in-memory chain in
-// `crates/morpholog-core/src/lib.rs` but runs every step through
-// the PostgreSQL adapter and inspects the durable claims, audit,
-// and outbox rows directly.
+// Verified revenue (Example 2) - durable proof that the two
+// patterns (currentness with restatement + admissibility-for-purpose)
+// compose end to end through propose_against_pg. One scenario walks
+// admission, multi-authority standing, decisions, correction (which
+// retracts standing on the prior verification), rejection of
+// decisions without standing, and re-grant on the corrected figure.
 // ============================================================
 
 #[tokio::test]
-async fn claim_standing_full_chain_through_pg() {
+async fn verified_revenue_full_chain_through_pg() {
     let pool = test_pool().await;
     reset_db(&pool).await;
+    let invariants = verified_revenue::all_invariants();
+    let bank = subj(verified_revenue::BANK_DEBT_SERVICE);
+    let investor = subj(verified_revenue::INVESTOR_REPORTING);
 
-    let invariants = claim_standing::all_invariants();
-    let bank = subj(claim_standing::BANK_DEBT_SERVICE);
-    let investor = subj(claim_standing::INVESTOR_REPORTING);
-
-    // 1. Admit IV at 91.
+    // 1. Verifier admits IV at 91 with ver_001. CurrentVerification
+    //    pointer is established.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::admit_independent_verification(),
+        &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(91), subj("ver_001")],
         &invariants,
     )
     .await
     .expect("step 1 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        emitted_intents, ..
-    } = outcome
-    else {
-        panic!("step 1 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 2. Bank credit committee grants debt-service-coverage standing.
+    // 2. Bank credit committee grants debt-service standing on ver_001.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::grant_standing(),
+        &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
             bank.clone(),
             subj("credit_committee"),
-            subj("grant_001"),
+            subj("grant_bank_001"),
         ],
         &invariants,
     )
     .await
     .expect("step 2 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        asserted_claims,
-        emitted_intents,
-        ..
-    } = outcome
-    else {
-        panic!("step 2 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(
-        asserted_claims.len(),
-        2,
-        "StandingGrantedBy + AdmissibleFor"
-    );
-    assert_eq!(emitted_intents[0].name, "StandingGranted");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 3. Bank admits a debt-service decision against the verification.
+    // 3. Bank admits a debt-service decision against ver_001.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::admit_debt_service_revenue(),
+        &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
             period(),
@@ -767,38 +548,29 @@ async fn claim_standing_full_chain_through_pg() {
     )
     .await
     .expect("step 3 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        emitted_intents, ..
-    } = outcome
-    else {
-        panic!("step 3 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(emitted_intents[0].name, "DebtServiceRevenueAdmitted");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 4. Investor relations office grants investor-reporting standing on the
-    //    same verification. Parallel admissibility — bank standing is still
-    //    active, and now investor standing too.
+    // 4. Investor relations office grants investor-reporting standing
+    //    on the same verification - parallel admissibility.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::grant_standing(),
+        &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
             investor.clone(),
             subj("investor_relations_office"),
-            subj("grant_002"),
+            subj("grant_inv_001"),
         ],
         &invariants,
     )
     .await
     .expect("step 4 propose_against_pg should not error");
-    let PgProposalOutcome::Committed { .. } = outcome else {
-        panic!("step 4 expected Committed, got {outcome:?}");
-    };
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 5. Investor relations admits an investor report against the verification.
+    // 5. Investor admits investor-reporting decision against ver_001.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::admit_investor_reported_revenue(),
+        &verified_revenue::admit_investor_reported_revenue(),
         vec![
             asset(),
             period(),
@@ -810,55 +582,73 @@ async fn claim_standing_full_chain_through_pg() {
     )
     .await
     .expect("step 5 propose_against_pg should not error");
-    let PgProposalOutcome::Committed {
-        emitted_intents, ..
-    } = outcome
-    else {
-        panic!("step 5 expected Committed, got {outcome:?}");
-    };
-    assert_eq!(emitted_intents[0].name, "InvestorReportedRevenueAdmitted");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 6. Bank revokes its standing. AdmissibleFor(ver_001, bank) is retracted;
-    //    the historical decision_001 must survive; investor standing is
-    //    untouched.
+    // 6. Verifier corrects to 88 (ver_002 supersedes ver_001).
+    //    The transformation: asserts new IV, Supersedes lineage; retracts
+    //    the CurrentVerification pointer on ver_001 AND every AdmissibleFor
+    //    on ver_001 (by pattern). The original IV stays admitted.
+    //    Historical decisions admitted under the prior standings survive.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::revoke_standing(),
-        vec![subj("ver_001"), bank.clone(), subj("revoke_001")],
+        &verified_revenue::correct_independent_verification(),
+        vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         &invariants,
     )
     .await
     .expect("step 6 propose_against_pg should not error");
     let PgProposalOutcome::Committed {
-        retracted_claims,
-        emitted_intents,
-        ..
+        retracted_claims, ..
     } = outcome
     else {
         panic!("step 6 expected Committed, got {outcome:?}");
     };
-    assert_eq!(retracted_claims.len(), 1);
-    assert_eq!(retracted_claims[0].predicate, "AdmissibleFor");
-    assert_eq!(emitted_intents[0].name, "StandingRevocationAdmitted");
+    // Three retractions: CurrentVerification(ver_001), AdmissibleFor(bank),
+    // AdmissibleFor(investor).
+    assert_eq!(retracted_claims.len(), 3);
 
-    // Final DB shape: 1 IV + 2 StandingGrantedBy + 1 AdmissibleFor (investor
-    // only) + 1 StandingRevoked + 1 DebtServiceRevenue + 1
-    // InvestorReportedRevenue = 7 claims.
-    assert_eq!(count(&pool, "claims").await, 7);
-    assert_eq!(count(&pool, "audit").await, 6);
-    assert_eq!(count(&pool, "outbox").await, 6);
-
-    // Underlying IV unchanged.
+    // Restatement lineage durably recorded; original IV preserved.
     assert!(
         claim_exists(
             &pool,
             "IndependentlyVerifiedRevenue",
             &[asset(), period(), dec(91), subj("ver_001")],
         )
+        .await,
+        "historical IV must be preserved",
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "IndependentlyVerifiedRevenue",
+            &[asset(), period(), dec(88), subj("ver_002")],
+        )
+        .await
+    );
+    assert!(claim_exists(&pool, "Supersedes", &[subj("ver_002"), subj("ver_001")]).await);
+
+    // Current pointer moved to ver_002.
+    assert!(
+        claim_exists(
+            &pool,
+            "CurrentVerification",
+            &[asset(), period(), subj("ver_002")],
+        )
+        .await
+    );
+    assert!(
+        !claim_exists(
+            &pool,
+            "CurrentVerification",
+            &[asset(), period(), subj("ver_001")],
+        )
         .await
     );
 
-    // Both grant provenances preserved.
+    // Both standings on ver_001 are retracted; both grant provenances
+    // persist as historical record.
+    assert!(!claim_exists(&pool, "AdmissibleFor", &[subj("ver_001"), bank.clone()]).await);
+    assert!(!claim_exists(&pool, "AdmissibleFor", &[subj("ver_001"), investor.clone()]).await);
     assert!(
         claim_exists(
             &pool,
@@ -867,47 +657,14 @@ async fn claim_standing_full_chain_through_pg() {
                 subj("ver_001"),
                 bank.clone(),
                 subj("credit_committee"),
-                subj("grant_001"),
+                subj("grant_bank_001"),
             ],
         )
         .await,
-        "bank grant provenance must persist after revocation"
-    );
-    assert!(
-        claim_exists(
-            &pool,
-            "StandingGrantedBy",
-            &[
-                subj("ver_001"),
-                investor.clone(),
-                subj("investor_relations_office"),
-                subj("grant_002"),
-            ],
-        )
-        .await
+        "grant provenance survives correction",
     );
 
-    // Revocation recorded as its own append-only claim.
-    assert!(
-        claim_exists(
-            &pool,
-            "StandingRevoked",
-            &[subj("ver_001"), bank.clone(), subj("revoke_001")],
-        )
-        .await
-    );
-
-    // Active admissibility: investor present, bank gone.
-    assert!(
-        claim_exists(&pool, "AdmissibleFor", &[subj("ver_001"), investor.clone()],).await,
-        "investor standing must remain active"
-    );
-    assert!(
-        !claim_exists(&pool, "AdmissibleFor", &[subj("ver_001"), bank.clone()]).await,
-        "bank standing must have been retracted"
-    );
-
-    // Historical decisions both survive.
+    // The historical decisions both survive.
     assert!(
         claim_exists(
             &pool,
@@ -921,7 +678,7 @@ async fn claim_standing_full_chain_through_pg() {
             ],
         )
         .await,
-        "the bank's historical decision must survive revocation"
+        "the bank's historical decision must survive correction",
     );
     assert!(
         claim_exists(
@@ -938,90 +695,106 @@ async fn claim_standing_full_chain_through_pg() {
         .await
     );
 
-    // Outbox carries one intent per committed transformation, in causal
-    // order.
-    let intent_types: Vec<String> = sqlx::query_scalar(
-        "SELECT intent_type FROM morpholog.outbox ORDER BY enqueued_at, intent_id",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        intent_types,
-        vec![
-            "IndependentVerificationAdmitted".to_string(),
-            "StandingGranted".to_string(),
-            "DebtServiceRevenueAdmitted".to_string(),
-            "StandingGranted".to_string(),
-            "InvestorReportedRevenueAdmitted".to_string(),
-            "StandingRevocationAdmitted".to_string(),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn decision_after_revocation_rejects_and_writes_nothing() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-
-    // Pre-state: IV admitted, bank standing was granted and then revoked
-    // (so the historical StandingGrantedBy and StandingRevoked claims are
-    // present, but no active AdmissibleFor). This is the shape the chain
-    // test above leaves behind after step 6 for the bank purpose.
-    insert_pre_state(
-        &pool,
-        vec![
-            claim(
-                "IndependentlyVerifiedRevenue",
-                vec![asset(), period(), dec(91), subj("ver_001")],
-            ),
-            claim(
-                "StandingGrantedBy",
-                vec![
-                    subj("ver_001"),
-                    subj(claim_standing::BANK_DEBT_SERVICE),
-                    subj("credit_committee"),
-                    subj("grant_001"),
-                ],
-            ),
-            claim(
-                "StandingRevoked",
-                vec![
-                    subj("ver_001"),
-                    subj(claim_standing::BANK_DEBT_SERVICE),
-                    subj("revoke_001"),
-                ],
-            ),
-        ],
-    )
-    .await;
-
-    // A new debt-service decision must be rejected: the AdmissibleFor
-    // require fails because revocation retracted it.
+    // 7. A new bank decision against ver_002 is rejected (no standing
+    //    on the corrected figure yet). Pin no durable trace: claims,
+    //    audit, and outbox must all be unchanged.
+    let claims_before = list_claims(&pool).await.unwrap().len();
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &claim_standing::admit_debt_service_revenue(),
+        &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
             period(),
-            dec(91),
+            dec(88),
             subj("decision_002"),
-            subj("ver_001"),
+            subj("ver_002"),
         ],
-        &claim_standing::all_invariants(),
+        &invariants,
     )
     .await
-    .expect("propose_against_pg should not error");
+    .expect("step 7 propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(
+        list_claims(&pool).await.unwrap().len(),
+        claims_before,
+        "rejected proposal must not mutate the claim set",
+    );
+    assert_eq!(
+        list_audit_rows(&pool).await.unwrap().len(),
+        audit_before,
+        "rejected proposal must not write an audit row",
+    );
+    assert_eq!(
+        list_pending_outbox(&pool).await.unwrap().len(),
+        outbox_before,
+        "rejected proposal must not enqueue an outbox intent",
+    );
 
-    let PgProposalOutcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    // 8. Bank re-grants standing on the corrected ver_002; the new
+    //    decision now admits.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &verified_revenue::grant_standing(),
+        vec![
+            subj("ver_002"),
+            bank.clone(),
+            subj("credit_committee"),
+            subj("grant_bank_002"),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("step 8 propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // Pre-state had 3 claims; no audit or outbox rows must appear.
-    assert_eq!(count(&pool, "claims").await, 3, "pre-state unchanged");
-    assert_eq!(count(&pool, "audit").await, 0);
-    assert_eq!(count(&pool, "outbox").await, 0);
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &verified_revenue::admit_debt_service_revenue(),
+        vec![
+            asset(),
+            period(),
+            dec(88),
+            subj("decision_002"),
+            subj("ver_002"),
+        ],
+        &invariants,
+    )
+    .await
+    .expect("step 8b propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    // Both decisions are durably present in the final claim set - the
+    // historical one against ver_001 and the new one against ver_002.
+    assert!(
+        claim_exists(
+            &pool,
+            "DebtServiceRevenue",
+            &[
+                asset(),
+                period(),
+                dec(91),
+                subj("decision_001"),
+                subj("ver_001"),
+            ],
+        )
+        .await
+    );
+    assert!(
+        claim_exists(
+            &pool,
+            "DebtServiceRevenue",
+            &[
+                asset(),
+                period(),
+                dec(88),
+                subj("decision_002"),
+                subj("ver_002"),
+            ],
+        )
+        .await
+    );
 }
 
 // ============================================================
