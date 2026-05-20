@@ -400,14 +400,16 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
 
     // Read all audit JSONB columns and verify they decode through the
     // PR #4 codec back into Rust types with the expected shapes.
-    let (args_json, invariants_checked_json, asserted_json, retracted_json, intents_json): (
+    type AuditJsonRow = (
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
-    ) = sqlx::query_as(
-        "SELECT arguments, invariants_checked, asserted_claims, retracted_claims, emitted_intents
+        serde_json::Value,
+    );
+    let (args_json, actor_json, invariants_checked_json, asserted_json, retracted_json, intents_json): AuditJsonRow = sqlx::query_as(
+        "SELECT arguments, actor, invariants_checked, asserted_claims, retracted_claims, emitted_intents
          FROM morpholog.audit WHERE transition_id = $1",
     )
     .bind(transition_id)
@@ -419,6 +421,10 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     let args: Vec<EvalValue> = serde_json::from_value(args_json).unwrap();
     assert_eq!(args.len(), 3);
     assert_eq!(args[0], subj("party_a"));
+
+    // actor: EvalValue (Subject under the v0 contract)
+    let actor: EvalValue = serde_json::from_value(actor_json).unwrap();
+    assert_eq!(actor, subj("test_actor"));
 
     // invariants_checked: [{name, version}, ...]
     let checked = invariants_checked_json.as_array().unwrap();
