@@ -824,6 +824,17 @@ fn find_claim_matches(
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut out = vec![];
 
+    // Pre-pass: any occurrence of `Term::Actor` requires an actor in
+    // scope. Without this, a selective ground arg appearing *earlier*
+    // in the args could short-circuit to `Ok(empty)` (missing bucket)
+    // before the loop ever reaches `Term::Actor`. That would leak the
+    // doctrine - an invariant referencing `Term::Actor` could silently
+    // produce no matches instead of erroring. Make the requirement
+    // position-independent.
+    if actor.is_none() && args.iter().any(|t| matches!(t, Term::Actor)) {
+        return Err(EvalError::UnboundActor);
+    }
+
     // First pass: identify every argument position that is *ground* in
     // the current binding context (Term::Literal in the IR, or
     // Term::Var already bound in `base`). Pick the position whose

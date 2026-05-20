@@ -11,9 +11,16 @@
 -- The forcing question: *who proposed this transition?* The actor
 -- is not a domain payload, so it should not be a transformation
 -- parameter. It is *transition context* - carried on the Transition
--- value object alongside the args, and reachable from invariants and
--- requires through the reserved term `$actor` (`Term::Actor` in the
--- IR).
+-- value object alongside the args, and reachable from inside a
+-- transformation body (require, assert, emit, let, for) through the
+-- reserved term `$actor` (`Term::Actor` in the IR).
+--
+-- `$actor` is *not* reachable from invariant bodies. Invariants
+-- evaluate against admitted state with no transition in scope; an
+-- invariant that reaches for `$actor` raises `EvalError::UnboundActor`
+-- at evaluation time. This is the require-vs-invariant doctrine
+-- (from Example 3) made enforceable by the runtime, not convention:
+-- authority checks live in `require`.
 --
 -- No invariants. Authority is a precondition at admission time, not
 -- a continuous property of admitted state. Tying Approval to live

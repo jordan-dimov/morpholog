@@ -186,3 +186,39 @@ fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
         "expected UnboundActor, got {err:?}",
     );
 }
+
+#[test]
+fn term_actor_unbound_error_is_position_independent() {
+    // Regression test for a subtle leak in `find_claim_matches`:
+    // when args contain both a ground value at an earlier position
+    // AND `Term::Actor` later, the per-position bucket lookup could
+    // short-circuit to `Ok(empty)` before reaching the Actor arm.
+    // That would let an invariant using Term::Actor silently produce
+    // no matches instead of erroring - weakening the doctrine to
+    // "Term::Actor errors unless some earlier ground arg's bucket is
+    // missing." A position-independent pre-pass fixes this.
+    //
+    // Setup: state is empty (so no bucket exists for predicate
+    // "AnyPredicate" at any position). Invariant args = [literal
+    // "missing", Term::Actor]. Without the pre-pass, the loop would
+    // see the missing literal bucket at position 0 first and return
+    // Ok(empty); UnboundActor would never fire.
+    use morpholog_core::Value;
+    let inv = Invariant {
+        name: "actor_masked_by_earlier_missing_literal".to_string(),
+        version: 1,
+        body: Expr::Claim {
+            predicate: "AnyPredicate".to_string(),
+            args: vec![
+                Term::Literal(Value::Subject("missing".to_string())),
+                Term::Actor,
+            ],
+        },
+    };
+    let err = eval_invariant(&inv, &State::default())
+        .expect_err("Term::Actor outside transition scope must error regardless of arg order");
+    assert!(
+        matches!(err, EvalError::UnboundActor),
+        "expected UnboundActor, got {err:?}",
+    );
+}
