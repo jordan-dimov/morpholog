@@ -277,7 +277,7 @@ impl Program {
 /// expressions evaluated under the per-key bindings.
 ///
 /// In v0 a derived claim's output [`ClaimInstance`]s are *not* added
-/// to [`State.claims`], *not* visible to invariants or
+/// to [`State::claims`], *not* visible to invariants or
 /// transformations, *not* persisted by the PostgreSQL adapter, and
 /// *not* recursively referenceable from another derived claim's body.
 /// See `docs/design-history.md` for the derived-claims retrospective
@@ -558,9 +558,9 @@ pub fn eval_invariant(inv: &Invariant, state: &State) -> Result<bool, EvalError>
 ///    The deduplication uses a `BTreeSet`, which also gives the output
 ///    a stable ordering by key tuple.
 /// 3. For each distinct key binding, evaluate each
-///    [`DerivedValue.expr`] in [`eval_value`] under that binding.
-///    Append the resulting values to the key tuple to form the
-///    output `ClaimInstance`.
+///    [`DerivedValue::expr`] via the internal value evaluator under that
+///    binding. Append the resulting values to the key tuple to form
+///    the output `ClaimInstance`.
 ///
 /// Errors propagate from the underlying evaluator: a non-decimal
 /// `Sub`, a missing key binding, a malformed body expression, etc.

@@ -1,0 +1,16 @@
+# cargo-audit configuration.
+#
+# Each ignored advisory MUST carry a written reason explaining why it
+# does not affect us. Future advisories - including ones in features
+# we DO use - should still fail CI; this file is for documented false
+# positives only.
+
+[advisories]
+ignore = [
+    # rsa 0.9.x timing sidechannel via sqlx-mysql. Morpholog uses
+    # PostgreSQL only (sqlx default-features disabled, no `mysql`
+    # feature). The vulnerable code path is never compiled into our
+    # binaries' runtime use. No upstream fix is available; revisit
+    # if/when sqlx-mysql drops rsa or rsa ships a patch.
+    "RUSTSEC-2023-0071",
+]

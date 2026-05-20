@@ -169,4 +169,4 @@ For every worked example, both in memory (via `propose()` and the kernel test su
 2. Invariant-violating attempts roll back atomically - no claims changed, no audit row written, no outbox row enqueued.
 3. Outbox intents stage at commit but do not fire inside the database transaction; an external worker (the polling `OutboxWorker` in `morpholog-outbox`, with `StdoutDeliverer` as the canonical concrete deliverer) is the only path that delivers them.
 
-These hold for the settlement-netting, revenue-restatement, claim-standing, and double-entry-ledger examples; see each example's `tests/integration.rs` block for the durable proofs.
+These hold for every worked example under [`examples/`](../examples/). In-memory proofs live in [`crates/morpholog-examples/tests/`](../crates/morpholog-examples/tests/); the durable, PostgreSQL-backed proofs live in [`crates/morpholog-postgres/tests/`](../crates/morpholog-postgres/tests/).

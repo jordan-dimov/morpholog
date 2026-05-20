@@ -107,7 +107,7 @@ where
     /// Set the jitter range `[low, high)` used to multiply the
     /// base interval each iteration. Bounds must satisfy
     /// `0 < low < high` (strict on both inequalities). Equal bounds
-    /// are not allowed because [`RandJitter`] samples the
+    /// are not allowed because [`crate::RandJitter`] samples the
     /// half-open range `[low, high)`, which is empty when
     /// `low == high` and would panic at runtime; if you want no
     /// jitter, use a custom [`crate::JitterRng`] impl that returns
