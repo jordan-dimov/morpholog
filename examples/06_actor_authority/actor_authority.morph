@@ -1,0 +1,47 @@
+-- Actor authority - the smallest worked example consulting the
+-- transition's actor (v0).
+--
+-- Domain: a business approves documents (invoices, contracts, change
+-- orders). Some people are authorised to approve which kinds of
+-- documents; some are not. Authority is granted explicitly and may
+-- later be revoked. The historical record of which approvals
+-- happened, by which actor, under which authority - survives every
+-- subsequent change.
+--
+-- The forcing question: *who proposed this transition?* The actor
+-- is not a domain payload, so it should not be a transformation
+-- parameter. It is *transition context* - carried on the Transition
+-- value object alongside the args, and reachable from invariants and
+-- requires through the reserved term `$actor` (`Term::Actor` in the
+-- IR).
+--
+-- No invariants. Authority is a precondition at admission time, not
+-- a continuous property of admitted state. Tying Approval to live
+-- MayApprove via an invariant would either reject every revocation
+-- (because historical approvals now break the rule) or cascade-retract
+-- the historical approvals themselves. Neither matches the real-
+-- world semantics. The require-vs-invariant lesson from Example 3
+-- is the same lesson here.
+
+
+transformation grant_approval_authority(actor, doc_type):
+    assert MayApprove(actor, doc_type)
+    emit ApprovalAuthorityGranted(actor, doc_type)
+
+
+transformation revoke_approval_authority(actor, doc_type):
+    require MayApprove(actor, doc_type)
+    retract MayApprove(actor, doc_type)
+    emit ApprovalAuthorityRevoked(actor, doc_type)
+
+
+-- The transformation declares no `actor` parameter. The actor flows
+-- through transition context and is read via $actor.
+--
+-- require $actor consults the proposing actor at admission time.
+-- assert Approval(..., $actor) stamps the proposing actor onto the
+-- durable record so the audit log answers "who approved this?".
+transformation approve_document(doc_id, doc_type):
+    require MayApprove($actor, doc_type)
+    assert Approval(doc_id, doc_type, $actor)
+    emit DocumentApproved(doc_id, $actor)

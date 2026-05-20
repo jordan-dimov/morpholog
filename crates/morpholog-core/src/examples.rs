@@ -14,6 +14,7 @@
 //! once a real parser and example-loading mechanism exist. Treat these
 //! as teaching fixtures, not a contract.
 
+pub mod actor_authority;
 pub mod claim_standing;
 pub mod double_entry_ledger;
 pub mod revenue_restatement;
@@ -34,5 +35,6 @@ pub fn all_programs() -> Vec<crate::Program> {
         revenue_restatement::program(),
         claim_standing::program(),
         double_entry_ledger::program(),
+        actor_authority::program(),
     ]
 }

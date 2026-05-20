@@ -95,7 +95,8 @@ Each entry below was actively considered during one of the early examples and de
 | `ReliedOnBy(decision_id, claim_id)` decision-snapshot pattern | Example 3's simpler `require`-based design proved sufficient; the snapshot pattern adds a third "claims-about-claims-about-claims" layer that would only earn its keep when the simple model breaks. |
 | `RevocationLifted` claim or grant-supersession to allow re-grant | Example 3 makes revocation terminal in v0. Re-granting after revocation would need a clear lifecycle model; deferred until a real example forces it. |
 | Temporal qualification claims (`OccurredOn`, `EffectiveFor`, `KnownAsOf`) | Mentioned in `scope-and-ambition.md` as candidates for the as-of operator. No example yet needs them. |
-| Actor context (consultation from invariants/requires via `Term::Actor`) | Mentioned in `scope-and-ambition.md`. No example yet needs it. Identity plumbing landed early; see the `Transition` entry below. |
+| Approval limits with decimal comparison (`<=`, `>=`) | Mentioned in `scope-and-ambition.md`. Forced by the next example beyond Example 6 - one that needs "may approve up to N". No `Expr::Lt`/`Le`/`Gt`/`Ge` in the IR yet. |
+| Predicate-pattern matching (`ApprovalAuthorityFor(actor, predicate_pattern, limit)`) | Mentioned in `scope-and-ambition.md`. Would let one authority claim govern a family of transformations. Forced by an example that genuinely needs the higher-order shape; not by Example 6. |
 | Cascading retraction of historical decisions on standing revocation | Considered as option B for Example 3's design; rejected because it contradicts the "history is preserved" rule. |
 | Sharing IR fixture helpers across example modules | The `morpholog_core::examples::*` modules each re-declare their own IR fixtures; they happen to use the same predicate names (e.g. `IndependentlyVerifiedRevenue` in Examples 2 and 3) without sharing constructor code. Keeps examples independent. |
 | Per-example PostgreSQL schemas | All examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
@@ -210,3 +211,33 @@ The other sketch leans that held into implementation:
 **Why pay this cost up front:** the alternative was paying it later under more pressure, when the first authority worked example would have forced both the plumbing *and* the consultation primitive in one PR. Separating them keeps each PR honest. The two principles we hold the project to (subtract until it breaks; example forces shape) are in mild tension here, and this entry records that tension rather than papering over it.
 
 **Pattern note:** this is the first time a doctrinally-loaded refactor was paid for ahead of a worked example. The bar for doing so again is high; the test is whether the resulting code felt obviously right (it did, including in review). If a future ahead-of-example refactor leaves the codebase feeling speculatively shaped rather than obviously shaped, that is the signal that the discipline slipped.
+
+### `Term::Actor` consultation primitive (forced by Example 6)
+
+**Forced by:** Example 6 - actor authority.
+
+**The pressure:** PR #35 plumbed actor identity through `Transition` and `audit.actor`, but nothing in the IR could *consult* the actor. Authority remained a half-promise: the runtime knew who proposed a transition, but no `require` clause could read that knowledge. The smallest forcing function was a transformation whose admission gate had to mention the proposing actor - exactly what `approve_document` in Example 6 does:
+
+```
+transformation approve_document(doc_id, doc_type):
+    require MayApprove($actor, doc_type)
+    assert Approval(doc_id, doc_type, $actor)
+```
+
+Without `Term::Actor`, the alternatives were all worse: thread the actor as a transformation parameter (the option PR #35 explicitly rejected), or stuff it into a magic binding name (couples user-controlled names to a runtime-controlled slot).
+
+**The design choice:** make `Term::Actor` a distinct IR variant rather than a reserved variable name.
+
+**Considered and rejected:** stashing the actor under a reserved binding key (e.g. `"$actor"`) in `Bindings`. Smaller signature footprint - no function would need a new parameter - but it would have mixed semantically distinct things (user-named bindings vs. runtime-supplied context) into one map. Worse: a user constructing IR directly could create a parameter with the same reserved name and silently shadow the runtime's value. The variant approach makes the shape explicit at the type level and lets the evaluator enforce "no actor available" as a typed error rather than a missing-binding fallthrough.
+
+**What landed:**
+
+- `Term::Actor` variant on the existing `Term` enum, no payload. Resolves to the actor of the proposed transition; raises `EvalError::UnboundActor` if no transition is in scope.
+- `actor: Option<&EvalValue>` threaded through `resolve_term`, `find_matches`, `find_claim_matches`, `unify_args`, `find_in_matches`, `find_conjunction`, `eval_value`, `execute_stmt`, `resolve_claim`, `resolve_intent`. The public `eval_invariant` and `enumerate_derived` signatures are unchanged; internally they pass `None`.
+- The ground-extraction inside `find_claim_matches` propagates `EvalError::UnboundActor` rather than silently returning an empty match set when `Term::Actor` appears with no actor in scope. This is what makes invariant authoring catch the mistake at evaluation time.
+
+**The doctrine the IR now enforces:** authority checks belong in `require`, not in invariants. An invariant body that reaches for `Term::Actor` errors at evaluation; it cannot silently misbehave. This is the require-vs-invariant lesson (from Example 3) made enforceable by the runtime rather than recorded only in prose.
+
+**What deliberately did NOT land:** decimal comparison (`<=`, `>=`) and predicate-pattern matching. Both are mentioned in `scope-and-ambition.md` as candidates and would extend the authority story (approval limits; one authority claim governing a family of transformations). Neither is forced by Example 6, which models *unconditional* authority. The forcing example for comparison is whichever future example needs "may approve up to N"; the forcing example for predicate-pattern matching is whichever future example needs "may admit any claim of this kind". Both land then, not before.
+
+**Pattern note:** Example 6 is also the smallest worked example to date - two predicates, no invariants, three transformations. The subtraction discipline held: the temptation to add an `at_most_one_approval_per_doc` invariant, or an administrative-authority gate on `grant_approval_authority`, or a `Forbidden` claim, was deflected to the "deliberately not covered" section of the README. The model is exactly what the consultation primitive needs to exist, and no more.

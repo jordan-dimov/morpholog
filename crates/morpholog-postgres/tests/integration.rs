@@ -12,7 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::examples::{
-    claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
+    actor_authority, claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
 };
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
@@ -1800,4 +1800,132 @@ async fn propose_rejects_non_subject_actor() {
 
     let audit_rows = list_audit_rows(&pool).await.unwrap();
     assert!(audit_rows.is_empty(), "rejected proposal must not audit");
+}
+
+// ============================================================
+// Actor authority (Example 6) - durable proof that Term::Actor
+// flows through propose_against_pg, into the audit log, and into
+// the asserted Approval claim. The in-memory tests pin the kernel
+// semantics; these pin the round-trip through PostgreSQL.
+// ============================================================
+
+#[tokio::test]
+async fn actor_authority_full_chain_through_pg() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = actor_authority::all_invariants();
+
+    // 1. Admin grants jordan authority for invoices.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &actor_authority::grant_approval_authority(),
+        vec![subj("jordan"), subj("invoice")],
+        &invariants,
+    )
+    .await
+    .expect("step 1 propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    // 2. jordan proposes the approval. require Term::Actor consults
+    // jordan; assert Term::Actor stamps jordan onto the Approval.
+    let outcome = common::propose_pg_as(
+        &pool,
+        &actor_authority::approve_document(),
+        vec![subj("doc_001"), subj("invoice")],
+        subj("jordan"),
+        &invariants,
+    )
+    .await
+    .expect("step 2 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        transition_id,
+        actor: receipt_actor,
+        asserted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("step 2 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(receipt_actor, subj("jordan"));
+    let approval = asserted_claims
+        .iter()
+        .find(|c| c.predicate == "Approval")
+        .expect("Approval should be asserted");
+    assert_eq!(
+        approval.args,
+        vec![subj("doc_001"), subj("invoice"), subj("jordan")],
+        "asserted Approval must carry the proposing actor",
+    );
+    assert_eq!(emitted_intents[0].name, "DocumentApproved");
+
+    // 3. The audit row records the actor durably.
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    let approve_row = audit_rows
+        .iter()
+        .find(|r| r.transition_id == transition_id)
+        .unwrap();
+    assert_eq!(approve_row.actor, subj("jordan"));
+
+    // 4. The Approval claim is queryable from the durable claim set,
+    // carrying the proposing actor as its third argument.
+    let claims = list_claims(&pool).await.unwrap();
+    assert!(
+        claims.iter().any(|c| c.predicate == "Approval"
+            && c.args == vec![subj("doc_001"), subj("invoice"), subj("jordan")]),
+        "Approval with actor must be queryable from durable claims",
+    );
+
+    // 5. alice has no authority - her approval attempt is rejected.
+    // No audit row written, no Approval claim, no DocumentApproved
+    // intent enqueued.
+    let outcome = common::propose_pg_as(
+        &pool,
+        &actor_authority::approve_document(),
+        vec![subj("doc_002"), subj("invoice")],
+        subj("alice"),
+        &invariants,
+    )
+    .await
+    .expect("step 5 propose_against_pg should not error");
+    let PgProposalOutcome::Rejected { reason } = outcome else {
+        panic!("alice should be rejected; got {outcome:?}");
+    };
+    assert!(reason.contains("require"), "got reason: {reason}");
+
+    // 6. Authority revoked. Jordan's earlier approval is preserved
+    // (require-vs-invariant); her next attempt is rejected.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &actor_authority::revoke_approval_authority(),
+        vec![subj("jordan"), subj("invoice")],
+        &invariants,
+    )
+    .await
+    .expect("step 6 propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    let claims = list_claims(&pool).await.unwrap();
+    assert!(
+        claims.iter().any(|c| c.predicate == "Approval"
+            && c.args == vec![subj("doc_001"), subj("invoice"), subj("jordan")]),
+        "historical Approval must survive authority revocation",
+    );
+    assert!(
+        !claims.iter().any(|c| c.predicate == "MayApprove"
+            && c.args == vec![subj("jordan"), subj("invoice")]),
+        "MayApprove must be gone after revoke",
+    );
+
+    let outcome = common::propose_pg_as(
+        &pool,
+        &actor_authority::approve_document(),
+        vec![subj("doc_003"), subj("invoice")],
+        subj("jordan"),
+        &invariants,
+    )
+    .await
+    .expect("step 6b propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
 }

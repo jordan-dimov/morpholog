@@ -38,3 +38,21 @@ pub async fn propose_pg_with_test_actor(
     let transition = test_transition(transformation, args);
     propose_against_pg(pool, transformation, &transition, invariants).await
 }
+
+/// Variant that lets the caller supply an explicit actor. Used by
+/// authority tests that need to assert on which actor proposed which
+/// transition.
+pub async fn propose_pg_as(
+    pool: &PgPool,
+    transformation: &Transformation,
+    args: Vec<EvalValue>,
+    actor: EvalValue,
+    invariants: &[Invariant],
+) -> Result<PgProposalOutcome, PgError> {
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args,
+        actor,
+    };
+    propose_against_pg(pool, transformation, &transition, invariants).await
+}

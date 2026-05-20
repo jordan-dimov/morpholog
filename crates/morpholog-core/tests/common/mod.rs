@@ -74,6 +74,51 @@ pub fn must_accept(
     }
 }
 
+/// Variant of `must_accept` that lets a test supply its own actor
+/// rather than the shared `test_actor()`. Used by authority tests
+/// that need to assert on which actor proposed which transition.
+pub fn must_accept_as(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    actor: EvalValue,
+    pre: State,
+    invariants: &[Invariant],
+) -> State {
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor,
+    };
+    match propose(t, &transition, &pre, invariants).expect("propose should not error") {
+        Outcome::Accepted {
+            candidate_state, ..
+        } => candidate_state,
+        Outcome::Rejected { reason } => {
+            panic!(
+                "expected Accepted from `{}`, got Rejected: {reason}",
+                t.name
+            )
+        }
+    }
+}
+
+/// Propose with a specific actor. Returns the raw `Outcome` so the
+/// caller can inspect both `Accepted` and `Rejected` cases.
+pub fn propose_as(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    actor: EvalValue,
+    pre: &State,
+    invariants: &[Invariant],
+) -> Result<Outcome, EvalError> {
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor,
+    };
+    propose(t, &transition, pre, invariants)
+}
+
 pub fn has_claim(state: &State, predicate: &str, args: &[EvalValue]) -> bool {
     state.claims_for(predicate).any(|c| c.args == args)
 }

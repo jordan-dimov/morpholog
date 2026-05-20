@@ -98,13 +98,24 @@ pub enum Expr {
 
 /// A positional argument in a claim, intent, or expression. A `Term` is
 /// either a variable to be bound by the surrounding context, a wildcard
-/// that matches anything, or a literal constant. Resolved through
-/// `Bindings` during evaluation.
+/// that matches anything, a literal constant, or `Actor` - a reserved
+/// term that resolves to the actor of the proposed transition.
+///
+/// `Term::Actor` is only resolvable inside a transformation body
+/// (require, let, assert, retract, emit, for). Invariant bodies do not
+/// have a transition in scope; `Term::Actor` used inside an invariant
+/// surfaces as `EvalError::UnboundActor` at evaluation time. This is
+/// the require-vs-invariant doctrine made enforceable: authority
+/// checks belong in `require`, not in invariants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(String),
     Wildcard,
     Literal(Value),
+    /// Resolves to the actor of the proposed transition. Available
+    /// inside transformation bodies; not available inside invariant
+    /// bodies.
+    Actor,
 }
 
 /// Literal constants embeddable in IR `Term`s. Distinct from `EvalValue`
@@ -484,6 +495,11 @@ pub enum EvalError {
     /// `Expr::ValueOf(predicate, args)` matched more than one claim;
     /// the functional-lookup contract requires exactly one match.
     ValueOfMultipleMatches(String),
+    /// `Term::Actor` was referenced in a context that has no transition
+    /// in scope - most commonly an invariant body. Authority checks
+    /// belong in `require`, not in invariants; this error makes that
+    /// doctrine enforceable rather than convention.
+    UnboundActor,
 }
 
 impl std::fmt::Display for EvalError {
@@ -499,6 +515,10 @@ impl std::fmt::Display for EvalError {
             EvalError::ValueOfMultipleMatches(p) => {
                 write!(f, "value({p}, _): multiple matches")
             }
+            EvalError::UnboundActor => write!(
+                f,
+                "Term::Actor referenced with no transition in scope (likely used inside an invariant body; authority checks belong in `require`)"
+            ),
         }
     }
 }
@@ -509,7 +529,11 @@ impl std::error::Error for EvalError {}
 /// holds, false if it fails.
 pub fn eval_invariant(inv: &Invariant, state: &State) -> Result<bool, EvalError> {
     let bindings = Bindings::new();
-    let matches = find_matches(&inv.body, state, &bindings)?;
+    // Invariants evaluate against admitted state with no transition in
+    // scope. `Term::Actor` inside an invariant body surfaces as
+    // `EvalError::UnboundActor`, enforcing the doctrine that authority
+    // checks live in `require`, not in invariants.
+    let matches = find_matches(&inv.body, state, &bindings, None)?;
     Ok(!matches.is_empty())
 }
 
@@ -539,7 +563,10 @@ pub fn enumerate_derived(
     derived: &DerivedClaim,
     state: &State,
 ) -> Result<Vec<ClaimInstance>, EvalError> {
-    let raw_bindings = find_matches(&derived.domain, state, &Bindings::new())?;
+    // Derived claims, like invariants, evaluate against admitted state
+    // with no transition in scope. `Term::Actor` in a derived claim body
+    // surfaces as `EvalError::UnboundActor`.
+    let raw_bindings = find_matches(&derived.domain, state, &Bindings::new(), None)?;
 
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
     for b in &raw_bindings {
@@ -564,7 +591,7 @@ pub fn enumerate_derived(
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
         for value_def in &derived.values {
-            let v = eval_value(&value_def.expr, state, &per_key)?;
+            let v = eval_value(&value_def.expr, state, &per_key, None)?;
             args.push(v);
         }
         out.push(ClaimInstance {
@@ -724,12 +751,17 @@ impl Ord for EvalValueOrd {
 /// set of binding extensions under which the expression holds. An empty
 /// vector means the expression fails; a non-empty vector means it succeeds
 /// (potentially with extended bindings).
-fn find_matches(e: &Expr, state: &State, base: &Bindings) -> Result<Vec<Bindings>, EvalError> {
+fn find_matches(
+    e: &Expr,
+    state: &State,
+    base: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<Vec<Bindings>, EvalError> {
     match e {
-        Expr::Claim { predicate, args } => find_claim_matches(predicate, args, state, base),
-        Expr::And(exprs) => find_conjunction(exprs, state, base),
+        Expr::Claim { predicate, args } => find_claim_matches(predicate, args, state, base, actor),
+        Expr::And(exprs) => find_conjunction(exprs, state, base, actor),
         Expr::Not(inner) => {
-            let m = find_matches(inner, state, base)?;
+            let m = find_matches(inner, state, base, actor)?;
             Ok(if m.is_empty() {
                 vec![base.clone()]
             } else {
@@ -737,16 +769,16 @@ fn find_matches(e: &Expr, state: &State, base: &Bindings) -> Result<Vec<Bindings
             })
         }
         Expr::Implies { left, right } => {
-            let lm = find_matches(left, state, base)?;
+            let lm = find_matches(left, state, base, actor)?;
             for m in lm {
-                if find_matches(right, state, &m)?.is_empty() {
+                if find_matches(right, state, &m, actor)?.is_empty() {
                     return Ok(vec![]);
                 }
             }
             Ok(vec![base.clone()])
         }
         Expr::Exists { binding: _, body } => {
-            let m = find_matches(body, state, base)?;
+            let m = find_matches(body, state, base, actor)?;
             Ok(if m.is_empty() {
                 vec![]
             } else {
@@ -758,25 +790,25 @@ fn find_matches(e: &Expr, state: &State, base: &Bindings) -> Result<Vec<Bindings
             source,
             body,
         } => {
-            let sm = find_matches(source, state, base)?;
+            let sm = find_matches(source, state, base, actor)?;
             for m in sm {
-                if find_matches(body, state, &m)?.is_empty() {
+                if find_matches(body, state, &m, actor)?.is_empty() {
                     return Ok(vec![]);
                 }
             }
             Ok(vec![base.clone()])
         }
         Expr::Eq(lhs, rhs) => {
-            let l = eval_value(lhs, state, base)?;
-            let r = eval_value(rhs, state, base)?;
+            let l = eval_value(lhs, state, base, actor)?;
+            let r = eval_value(rhs, state, base, actor)?;
             Ok(if l == r { vec![base.clone()] } else { vec![] })
         }
         Expr::Neq(t1, t2) => {
-            let l = resolve_term(t1, base)?;
-            let r = resolve_term(t2, base)?;
+            let l = resolve_term(t1, base, actor)?;
+            let r = resolve_term(t2, base, actor)?;
             Ok(if l != r { vec![base.clone()] } else { vec![] })
         }
-        Expr::In(elem, coll) => find_in_matches(elem, coll, base),
+        Expr::In(elem, coll) => find_in_matches(elem, coll, base, actor),
         Expr::Term(_) | Expr::Sub(_, _) | Expr::Sum { .. } | Expr::ValueOf { .. } => {
             Err(EvalError::NotPredicate)
         }
@@ -788,6 +820,7 @@ fn find_claim_matches(
     args: &[Term],
     state: &State,
     base: &Bindings,
+    actor: Option<&EvalValue>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut out = vec![];
 
@@ -818,6 +851,10 @@ fn find_claim_matches(
             Term::Var(name) => base.get(name).cloned(),
             Term::Literal(Value::Subject(s)) => Some(EvalValue::Subject(s.clone())),
             Term::Literal(Value::Decimal(s)) => Decimal::from_str(s).ok().map(EvalValue::Decimal),
+            Term::Actor => match actor {
+                Some(a) => Some(a.clone()),
+                None => return Err(EvalError::UnboundActor),
+            },
         };
         let Some(value) = ground else {
             continue;
@@ -837,7 +874,7 @@ fn find_claim_matches(
             if claim.args.len() != args.len() {
                 continue;
             }
-            if let Some(b) = unify_args(args, &claim.args, base) {
+            if let Some(b) = unify_args(args, &claim.args, base, actor) {
                 out.push(b);
             }
         }
@@ -846,7 +883,7 @@ fn find_claim_matches(
             if claim.args.len() != args.len() {
                 continue;
             }
-            if let Some(b) = unify_args(args, &claim.args, base) {
+            if let Some(b) = unify_args(args, &claim.args, base, actor) {
                 out.push(b);
             }
         }
@@ -854,7 +891,12 @@ fn find_claim_matches(
     Ok(out)
 }
 
-fn unify_args(patterns: &[Term], values: &[EvalValue], base: &Bindings) -> Option<Bindings> {
+fn unify_args(
+    patterns: &[Term],
+    values: &[EvalValue],
+    base: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Option<Bindings> {
     let mut b = base.clone();
     for (p, v) in patterns.iter().zip(values.iter()) {
         match p {
@@ -879,6 +921,10 @@ fn unify_args(patterns: &[Term], values: &[EvalValue], base: &Bindings) -> Optio
                 EvalValue::Subject(id) if id == s => {}
                 _ => return None,
             },
+            Term::Actor => match actor {
+                Some(a) if a == v => {}
+                _ => return None,
+            },
         }
     }
     Some(b)
@@ -888,12 +934,13 @@ fn find_conjunction(
     exprs: &[Expr],
     state: &State,
     base: &Bindings,
+    actor: Option<&EvalValue>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut current = vec![base.clone()];
     for expr in exprs {
         let mut next = vec![];
         for b in &current {
-            next.extend(find_matches(expr, state, b)?);
+            next.extend(find_matches(expr, state, b, actor)?);
         }
         if next.is_empty() {
             return Ok(vec![]);
@@ -903,16 +950,21 @@ fn find_conjunction(
     Ok(current)
 }
 
-fn find_in_matches(elem: &Term, coll: &Term, base: &Bindings) -> Result<Vec<Bindings>, EvalError> {
-    let coll_val = resolve_term(coll, base)?;
+fn find_in_matches(
+    elem: &Term,
+    coll: &Term,
+    base: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<Vec<Bindings>, EvalError> {
+    let coll_val = resolve_term(coll, base, actor)?;
     let items = match coll_val {
         EvalValue::Collection(v) => v,
         _ => return Err(EvalError::TypeMismatch("In expects a collection".into())),
     };
     match elem {
         Term::Wildcard => Err(EvalError::TypeMismatch("wildcard not valid in In".into())),
-        Term::Literal(_) => {
-            let e = resolve_term(elem, base)?;
+        Term::Literal(_) | Term::Actor => {
+            let e = resolve_term(elem, base, actor)?;
             Ok(if items.contains(&e) {
                 vec![base.clone()]
             } else {
@@ -940,12 +992,17 @@ fn find_in_matches(elem: &Term, coll: &Term, base: &Bindings) -> Result<Vec<Bind
     }
 }
 
-fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue, EvalError> {
+fn eval_value(
+    e: &Expr,
+    state: &State,
+    bindings: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<EvalValue, EvalError> {
     match e {
-        Expr::Term(t) => resolve_term(t, bindings),
+        Expr::Term(t) => resolve_term(t, bindings, actor),
         Expr::Sub(lhs, rhs) => {
-            let l = eval_value(lhs, state, bindings)?;
-            let r = eval_value(rhs, state, bindings)?;
+            let l = eval_value(lhs, state, bindings, actor)?;
+            let r = eval_value(rhs, state, bindings, actor)?;
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a - b)),
                 _ => Err(EvalError::TypeMismatch(
@@ -958,10 +1015,10 @@ fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue,
             binding: _,
             body,
         } => {
-            let matches = find_matches(body, state, bindings)?;
+            let matches = find_matches(body, state, bindings, actor)?;
             let mut total = Decimal::ZERO;
             for m in matches {
-                match resolve_term(value, &m)? {
+                match resolve_term(value, &m, actor)? {
                     EvalValue::Decimal(d) => total += d,
                     _ => return Err(EvalError::TypeMismatch("Sum expects decimal".into())),
                 }
@@ -973,7 +1030,7 @@ fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue,
             args,
             default,
         } => {
-            let matches = find_claim_matches(predicate, args, state, bindings)?;
+            let matches = find_claim_matches(predicate, args, state, bindings, actor)?;
             match matches.len() {
                 1 => {
                     let pos = args
@@ -986,13 +1043,13 @@ fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue,
                         .claims_for(predicate)
                         .find(|f| {
                             f.args.len() == args.len()
-                                && unify_args(args, &f.args, bindings).is_some()
+                                && unify_args(args, &f.args, bindings, actor).is_some()
                         })
                         .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.clone()))?;
                     Ok(claim.args[pos].clone())
                 }
                 0 => match default {
-                    Some(d) => eval_value(d, state, bindings),
+                    Some(d) => eval_value(d, state, bindings, actor),
                     None => Err(EvalError::ValueOfZeroMatches(predicate.clone())),
                 },
                 _ => Err(EvalError::ValueOfMultipleMatches(predicate.clone())),
@@ -1002,7 +1059,11 @@ fn eval_value(e: &Expr, state: &State, bindings: &Bindings) -> Result<EvalValue,
     }
 }
 
-fn resolve_term(t: &Term, bindings: &Bindings) -> Result<EvalValue, EvalError> {
+fn resolve_term(
+    t: &Term,
+    bindings: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<EvalValue, EvalError> {
     match t {
         Term::Var(name) => bindings
             .get(name)
@@ -1017,6 +1078,7 @@ fn resolve_term(t: &Term, bindings: &Bindings) -> Result<EvalValue, EvalError> {
             Ok(EvalValue::Decimal(d))
         }
         Term::Literal(Value::Subject(s)) => Ok(EvalValue::Subject(s.clone())),
+        Term::Actor => actor.cloned().ok_or(EvalError::UnboundActor),
     }
 }
 
@@ -1138,11 +1200,13 @@ pub fn propose(
     let mut retracted: Vec<ClaimInstance> = vec![];
     let mut emitted: Vec<IntentInstance> = vec![];
 
+    let actor = Some(&transition.actor);
     for stmt in &transformation.body {
         match execute_stmt(
             stmt,
             pre_state,
             &mut bindings,
+            actor,
             &mut asserted,
             &mut retracted,
             &mut emitted,
@@ -1170,17 +1234,19 @@ pub fn propose(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_stmt(
     stmt: &Stmt,
     pre_state: &State,
     bindings: &mut Bindings,
+    actor: Option<&EvalValue>,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
 ) -> Result<StmtOutcome, EvalError> {
     match stmt {
         Stmt::Require(expr) => {
-            let matches = find_matches(expr, pre_state, bindings)?;
+            let matches = find_matches(expr, pre_state, bindings, actor)?;
             if matches.is_empty() {
                 Ok(StmtOutcome::Rejected(
                     "require failed: predicate did not hold over pre-state".to_string(),
@@ -1190,7 +1256,7 @@ fn execute_stmt(
             }
         }
         Stmt::Let { name, value } => {
-            let v = eval_value(value, pre_state, bindings)?;
+            let v = eval_value(value, pre_state, bindings, actor)?;
             bindings.insert(name.clone(), v);
             Ok(StmtOutcome::Continue)
         }
@@ -1200,7 +1266,7 @@ fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Assert(claim) => {
-            asserted.push(resolve_claim(claim, bindings)?);
+            asserted.push(resolve_claim(claim, bindings, actor)?);
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
@@ -1208,7 +1274,7 @@ fn execute_stmt(
                 if claim.args.len() != args.len() {
                     continue;
                 }
-                if unify_args(args, &claim.args, bindings).is_some() {
+                if unify_args(args, &claim.args, bindings, actor).is_some() {
                     retracted.push(claim.clone());
                 }
             }
@@ -1219,7 +1285,7 @@ fn execute_stmt(
             collection,
             body,
         } => {
-            let coll_val = eval_value(collection, pre_state, bindings)?;
+            let coll_val = eval_value(collection, pre_state, bindings, actor)?;
             let items = match coll_val {
                 EvalValue::Collection(v) => v,
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),
@@ -1227,7 +1293,9 @@ fn execute_stmt(
             for item in items {
                 bindings.insert(binding.clone(), item);
                 for inner in body {
-                    match execute_stmt(inner, pre_state, bindings, asserted, retracted, emitted)? {
+                    match execute_stmt(
+                        inner, pre_state, bindings, actor, asserted, retracted, emitted,
+                    )? {
                         StmtOutcome::Continue => {}
                         StmtOutcome::Rejected(r) => return Ok(StmtOutcome::Rejected(r)),
                     }
@@ -1237,13 +1305,17 @@ fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Emit(intent) => {
-            emitted.push(resolve_intent(intent, bindings)?);
+            emitted.push(resolve_intent(intent, bindings, actor)?);
             Ok(StmtOutcome::Continue)
         }
     }
 }
 
-fn resolve_claim(claim: &Claim, bindings: &Bindings) -> Result<ClaimInstance, EvalError> {
+fn resolve_claim(
+    claim: &Claim,
+    bindings: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<ClaimInstance, EvalError> {
     let mut args = Vec::with_capacity(claim.args.len());
     for t in &claim.args {
         if matches!(t, Term::Wildcard) {
@@ -1251,7 +1323,7 @@ fn resolve_claim(claim: &Claim, bindings: &Bindings) -> Result<ClaimInstance, Ev
                 "wildcard not allowed in assert/retract".into(),
             ));
         }
-        args.push(resolve_term(t, bindings)?);
+        args.push(resolve_term(t, bindings, actor)?);
     }
     Ok(ClaimInstance {
         predicate: claim.predicate.clone(),
@@ -1259,7 +1331,11 @@ fn resolve_claim(claim: &Claim, bindings: &Bindings) -> Result<ClaimInstance, Ev
     })
 }
 
-fn resolve_intent(intent: &Intent, bindings: &Bindings) -> Result<IntentInstance, EvalError> {
+fn resolve_intent(
+    intent: &Intent,
+    bindings: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<IntentInstance, EvalError> {
     let mut args = Vec::with_capacity(intent.args.len());
     for t in &intent.args {
         if matches!(t, Term::Wildcard) {
@@ -1267,7 +1343,7 @@ fn resolve_intent(intent: &Intent, bindings: &Bindings) -> Result<IntentInstance
                 "wildcard not allowed in emit".into(),
             ));
         }
-        args.push(resolve_term(t, bindings)?);
+        args.push(resolve_term(t, bindings, actor)?);
     }
     Ok(IntentInstance {
         name: intent.name.clone(),
@@ -1322,6 +1398,7 @@ mod tests {
         let resolved = resolve_term(
             &Term::Literal(Value::Subject("bank_debt_service".to_string())),
             &Bindings::new(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1334,13 +1411,13 @@ mod tests {
     fn subject_literal_unifies_with_matching_subject_arg() {
         let pattern = vec![Term::Literal(Value::Subject("p1".to_string()))];
         let value = vec![EvalValue::Subject("p1".to_string())];
-        assert!(unify_args(&pattern, &value, &Bindings::new()).is_some());
+        assert!(unify_args(&pattern, &value, &Bindings::new(), None).is_some());
 
         let mismatch = vec![EvalValue::Subject("p2".to_string())];
-        assert!(unify_args(&pattern, &mismatch, &Bindings::new()).is_none());
+        assert!(unify_args(&pattern, &mismatch, &Bindings::new(), None).is_none());
 
         let wrong_kind = vec![EvalValue::Decimal(Decimal::new(1, 0))];
-        assert!(unify_args(&pattern, &wrong_kind, &Bindings::new()).is_none());
+        assert!(unify_args(&pattern, &wrong_kind, &Bindings::new(), None).is_none());
     }
 
     /// Pins the contract of `State::claims_for`: it returns *only*
