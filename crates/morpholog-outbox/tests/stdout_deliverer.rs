@@ -10,8 +10,8 @@
 
 use std::time::Duration;
 
-use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
+use morpholog_core::{EvalValue, Transition};
 use morpholog_outbox::{StdoutDeliverer, process_available_outbox_rows};
 use morpholog_postgres::{PgPool, PgProposalOutcome, ProcessOutcome, propose_against_pg};
 use rust_decimal::Decimal;
@@ -45,10 +45,10 @@ fn dec(n: i64) -> EvalValue {
 async fn stdout_deliverer_marks_row_delivered_via_drain() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let outcome = propose_against_pg(
-        &pool,
-        &double_entry_ledger::post_simple_entry(),
-        vec![
+    let transformation = double_entry_ledger::post_simple_entry();
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
             subj("entry_001"),
             subj("d_2026_05_17"),
             subj("p_stdout"),
@@ -56,6 +56,12 @@ async fn stdout_deliverer_marks_row_delivered_via_drain() {
             subj("revenue"),
             dec(100),
         ],
+        actor: subj("outbox_test"),
+    };
+    let outcome = propose_against_pg(
+        &pool,
+        &transformation,
+        &transition,
         &double_entry_ledger::all_invariants(),
     )
     .await

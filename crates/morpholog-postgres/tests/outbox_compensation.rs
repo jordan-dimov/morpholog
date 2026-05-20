@@ -22,10 +22,12 @@ use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, begin_compensation, complete_compensation,
-    mark_compensation_failed, mark_outbox_failed, propose_against_pg,
+    mark_compensation_failed, mark_outbox_failed,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -60,7 +62,7 @@ fn dec(n: i64) -> EvalValue {
 /// the resulting outbox row's `intent_id`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     let invariants = double_entry_ledger::all_invariants();
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -118,7 +120,7 @@ async fn enqueue_then_fail(pool: &PgPool, entry_id: &str) -> Uuid {
 /// exists in `morpholog.audit`. The FK constraint would reject a
 /// synthesized UUID.
 async fn commit_compensation_transformation(pool: &PgPool, suffix: &str) -> Uuid {
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
         vec![

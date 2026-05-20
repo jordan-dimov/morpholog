@@ -15,7 +15,7 @@ mod common;
 
 use common::{dec, has_claim, must_accept, subj};
 use morpholog_core::examples::double_entry_ledger;
-use morpholog_core::{ClaimInstance, Outcome, State, eval_invariant, propose};
+use morpholog_core::{ClaimInstance, Outcome, State, eval_invariant};
 
 #[test]
 fn simple_entry_balances_and_commits() {
@@ -104,7 +104,7 @@ fn unbalanced_entry_rejected_by_invariant() {
     // the journal entry + three lines, and the candidate state
     // violates `balanced_posted_entry`. Atomic rollback: no claim
     // is admitted.
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &double_entry_ledger::post_split_entry(),
         vec![
             subj("entry_001"),
@@ -149,7 +149,7 @@ fn closed_period_rejects_normal_posting() {
         &[subj("p_2026_04")]
     ));
 
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -179,7 +179,7 @@ fn double_close_rejected() {
         &double_entry_ledger::all_invariants(),
     );
 
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &double_entry_ledger::close_period(),
         vec![subj("p_2026_04")],
         &after_close,
@@ -346,7 +346,7 @@ fn cannot_restate_already_restated_entry() {
         &double_entry_ledger::all_invariants(),
     );
 
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &double_entry_ledger::restate_entry(),
         vec![
             subj("entry_003"),

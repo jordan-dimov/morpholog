@@ -9,7 +9,7 @@
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
-    Transformation, enumerate_derived, predicates_referenced_by_derived, propose,
+    Transformation, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,6 +22,20 @@ use uuid::Uuid;
 /// async functions in this crate take, without pulling `sqlx` in as a
 /// direct dependency.
 pub use sqlx::PgPool;
+
+/// Sentinel actor for transitions the runtime itself initiates, with
+/// no user under whose authority the transition is being proposed.
+/// Used by the outbox compensation path: when a delivery fails
+/// non-retryably and a [`CompensationSpec`] is configured, the
+/// compensating transformation is proposed by the runtime, not by
+/// the actor of the original commit.
+///
+/// First-class authority modeling (granting and consulting actor
+/// standing) is a later concern; the sentinel keeps the audit row's
+/// `actor` column populated meaningfully until then.
+pub fn system_actor() -> EvalValue {
+    EvalValue::Subject("morpholog-system".to_string())
+}
 
 /// Errors returned by the PostgreSQL adapter.
 ///
@@ -78,6 +92,7 @@ pub enum PgError {
 pub enum PgProposalOutcome {
     Committed {
         transition_id: Uuid,
+        actor: EvalValue,
         asserted_claims: Vec<ClaimInstance>,
         retracted_claims: Vec<ClaimInstance>,
         emitted_intents: Vec<IntentInstance>,
@@ -96,10 +111,16 @@ pub enum PgProposalOutcome {
 ///
 /// External side effects do not run inside this transaction. Outbox rows
 /// are enqueued for post-commit delivery by workers running outside.
+///
+/// The proposal is given as a [`Transition`] - which bundles the
+/// transformation name (verified against `transformation.name`), the
+/// arguments, and the actor under whose authority the transition is
+/// being proposed. On `Committed`, the actor is persisted to the
+/// `morpholog.audit.actor` column alongside the other audit fields.
 pub async fn propose_against_pg(
     pool: &PgPool,
     transformation: &Transformation,
-    args: Vec<EvalValue>,
+    transition: &Transition,
     invariants: &[Invariant],
 ) -> Result<PgProposalOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
@@ -109,7 +130,7 @@ pub async fn propose_against_pg(
         .map_err(classify)?;
 
     let state = load_state(&mut tx).await?;
-    let outcome = propose(transformation, args.clone(), &state, invariants)?;
+    let outcome = propose(transformation, transition, &state, invariants)?;
 
     match outcome {
         Outcome::Rejected { reason } => {
@@ -127,7 +148,7 @@ pub async fn propose_against_pg(
                 &mut tx,
                 transition_id,
                 transformation,
-                &args,
+                transition,
                 invariants,
                 &asserted_claims,
                 &retracted_claims,
@@ -137,6 +158,7 @@ pub async fn propose_against_pg(
             tx.commit().await.map_err(classify)?;
             Ok(PgProposalOutcome::Committed {
                 transition_id,
+                actor: transition.actor.clone(),
                 asserted_claims,
                 retracted_claims,
                 emitted_intents,
@@ -197,7 +219,7 @@ async fn write_accepted(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
     transformation: &Transformation,
-    args: &[EvalValue],
+    transition: &Transition,
     invariants: &[Invariant],
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
@@ -261,14 +283,15 @@ async fn write_accepted(
         .collect();
     sqlx::query(
         "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments,
+            transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(transition_id)
     .bind(&transformation.name)
-    .bind(serde_json::to_value(args)?)
+    .bind(serde_json::to_value(&transition.args)?)
+    .bind(serde_json::to_value(&transition.actor)?)
     .bind(1_i32)
     .bind(serde_json::to_value(&checked)?)
     .bind(serde_json::to_value(asserted_claims)?)
@@ -362,6 +385,7 @@ pub struct AuditRow {
     pub transition_id: Uuid,
     pub transformation_name: String,
     pub arguments: Vec<EvalValue>,
+    pub actor: EvalValue,
     pub invariant_epoch: i32,
     pub invariants_checked: Vec<InvariantCheck>,
     pub asserted_claims: Vec<ClaimInstance>,
@@ -509,6 +533,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
         Uuid,
         String,
         serde_json::Value,
+        serde_json::Value,
         i32,
         serde_json::Value,
         serde_json::Value,
@@ -517,7 +542,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
         DateTime<Utc>,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT transition_id, transformation_name, arguments,
+        "SELECT transition_id, transformation_name, arguments, actor,
                 invariant_epoch, invariants_checked,
                 asserted_claims, retracted_claims, emitted_intents,
                 committed_at
@@ -534,6 +559,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
                 transition_id,
                 transformation_name,
                 args_json,
+                actor_json,
                 invariant_epoch,
                 invariants_checked_json,
                 asserted_json,
@@ -545,6 +571,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
                     transition_id,
                     transformation_name,
                     arguments: serde_json::from_value(args_json)?,
+                    actor: serde_json::from_value(actor_json)?,
                     invariant_epoch,
                     invariants_checked: serde_json::from_value(invariants_checked_json)?,
                     asserted_claims: serde_json::from_value(asserted_json)?,
@@ -1834,8 +1861,18 @@ where
                 return Ok(ProcessOutcome::CompensationDeferred { intent_id });
             };
             let args = (spec.args_from_row)(&failed_row);
-            let outcome =
-                propose_against_pg(pool, &spec.transformation, args, &spec.invariants).await?;
+            let compensation_transition = Transition {
+                transformation_name: spec.transformation.name.clone(),
+                args,
+                actor: system_actor(),
+            };
+            let outcome = propose_against_pg(
+                pool,
+                &spec.transformation,
+                &compensation_transition,
+                &spec.invariants,
+            )
+            .await?;
             match outcome {
                 PgProposalOutcome::Committed { transition_id, .. } => {
                     match complete_compensation(pool, intent_id, worker_id, transition_id).await? {

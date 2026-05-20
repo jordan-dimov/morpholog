@@ -14,7 +14,7 @@ mod common;
 
 use common::{dec, has_claim, must_accept, subj};
 use morpholog_core::examples::claim_standing;
-use morpholog_core::{Invariant, Outcome, State, propose};
+use morpholog_core::{Invariant, Outcome, State};
 
 fn standing_invariants() -> Vec<Invariant> {
     claim_standing::all_invariants()
@@ -76,7 +76,7 @@ fn standing_is_purpose_specific() {
     ));
 
     // Investor report against the same verification: rejected (no investor standing).
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &claim_standing::admit_investor_reported_revenue(),
         vec![
             subj("asset_a"),
@@ -254,7 +254,7 @@ fn revocation_blocks_new_decisions_but_preserves_history() {
     ));
 
     // 3. A NEW debt-service decision is rejected (admission gate fails).
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &claim_standing::admit_debt_service_revenue(),
         vec![
             subj("asset_a"),
@@ -280,7 +280,7 @@ fn wrong_amount_rejected_even_with_valid_standing() {
     // find an IndependentlyVerifiedRevenue claim matching all four
     // positional args.
     let state = state_with_bank_standing();
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &claim_standing::admit_debt_service_revenue(),
         vec![
             subj("asset_a"),
@@ -320,7 +320,7 @@ fn cannot_admit_decision_without_iv() {
 
     // Decision against ver_999 fails because there is no
     // IndependentlyVerifiedRevenue(_, _, _, ver_999) claim.
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &claim_standing::admit_debt_service_revenue(),
         vec![
             subj("asset_a"),

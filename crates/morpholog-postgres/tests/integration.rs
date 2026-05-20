@@ -17,11 +17,13 @@ use morpholog_core::examples::{
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
     PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_derived,
-    list_pending_outbox, propose_against_pg,
+    list_pending_outbox,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -114,7 +116,7 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
     reset_db(&pool).await;
     insert_pre_state(&pool, netting_pre_state_claims()).await;
 
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &settlement_netting::create_net_settlement(),
         netting_args(),
@@ -128,6 +130,7 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
         asserted_claims,
         retracted_claims,
         emitted_intents,
+        ..
     } = outcome
     else {
         panic!("expected Committed, got {outcome:?}");
@@ -191,7 +194,7 @@ async fn require_failure_writes_nothing() {
     claims.push(claim("Netted", vec![subj("l1")]));
     insert_pre_state(&pool, claims).await;
 
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &settlement_netting::create_net_settlement(),
         netting_args(),
@@ -241,7 +244,7 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
     ));
     insert_pre_state(&pool, claims).await;
 
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &settlement_netting::create_net_settlement(),
         netting_args(),
@@ -327,7 +330,7 @@ async fn retraction_deletes_targeted_row_and_preserves_others() {
     )
     .await;
 
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &retract_marker_transformation(),
         vec![subj("y")],
@@ -382,7 +385,7 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     reset_db(&pool).await;
     insert_pre_state(&pool, netting_pre_state_claims()).await;
 
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &settlement_netting::create_net_settlement(),
         netting_args(),
@@ -397,14 +400,16 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
 
     // Read all audit JSONB columns and verify they decode through the
     // PR #4 codec back into Rust types with the expected shapes.
-    let (args_json, invariants_checked_json, asserted_json, retracted_json, intents_json): (
+    type AuditJsonRow = (
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
-    ) = sqlx::query_as(
-        "SELECT arguments, invariants_checked, asserted_claims, retracted_claims, emitted_intents
+        serde_json::Value,
+    );
+    let (args_json, actor_json, invariants_checked_json, asserted_json, retracted_json, intents_json): AuditJsonRow = sqlx::query_as(
+        "SELECT arguments, actor, invariants_checked, asserted_claims, retracted_claims, emitted_intents
          FROM morpholog.audit WHERE transition_id = $1",
     )
     .bind(transition_id)
@@ -416,6 +421,10 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     let args: Vec<EvalValue> = serde_json::from_value(args_json).unwrap();
     assert_eq!(args.len(), 3);
     assert_eq!(args[0], subj("party_a"));
+
+    // actor: EvalValue (Subject under the v0 contract)
+    let actor: EvalValue = serde_json::from_value(actor_json).unwrap();
+    assert_eq!(actor, subj("test_actor"));
 
     // invariants_checked: [{name, version}, ...]
     let checked = invariants_checked_json.as_array().unwrap();
@@ -487,7 +496,7 @@ async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
     let invariants = revenue_restatement::all_invariants();
 
     // 1. Admit initial independent verification at 92.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &revenue_restatement::admit_independent_verification(),
         vec![asset(), period(), dec(92), subj("ver_001")],
@@ -504,7 +513,7 @@ async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
     assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
 
     // 2. Bank recognises 92, rec_001. I1 holds against the current verification.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &revenue_restatement::recognise_bank_revenue(),
         vec![asset(), period(), dec(92), subj("rec_001")],
@@ -524,7 +533,7 @@ async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
     //    transformation body also retracts CurrentBankRecognition, so I1 is
     //    vacuously satisfied (no current pointer remains until the bank
     //    restates).
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &revenue_restatement::correct_independent_verification(),
         vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
@@ -545,7 +554,7 @@ async fn revenue_restatement_full_chain_preserves_history_and_moves_pointer() {
     assert_eq!(emitted_intents[0].name, "VerificationCorrected");
 
     // 4. Bank restates to 91 with rec_002. New current pointer; new Supersedes.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &revenue_restatement::restate_bank_revenue(),
         vec![asset(), period(), dec(91), subj("rec_002"), subj("rec_001")],
@@ -659,7 +668,7 @@ async fn correct_verification_with_no_prior_rejects_and_writes_nothing() {
     // (asset, period, _, prior_verification_id) tuple, so the first
     // `require` in correct_independent_verification fails. The proposal
     // must be rejected and leave all three tables empty.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &revenue_restatement::correct_independent_verification(),
         vec![asset(), period(), dec(91), subj("ver_002"), subj("ver_001")],
@@ -698,7 +707,7 @@ async fn claim_standing_full_chain_through_pg() {
     let investor = subj(claim_standing::INVESTOR_REPORTING);
 
     // 1. Admit IV at 91.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::admit_independent_verification(),
         vec![asset(), period(), dec(91), subj("ver_001")],
@@ -715,7 +724,7 @@ async fn claim_standing_full_chain_through_pg() {
     assert_eq!(emitted_intents[0].name, "IndependentVerificationAdmitted");
 
     // 2. Bank credit committee grants debt-service-coverage standing.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::grant_standing(),
         vec![
@@ -744,7 +753,7 @@ async fn claim_standing_full_chain_through_pg() {
     assert_eq!(emitted_intents[0].name, "StandingGranted");
 
     // 3. Bank admits a debt-service decision against the verification.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::admit_debt_service_revenue(),
         vec![
@@ -769,7 +778,7 @@ async fn claim_standing_full_chain_through_pg() {
     // 4. Investor relations office grants investor-reporting standing on the
     //    same verification. Parallel admissibility — bank standing is still
     //    active, and now investor standing too.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::grant_standing(),
         vec![
@@ -787,7 +796,7 @@ async fn claim_standing_full_chain_through_pg() {
     };
 
     // 5. Investor relations admits an investor report against the verification.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::admit_investor_reported_revenue(),
         vec![
@@ -812,7 +821,7 @@ async fn claim_standing_full_chain_through_pg() {
     // 6. Bank revokes its standing. AdmissibleFor(ver_001, bank) is retracted;
     //    the historical decision_001 must survive; investor standing is
     //    untouched.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::revoke_standing(),
         vec![subj("ver_001"), bank.clone(), subj("revoke_001")],
@@ -989,7 +998,7 @@ async fn decision_after_revocation_rejects_and_writes_nothing() {
 
     // A new debt-service decision must be rejected: the AdmissibleFor
     // require fails because revocation retracted it.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &claim_standing::admit_debt_service_revenue(),
         vec![
@@ -1038,7 +1047,7 @@ async fn double_entry_full_chain_through_pg() {
     let invariants = double_entry_ledger::all_invariants();
 
     // 1. Post a simple entry: cash debit 100, revenue credit 100.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1069,7 +1078,7 @@ async fn double_entry_full_chain_through_pg() {
     assert_eq!(emitted_intents[0].name, "JournalEntryPosted");
 
     // 2. Close the period.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
@@ -1091,7 +1100,7 @@ async fn double_entry_full_chain_through_pg() {
     // 3. Restate the entry with a corrected amount (101 instead of
     //    100). The restatement transformation does not check
     //    PeriodClosed; restatement is the closed-period path.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::restate_entry(),
         vec![
@@ -1221,7 +1230,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     // A normal posting against the closed period must be rejected by
     // `require not PeriodClosed`, with no writes to claims, audit,
     // or outbox.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1267,7 +1276,7 @@ async fn list_claims_returns_admitted_claims_in_stable_order() {
 
     // Post a simple journal entry: cash 100 debit, revenue 100 credit.
     // Three claims will land: 1 JournalEntry, 2 JournalLine.
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1312,7 +1321,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     reset_db(&pool).await;
 
     // Two committed transformations in causal order: post then close.
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1327,7 +1336,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     )
     .await
     .unwrap();
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
@@ -1388,7 +1397,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1403,7 +1412,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     )
     .await
     .unwrap();
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
@@ -1457,7 +1466,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
     let invariants = double_entry_ledger::all_invariants();
 
     // Entry 1: cash debit 100, revenue credit 100.
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1475,7 +1484,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
     // Entry 2: cash debit 50, revenue credit 50. Same accounts, so the
     // two rows accumulate rather than producing four distinct rows.
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1576,7 +1585,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
 
     // Real ledger fixture: 1 entry, 2 journal lines.
     let invariants = double_entry_ledger::all_invariants();
-    propose_against_pg(
+    common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1655,7 +1664,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     // is rejected by `require not PeriodClosed`.
     insert_pre_state(&pool, vec![claim("PeriodClosed", vec![ledger_period()])]).await;
 
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1687,4 +1696,108 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
         outbox.is_empty(),
         "rejected transformation must not enqueue intents"
     );
+}
+
+// Pins that the actor supplied on a Transition round-trips through the
+// kernel, the audit-write codec, and list_audit_rows() unchanged.
+// Also pins that the actor surfaces on PgProposalOutcome::Committed so
+// the commit receipt is self-describing.
+#[tokio::test]
+async fn audit_row_records_actor() {
+    use morpholog_core::Transition;
+    use morpholog_postgres::propose_against_pg;
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let transformation = double_entry_ledger::post_simple_entry();
+    let actor = EvalValue::Subject("user:jordan".to_string());
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
+            subj("entry_actor_test"),
+            subj("d_2026_05_20"),
+            subj("p_actor_test"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        actor: actor.clone(),
+    };
+
+    let outcome = propose_against_pg(
+        &pool,
+        &transformation,
+        &transition,
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
+
+    let PgProposalOutcome::Committed {
+        transition_id,
+        actor: receipt_actor,
+        ..
+    } = outcome
+    else {
+        panic!("expected Committed, got {outcome:?}");
+    };
+
+    assert_eq!(
+        receipt_actor, actor,
+        "Committed receipt must echo the proposed actor"
+    );
+
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    assert_eq!(audit_rows.len(), 1);
+    let row = &audit_rows[0];
+    assert_eq!(row.transition_id, transition_id);
+    assert_eq!(
+        row.actor, actor,
+        "audit row must persist the actor unchanged"
+    );
+}
+
+// Pins that a Transition whose `actor` is not a Subject is rejected at
+// the kernel boundary as a typed error - not silently committed with a
+// nonsense actor encoded into audit. Future authority work assumes
+// actors are subject-shaped; this guard makes that contract testable.
+#[tokio::test]
+async fn propose_rejects_non_subject_actor() {
+    use morpholog_core::Transition;
+    use morpholog_postgres::{PgError, propose_against_pg};
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let transformation = double_entry_ledger::post_simple_entry();
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
+            subj("entry_bad_actor"),
+            subj("d_2026_05_20"),
+            subj("p_bad_actor"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        actor: dec(42), // decimal where a subject is required
+    };
+
+    let err = propose_against_pg(
+        &pool,
+        &transformation,
+        &transition,
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .expect_err("non-subject actor must surface as Kernel(TypeMismatch), not commit");
+
+    assert!(
+        matches!(err, PgError::Kernel(_)),
+        "expected PgError::Kernel(TypeMismatch), got {err:?}"
+    );
+
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    assert!(audit_rows.is_empty(), "rejected proposal must not audit");
 }

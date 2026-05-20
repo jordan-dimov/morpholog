@@ -14,8 +14,8 @@
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
+use morpholog_core::{EvalValue, Transition};
 use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
     Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome, ProcessOutcome,
@@ -54,10 +54,10 @@ fn dec(n: i64) -> EvalValue {
 }
 
 async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
-    let outcome = propose_against_pg(
-        pool,
-        &double_entry_ledger::post_simple_entry(),
-        vec![
+    let transformation = double_entry_ledger::post_simple_entry();
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
             subj(entry_id),
             subj("d_2026_05_17"),
             subj("p_drain"),
@@ -65,6 +65,12 @@ async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
             subj(&format!("revenue_{entry_id}")),
             dec(100),
         ],
+        actor: subj("outbox_test"),
+    };
+    let outcome = propose_against_pg(
+        pool,
+        &transformation,
+        &transition,
         &double_entry_ledger::all_invariants(),
     )
     .await

@@ -36,6 +36,10 @@ CREATE TABLE audit (
     transition_id        uuid         PRIMARY KEY,        -- UUIDv7, app-generated
     transformation_name  text         NOT NULL,
     arguments            jsonb        NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
+    -- The actor under whose authority this transition was proposed.
+    -- JSONB-encoded EvalValue (typically Subject); the codec writes
+    -- {"type":"subject","value":"..."} for the v0 actor shape.
+    actor                jsonb        NOT NULL,
     invariant_epoch      int          NOT NULL,           -- v0: always 1
     invariants_checked   jsonb        NOT NULL,           -- [{name, version}]
     asserted_claims      jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects

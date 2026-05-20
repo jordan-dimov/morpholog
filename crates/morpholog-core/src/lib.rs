@@ -1043,6 +1043,30 @@ pub struct IntentInstance {
     pub args: Vec<EvalValue>,
 }
 
+/// A proposed state transition under proposed context.
+///
+/// A `Transition` is the value evaluated, accepted-or-rejected, and
+/// persisted to the audit log on acceptance. It bundles three things:
+///
+/// - `transformation_name`: which named transformation is being proposed.
+///   Must match the `name` of the [`Transformation`] passed to [`propose`].
+/// - `args`: the per-call arguments to that transformation, positional,
+///   matching the transformation's declared `parameters`.
+/// - `actor`: the [`EvalValue::Subject`] under whose authority the
+///   transition is being proposed. Carried as transition context, not
+///   as a transformation parameter, so domain payloads stay free of
+///   plumbing concerns.
+///
+/// The actor is plumbed through `propose` and persisted with the audit
+/// row from this PR forward; admission rules that consult the actor
+/// (authority checks) arrive in a later PR.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transition {
+    pub transformation_name: String,
+    pub args: Vec<EvalValue>,
+    pub actor: EvalValue,
+}
+
 /// The result of proposing a transformation. Either the candidate state is
 /// admissible (Accepted) or some predicate or invariant rejected it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1067,25 +1091,46 @@ enum StmtOutcome {
 /// intents, builds the candidate state, evaluates every invariant against
 /// that candidate state, and returns Accepted iff all invariants hold.
 ///
-/// No PostgreSQL, no audit, no outbox — that's a later concern. This
+/// No PostgreSQL, no audit, no outbox - that's a later concern. This
 /// proves the semantic loop: transformation proposes, invariants decide.
+///
+/// The proposal is given as a [`Transition`], which bundles the
+/// transformation name (verified against `transformation.name`), the
+/// arguments, and the actor under whose authority the transition is
+/// being proposed. The actor is plumbed through from this PR; admission
+/// rules that consult it arrive later.
 pub fn propose(
     transformation: &Transformation,
-    args: Vec<EvalValue>,
+    transition: &Transition,
     pre_state: &State,
     invariants: &[Invariant],
 ) -> Result<Outcome, EvalError> {
-    if args.len() != transformation.parameters.len() {
+    if transformation.name != transition.transformation_name {
+        return Err(EvalError::TypeMismatch(format!(
+            "transition names transformation `{}` but Transformation passed is `{}`",
+            transition.transformation_name, transformation.name,
+        )));
+    }
+    if !matches!(transition.actor, EvalValue::Subject(_)) {
+        return Err(EvalError::TypeMismatch(
+            "transition actor must be a subject".to_string(),
+        ));
+    }
+    if transition.args.len() != transformation.parameters.len() {
         return Err(EvalError::TypeMismatch(format!(
             "transformation `{}` expects {} args, got {}",
             transformation.name,
             transformation.parameters.len(),
-            args.len(),
+            transition.args.len(),
         )));
     }
 
     let mut bindings = Bindings::new();
-    for (name, val) in transformation.parameters.iter().zip(args) {
+    for (name, val) in transformation
+        .parameters
+        .iter()
+        .zip(transition.args.iter().cloned())
+    {
         bindings.insert(name.clone(), val);
     }
 

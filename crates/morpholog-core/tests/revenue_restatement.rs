@@ -12,7 +12,7 @@ mod common;
 
 use common::{claim_instance, dec, has_claim, must_accept, subj};
 use morpholog_core::examples::revenue_restatement;
-use morpholog_core::{Outcome, State, propose};
+use morpholog_core::{Outcome, State};
 
 #[test]
 fn correct_independent_verification_retracts_dependent_current_pointer() {
@@ -45,7 +45,7 @@ fn correct_independent_verification_retracts_dependent_current_pointer() {
         subj("ver_001"),
     ];
 
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &revenue_restatement::correct_independent_verification(),
         args,
         &pre,

@@ -14,10 +14,12 @@ use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, list_pending_outbox, mark_outbox_delivered,
-    mark_outbox_failed, mark_outbox_transient_attempt, propose_against_pg, record_compensation,
+    mark_outbox_failed, mark_outbox_transient_attempt, record_compensation,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -53,7 +55,7 @@ fn dec(n: i64) -> EvalValue {
 /// held.
 async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
     let invariants = double_entry_ledger::all_invariants();
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -251,7 +253,7 @@ async fn record_compensation_links_compensation_to_failed_row() {
     // genuine transition_id we can attach as the compensation linkage.
     // Using post_simple_entry with debit/credit swapped, mirroring the
     // outbox-spike compensation shape.
-    let compensation_outcome = propose_against_pg(
+    let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -311,7 +313,7 @@ async fn record_compensation_errors_on_double_record() {
 
     // First compensation linkage: insert a real audit row to satisfy
     // the FK.
-    let compensation_outcome = propose_against_pg(
+    let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -338,7 +340,7 @@ async fn record_compensation_errors_on_double_record() {
     // Attempting to record a second compensation against the same
     // outbox row is a programming bug and must error rather than
     // silently overwrite.
-    let comp_outcome_b = propose_against_pg(
+    let comp_outcome_b = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
