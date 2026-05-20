@@ -3,7 +3,7 @@
 //!
 //! Production uses [`RealClock`] which delegates to
 //! `chrono::Utc::now` and `tokio::time::sleep`. Tests can use
-//! [`MockClock`] (re-exported from the [`crate::testing`] module),
+//! [`crate::testing::MockClock`],
 //! which records each `sleep_for` call into an inspectable buffer
 //! and never actually sleeps. With this split, tests can assert
 //! "the worker tried to sleep for the jittered interval" with
