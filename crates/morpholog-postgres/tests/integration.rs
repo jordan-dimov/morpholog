@@ -696,7 +696,9 @@ async fn verified_revenue_full_chain_through_pg() {
     );
 
     // 7. A new bank decision against ver_002 is rejected (no standing
-    //    on the corrected figure yet). Pin no durable trace.
+    //    on the corrected figure yet). Pin no durable trace: claims,
+    //    audit, and outbox must all be unchanged.
+    let claims_before = list_claims(&pool).await.unwrap().len();
     let audit_before = list_audit_rows(&pool).await.unwrap().len();
     let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_with_test_actor(
@@ -714,6 +716,11 @@ async fn verified_revenue_full_chain_through_pg() {
     .await
     .expect("step 7 propose_against_pg should not error");
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(
+        list_claims(&pool).await.unwrap().len(),
+        claims_before,
+        "rejected proposal must not mutate the claim set",
+    );
     assert_eq!(
         list_audit_rows(&pool).await.unwrap().len(),
         audit_before,
