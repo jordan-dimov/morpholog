@@ -41,6 +41,8 @@ CI is `.github/workflows/ci.yml`. The local equivalent is:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+cargo audit                                                                          # needs `cargo install cargo-audit` once
 cargo test -p morpholog-core -p morpholog-examples -p morpholog-cli --all-targets --locked
 
 # Against a local PostgreSQL 17+ with crates/morpholog-core/sql/schema.sql applied:

@@ -51,11 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
+      # Pre-built binary download (~5s) instead of compiling cargo-audit
+      # from source (~3 min) on every run.
       - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: cargo audit
         run: cargo audit

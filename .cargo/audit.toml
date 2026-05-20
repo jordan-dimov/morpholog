@@ -1,6 +1,6 @@
 # cargo-audit configuration.
 #
-# Each ignored advisory MUST carry a one-line reason recording why it
+# Each ignored advisory MUST carry a written reason explaining why it
 # does not affect us. Future advisories - including ones in features
 # we DO use - should still fail CI; this file is for documented false
 # positives only.
