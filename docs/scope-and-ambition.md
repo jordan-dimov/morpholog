@@ -112,9 +112,9 @@ transformation approve_journal(journal):
     assert JournalApproved(journal, $actor)
 ```
 
-Authority, delegation, approval limits, and segregation-of-duties are then modelled as claims (`HasRole(actor, role)`, `ApprovalAuthorityFor(actor, amount_cap)`, `DelegatedBy(delegate, delegator, scope)`), and invariants over those claims. No RBAC subsystem. No middleware. Just the affordance to put "who proposed this" into the invariant fragment, and the discipline to express authority itself as governed claims.
+Authority, delegation, approval limits, and segregation-of-duties are then modelled as claims (`HasRole(actor, role)`, `ApprovalAuthorityFor(actor, amount_cap)`, `DelegatedBy(delegate, delegator, scope)`), and invariants over those claims. No RBAC subsystem. No middleware. Two pieces working together: the affordance to consult "who proposed this" at *admission time* (`require` checks inside a transformation body, against the actor of the proposed transition), and the discipline to express authority itself as governed claims that invariants can constrain (consistency of the authority record, not its application to any specific proposal).
 
-The plumbing landed before the consultation primitive: `Transition.actor` and `audit.actor` exist today, threaded through `propose` and `propose_against_pg`. `Term::Actor` arrives when the first authority invariant earns it.
+The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation primitive `Term::Actor` followed in the next PR, forced by Example 6 (actor authority). Inside a `require` or an `assert`, `$actor` resolves to the actor of the proposing transition. Inside an invariant body, it raises `EvalError::UnboundActor` - the require-vs-invariant doctrine made enforceable by the runtime rather than convention.
 
 ### What is not in this list
 
@@ -162,7 +162,7 @@ Proven by:
 
 The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; actor authority and approval-limit invariants for regulated workflows) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
 
-Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor identity is plumbed through the runtime (PR #35 added `Transition.actor` and `audit.actor`); the consultation primitive (`Term::Actor`) and the first authority invariant follow from a worked example needing `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims.
+Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor identity is plumbed through the runtime (`Transition.actor`, `audit.actor`) and the consultation primitive (`Term::Actor`) is in the IR; Example 6 (actor authority) earned both. The next forced step in the authority arc - approval limits with decimal comparison, then predicate-pattern matching - awaits the worked example that demands them.
 
 ### Level 3 - Governed external and integration provenance
 

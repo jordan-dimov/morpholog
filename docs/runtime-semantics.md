@@ -80,7 +80,17 @@ Transition                       -- the value object proposed against a Transfor
   args                           -- per-call positional arguments
   actor                          -- EvalValue::Subject identifying who proposed this
                                     transition; persisted to audit.actor on commit;
-                                    available to invariants/requires once Term::Actor lands
+                                    reachable from anywhere inside the transformation body
+                                    (require/let/assert/retract/for/emit) via Term::Actor;
+                                    not reachable from invariant or derived-claim bodies
+
+Term                             -- a node inside a claim's args, a comprehension binding, etc.
+  Var(name)                      -- bound by surrounding context
+  Wildcard                       -- matches anything
+  Literal(Value)                 -- IR literal (Subject or Decimal)
+  Actor                          -- resolves to the proposing transition's actor;
+                                    in invariant bodies it raises EvalError::UnboundActor
+                                    (authority checks live in `require`, not in invariants)
 
 Statement
   require Expression
