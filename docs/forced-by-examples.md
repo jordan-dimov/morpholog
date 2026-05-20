@@ -1,6 +1,8 @@
 # What the worked examples forced into the language
 
-Status: retrospective. Companion to [`scope-and-ambition.md`](scope-and-ambition.md) and [`runtime-semantics.md`](runtime-semantics.md). This doc records design moves the runtime made *because a worked example forced them*, not moves we set out to make ex ante. Updated when a new example crystallizes a decision the doctrine docs hadn't yet.
+Status: design archaeology. Companion to [`scope-and-ambition.md`](scope-and-ambition.md) and [`runtime-semantics.md`](runtime-semantics.md). This doc records the design moves the runtime made because a worked example forced them, in the order in which each move happened.
+
+**Reorganisation note.** The worked examples were originally numbered in the chronological order in which each IR primitive was forced. In a later reorganisation they were consolidated by *business programme* (e.g. `actor_authority` and `approval_limits` collapsed into `approval_controls`), and one example was reframed (`settlement_netting` now leads with the candidate-state-invariants doctrine). The retrospective entries below still refer to the *original* example names, because they record what was forced at the moment it was forced. The current example taxonomy is in the [README](../README.md); this doc is the design journal that produced the current taxonomy, not a map to it.
 
 ## Why this doc exists
 
