@@ -77,10 +77,16 @@ pub enum Expr {
     /// Added with the trial-balance derived-claim example so that
     /// `balance == sum(debits) - sum(credits)` can be expressed without
     /// extending `Sum`'s value position into an expression sublanguage.
-    /// Deliberately the only decimal-arithmetic primitive in v0; no
-    /// addition, multiplication, or division until a real example
-    /// forces them.
     Sub(Box<Expr>, Box<Expr>),
+    /// Decimal addition. Both operands must evaluate to
+    /// `EvalValue::Decimal`; the result is the left plus the right.
+    /// Added with the insurance-claim-settlement example so that
+    /// cumulative-cap rules like `sum(paid) + proposed <= aggregate`
+    /// can be expressed directly, instead of contorting the natural
+    /// rule into `proposed <= aggregate - sum(paid)`. Together with
+    /// `Sub` this is the entire decimal-arithmetic surface in v0; no
+    /// multiplication or division until a real example forces them.
+    Add(Box<Expr>, Box<Expr>),
     Sum {
         value: Term,
         binding: String,
@@ -653,7 +659,7 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
         Expr::Not(e) | Expr::Exists { body: e, .. } => {
             predicates_referenced_by_expr(e, out);
         }
-        Expr::Eq(l, r) | Expr::Le(l, r) | Expr::Sub(l, r) => {
+        Expr::Eq(l, r) | Expr::Le(l, r) | Expr::Sub(l, r) | Expr::Add(l, r) => {
             predicates_referenced_by_expr(l, out);
             predicates_referenced_by_expr(r, out);
         }
@@ -830,9 +836,11 @@ fn find_matches(
             Ok(if l != r { vec![base.clone()] } else { vec![] })
         }
         Expr::In(elem, coll) => find_in_matches(elem, coll, base, actor),
-        Expr::Term(_) | Expr::Sub(_, _) | Expr::Sum { .. } | Expr::ValueOf { .. } => {
-            Err(EvalError::NotPredicate)
-        }
+        Expr::Term(_)
+        | Expr::Sub(_, _)
+        | Expr::Add(_, _)
+        | Expr::Sum { .. }
+        | Expr::ValueOf { .. } => Err(EvalError::NotPredicate),
     }
 }
 
@@ -1039,6 +1047,16 @@ fn eval_value(
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a - b)),
                 _ => Err(EvalError::TypeMismatch(
                     "Sub expects decimal operands".into(),
+                )),
+            }
+        }
+        Expr::Add(lhs, rhs) => {
+            let l = eval_value(lhs, state, bindings, actor)?;
+            let r = eval_value(rhs, state, bindings, actor)?;
+            match (l, r) {
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a + b)),
+                _ => Err(EvalError::TypeMismatch(
+                    "Add expects decimal operands".into(),
                 )),
             }
         }
@@ -1611,6 +1629,11 @@ mod tests {
                 Box::new(claim("P_sub_left")),
                 Box::new(claim("P_sub_right")),
             ),
+            // Add operates on two sub-expressions.
+            Expr::Add(
+                Box::new(claim("P_add_left")),
+                Box::new(claim("P_add_right")),
+            ),
             // Sum wraps a body.
             Expr::Sum {
                 value: Term::Var("v".to_string()),
@@ -1650,6 +1673,8 @@ mod tests {
             "P_le_right",
             "P_sub_left",
             "P_sub_right",
+            "P_add_left",
+            "P_add_right",
             "P_sum_body",
             "P_forall_source",
             "P_forall_body",
@@ -1664,5 +1689,81 @@ mod tests {
             got, expected,
             "every Expr variant that carries a predicate reference must contribute it"
         );
+    }
+
+    /// `Expr::Add` returns the decimal sum of its operands when both
+    /// evaluate to decimals.
+    #[test]
+    fn add_sums_two_decimals() {
+        let expr = Expr::Add(
+            Box::new(Expr::Term(Term::Literal(Value::Decimal("10".to_string())))),
+            Box::new(Expr::Term(Term::Literal(Value::Decimal(
+                "32.5".to_string(),
+            )))),
+        );
+        let v = eval_value(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        assert_eq!(v, EvalValue::Decimal(Decimal::new(425, 1)));
+    }
+
+    /// Non-decimal operands surface as `TypeMismatch`. Same contract as
+    /// `Sub`. Authority records and other claims that admit non-decimal
+    /// values into an `Add` position must trip this rather than fall
+    /// through silently.
+    #[test]
+    fn add_with_non_decimal_operand_is_type_mismatch() {
+        let expr = Expr::Add(
+            Box::new(Expr::Term(Term::Literal(Value::Decimal("10".to_string())))),
+            Box::new(Expr::Term(Term::Literal(Value::Subject(
+                "oops".to_string(),
+            )))),
+        );
+        let err = eval_value(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
+            .expect_err("expected TypeMismatch");
+        match err {
+            EvalError::TypeMismatch(msg) => assert!(msg.contains("Add")),
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// The cumulative-cap shape: `Le(Add(running, proposed), cap)`.
+    /// This is the load-bearing composition the insurance-claim-settlement
+    /// example uses to gate authorisations under a policy aggregate
+    /// limit. Pinning it here so the kernel composition cannot drift.
+    #[test]
+    fn add_nests_under_le_for_cumulative_cap() {
+        let running = Expr::Term(Term::Literal(Value::Decimal("60".to_string())));
+        let proposed = Expr::Term(Term::Literal(Value::Decimal("40".to_string())));
+        let cap = Expr::Term(Term::Literal(Value::Decimal("100".to_string())));
+
+        // 60 + 40 <= 100 admits (binding pass-through).
+        let under_cap = Expr::Le(
+            Box::new(Expr::Add(Box::new(running.clone()), Box::new(proposed))),
+            Box::new(cap.clone()),
+        );
+        let matches = find_matches(
+            &under_cap,
+            &State::from_claims(vec![]),
+            &Bindings::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(matches.len(), 1, "60 + 40 <= 100 should admit");
+
+        // 60 + 50 <= 100 fails (empty match set).
+        let over_cap = Expr::Le(
+            Box::new(Expr::Add(
+                Box::new(running),
+                Box::new(Expr::Term(Term::Literal(Value::Decimal("50".to_string())))),
+            )),
+            Box::new(cap),
+        );
+        let matches = find_matches(
+            &over_cap,
+            &State::from_claims(vec![]),
+            &Bindings::new(),
+            None,
+        )
+        .unwrap();
+        assert!(matches.is_empty(), "60 + 50 <= 100 should reject");
     }
 }
