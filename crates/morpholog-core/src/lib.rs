@@ -42,11 +42,11 @@ pub struct Invariant {
 ///
 /// The variants are deliberately narrow: predicate composition (`And`,
 /// `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
-/// (`Claim`, `Neq`, `Eq`), one bounded aggregation (`Sum`), one decimal
-/// arithmetic primitive (`Sub`), one collection primitive (`In`), one
-/// functional-lookup primitive (`ValueOf`), and `Term`-as-value lifting.
-/// Anything that cannot be expressed within this set is, by design, not
-/// yet a runtime concern.
+/// (`Claim`, `Neq`, `Eq`), one decimal-comparison primitive (`Le`), one
+/// bounded aggregation (`Sum`), one decimal-arithmetic primitive (`Sub`),
+/// one collection primitive (`In`), one functional-lookup primitive
+/// (`ValueOf`), and `Term`-as-value lifting. Anything that cannot be
+/// expressed within this set is, by design, not yet a runtime concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Claim {
@@ -66,6 +66,15 @@ pub enum Expr {
     Neq(Term, Term),
     Term(Term),
     Eq(Box<Expr>, Box<Expr>),
+    /// Decimal less-than-or-equal. Both operands must evaluate to
+    /// `EvalValue::Decimal`. Predicate-shaped: returns the empty match
+    /// set when the comparison is false, the unchanged binding set when
+    /// true. Added in Example 7 (approval limits) so that
+    /// `require amount <= limit` can be expressed without smuggling
+    /// quantitative authority into the bindings via `Eq` games.
+    /// Deliberately the only decimal-comparison primitive in v0; `Lt`,
+    /// `Gt`, `Ge` arrive when an example forces them.
+    Le(Box<Expr>, Box<Expr>),
     /// Decimal subtraction. Both operands must evaluate to
     /// `EvalValue::Decimal`; the result is the left minus the right.
     /// Added in Example 5 (derived claims) so that
@@ -647,7 +656,7 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
         Expr::Not(e) | Expr::Exists { body: e, .. } => {
             predicates_referenced_by_expr(e, out);
         }
-        Expr::Eq(l, r) | Expr::Sub(l, r) => {
+        Expr::Eq(l, r) | Expr::Le(l, r) | Expr::Sub(l, r) => {
             predicates_referenced_by_expr(l, out);
             predicates_referenced_by_expr(r, out);
         }
@@ -805,6 +814,18 @@ fn find_matches(
             let l = eval_value(lhs, state, base, actor)?;
             let r = eval_value(rhs, state, base, actor)?;
             Ok(if l == r { vec![base.clone()] } else { vec![] })
+        }
+        Expr::Le(lhs, rhs) => {
+            let l = eval_value(lhs, state, base, actor)?;
+            let r = eval_value(rhs, state, base, actor)?;
+            match (l, r) {
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => {
+                    Ok(if a <= b { vec![base.clone()] } else { vec![] })
+                }
+                _ => Err(EvalError::TypeMismatch(
+                    "Le expects decimal operands".into(),
+                )),
+            }
         }
         Expr::Neq(t1, t2) => {
             let l = resolve_term(t1, base, actor)?;
@@ -1586,6 +1607,8 @@ mod tests {
             Expr::Not(Box::new(claim("P_not_body"))),
             // Eq operates on two sub-expressions.
             Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
+            // Le operates on two sub-expressions.
+            Expr::Le(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
             // Sub operates on two sub-expressions.
             Expr::Sub(
                 Box::new(claim("P_sub_left")),
@@ -1626,6 +1649,8 @@ mod tests {
             "P_not_body",
             "P_eq_left",
             "P_eq_right",
+            "P_le_left",
+            "P_le_right",
             "P_sub_left",
             "P_sub_right",
             "P_sum_body",

@@ -15,6 +15,7 @@
 //! as teaching fixtures, not a contract.
 
 pub mod actor_authority;
+pub mod approval_limits;
 pub mod claim_standing;
 pub mod double_entry_ledger;
 pub mod revenue_restatement;
@@ -36,5 +37,6 @@ pub fn all_programs() -> Vec<crate::Program> {
         claim_standing::program(),
         double_entry_ledger::program(),
         actor_authority::program(),
+        approval_limits::program(),
     ]
 }

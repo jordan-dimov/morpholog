@@ -12,7 +12,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::examples::{
-    actor_authority, claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
+    actor_authority, approval_limits, claim_standing, double_entry_ledger, revenue_restatement,
+    settlement_netting,
 };
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
@@ -1928,4 +1929,89 @@ async fn actor_authority_full_chain_through_pg() {
     .await
     .expect("step 6b propose_against_pg should not error");
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+}
+
+// ============================================================
+// Approval limits (Example 7) - durable proof that Expr::Le flows
+// through propose_against_pg, including the round-trip of the
+// authorised amount onto the LimitedApproval claim.
+// ============================================================
+
+#[tokio::test]
+async fn approval_limits_full_chain_through_pg() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = approval_limits::all_invariants();
+
+    // 1. Admin grants jordan an invoice limit of 1000.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &approval_limits::grant_approval_limit(),
+        vec![subj("jordan"), subj("invoice"), dec(1000)],
+        &invariants,
+    )
+    .await
+    .expect("step 1 propose_against_pg should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    // 2. jordan approves an invoice within the limit.
+    let outcome = common::propose_pg_as(
+        &pool,
+        &approval_limits::approve_within_limit(),
+        vec![subj("inv_001"), subj("invoice"), dec(750)],
+        subj("jordan"),
+        &invariants,
+    )
+    .await
+    .expect("step 2 propose_against_pg should not error");
+    let PgProposalOutcome::Committed {
+        actor: receipt_actor,
+        asserted_claims,
+        ..
+    } = outcome
+    else {
+        panic!("step 2 expected Committed, got {outcome:?}");
+    };
+    assert_eq!(receipt_actor, subj("jordan"));
+    let approval = asserted_claims
+        .iter()
+        .find(|c| c.predicate == "LimitedApproval")
+        .expect("LimitedApproval should be asserted");
+    assert_eq!(
+        approval.args,
+        vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")],
+        "LimitedApproval must carry doc_id, doc_type, amount, and proposing actor",
+    );
+
+    // 3. jordan tries to approve above the limit. Rejected at require.
+    let outcome = common::propose_pg_as(
+        &pool,
+        &approval_limits::approve_within_limit(),
+        vec![subj("inv_over"), subj("invoice"), dec(2000)],
+        subj("jordan"),
+        &invariants,
+    )
+    .await
+    .expect("step 3 propose_against_pg should not error");
+    let PgProposalOutcome::Rejected { reason } = outcome else {
+        panic!("amount above limit must be rejected; got {outcome:?}");
+    };
+    assert!(reason.contains("require"), "got reason: {reason}");
+
+    // 4. Durable claim set carries jordan's approval, not the
+    // rejected one.
+    let claims = list_claims(&pool).await.unwrap();
+    assert!(claims.iter().any(|c| c.predicate == "LimitedApproval"
+        && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")]));
+    assert!(!claims.iter().any(|c| c.predicate == "LimitedApproval"
+        && c.args == vec![subj("inv_over"), subj("invoice"), dec(2000), subj("jordan")]));
+
+    // 5. Audit log records the actor on the committed approval.
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    let approve_row = audit_rows
+        .iter()
+        .find(|r| r.transformation_name == "approve_within_limit")
+        .expect("approve_within_limit audit row should exist");
+    assert_eq!(approve_row.actor, subj("jordan"));
 }

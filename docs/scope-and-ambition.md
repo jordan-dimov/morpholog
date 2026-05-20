@@ -162,7 +162,7 @@ Proven by:
 
 The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; actor authority and approval-limit invariants for regulated workflows) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
 
-Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor identity is plumbed through the runtime (`Transition.actor`, `audit.actor`) and the consultation primitive (`Term::Actor`) is in the IR; Example 6 (actor authority) earned both. The next forced step in the authority arc - approval limits with decimal comparison, then predicate-pattern matching - awaits the worked example that demands them.
+Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor identity is plumbed through the runtime (`Transition.actor`, `audit.actor`) and the consultation primitive (`Term::Actor`) is in the IR (Example 6). Quantitative authority via decimal comparison (`Expr::Le`) is in the IR too (Example 7). The next forced step in the authority arc - higher-order authority via predicate-pattern matching, or cumulative/time-bounded limits via richer requires - awaits the worked example that demands it.
 
 ### Level 3 - Governed external and integration provenance
 

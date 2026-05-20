@@ -63,7 +63,10 @@ Claim
 
 Expression                       (inside invariants, requires, lets, comprehensions)
   literal | variable | claim-query | comprehension
-  operators: == != and or not implies, plus arithmetic on Decimal
+  operators: == != <= and not implies, plus subtraction on Decimal
+                                    (== takes Exprs; != takes Terms; <= takes Exprs
+                                    and requires Decimal operands; Sub returns Decimal;
+                                    no other arithmetic or comparison primitives yet)
 
 Invariant
   name
