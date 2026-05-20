@@ -1,4 +1,4 @@
-//! Integration tests for derived claims (Example 5).
+//! Integration tests for derived claims.
 //!
 //! `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`
 //! make the trial balance over the double-entry ledger expressible

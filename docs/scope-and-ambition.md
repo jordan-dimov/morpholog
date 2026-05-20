@@ -1,6 +1,6 @@
 # Morpholog: Scope and Ambition
 
-Status: design doctrine. Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`forced-by-examples.md`](forced-by-examples.md), which records (retrospectively) which specific examples forced which design decisions.
+Status: design doctrine. Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
 
 This document fixes what Morpholog is *for*, what it should grow into, and - equally important - what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
 
@@ -86,7 +86,7 @@ This single construct subsumes:
 
 Derived claims are the answer to "how does Morpholog own the read side without becoming a query engine?" - by making the read side a governed artefact rather than a free query surface.
 
-The first cut of derived claims landed with Example 5 (trial balance over the double-entry ledger): `DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, no materialisation, no recursion, not visible to invariants or transformations. Later questions - materialisation, invalidation, provenance, recursion through other derived claims, visibility to invariants - remain forced-by-examples territory; see `docs/forced-by-examples.md` for what Example 5 forced and what was explicitly deferred.
+The first cut of derived claims landed with Example 5 (trial balance over the double-entry ledger): `DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, no materialisation, no recursion, not visible to invariants or transformations. Later questions - materialisation, invalidation, provenance, recursion through other derived claims, visibility to invariants - remain design-history territory; see `docs/design-history.md` for what Example 5 forced and what was explicitly deferred.
 
 ### 3. As-of, as a single operator
 
@@ -114,7 +114,7 @@ transformation approve_journal(journal):
 
 Authority, delegation, approval limits, and segregation-of-duties are then modelled as claims (`HasRole(actor, role)`, `ApprovalAuthorityFor(actor, amount_cap)`, `DelegatedBy(delegate, delegator, scope)`), and invariants over those claims. No RBAC subsystem. No middleware. Two pieces working together: the affordance to consult "who proposed this" at *admission time* (`require` checks inside a transformation body, against the actor of the proposed transition), and the discipline to express authority itself as governed claims that invariants can constrain (consistency of the authority record, not its application to any specific proposal).
 
-The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation primitive `Term::Actor` followed in the next PR, forced by Example 6 (actor authority). Inside a `require` or an `assert`, `$actor` resolves to the actor of the proposing transition. Inside an invariant body, it raises `EvalError::UnboundActor` - the require-vs-invariant doctrine made enforceable by the runtime rather than convention.
+The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation primitive `Term::Actor` followed, forced by the actor-authority worked example (now part of [`approval_controls`](../examples/04_approval_controls/)). Inside a `require` or an `assert`, `$actor` resolves to the actor of the proposing transition. Inside an invariant body, it raises `EvalError::UnboundActor` - the require-vs-invariant doctrine made enforceable by the runtime rather than convention.
 
 ### What is not in this list
 
@@ -147,22 +147,23 @@ Three levels. Each one is proven by a worked example before any language afforda
 Transformations and invariants over admitted claims. One PostgreSQL `SERIALIZABLE` transaction per proposal. Audit and outbox written atomically with the claim mutations.
 
 Proven by:
-- **Example 1 - Settlement netting.** Transactional correctness: arithmetic, exclusion, double-use prevention, atomic rollback.
-- **Example 2 - Revenue restatement.** Contested legitimacy: history survives correction; current-standing pointer moves via retraction; supersession lineage persists; durable through `propose_against_pg`.
+- **[Settlement netting](../examples/01_settlement_netting/).** Transactional correctness: arithmetic, exclusion, double-use prevention, atomic rollback. The foundational example: invariants check the *candidate state*, not just the pre-state.
 
-### Level 2 - Governed standing and governed derived claims
+### Level 2 - Governed standing, restatement, read-side projection, and authority
 
-Standing first (the next semantic frontier already named in the README), then derived claims as the disciplined answer to read-side legitimacy.
+The richer worked examples. Each one combines several of the patterns the language needs:
 
-Proven by:
-- **Example 3 - Claim standing.** `AdmissibleFor(claim, purpose)` as the central pattern: which admitted claims may be used for which decisions, and how that standing is acquired and lost without mutating the claims themselves. (Landed; forced `Value::Subject` and the require-vs-invariant distinction.)
-- **Example 4 - Double-entry ledger with period close.** Whether Xero-like accounting cores are a credible target. Posted-balance invariants, closed-period rejection, restatement-with-supersession for prior periods. (Landed; reused existing affordances without forcing new ones.)
-- **Example 5 - Trial balance as a derived claim.** Whether read-side projections can be governed by the same model as admitted state. (Landed; forced `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`. Materialisation, provenance, and recursion through other derived claims remain deferred.)
-- **As-of evaluation.** (Landed in subsequent PRs.) `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`.
+- **[Verified revenue](../examples/02_verified_revenue/).** The flagship. Contested legitimacy in two patterns woven together: *currentness with restatement* (the verifier corrects a figure; the original stays in admitted state; a singleton pointer moves; lineage records the change) and *admissibility-for-purpose* (different authorities grant standing for the same figure for their own decisions; standing can be revoked without touching the underlying claim). When the verifier corrects, standings on the prior verification are retracted by pattern, but historical decisions survive. Forced `Value::Subject` and crystallised the require-vs-invariant distinction.
 
-The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; actor authority and approval-limit invariants for regulated workflows) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
+- **[Double-entry ledger](../examples/03_double_entry_ledger/).** Whether Xero-like accounting cores are a credible target. Posted-balance invariants, closed-period rejection, restatement-with-supersession for prior periods, and `TrialBalanceRow` as the read-side projection. Hosts the trial-balance derived claim that forced `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived` into the IR.
 
-Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor identity is plumbed through the runtime (`Transition.actor`, `audit.actor`) and the consultation primitive (`Term::Actor`) is in the IR (Example 6). Quantitative authority via decimal comparison (`Expr::Le`) is in the IR too (Example 7). The next forced step in the authority arc - higher-order authority via predicate-pattern matching, or cumulative/time-bounded limits via richer requires - awaits the worked example that demands it.
+- **[Approval controls](../examples/04_approval_controls/).** Actor identity threading through transitions and into the audit log, with both unconditional authority (`MayApprove`) and quantitative authority via `Expr::Le` (`ApprovalLimit`). Forced `Term::Actor` and `Expr::Le`.
+
+- **As-of evaluation.** `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`. The trial-balance example demonstrates this end-to-end.
+
+The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; higher-order authority via predicate-pattern matching for regulated workflows; effective time as a separate axis) is the next forced territory. See [`docs/design-history.md`](design-history.md) for the design-archaeology record of what each forcing event added to the IR.
+
+The candidate language affordances driven by Level 2: typed predicate declarations remain on the candidate list. The next forced step in the authority arc is higher-order authority (one authority claim governing a family of transformations - forcing predicate names as first-class IR values), or cumulative / time-bounded limits via richer requires. Both await the worked example that demands them.
 
 ### Level 3 - Governed external and integration provenance
 

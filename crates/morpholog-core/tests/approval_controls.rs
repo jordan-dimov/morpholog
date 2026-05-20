@@ -1,5 +1,5 @@
 //! Integration tests for the approval controls example
-//! (`examples/06_approval_controls/`).
+//! (`examples/04_approval_controls/`).
 //!
 //! Two-section coverage matching the example's two authority shapes:
 //!

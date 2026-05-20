@@ -1,7 +1,7 @@
 //! Approval controls - actor identity, unconditional authority, and
 //! quantitative authority in one programme.
 //!
-//! Surface-syntax form: `examples/06_approval_controls/approval_controls.morph`.
+//! Surface-syntax form: `examples/04_approval_controls/approval_controls.morph`.
 //!
 //! Combines two shapes a real business uses side by side:
 //!

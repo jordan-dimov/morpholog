@@ -1,27 +1,26 @@
-//! Double-entry ledger with period close — Example 4 IR.
+//! Double-entry ledger IR.
 //!
-//! Surface-syntax form: `examples/04_double_entry_ledger/ledger.morph`.
+//! Surface-syntax form: `examples/03_double_entry_ledger/ledger.morph`.
 //!
 //! Demonstrates the runtime against the canonical accounting domain:
 //! posted journal entries must balance (sum of debits = sum of credits),
 //! periods can be closed (after which new postings are rejected), and
 //! closed periods can be restated through a separate transformation
 //! that records `Supersedes` lineage without mutating the original
-//! posting.
+//! posting. Hosts the `TrialBalanceRow` derived claim as the
+//! programme's read-side projection.
 //!
-//! Reuses the [`super::revenue_restatement`] supersession pattern (the
+//! Reuses the [`super::verified_revenue`] supersession pattern (the
 //! `Supersedes` predicate) without sharing constructor code; each
 //! example module re-declares the IR it needs.
 //!
-//! Per `docs/forced-by-examples.md`, this example was expected to
-//! exercise the require-vs-invariant distinction (period close is
+//! Exercises the require-vs-invariant distinction (period close is
 //! admission gating; balance is an eternal invariant) and the
 //! history-as-append-only discipline (JournalEntry and JournalLine
 //! are content; PeriodClosed is append-only state; Supersedes is
-//! append-only lineage). No new IR primitive is forced; the existing
-//! `Expr::Sum` / `Expr::Eq` pair handles the balance check, and
-//! `Eq(Sum, Sum)` works directly because `eval_value` handles `Sum`
-//! and `Eq` evaluates both sides through `eval_value`.
+//! append-only lineage). The existing `Expr::Sum` / `Expr::Eq` pair
+//! handles the balance check via `Eq(Sum, Sum)`; the trial balance is
+//! a `DerivedClaim` using `Expr::Sub`.
 
 use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
 
@@ -33,11 +32,12 @@ fn var(name: &str) -> Term {
 // Invariants — eternal rules over admitted state.
 //
 // Period-close gating lives in `require` on the posting
-// transformations, not in an invariant. This is the same lesson
-// crystallized in Example 3: a constraint that only applies *at
-// admission time* must not be an eternal invariant, or closing
-// a period would either fail (because historical postings would
-// then violate it) or cascade-retract them.
+// transformations, not in an invariant. This is the same
+// require-vs-invariant lesson the verified-revenue example
+// crystallized: a constraint that only applies *at admission time*
+// must not be an eternal invariant, or closing a period would
+// either fail (because historical postings would then violate it)
+// or cascade-retract them.
 // ============================================================
 
 /// Every `JournalEntry` must satisfy the fundamental accounting
@@ -104,7 +104,8 @@ pub fn journal_entry_has_lines() -> Invariant {
 }
 
 /// A posted entry can be superseded by at most one direct successor.
-/// Reuses Example 2's at-most-one-direct-successor shape.
+/// Reuses the same shape as the verified-revenue programme's
+/// invariant of the same name.
 pub fn at_most_one_direct_successor() -> Invariant {
     Invariant {
         name: "at_most_one_direct_successor".to_string(),
@@ -366,13 +367,13 @@ pub fn all_invariants() -> Vec<Invariant> {
 /// Trial balance derived from the posted `JournalLine` claims. One
 /// row per distinct account; the balance is debits minus credits.
 ///
-/// This is the worked example for Example 5 (derived claims). The
+/// The read-side projection that completes this programme. The
 /// derived claim is enumerable via [`crate::enumerate_derived`] (or
 /// `morpholog inspect derived double_entry_ledger TrialBalanceRow`
 /// from the CLI). In v0 it is not added to admitted state, not
 /// visible to invariants or transformations, not persisted, and not
 /// recursively referenceable from another derived claim's body. See
-/// `docs/forced-by-examples.md` for the Example 5 retrospective.
+/// `docs/design-history.md` for the derived-claims retrospective.
 ///
 /// Shape:
 ///

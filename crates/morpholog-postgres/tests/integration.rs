@@ -449,14 +449,7 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
 }
 
 // ============================================================
-// Revenue restatement (Example 2) — durable proof of the
-// contested-legitimacy model through propose_against_pg.
-//
-// Mirrors the in-memory test
-// `full_restatement_chain_preserves_history_and_updates_pointer`
-// in crates/morpholog-core/src/lib.rs, but runs every step through
-// the PostgreSQL adapter and inspects the durable claims/audit/
-// outbox rows directly.
+// Shared helpers for the verified-revenue PG tests below.
 // ============================================================
 
 fn asset() -> EvalValue {
@@ -489,8 +482,8 @@ async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> boo
 }
 
 // ============================================================
-// Verified revenue (Example 2) - durable proof that the two
-// patterns (currentness with restatement + admissibility-for-purpose)
+// Verified revenue - durable proof that the two patterns
+// (currentness with restatement + admissibility-for-purpose)
 // compose end to end through propose_against_pg. One scenario walks
 // admission, multi-authority standing, decisions, correction (which
 // retracts standing on the prior verification), rejection of
@@ -798,7 +791,7 @@ async fn verified_revenue_full_chain_through_pg() {
 }
 
 // ============================================================
-// Double-entry ledger (Example 4) — durable proof of balanced
+// Double-entry ledger - durable proof of balanced
 // posting, period close, and restatement through
 // propose_against_pg.
 //
@@ -1576,7 +1569,7 @@ async fn propose_rejects_non_subject_actor() {
 }
 
 // ============================================================
-// Approval controls (Example 6) - durable proof that Term::Actor
+// Approval controls - durable proof that Term::Actor
 // and Expr::Le flow through propose_against_pg, into the audit log,
 // and into the asserted Approval / LimitedApproval claims. One
 // scenario walks both shapes (unconditional + quantitative) in

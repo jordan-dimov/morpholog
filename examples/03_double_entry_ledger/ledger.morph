@@ -16,7 +16,7 @@
 -- (`require` in the posting transformations, not an invariant) so
 -- that closing a period does not invalidate the historical postings
 -- made before it. Restatement reuses the `Supersedes` lineage pattern
--- proven in Example 2.
+-- proven by the verified-revenue example.
 
 
 invariant balanced_posted_entry:

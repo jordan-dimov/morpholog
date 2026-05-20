@@ -2,7 +2,13 @@
 
 Status: design archaeology. Companion to [`scope-and-ambition.md`](scope-and-ambition.md) and [`runtime-semantics.md`](runtime-semantics.md). This doc records the design moves the runtime made because a worked example forced them, in the order in which each move happened.
 
-**Reorganisation note.** The worked examples were originally numbered in the chronological order in which each IR primitive was forced. In a later reorganisation they were consolidated by *business programme* (e.g. `actor_authority` and `approval_limits` collapsed into `approval_controls`), and one example was reframed (`settlement_netting` now leads with the candidate-state-invariants doctrine). The retrospective entries below still refer to the *original* example names, because they record what was forced at the moment it was forced. The current example taxonomy is in the [README](../README.md); this doc is the design journal that produced the current taxonomy, not a map to it.
+**Reorganisation note.** The worked examples were originally numbered in the chronological order in which each IR primitive was forced. They were later consolidated by *business programme*, producing the current four-example layout:
+
+- `revenue_restatement` (old Example 2) + `claim_standing` (old Example 3) -> `verified_revenue` (new Example 2)
+- `double_entry_ledger` (old Example 4) + `trial_balance` (old Example 5, hosted on the ledger programme) -> `double_entry_ledger` (new Example 3)
+- `actor_authority` (old Example 6) + `approval_limits` (old Example 7) -> `approval_controls` (new Example 4)
+
+The retrospective entries below still refer to the *original* example names, because they record what was forced at the moment it was forced. The current example taxonomy is in the [README](../README.md); this doc is the design journal that produced the current taxonomy, not a map to it.
 
 ## Why this doc exists
 
@@ -261,7 +267,7 @@ Also considered: making `Le` take `Term` operands rather than `Expr`, like `Neq`
 
 - `Expr::Le(Box<Expr>, Box<Expr>)`. Both operands evaluate via `eval_value`. Both must yield `EvalValue::Decimal`; anything else surfaces as `EvalError::TypeMismatch("Le expects decimal operands")`. Predicate-shaped: returns the unchanged binding set when `a <= b`, the empty set otherwise.
 - `predicates_referenced_by_expr` extended (`Eq | Le | Sub` recurse into both children) so predicate-scoped loading still works against any program that uses comparisons.
-- Example 7 (later merged into [`examples/06_approval_controls/`](../examples/06_approval_controls/)): three transformations (grant, revoke, approve), two predicates (`ApprovalLimit` retractable, `LimitedApproval` append-only), no invariants. The `approve_within_limit` transformation's require is `And(ApprovalLimit($actor, doc_type, limit), Le(amount, limit))` - the And binds `limit` from the authority claim, then `Le` compares the proposed amount against it.
+- Example 7 (later merged into [`examples/04_approval_controls/`](../examples/04_approval_controls/)): three transformations (grant, revoke, approve), two predicates (`ApprovalLimit` retractable, `LimitedApproval` append-only), no invariants. The `approve_within_limit` transformation's require is `And(ApprovalLimit($actor, doc_type, limit), Le(amount, limit))` - the And binds `limit` from the authority claim, then `Le` compares the proposed amount against it.
 - Tests pin: rejection without grant; admission under limit; **boundary equality** (`amount == limit` admits, by `Le`'s inclusive semantics); rejection above limit; per-actor and per-doc-type scoping; stacked grants (the require finds *some* satisfying limit when multiple grants exist); revocation preserves history. Durable test through `propose_against_pg` rounds the same chain to the audit log.
 
 **What deliberately did NOT land:** `Lt`, `Gt`, `Ge`. Each is one variant away when an example forces it. The bar is the same as for every other arithmetic primitive: a concrete worked example whose semantics genuinely need the strict comparison or the right-leaning form.
