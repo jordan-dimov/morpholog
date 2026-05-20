@@ -4,7 +4,7 @@ Synthetic scale-pressure benchmark for the Morpholog runtime. Two scenarios that
 
 ## Status
 
-Exploratory. The numbers this binary prints are not regression assertions and are not checked into the repo as expected values. The intent is to surface bottlenecks ahead of speculative optimisation, per the project's forced-by-examples discipline.
+Exploratory. The numbers this binary prints are not regression assertions and are not checked into the repo as expected values. The intent is to surface bottlenecks ahead of speculative optimisation, per the project's design-history discipline.
 
 ## What it measures
 

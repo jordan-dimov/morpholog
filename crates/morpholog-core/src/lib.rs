@@ -69,7 +69,7 @@ pub enum Expr {
     /// Decimal less-than-or-equal. Both operands must evaluate to
     /// `EvalValue::Decimal`. Predicate-shaped: returns the empty match
     /// set when the comparison is false, the unchanged binding set when
-    /// true. Added in Example 7 (approval limits) so that
+    /// true. Added with the approval-limits worked example so that
     /// `require amount <= limit` can be expressed without smuggling
     /// quantitative authority into the bindings via `Eq` games.
     /// Deliberately the only decimal-comparison primitive in v0; `Lt`,
@@ -77,7 +77,7 @@ pub enum Expr {
     Le(Box<Expr>, Box<Expr>),
     /// Decimal subtraction. Both operands must evaluate to
     /// `EvalValue::Decimal`; the result is the left minus the right.
-    /// Added in Example 5 (derived claims) so that
+    /// Added with the trial-balance derived-claim example so that
     /// `balance == sum(debits) - sum(credits)` can be expressed without
     /// extending `Sum`'s value position into an expression sublanguage.
     /// Deliberately the only decimal-arithmetic primitive in v0; no
@@ -283,7 +283,7 @@ impl Program {
 /// to [`State.claims`], *not* visible to invariants or
 /// transformations, *not* persisted by the PostgreSQL adapter, and
 /// *not* recursively referenceable from another derived claim's body.
-/// See `docs/forced-by-examples.md` for the Example 5 retrospective
+/// See `docs/design-history.md` for the derived-claims retrospective
 /// and what derived claims forced into the IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedClaim {

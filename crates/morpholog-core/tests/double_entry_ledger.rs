@@ -1,5 +1,5 @@
 //! Integration tests for the double-entry ledger example
-//! (`examples/04_double_entry_ledger/`).
+//! (`examples/03_double_entry_ledger/`).
 //!
 //! Proves: posted entries must balance (sum of debits = sum of
 //! credits); period close gates further normal posting via

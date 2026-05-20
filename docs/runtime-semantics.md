@@ -2,7 +2,7 @@
 
 Status: design doctrine. The IR and runtime are implemented in `crates/morpholog-core`; surface syntax and parser commitments remain deferred. This document is the authoritative source for the semantics; the code is one realisation of them.
 
-Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`forced-by-examples.md`](forced-by-examples.md), which records (retrospectively) which specific examples forced which design decisions.
+Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
 
 ## Conceptual core
 

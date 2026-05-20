@@ -25,7 +25,8 @@
 -- historical approvals now break the rule) or cascade-retract those
 -- historical approvals (which destroys the record). A document
 -- approved on June 30 stays approved even if the approver leaves
--- on July 1. This is the require-vs-invariant lesson from Example 3.
+-- on July 1. This is the require-vs-invariant lesson the verified-
+-- revenue example crystallised.
 
 
 -- ===========================================================
