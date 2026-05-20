@@ -275,3 +275,35 @@ Also considered: making `Le` take `Term` operands rather than `Expr`, like `Neq`
 **Honesty about the typing edge.** `Expr::Le` requires both operands to evaluate to `EvalValue::Decimal`. A non-decimal value in the `limit` position of an admitted `ApprovalLimit` claim makes the require's `Le` raise `EvalError::TypeMismatch` rather than fall through to "no satisfying limit". This is correct behaviour for a structurally-malformed claim - the runtime surfaces the corruption rather than papering it over - but it means `approve_within_limit` is not robust against ill-typed authority records. The complete fix (rejecting non-decimal limits at admission time on `grant_approval_limit`) is the work of typed predicate declarations, which remain deferred. Until an example forces typed predicates, this example's callers are trusted to admit decimal limits. The pinning test `non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch` makes the current behaviour catchable rather than convention.
 
 **Pattern note:** Example 7 is the second worked example whose IR addition was a single variant, paired with a transformation that uses it once. Example 5's `Expr::Sub` was the first; this is the second; Example 6's `Term::Actor` was the third. Each forced exactly one IR variant. That is the shape to keep aiming for - one example, one primitive, one require or assert that needs it.
+
+### `Expr::Add` decimal addition primitive (forced by Example 5: insurance claim settlement)
+
+**Forced by:** the insurance-claim-settlement example - cumulative settlements consumed against a per-policy aggregate limit.
+
+**The pressure:** every previous example expressed comparisons against *fixed* bounds. `Expr::Le(amount, limit)` from Example 7 is a binary test of "this proposed value against this authority ceiling." Insurance aggregate limits require a *cumulative* test: the sum of everything already paid on this policy, plus the proposed settlement, must not exceed the cap. The natural shape is
+
+```text
+Le(Add(Sum(paid_on_policy), proposed), aggregate_limit)
+```
+
+The least-honest alternative is the inversion `Le(proposed, Sub(aggregate, Sum(paid_on_policy)))`, which expresses the same arithmetic but reads as "the proposed amount must not exceed the headroom" rather than "cumulative consumption must not exceed the cap." The business statement is the first; encoding the IR to match it preserves the modelling intent. When a real example needs cumulative consumption written cleanly, the primitive belongs in the IR.
+
+**The design choice:** add a single decimal-addition variant (`Expr::Add`), shaped exactly like `Expr::Sub`. Same dispatch contract, same TypeMismatch behaviour, same recursion in `predicates_referenced_by_expr`.
+
+**Considered and rejected:** waiting until a forcing example also demanded multiplication or division. Tempting (a single "arithmetic tower" PR would feel weighty); rejected on the same subtraction grounds as `Lt`/`Gt`/`Ge`. Nothing in any worked example or in the codebase yet needs `*` or `/`. Each is one variant away when an example forces it. The bar is the same as for every other arithmetic primitive: a concrete worked example whose semantics genuinely need it.
+
+Also considered: encoding cumulative consumption via the inversion `Le(proposed, Sub(aggregate, Sum(paid)))` and skipping `Add` entirely. Mechanically equivalent; rejected because it makes the example's load-bearing require read backwards relative to the business rule. The IR should make natural business statements expressible directly.
+
+**What landed:**
+
+- `Expr::Add(Box<Expr>, Box<Expr>)`. Both operands evaluate via `eval_value`. Both must yield `EvalValue::Decimal`; anything else surfaces as `EvalError::TypeMismatch("Add expects decimal operands")`. Returns `EvalValue::Decimal(a + b)`.
+- `predicates_referenced_by_expr` extended: `Eq | Le | Sub | Add` all recurse into both children. Predicate-scoped loading continues to work against any program that uses arithmetic.
+- Kernel tests pin: decimal + decimal works, non-decimal operand surfaces as `TypeMismatch`, and the cumulative-cap composition `Le(Add(running, proposed), cap)` admits under the cap and rejects over it. The composition test is the load-bearing one - it pins the shape the example then exercises end-to-end.
+- Example 5: [`examples/05_insurance_claim_settlement/`](../examples/05_insurance_claim_settlement/). One invariant (`paid_implies_authorised`), four transformations, one derived claim (`PolicyLimitUsage`). The load-bearing `authorise_settlement` transformation gates admission on `Le(Add(Sum(SettlementPaid(policy, _, _, paid)), amount), aggregate_limit)` - the require that exercises `Add` exactly once, in exactly the shape that forced it.
+- Tests pin: under-cap admission, exact-fill boundary equality (cumulative = aggregate admits), over-cap rejection that surfaces from the require, per-policy scoping (a fully-consumed policy does not prevent settlements on a different policy), `PolicyLimitUsage` enumeration matching the sum of admitted payments. Durable test through `propose_against_pg` rounds the same chain to the audit log and outbox.
+
+**What deliberately did NOT land:** `*` (Mul), `/` (Div), and any of the strict comparisons (`<`, `>`, `>=`). The same argument as `Expr::Le`'s rejected "complete set": each variant earns its place when a concrete worked example demands it. Multiplication is the most likely next forcing function (interest calculations, fee schedules, unit pricing), but no example today needs it.
+
+**An incidental discovery, recorded for the next IR work.** Building this example surfaced that `Stmt::Require` is a yes/no predicate gate that does NOT propagate its matching bindings back into the active scope. The example originally tried to use sequential requires to bind `policy_id` (from `ClaimReported`) and `aggregate_limit` (from `Policy`); the bindings were silently dropped, and later statements that referenced them failed with `UnboundVariable`. The settlement-netting precedent for the right pattern is `Let` + `ValueOf`: gate existence with a require, then extract the value through an explicit binding. The require-vs-let distinction is real and load-bearing; it just wasn't documented before this example exercised it. No IR change was needed - the existing primitives compose - but the doctrine deserves to surface, and `runtime-semantics.md` is the natural place for it next time the doctrine docs are touched.
+
+**Pattern note:** Example 5 is the fourth worked example to force a single IR variant (after Example 5's original `Expr::Sub`, Example 6's `Term::Actor`, and Example 7's `Expr::Le`). The discipline holds: one example, one primitive, one require that needs it. The example itself stayed deliberately tight - no coverage correction, no reserve restatement, no multi-purpose standing, no effective-time axis - because every one of those patterns is already pinned by an earlier example. Re-illustrating proven patterns in a new domain does not earn its place; only forcing new IR does.
