@@ -25,6 +25,11 @@ invariant balanced_posted_entry:
         == sum { c | JournalLine(entry, _, _, c) }
 
 
+invariant journal_entry_has_lines:
+    JournalEntry(entry, _, _) implies
+        exists { JournalLine(entry, _, _, _) }
+
+
 invariant at_most_one_direct_successor:
     Supersedes(new_a, old)
     and Supersedes(new_b, old)
@@ -73,3 +78,21 @@ transformation restate_entry(
     assert JournalLine(new_entry_id, credit_account, 0, amount)
     assert Supersedes(new_entry_id, prior_entry_id)
     emit JournalEntryRestated(new_entry_id, prior_entry_id)
+
+
+-- Read-side projection. A derived claim is a governed view: not in
+-- the claim set, not persisted, not visible to invariants, enumerated
+-- on demand from admitted claims by the same kernel that admits them.
+-- The trial balance cannot drift from the journal lines because it
+-- IS the journal lines, projected through this stable rule.
+--
+-- Keys: one row per distinct account.
+-- Values: balance = sum of debits posted to the account
+--                 - sum of credits posted to the account.
+-- Domain: every distinct account that appears in any JournalLine.
+
+derived TrialBalanceRow(account, balance)
+    where balance ==
+        sum { d | JournalLine(_, account, d, _) }
+      - sum { c | JournalLine(_, account, _, c) }
+    over JournalLine(_, account, _, _)
