@@ -25,6 +25,11 @@ invariant balanced_posted_entry:
         == sum { c | JournalLine(entry, _, _, c) }
 
 
+invariant journal_entry_has_lines:
+    JournalEntry(entry, _, _) implies
+        exists { JournalLine(entry, _, _, _) }
+
+
 invariant at_most_one_direct_successor:
     Supersedes(new_a, old)
     and Supersedes(new_b, old)

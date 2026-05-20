@@ -74,11 +74,14 @@ The same scenario is proven at two layers - in-memory through the sync kernel, a
 
 ### In-memory (sync kernel)
 
+Write-side tests live in the `double_entry_ledger` binary; read-side tests for `TrialBalanceRow` live alongside the other derived-claim tests in `derived_claims`:
+
 ```bash
 cargo test -p morpholog-core --test double_entry_ledger
+cargo test -p morpholog-core --test derived_claims
 ```
 
-In-memory tests:
+Write-side tests:
 
 1. **`simple_entry_balances_and_commits`** - happy path: cash debit 100, revenue credit 100. Final state has one `JournalEntry` and two `JournalLine`s.
 2. **`split_entry_balances_and_commits`** - cash debit 100, revenue credit 70 + deferred revenue credit 30. Balance holds.
@@ -89,7 +92,7 @@ In-memory tests:
 7. **`lone_journal_entry_without_lines_violates_invariant`** - evaluates `journal_entry_has_lines` directly against a hand-crafted state that no legitimate transformation could produce.
 8. **`cannot_restate_already_restated_entry`** - the at-most-one-direct-successor restriction blocks parallel restatement chains.
 
-Plus tests pinning `TrialBalanceRow`: the keys/values/domain shape, the enumeration semantics, the v0 boundary that derived claims do not pollute admitted state.
+Read-side tests (in `derived_claims`): pin the keys/values/domain shape of `TrialBalanceRow`, the enumeration semantics, and the v0 boundary that derived claims do not pollute admitted state.
 
 ### Durable (PostgreSQL adapter)
 
