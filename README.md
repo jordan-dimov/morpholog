@@ -154,7 +154,7 @@ DATABASE_URL=postgres:///morpholog_dev \
 
 Existing databases need the migrations under `crates/morpholog-core/sql/migrations/` applied in numeric order. Fresh installations get the head schema from `crates/morpholog-core/sql/schema.sql`.
 
-The workspace: `morpholog-core` (sync kernel, no I/O), `morpholog-postgres` (async adapter and read helpers), `morpholog-outbox` (polling worker), `morpholog-cli` (the `morpholog` binary), `morpholog-bench` (scale-pressure benchmark).
+The workspace: `morpholog-core` (sync kernel, no I/O), `morpholog-examples` (worked-example IR + registry), `morpholog-postgres` (async adapter and read helpers), `morpholog-outbox` (polling worker), `morpholog-cli` (the `morpholog` binary), `morpholog-bench` (scale-pressure benchmark).
 
 ## Where this is heading
 
