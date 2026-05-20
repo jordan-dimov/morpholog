@@ -1,26 +1,7 @@
-//! Double-entry ledger IR.
-//!
-//! Surface-syntax form: `examples/03_double_entry_ledger/ledger.morph`.
-//!
-//! Demonstrates the runtime against the canonical accounting domain:
-//! posted journal entries must balance (sum of debits = sum of credits),
-//! periods can be closed (after which new postings are rejected), and
-//! closed periods can be restated through a separate transformation
-//! that records `Supersedes` lineage without mutating the original
-//! posting. Hosts the `TrialBalanceRow` derived claim as the
-//! programme's read-side projection.
-//!
-//! Reuses the [`super::verified_revenue`] supersession pattern (the
-//! `Supersedes` predicate) without sharing constructor code; each
-//! example module re-declares the IR it needs.
-//!
-//! Exercises the require-vs-invariant distinction (period close is
-//! admission gating; balance is an eternal invariant) and the
-//! history-as-append-only discipline (JournalEntry and JournalLine
-//! are content; PeriodClosed is append-only state; Supersedes is
-//! append-only lineage). The existing `Expr::Sum` / `Expr::Eq` pair
-//! handles the balance check via `Eq(Sum, Sum)`; the trial balance is
-//! a `DerivedClaim` using `Expr::Sub`.
+//! Double-entry ledger IR: balance invariant, period close, restatement
+//! via `Supersedes`, and the `TrialBalanceRow` derived claim as the
+//! programme's read-side projection. See
+//! `examples/03_double_entry_ledger/README.md` for the business framing.
 
 use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
 

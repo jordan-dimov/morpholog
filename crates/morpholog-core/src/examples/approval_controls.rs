@@ -1,38 +1,8 @@
-//! Approval controls - actor identity, unconditional authority, and
-//! quantitative authority in one programme.
-//!
-//! Surface-syntax form: `examples/04_approval_controls/approval_controls.morph`.
-//!
-//! Combines two shapes a real business uses side by side:
-//!
-//! - **Unconditional authority.** Some sign-offs are not about amounts -
-//!   approving a vendor onboarding, signing off on a policy change.
-//!   Either the actor holds the authority for the document kind or
-//!   they do not. `MayApprove(actor, doc_type)` plus
-//!   `approve_document(doc_id, doc_type)`.
-//! - **Quantitative authority.** Most monetary approvals are
-//!   amount-sensitive: a clerk approves invoices up to £1,000; a
-//!   director up to £100,000. `ApprovalLimit(actor, doc_type, limit)`
-//!   plus `approve_within_limit(doc_id, doc_type, amount)`.
-//!
-//! Both share a doctrine point that is the load-bearing lesson of
-//! this example: **the proposing actor is transition context, not
-//! a transformation parameter**. The approve transformations declare
-//! no `actor` parameter; the actor flows through the `Transition`
-//! value object and is reached from inside the transformation via
-//! `Term::Actor` (illustrated as `$actor` in surface syntax). Inside
-//! an invariant body, `Term::Actor` raises `EvalError::UnboundActor`,
-//! enforcing the require-vs-invariant doctrine by construction
-//! rather than by convention.
-//!
-//! No invariants. Authority is a precondition checked at admission
-//! time, not a continuous property of admitted state. Tying recorded
-//! `Approval`/`LimitedApproval` claims to live authority via an
-//! invariant would either reject every revocation (because historical
-//! approvals now break the rule) or cascade-retract them on
-//! revocation (which destroys the record). Neither matches the
-//! business: a document approved on June 30 stays approved even if
-//! the approver leaves on July 1.
+//! Approval controls IR: unconditional `MayApprove` + quantitative
+//! `ApprovalLimit`, both consulted via `Term::Actor` in admission-time
+//! `require` clauses. No invariants - revocation prevents future
+//! approvals but historical approvals stay admitted. See
+//! `examples/04_approval_controls/README.md` for the business framing.
 
 use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
 

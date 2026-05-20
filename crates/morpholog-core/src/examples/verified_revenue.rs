@@ -1,23 +1,6 @@
-//! Verified revenue - the flagship example for the project's
-//! commercial thesis. One business programme combining two patterns
-//! that the runtime needed to defend a contested number over time:
-//!
-//! - **Currentness with restatement.** An independent verifier admits
-//!   a revenue figure for an asset/period; later they may correct it.
-//!   The original verification stays admitted as the record of what
-//!   was filed; `Supersedes` records the lineage; a singleton
-//!   `CurrentVerification` pointer moves to the corrected figure.
-//!
-//! - **Admissibility-for-purpose.** Different authorities (a bank's
-//!   credit committee, an investor-relations office) grant **standing**
-//!   for the verification to be relied upon for *their* decisions
-//!   (debt-service-coverage, investor reporting). Standing can be
-//!   revoked. Decisions admitted under valid standing survive any
-//!   later revocation - the legitimacy of a *past* decision was
-//!   established when it was made; revocation prevents *future*
-//!   decisions, not past ones.
-//!
-//! Surface-syntax form: `examples/02_verified_revenue/verified_revenue.morph`.
+//! Verified revenue: currentness-with-restatement + admissibility-for-purpose
+//! in one programme. See `examples/02_verified_revenue/README.md` for the
+//! business framing; this module is the IR.
 
 use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation, Value};
 
@@ -36,13 +19,9 @@ pub const BANK_DEBT_SERVICE: &str = "bank_debt_service";
 pub const INVESTOR_REPORTING: &str = "investor_reporting";
 
 // ============================================================
-// Invariants
-//
-// Four invariants govern the consistency of the authority and
-// currentness records. No invariant ties decision claims to live
-// AdmissibleFor: decisions are gated at admission time via `require`
-// and once admitted are locked in - historical decisions survive
-// later revocation or restatement.
+// Invariants. No invariant ties decision claims to live
+// AdmissibleFor - decisions are gated at admission time via
+// `require` so historical decisions survive later revocation.
 // ============================================================
 
 /// Every active `AdmissibleFor(v, p)` must be backed by some
