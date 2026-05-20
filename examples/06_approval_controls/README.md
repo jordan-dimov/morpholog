@@ -80,6 +80,19 @@ The PG test walks the whole story end-to-end through `propose_against_pg`: grant
 
 The complete fix - rejecting non-decimal limits at admission time on `grant_approval_limit` - is the work of typed predicate declarations, which `docs/scope-and-ambition.md` already lists as a candidate language affordance. Until an example forces typed predicates, this example trusts its callers to admit decimal values.
 
+### Routing policy is conventional, not enforced
+
+The example uses unconditional and quantitative authority for *different document classes*: `MayApprove` for non-monetary documents (`vendor_onboarding`), `ApprovalLimit` for monetary ones (`invoice`). This is the right convention.
+
+The runtime does **not** enforce mutual exclusion. Nothing in the IR prevents an organisation from admitting both `MayApprove(jordan, invoice)` *and* `ApprovalLimit(jordan, invoice, 1000)`. If both held, jordan could approve an invoice for any amount by routing it through `approve_document` (which has no amount parameter), bypassing the limit check.
+
+That gap is the v0 honest position. A complete policy model would either:
+
+- Add **typed document classes** so a `doc_type` declares which approval shape applies to it (forces typed predicate declarations - see [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md)).
+- Or unify the two shapes under a **higher-order policy** like `ApprovalPolicy(actor, predicate_pattern, limit_or_unbounded)` so one programme reasons about one policy family (forces predicate-pattern matching).
+
+Neither is forced by this example. Until one is, the routing discipline is convention enforced by the deployment, not by the language. Worth being honest about, because a reader might otherwise mistake the example for a complete approval-control system.
+
 ### What this example deliberately does not cover
 
 1. **Strict comparison (`<`, `>`, `>=`).** `Le` lands here. The others arrive when an example needs them.
