@@ -23,11 +23,11 @@
 mod common;
 
 use common::{dec, has_claim, must_accept, must_accept_as, propose_as, subj};
-use morpholog_core::examples::approval_controls;
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Expr, Invariant, Outcome, State, Term, Value,
     eval_invariant,
 };
+use morpholog_examples::approval_controls;
 
 fn empty_invariants() -> Vec<Invariant> {
     approval_controls::all_invariants()

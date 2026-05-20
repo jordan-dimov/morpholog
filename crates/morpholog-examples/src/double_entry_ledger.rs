@@ -3,7 +3,7 @@
 //! programme's read-side projection. See
 //! `examples/03_double_entry_ledger/README.md` for the business framing.
 
-use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
+use morpholog_core::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
 
 fn var(name: &str) -> Term {
     Term::Var(name.to_string())
@@ -147,7 +147,7 @@ pub fn post_simple_entry() -> Transformation {
                     var("entry_id"),
                     var("debit_account"),
                     var("amount"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                 ],
             }),
             Stmt::Assert(Claim {
@@ -155,7 +155,7 @@ pub fn post_simple_entry() -> Transformation {
                 args: vec![
                     var("entry_id"),
                     var("credit_account"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                     var("amount"),
                 ],
             }),
@@ -204,7 +204,7 @@ pub fn post_split_entry() -> Transformation {
                     var("entry_id"),
                     var("debit_account"),
                     var("debit_amount"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                 ],
             }),
             Stmt::Assert(Claim {
@@ -212,7 +212,7 @@ pub fn post_split_entry() -> Transformation {
                 args: vec![
                     var("entry_id"),
                     var("credit_a_account"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                     var("credit_a_amount"),
                 ],
             }),
@@ -221,7 +221,7 @@ pub fn post_split_entry() -> Transformation {
                 args: vec![
                     var("entry_id"),
                     var("credit_b_account"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                     var("credit_b_amount"),
                 ],
             }),
@@ -313,7 +313,7 @@ pub fn restate_entry() -> Transformation {
                     var("new_entry_id"),
                     var("debit_account"),
                     var("amount"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                 ],
             }),
             Stmt::Assert(Claim {
@@ -321,7 +321,7 @@ pub fn restate_entry() -> Transformation {
                 args: vec![
                     var("new_entry_id"),
                     var("credit_account"),
-                    Term::Literal(crate::Value::Decimal("0".to_string())),
+                    Term::Literal(morpholog_core::Value::Decimal("0".to_string())),
                     var("amount"),
                 ],
             }),
@@ -361,11 +361,11 @@ pub fn all_invariants() -> Vec<Invariant> {
 ///     keys:    [account]
 ///     values:  [balance = sum(debits for account) - sum(credits for account)]
 ///     domain:  JournalLine(_, account, _, _)
-pub fn trial_balance_row() -> crate::DerivedClaim {
-    crate::DerivedClaim {
+pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
+    morpholog_core::DerivedClaim {
         predicate: "TrialBalanceRow".to_string(),
         keys: vec!["account".to_string()],
-        values: vec![crate::DerivedValue {
+        values: vec![morpholog_core::DerivedValue {
             name: "balance".to_string(),
             expr: Expr::Sub(
                 // sum { d | JournalLine(_, account, d, _) }
@@ -400,12 +400,12 @@ pub fn trial_balance_row() -> crate::DerivedClaim {
     }
 }
 
-/// The double-entry-ledger example as a [`crate::Program`]: posting
+/// The double-entry-ledger example as a [`morpholog_core::Program`]: posting
 /// and restatement transformations, balance and lineage invariants,
 /// and the trial-balance derived claim. Stable identifier:
 /// `"double_entry_ledger"`.
-pub fn program() -> crate::Program {
-    crate::Program {
+pub fn program() -> morpholog_core::Program {
+    morpholog_core::Program {
         name: "double_entry_ledger".to_string(),
         invariants: all_invariants(),
         transformations: vec![

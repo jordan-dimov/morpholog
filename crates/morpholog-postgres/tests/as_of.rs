@@ -12,8 +12,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::{double_entry_ledger, verified_revenue};
 use morpholog_core::{ClaimInstance, EvalValue};
+use morpholog_examples::{double_entry_ledger, verified_revenue};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, list_claims, list_claims_at, list_derived, list_derived_at,
     reconstruct_state_at,

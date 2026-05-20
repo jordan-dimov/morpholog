@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
-use morpholog_core::examples::double_entry_ledger;
+use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
     ProcessOutcome, list_audit_rows, list_pending_outbox, process_one_outbox_row,

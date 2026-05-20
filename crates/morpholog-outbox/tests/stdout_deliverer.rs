@@ -10,8 +10,8 @@
 
 use std::time::Duration;
 
-use morpholog_core::examples::double_entry_ledger;
 use morpholog_core::{EvalValue, Transition};
+use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::{StdoutDeliverer, process_available_outbox_rows};
 use morpholog_postgres::{PgPool, PgProposalOutcome, ProcessOutcome, propose_against_pg};
 use rust_decimal::Decimal;

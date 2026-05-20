@@ -2,7 +2,7 @@
 //! in one programme. See `examples/02_verified_revenue/README.md` for the
 //! business framing; this module is the IR.
 
-use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation, Value};
+use morpholog_core::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation, Value};
 
 fn var(name: &str) -> Term {
     Term::Var(name.to_string())
@@ -437,11 +437,11 @@ pub fn all_invariants() -> Vec<Invariant> {
     ]
 }
 
-/// The verified-revenue example as a [`crate::Program`]: six
+/// The verified-revenue example as a [`morpholog_core::Program`]: six
 /// transformations and four invariants. Stable identifier:
 /// `"verified_revenue"`.
-pub fn program() -> crate::Program {
-    crate::Program {
+pub fn program() -> morpholog_core::Program {
+    morpholog_core::Program {
         name: "verified_revenue".to_string(),
         invariants: all_invariants(),
         transformations: vec![

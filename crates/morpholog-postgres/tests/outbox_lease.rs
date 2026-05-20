@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
-use morpholog_core::examples::double_entry_ledger;
+use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row,
     release_outbox_claim,

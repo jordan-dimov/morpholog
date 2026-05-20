@@ -4,7 +4,7 @@
 //! approvals but historical approvals stay admitted. See
 //! `examples/04_approval_controls/README.md` for the business framing.
 
-use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
+use morpholog_core::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
 
 fn var(name: &str) -> Term {
     Term::Var(name.to_string())
@@ -193,12 +193,12 @@ pub fn all_invariants() -> Vec<Invariant> {
     vec![]
 }
 
-/// The approval-controls example as a [`crate::Program`]: six
+/// The approval-controls example as a [`morpholog_core::Program`]: six
 /// transformations split across two authority shapes (unconditional
 /// and quantitative), no invariants. Stable identifier:
 /// `"approval_controls"`.
-pub fn program() -> crate::Program {
-    crate::Program {
+pub fn program() -> morpholog_core::Program {
+    morpholog_core::Program {
         name: "approval_controls".to_string(),
         invariants: all_invariants(),
         transformations: vec![

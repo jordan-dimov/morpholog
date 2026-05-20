@@ -2,7 +2,7 @@
 //!
 //! Surface-syntax form: `examples/01_settlement_netting/netting.morph`.
 
-use crate::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
+use morpholog_core::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation};
 
 fn var(name: &str) -> Term {
     Term::Var(name.to_string())
@@ -161,11 +161,11 @@ pub fn all_invariants() -> Vec<Invariant> {
     ]
 }
 
-/// The settlement-netting example as a [`crate::Program`]: one
+/// The settlement-netting example as a [`morpholog_core::Program`]: one
 /// transformation (`create_net_settlement`) and three invariants.
 /// Stable identifier: `"settlement_netting"`.
-pub fn program() -> crate::Program {
-    crate::Program {
+pub fn program() -> morpholog_core::Program {
+    morpholog_core::Program {
         name: "settlement_netting".to_string(),
         invariants: all_invariants(),
         transformations: vec![create_net_settlement()],

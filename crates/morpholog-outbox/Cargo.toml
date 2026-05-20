@@ -17,6 +17,7 @@ sqlx = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
+morpholog-examples = { path = "../morpholog-examples" }
 rust_decimal = { workspace = true }
 
 [lints]

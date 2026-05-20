@@ -11,7 +11,7 @@
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
-use morpholog_core::examples::double_entry_ledger;
+use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, list_pending_outbox, mark_outbox_delivered,
     mark_outbox_failed, mark_outbox_transient_attempt, record_compensation,
