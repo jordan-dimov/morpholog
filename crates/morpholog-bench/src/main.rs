@@ -35,9 +35,9 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    EvalValue, State, Transition, enumerate_derived, examples::double_entry_ledger,
-    predicates_referenced_by_derived,
+    EvalValue, State, Transition, enumerate_derived, predicates_referenced_by_derived,
 };
+use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     PgPool, PgProposalOutcome, list_claims_for_predicates, list_derived_at, propose_against_pg,
     reconstruct_state_at,

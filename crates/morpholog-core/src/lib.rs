@@ -8,16 +8,13 @@
 //!
 //! `morpholog-core` does no I/O. The PostgreSQL persistence adapter
 //! lives in the separate `morpholog-postgres` crate and wraps this
-//! kernel as an async boundary.
-//!
-//! Worked examples (IR data) live under [`examples`].
+//! kernel as an async boundary. Worked-example IR lives in the
+//! `morpholog-examples` crate.
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
-
-pub mod examples;
 
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
@@ -1666,26 +1663,6 @@ mod tests {
         assert_eq!(
             got, expected,
             "every Expr variant that carries a predicate reference must contribute it"
-        );
-    }
-
-    /// Sanity-check against the real worked example: the trial-balance
-    /// derived claim from `examples::double_entry_ledger` should
-    /// extract exactly `{"JournalLine"}` - the `JournalEntry` claims
-    /// in the ledger are not touched by `enumerate_derived`. This is
-    /// the test that pays for the read-path optimization: the PG
-    /// adapter knows to skip the JournalEntry rows.
-    #[test]
-    fn predicates_referenced_by_trial_balance_derived_excludes_unused_predicates() {
-        let derived = examples::double_entry_ledger::trial_balance_row();
-        let footprint = predicates_referenced_by_derived(&derived);
-        let expected: BTreeSet<String> = ["JournalLine"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(
-            footprint, expected,
-            "trial_balance_row reads only JournalLine; the derived's own \
-             predicate (TrialBalanceRow) must not appear in the footprint, \
-             and unrelated ledger predicates (JournalEntry, PeriodClosed, \
-             etc.) must not appear either"
         );
     }
 }

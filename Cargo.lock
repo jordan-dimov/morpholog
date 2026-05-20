@@ -983,6 +983,7 @@ dependencies = [
  "anyhow",
  "clap",
  "morpholog-core",
+ "morpholog-examples",
  "morpholog-postgres",
  "rust_decimal",
  "sqlx",
@@ -997,6 +998,7 @@ dependencies = [
  "anyhow",
  "clap",
  "morpholog-core",
+ "morpholog-examples",
  "morpholog-postgres",
  "serde",
  "serde_json",
@@ -1016,11 +1018,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "morpholog-examples"
+version = "0.0.1"
+dependencies = [
+ "morpholog-core",
+ "rust_decimal",
+]
+
+[[package]]
 name = "morpholog-outbox"
 version = "0.0.1"
 dependencies = [
  "chrono",
  "morpholog-core",
+ "morpholog-examples",
  "morpholog-postgres",
  "rand 0.9.4",
  "rust_decimal",
@@ -1036,6 +1047,7 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "morpholog-core",
+ "morpholog-examples",
  "rust_decimal",
  "serde",
  "serde_json",

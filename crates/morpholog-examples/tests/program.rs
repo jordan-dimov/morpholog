@@ -16,7 +16,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::{
+use morpholog_examples::{
     approval_controls, double_entry_ledger, settlement_netting, verified_revenue,
 };
 
@@ -128,7 +128,7 @@ fn all_programs_registry_contains_every_per_example_program() {
     // load-bearing: it should be updated whenever a new example is
     // added, in the same commit that adds the example to
     // `all_programs()`.
-    let registry = morpholog_core::examples::all_programs();
+    let registry = morpholog_examples::all_programs();
     let registry_names: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
 
     for expected_name in [
@@ -152,7 +152,7 @@ fn all_programs_registry_has_unique_names() {
     // would make one of the duplicates unreachable, silently. Pin
     // uniqueness so the failure surfaces immediately rather than at
     // CLI invocation time.
-    let registry = morpholog_core::examples::all_programs();
+    let registry = morpholog_examples::all_programs();
     let mut names: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
     let total = names.len();
     names.sort();

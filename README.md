@@ -2,9 +2,9 @@
 
 There comes a moment in every serious business when someone - an auditor, a regulator, a board director who has not been having a great quarter - asks you to *prove* a number. Why is it what it is. Who decided it should be. What it looked like before the restatement. Whether the rule it had to satisfy actually held at the moment it was admitted.
 
-In most systems, those answers come from detective work. You pull logs, reconcile parallel files, ask the people who happened to be on call. Sometimes the answer is good enough. Sometimes the books just stop tying out, and everyone learns to live with that.
+In most systems, those answers come from detective work. You pull logs, reconcile parallel files, ask the people who happened to be on call.
 
-Morpholog is a programming language and runtime that takes those questions out of detective territory. You write down the rules your records have to satisfy. The language only lets you express rules the runtime can guarantee, and the runtime checks every one on every change. Anything that breaks a rule never gets in. Everything that does get in carries enough provenance that you can reconstruct exactly what the books said at any past point in the audit log - no bitemporal columns, no shadow tables, no overnight reconciliation scripts.
+Morpholog answers them differently. It treats records as **admitted claims**, not objective facts. The same number can carry different *standing* for different decisions, granted and revoked by different authorities. The verifier can correct the figure; the original stays in the books and the corrected figure becomes current. **Decisions admitted under valid standing remain valid records even when that standing is later revoked** - the legitimacy of a *past* decision was established when it was made. Behind that: every change is checked against the rules atomically; nothing sticks unless every rule holds; the audit log carries enough provenance to reconstruct any past moment - no bitemporal columns, no shadow tables.
 
 The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
 
@@ -16,27 +16,25 @@ The point is to make *"how do you know?"* answerable by *"because the system cou
 - *What did the books say on the last day of Q1, under the close rules in force then?*
 - *Did this trade conform to our exposure limits when it was booked? Not now - then?*
 
-Morpholog answers a meaningful subset of these today, against a real PostgreSQL database, through a small CLI. The double-entry-ledger example handles questions 1 and 4 directly through its trial-balance derived claim. The verified-revenue example handles 2 and 3. Question 5 needs an exposure-limit programme that doesn't exist yet, but the runtime would handle it the same way - that is the point of writing the runtime first.
+Morpholog answers a meaningful subset of these today, against a real PostgreSQL database, through a small CLI. The double-entry-ledger example handles questions 1 and 4 through its trial balance and as-of replay. The verified-revenue example handles 2 and 3. Question 5 awaits an exposure-limit programme - the runtime would handle it the same way.
 
 ## What you get for writing your rules this way
 
-A list a controller, an auditor, or a risk officer might actually care about:
-
-- **Atomic commit or full rollback.** A change either lands every part of itself - record edits, audit row, outbound notifications - or none of them. There is no half-written ledger, no orphaned audit row, no notification fired against a state that never actually committed. PostgreSQL's `SERIALIZABLE` isolation does the work; the runtime guarantees it.
-- **A complete audit of every change, by construction.** Every committed change writes a row carrying the transformation name, the actor who proposed it, the arguments, the asserted and retracted records, the emitted notifications, and the rules that governed admission. Three months from now, the record of how a number got to be what it is *is* the row that wrote it.
-- **Reports computed by the same rules they're governed by.** A trial balance, an exposure summary, an account balance - these are not external queries; they are *governed views* declared alongside the rules. The same kernel that admits the underlying records computes the report. A report cannot show a record an invariant would have refused, because that record is not there.
-- **Correction without overwriting.** When a record needs to change, the original stays admitted; a new transformation asserts the correction and records the lineage. Three quarters later, an auditor can still see the original number, the corrected number, and the moment one became the other.
-- **Notifications that respect the commit boundary.** Outbound side effects (a wire dispatch, a webhook fire, a Kafka publish) stage at commit time and deliver afterward through a worker. They never run inside the database transaction; they never run if the commit rolled back.
-- **Arbitrary-precision decimal arithmetic.** No floating-point drift in financial quantities. Adds, subtracts, sums - all exact.
-- **The same record can carry different standing for different decisions.** Granted and revoked by different authorities, never modifying the underlying record itself. The shape regulated lending and statutory reporting need: the verified-revenue example demonstrates it end to end.
+- **The same record can carry different standing for different decisions.** Granted and revoked by different authorities, without modifying the underlying record. The shape regulated lending and statutory reporting need - and the genuinely distinctive thing in this list.
+- **Correction without overwriting.** Originals stay admitted; a new transformation asserts the correction and records the lineage. An auditor three quarters later sees the original number, the corrected number, and the moment one became the other.
+- **A complete audit of every change.** Each committed change writes a row carrying the transformation, the actor, the arguments, the asserted and retracted records, the emitted notifications, and the rules that governed admission.
+- **Atomic commit or full rollback.** A change either lands every part of itself - record edits, audit row, outbound notifications - or none of them. PostgreSQL's `SERIALIZABLE` isolation does the work; the runtime guarantees it.
+- **Reports computed by the same rules they're governed by.** A trial balance, an exposure summary, an account balance - declared alongside the rules, computed by the same kernel. A report cannot show a record an invariant would have refused.
+- **Notifications that respect the commit boundary.** Outbound side effects stage at commit and deliver afterward through a worker. They never run inside the transaction; they never run if the commit rolled back.
+- **Arbitrary-precision decimals.** No floating-point drift. Adds, subtracts, sums - all exact.
 
 ## How it works
 
-There are two first-class constructs. Everything else is built from these.
+Two first-class constructs. Everything else is built from these.
 
-An **invariant** says what must always be true of admitted records. A **transformation** is the only path that gets to change them. It proposes additions, removals, and outbound notifications; the runtime checks every active invariant against the proposed result; if anything fails, nothing happens. No record written. No notification sent. The state is exactly what it was before you asked.
+An **invariant** says what must always be true of admitted records. A **transformation** is the only path that gets to change them. It proposes additions, removals, and outbound notifications; the runtime checks every active invariant against the proposed result; if anything fails, nothing happens.
 
-Here is what that looks like, in the double-entry ledger example (surface syntax is illustrative - the parser is on the roadmap; programs today are constructed as Rust IR):
+In the double-entry ledger example (illustrative surface syntax - the parser is on the roadmap; programs are Rust IR today):
 
 ```
 invariant balanced_posted_entry:
@@ -55,11 +53,11 @@ transformation post_simple_entry(
     emit JournalEntryPosted(entry_id)
 ```
 
-The invariant says debits and credits must balance for every posted entry. Always. The transformation is the only way a journal entry can enter the books, and only when the period is open and the result balances. If the math is off by a penny, the entire transaction is rejected atomically. No half-written ledger, no missing notifications, no "we'll reconcile this in the morning."
+The invariant says debits and credits must balance for every posted entry. The transformation is the only way a journal entry can enter the books, and only when the period is open and the result balances. If the math is off by a penny, the transaction is rejected atomically.
 
 ## A sixty-second tour
 
-You need PostgreSQL (17+; Morpholog uses PG-specific features). One-time setup:
+One-time setup (PostgreSQL 17+):
 
 ```bash
 createdb my_books
@@ -82,7 +80,7 @@ morpholog propose double_entry_ledger post_simple_entry \
   ]'
 ```
 
-The runtime checks every invariant, commits the transaction, and prints a receipt:
+The receipt:
 
 ```json
 {
@@ -95,9 +93,9 @@ The runtime checks every invariant, commits the transaction, and prints a receip
 }
 ```
 
-The `--actor` records, under whose authority, the transition was proposed. It lands in the audit row alongside the transformation name, arguments, and invariants that governed admission; three months from now the answer to "who admitted this?" is the row that wrote it.
+`--actor` records under whose authority the transition was proposed; it lands in the audit row. Three months from now the answer to "who admitted this?" is that row.
 
-Write down that `transition_id`. You will want it shortly. Now look at the trial balance:
+Now the trial balance:
 
 ```bash
 morpholog inspect derived double_entry_ledger TrialBalanceRow
@@ -114,37 +112,37 @@ morpholog inspect derived double_entry_ledger TrialBalanceRow
 ]
 ```
 
-Post another entry - say, $200 between the same two accounts - and look again. Cash is at 300; revenue at -300. Fine. Now ask for the trial balance *as it stood right after the first transition*:
+Post another entry, then ask for the trial balance *as it stood right after the first transition*:
 
 ```bash
 morpholog inspect derived double_entry_ledger TrialBalanceRow \
     --as-of 019231ab-...-...-...-...-...
 ```
 
-Cash is back at 100. Revenue is back at -100. The report is exactly what an auditor would have seen if they had run it at that exact moment - frozen in time, recomputed from the audit log, with no bitemporal columns or shadow tables anywhere in your schema.
+The report is exactly what an auditor would have seen at that moment - recomputed from the audit log, no bitemporal columns anywhere in your schema.
 
-If you had tried to post an unbalanced entry - say, debit 100 against credits totalling 95 - the receipt would have come back as `{"status":"rejected","reason":"balanced_posted_entry invariant did not hold"}`, and your database would look exactly the way it did before you tried. That is the whole point.
+An unbalanced entry would come back as `{"status":"rejected","reason":"balanced_posted_entry invariant did not hold"}`, and the database would look exactly the way it did before the attempt.
 
 ## Worked examples
 
-Each runs both in memory (against the kernel) and durably (against PostgreSQL). The integration tests exercise the same audit log the CLI does; nothing is mocked.
+Each runs both in memory (against the kernel) and durably (against PostgreSQL). Nothing is mocked.
 
-- [**Bilateral settlement netting**](examples/01_settlement_netting/) - proves invariants check the *candidate state*, not just the pre-state. A transformation that would create an inconsistency by combining individually-valid inputs is rejected before any commit.
-- [**Verified revenue**](examples/02_verified_revenue/) - the flagship. A revenue figure for a single asset and period is independently verified, and different authorities (a bank's credit committee, an investor-relations office) grant *standing* for it to be relied on for their own decisions (debt-service-coverage covenant tests, shareholder reporting). The verifier can correct the figure later; the original number stays in the books; the corrected figure becomes current; **active standings on the prior figure are retracted by the runtime** so future reliance must attach to the corrected one. **Historical decisions made under the original figure remain valid records of what was decided that day.** Defending a contested number over time, in one example.
-- [**Double-entry ledger with trial balance**](examples/03_double_entry_ledger/) - the canonical accounting domain end to end. The accounting equation enforced as an invariant; period close as an admission gate; closed periods corrected by restatement that preserves the original record; the trial balance as a **governed read-side projection** computed by the same kernel from the same admitted claims. As-of replay yields the historical trial balance without a single bitemporal column in the schema.
-- [**Approval controls**](examples/04_approval_controls/) - two authority shapes side by side. *Unconditional* authority for sign-offs that are not about amounts; *quantitative* authority for amount-sensitive approvals. The approving actor flows from transition context (`$actor`); the asserted record carries them durably. Revocation prevents future approvals while preserving every historical one.
+- [**Bilateral settlement netting**](examples/01_settlement_netting/) - invariants check the *candidate state*, not just the pre-state. A transformation that would create an inconsistency by combining individually-valid inputs is rejected before any commit.
+- [**Verified revenue**](examples/02_verified_revenue/) - the flagship. A revenue figure is independently verified, and different authorities grant *standing* for it to be relied on for their own decisions. The verifier can correct the figure later; the original stays in the books; **active standings on the prior figure are retracted by the runtime** so future reliance must attach to the corrected one; **historical decisions made under the original figure remain valid records of what was decided that day.** Defending a contested number over time, in one example.
+- [**Double-entry ledger with trial balance**](examples/03_double_entry_ledger/) - the accounting equation as an invariant; period close as an admission gate; restatement that preserves the original; the trial balance as a **governed read-side projection**. As-of replay yields the historical trial balance without a bitemporal column in the schema.
+- [**Approval controls**](examples/04_approval_controls/) - unconditional authority for sign-offs that aren't about amounts, and quantitative authority for amount-sensitive approvals. The approving actor flows from transition context; the asserted record carries them. Revocation prevents future approvals while preserving every historical one.
 
-Morpholog isn't the whole stack - UIs, dashboards, dataloaders, ML pipelines all stay in the normal tools. What it owns is the line where "may this be admitted as a valid record?" needs a definite answer. That line is a small fraction of any real business system, and the fraction that, when it fails, makes the news. The framing of what Morpholog should grow into, and what it must never become, lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
+Morpholog isn't the whole stack - UIs, dashboards, dataloaders, ML pipelines stay in normal tools. What it owns is the line where "may this be admitted as a valid record?" needs a definite answer. That line is a small fraction of any real business system, and the fraction that, when it fails, makes the news. The framing of what Morpholog should grow into - and what it must never become - lives in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md).
 
 ---
 
 ## Project status
 
-Active. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples all work and are tested. Every committed transition records the actor under whose authority it was proposed. Writes scale linearly: about 1.6 seconds per commit against a 100,000-entry ledger. As-of replay also scales linearly: about 1.5 seconds to reconstruct state from a 100,000-transition audit log (was quadratic until recently; a `ReplaySet` working set replaced the linear-scan dedupe loop). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the running performance story.
+Active. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples all work and are tested. Every committed transition records its actor. Writes scale linearly (~1.6s per commit against a 100,000-entry ledger); as-of replay also linear (~1.5s for 100,000 transitions). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the performance story.
 
-Not in the box yet: a parser (programs are constructed as Rust IR; the CLI accepts built-in programs only); a worker supervisor with circuit breakers and an HTTP-aware deliverer (a polling worker exists in `morpholog-outbox` with a `StdoutDeliverer`, but driving multiple workers under restart-with-intensity is PR-after-next); predicate-pattern matching / higher-order authority (quantitative actor authority works today via `Expr::Le`; one authority claim governing a family of transformations awaits its example); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
+Not in the box yet: a parser; a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching / higher-order authority (quantitative authority works today via `Expr::Le`); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
 
-Built in Rust on modern PostgreSQL (17+). The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation (SSI) and JSONB so an entire commit - `claims`, `audit`, and `outbox` rows - lands atomically in one transaction or not at all.
+Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
 To run the tests:
 
@@ -156,26 +154,26 @@ DATABASE_URL=postgres:///morpholog_dev \
 
 Existing databases need the migrations under `crates/morpholog-core/sql/migrations/` applied in numeric order. Fresh installations get the head schema from `crates/morpholog-core/sql/schema.sql`.
 
-The workspace splits into `morpholog-core` (synchronous kernel, no I/O), `morpholog-postgres` (async adapter and read helpers), `morpholog-outbox` (polling worker that drives the outbox processor in the background), `morpholog-cli` (the `morpholog` binary), and `morpholog-bench` (scale-pressure benchmark).
+The workspace: `morpholog-core` (sync kernel, no I/O), `morpholog-examples` (worked-example IR + registry), `morpholog-postgres` (async adapter and read helpers), `morpholog-outbox` (polling worker), `morpholog-cli` (the `morpholog` binary), `morpholog-bench` (scale-pressure benchmark).
 
 ## Where this is heading
 
-The runtime today is operationally complete enough to defend a number; the next arc is making it operationally complete enough to defend an *organisation*. The roadmap, framed in business shapes rather than feature names:
+The runtime today is operationally complete enough to defend a number; the next arc is making it operationally complete enough to defend an *organisation*. Framed in business shapes, not feature names:
 
-- **A worker supervisor with circuit breakers and an HTTP-aware deliverer.** The outbox substrate (delivery state machine, compensation lease, single-row processor) and a polling worker driving it are in tree as of PR #34 - the worker runs one tokio task per intent type, drains all currently-claimable rows on each tick, sleeps the smaller of the jittered base interval or the soonest scheduled retry, and shuts down cleanly on a watch signal. A `StdoutDeliverer` is shipped as the canonical first concrete deliverer. What is left is the supervisor (`JoinSet`-based restart-with-intensity across multiple workers), per-target circuit breakers (`failsafe-rs`), and the first non-stdout deliverer (`HttpDeliverer` that POSTs intents to a configured URL and routes 5xx/connection errors to `Transient`, 4xx non-rate-limit to `NonRetryable`).
-- **Predicate-pattern matching and higher-order authority.** Quantitative authority works today (see [Approval Controls](examples/04_approval_controls/) - approval limits with `Expr::Le`). The next shape is *higher-order* authority: one `ApprovalAuthorityFor(actor, predicate_pattern, limit)` claim that governs a family of transformations, rather than one authority claim per kind. That forces predicate names as first-class IR values. Lands when an example demands it.
-- **Effective time as a first-class temporal axis.** As-of evaluation already gives knowledge time (what did we believe at moment T). Effective time (the day a contract becomes binding; the period a posting reflects) is expressible as ordinary claims; combining the two gives full bitemporal addressability without ever introducing `valid_from`/`valid_to` columns to any schema.
-- **A surface syntax and parser.** Programs are constructed as Rust IR today; the CLI accepts built-in programs only. A parser commits to file layout, module system, error spans, literal syntax, and a dozen other things that should be ratified by a real outside user, not pre-decided. The parser arrives when an outside collaborator is genuinely blocked by its absence - not before.
-- **Materialised derived claims.** Trial balance and similar reads are recomputed on demand today. For long audit logs and frequent queries, materialised snapshots will become forced. The benchmark is the regression test that will reveal when.
+- **A worker supervisor with circuit breakers and an HTTP-aware deliverer.** The polling worker exists and ships a `StdoutDeliverer`; what's missing is a supervisor running multiple workers under restart-with-intensity, per-target circuit breakers, and an `HttpDeliverer`.
+- **Predicate-pattern matching and higher-order authority.** Quantitative authority works today (see [Approval Controls](examples/04_approval_controls/)). The next shape is *one* authority claim governing a *family* of transformations, instead of one claim per kind. Forces predicate names as first-class IR values.
+- **Effective time as a first-class temporal axis.** As-of already gives *knowledge* time. Effective time - the day a contract becomes binding, the period a posting reflects - is expressible as ordinary claims; combining the two gives full bitemporal addressability without any `valid_from`/`valid_to` columns.
+- **A surface syntax and parser.** Programs are Rust IR today. A parser commits to a dozen choices (file layout, module system, error spans, literal syntax) that should be ratified by a real outside user, not pre-decided.
+- **Materialised derived claims.** Reports are recomputed on demand. For long audit logs and frequent queries, materialised snapshots will become forced.
 
-The discipline that has carried the runtime so far - *smallest possible increment that produces a working artefact, forced by a worked example* - applies to each. None of these are speculative roadmap entries; each has a concrete forcing scenario named in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) or [`docs/design-history.md`](docs/design-history.md), and each lands when an example actually demands it.
+None of these are speculative; each has a concrete forcing scenario in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) or [`docs/design-history.md`](docs/design-history.md). Each lands when an example actually demands it.
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the language affordances on the roadmap, the three-level expansion ladder, and non-goals. Start here for the design framing.
+- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the affordances on the roadmap, the three-level expansion ladder, and non-goals.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics the `morpholog-core` kernel realises.
-- [`docs/design-history.md`](docs/design-history.md) - retrospective doctrine doc recording, for each significant runtime/IR decision, which worked example forced it and why.
-- [`docs/outbox-sketch.md`](docs/outbox-sketch.md) - design doctrine for the outbox worker plus compensating-transformation pattern (the "Morpholog plus an Outside Coordinator" architecture). The substrate, single-row processor with compensation lease, polling worker with smart sleep, and `StdoutDeliverer` are in tree; supervisor + circuit breaker + HttpDeliverer are the remaining slice.
+- [`docs/design-history.md`](docs/design-history.md) - for each significant runtime/IR decision, which worked example forced it and why.
+- [`docs/outbox-sketch.md`](docs/outbox-sketch.md) - the "Morpholog plus an Outside Coordinator" doctrine for the outbox worker.
 - Worked examples: [`examples/01_settlement_netting/`](examples/01_settlement_netting/), [`examples/02_verified_revenue/`](examples/02_verified_revenue/), [`examples/03_double_entry_ledger/`](examples/03_double_entry_ledger/), [`examples/04_approval_controls/`](examples/04_approval_controls/).
 
 ## License

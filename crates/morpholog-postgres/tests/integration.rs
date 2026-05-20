@@ -11,10 +11,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::{
+use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
+use morpholog_examples::{
     approval_controls, double_entry_ledger, settlement_netting, verified_revenue,
 };
-use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
     PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_derived,
     list_pending_outbox,

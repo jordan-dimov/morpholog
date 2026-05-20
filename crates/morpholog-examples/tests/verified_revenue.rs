@@ -20,8 +20,8 @@
 mod common;
 
 use common::{dec, has_claim, must_accept, subj};
-use morpholog_core::examples::verified_revenue;
 use morpholog_core::{Invariant, Outcome, State};
+use morpholog_examples::verified_revenue;
 
 fn invariants() -> Vec<Invariant> {
     verified_revenue::all_invariants()

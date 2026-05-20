@@ -20,8 +20,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::examples::double_entry_ledger;
 use morpholog_core::{EvalValue, IntentInstance, Invariant, Transformation};
+use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{PgPool, PgProposalOutcome, list_audit_rows, list_pending_outbox};
 use rust_decimal::Decimal;
 use uuid::Uuid;

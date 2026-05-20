@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use morpholog_core::EvalValue;
-use morpholog_core::examples::double_entry_ledger;
+use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, begin_compensation, complete_compensation,
     mark_compensation_failed, mark_outbox_failed,

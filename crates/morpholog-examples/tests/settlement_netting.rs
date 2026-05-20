@@ -14,8 +14,8 @@
 mod common;
 
 use common::{dec, subj};
-use morpholog_core::examples::settlement_netting;
 use morpholog_core::{ClaimInstance, EvalValue, Expr, Outcome, State, Stmt, eval_invariant};
+use morpholog_examples::settlement_netting;
 
 // ============================================================
 // IR shape — the example's invariants and transformation look

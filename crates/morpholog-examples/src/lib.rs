@@ -14,21 +14,23 @@
 //! once a real parser and example-loading mechanism exist. Treat these
 //! as teaching fixtures, not a contract.
 
+mod helpers;
+
 pub mod approval_controls;
 pub mod double_entry_ledger;
 pub mod settlement_netting;
 pub mod verified_revenue;
 
 /// All built-in worked example programs, in the order they were
-/// developed. Returned as owned [`crate::Program`] values so callers
+/// developed. Returned as owned [`morpholog_core::Program`] values so callers
 /// can iterate, look up a specific one by `name`, or hand each to
 /// `propose_against_pg`.
 ///
 /// Used by the CLI's `propose` subcommand to resolve a program name
-/// supplied on the command line to its [`crate::Program`] value. The
+/// supplied on the command line to its [`morpholog_core::Program`] value. The
 /// list is the canonical built-in registry; future user-supplied
 /// programs (post-parser) would live alongside, not replace, these.
-pub fn all_programs() -> Vec<crate::Program> {
+pub fn all_programs() -> Vec<morpholog_core::Program> {
     vec![
         settlement_netting::program(),
         verified_revenue::program(),

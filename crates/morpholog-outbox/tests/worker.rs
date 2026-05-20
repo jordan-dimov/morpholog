@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::examples::double_entry_ledger;
 use morpholog_core::{EvalValue, Transition};
+use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::OutboxWorker;
 use morpholog_outbox::testing::{FixedJitter, MockClock};
 use morpholog_postgres::{

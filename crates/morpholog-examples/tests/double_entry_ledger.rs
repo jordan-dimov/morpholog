@@ -14,8 +14,8 @@
 mod common;
 
 use common::{dec, has_claim, must_accept, subj};
-use morpholog_core::examples::double_entry_ledger;
 use morpholog_core::{ClaimInstance, Outcome, State, eval_invariant};
+use morpholog_examples::double_entry_ledger;
 
 #[test]
 fn simple_entry_balances_and_commits() {

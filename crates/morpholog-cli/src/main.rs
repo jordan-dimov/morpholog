@@ -30,7 +30,7 @@
 //! The CLI is still deliberately narrow. Explicit non-goals: no
 //! parser, no user-supplied program loading (`propose` and `inspect
 //! derived` only accept built-in programs from
-//! `morpholog_core::examples::all_programs()`), no outbox-delivery
+//! `morpholog_examples::all_programs()`), no outbox-delivery
 //! worker, no filtering or pagination DSL, no materialised
 //! derived-claim storage.
 
@@ -253,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
 ///   modes; in both cases the exit code is 1.
 async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
     // 1. Resolve the program from the built-in registry.
-    let programs = morpholog_core::examples::all_programs();
+    let programs = morpholog_examples::all_programs();
     let program = programs
         .iter()
         .find(|p| p.name == args.program)
@@ -343,7 +343,7 @@ async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
 /// structural `EvalValue` ordering), so the output is deterministic
 /// for a given state.
 async fn inspect_derived(args: InspectDerivedArgs) -> anyhow::Result<()> {
-    let programs = morpholog_core::examples::all_programs();
+    let programs = morpholog_examples::all_programs();
     let program = programs
         .iter()
         .find(|p| p.name == args.program)

@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 morpholog-core = { path = "../morpholog-core" }
+morpholog-examples = { path = "../morpholog-examples" }
 morpholog-postgres = { path = "../morpholog-postgres" }
 clap = { workspace = true }
 anyhow = { workspace = true }

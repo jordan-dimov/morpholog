@@ -1,0 +1,16 @@
+[package]
+name = "morpholog-examples"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+morpholog-core = { path = "../morpholog-core" }
+
+[dev-dependencies]
+rust_decimal = { workspace = true }
+
+[lints]
+workspace = true

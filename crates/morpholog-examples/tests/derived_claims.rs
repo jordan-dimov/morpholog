@@ -30,10 +30,10 @@
 mod common;
 
 use common::{dec, must_accept, subj};
-use morpholog_core::examples::double_entry_ledger;
 use morpholog_core::{
     ClaimInstance, DerivedClaim, DerivedValue, EvalValue, Expr, State, Term, enumerate_derived,
 };
+use morpholog_examples::double_entry_ledger;
 use rust_decimal::Decimal;
 
 /// Helper: post one journal entry against the ledger.
@@ -239,5 +239,27 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     assert!(
         msg.contains("Sub expects decimal"),
         "expected Sub type-mismatch error, got: {msg}"
+    );
+}
+
+/// Sanity-check against the real worked example: the trial-balance
+/// derived claim from `double_entry_ledger` should extract exactly
+/// `{"JournalLine"}` - the `JournalEntry` claims in the ledger are
+/// not touched by `enumerate_derived`. This pays for the read-path
+/// optimization: the PG adapter knows to skip the JournalEntry rows.
+#[test]
+fn predicates_referenced_by_trial_balance_derived_excludes_unused_predicates() {
+    use morpholog_core::predicates_referenced_by_derived;
+    use std::collections::BTreeSet;
+
+    let derived = double_entry_ledger::trial_balance_row();
+    let footprint = predicates_referenced_by_derived(&derived);
+    let expected: BTreeSet<String> = ["JournalLine"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        footprint, expected,
+        "trial_balance_row reads only JournalLine; the derived's own \
+         predicate (TrialBalanceRow) must not appear in the footprint, \
+         and unrelated ledger predicates (JournalEntry, PeriodClosed, \
+         etc.) must not appear either"
     );
 }
