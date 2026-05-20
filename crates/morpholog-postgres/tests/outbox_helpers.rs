@@ -192,6 +192,31 @@ async fn mark_outbox_transient_attempt_schedules_retry_and_releases_lease() {
 }
 
 #[tokio::test]
+async fn mark_outbox_transient_attempt_accepts_past_next_attempt_at() {
+    // The helper does NOT validate that next_attempt_at is in the
+    // future. Loop-safety against same-pass reclaim lives at
+    // `claim_pending_outbox_row`'s pass boundary; adding a
+    // validation here would conflict with the lease-loss-as-signal
+    // contract and would spuriously fail a slow legitimate
+    // delivery whose retry instant elapsed during transit.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let intent_id = enqueue_one_pending(&pool).await;
+    force_lease(&pool, intent_id, "worker_a", 30).await;
+
+    let past = Utc::now() - ChronoDuration::seconds(5);
+    let result = mark_outbox_transient_attempt(&pool, intent_id, "worker_a", past)
+        .await
+        .expect("past next_attempt_at must be accepted");
+    assert_eq!(result, OutboxUpdate::Applied);
+
+    let row = fetch_row(&pool, intent_id).await;
+    assert_eq!(row.0, "pending", "row returns to pending");
+    assert!(row.5.is_some(), "next_attempt_at was written");
+    assert!(row.7.is_none(), "lease released");
+}
+
+#[tokio::test]
 async fn mark_outbox_failed_captures_reason_and_releases_lease() {
     let pool = test_pool().await;
     reset_db(&pool).await;

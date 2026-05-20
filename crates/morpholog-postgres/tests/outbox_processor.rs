@@ -29,9 +29,9 @@ use chrono::{Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
-    CompensationSpec, Deliverer, DeliveryOutcome, IntendedOutcome, OutboxRow, PgPool,
-    PgProposalOutcome, ProcessOutcome, list_audit_rows, list_pending_outbox,
-    process_one_outbox_row, propose_against_pg,
+    CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
+    ProcessOutcome, list_audit_rows, list_pending_outbox, process_one_outbox_row,
+    propose_against_pg,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -212,10 +212,17 @@ async fn process_one_outbox_row_returns_no_row_available_when_empty() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let outcome =
-        process_one_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers, None)
-            .await
-            .unwrap();
+    let outcome = process_one_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &AlwaysDelivers,
+        None,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     assert_eq!(outcome, ProcessOutcome::NoRowAvailable);
 }
 
@@ -225,10 +232,17 @@ async fn process_one_outbox_row_marks_delivered_on_success() {
     reset_db(&pool).await;
     let _ = commit_post_simple_entry(&pool, "entry_001").await;
 
-    let outcome =
-        process_one_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers, None)
-            .await
-            .unwrap();
+    let outcome = process_one_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &AlwaysDelivers,
+        None,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(outcome, ProcessOutcome::Delivered { .. }));
 
     // No pending rows left; outbox row is in `delivered`.
@@ -256,6 +270,7 @@ async fn process_one_outbox_row_schedules_retry_on_transient() {
             next_attempt_at: next,
         },
         None,
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -296,6 +311,7 @@ async fn process_one_outbox_row_marks_failed_when_no_compensation_spec() {
             reason: "no compensation wired",
         },
         None,
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -338,6 +354,7 @@ async fn process_one_outbox_row_compensates_on_nonretryable_with_spec() {
             reason: "counterparty bank rejected wire: AML routing lock",
         },
         Some(&spec),
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -391,6 +408,7 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
             reason: "delivery failed",
         },
         Some(&spec),
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -432,11 +450,11 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
 //
 // Two tests force the lease to expire mid-deliver, exercising
 // the processor's LeaseLost return paths on different intended
-// outcomes. The third (LeaseLost on IntendedOutcome::Compensated)
+// outcomes. The third (LeaseLost during compensation completion)
 // would require a hook between begin_compensation and
 // complete_compensation that the current processor API does not
-// expose; the orphan-audit case is documented on the variant
-// itself but not pinned by an automated test in this PR.
+// expose; the orphan-audit case is documented in
+// docs/outbox-sketch.md but not pinned by an automated test.
 
 #[tokio::test]
 async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires() {
@@ -454,15 +472,14 @@ async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires()
             outcome: DeliveryOutcome::Delivered,
         },
         None,
+        Utc::now(),
     )
     .await
     .unwrap();
-    match outcome {
-        ProcessOutcome::LeaseLost { intended, .. } => {
-            assert_eq!(intended, IntendedOutcome::Delivered);
-        }
-        other => panic!("expected LeaseLost {{ intended: Delivered }}, got {other:?}"),
-    }
+    assert!(
+        matches!(outcome, ProcessOutcome::LeaseLost { .. }),
+        "expected LeaseLost (delivery-mark branch), got {outcome:?}"
+    );
 
     // Row was NOT moved to `delivered`. It is still in_progress
     // under the expired lease (an expired-lease reclaim by the
@@ -502,15 +519,14 @@ async fn process_one_outbox_row_returns_lease_lost_on_failed_branch_when_lease_e
             },
         },
         Some(&spec),
+        Utc::now(),
     )
     .await
     .unwrap();
-    match outcome {
-        ProcessOutcome::LeaseLost { intended, .. } => {
-            assert_eq!(intended, IntendedOutcome::Failed);
-        }
-        other => panic!("expected LeaseLost {{ intended: Failed }}, got {other:?}"),
-    }
+    assert!(
+        matches!(outcome, ProcessOutcome::LeaseLost { .. }),
+        "expected LeaseLost (failed-mark branch), got {outcome:?}"
+    );
 
     // Row was NOT moved to failed; the compensation arm was NOT
     // entered (no second audit row written).

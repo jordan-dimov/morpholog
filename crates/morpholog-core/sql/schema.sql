@@ -92,3 +92,14 @@ CREATE INDEX outbox_pending ON outbox (enqueued_at) WHERE status = 'pending';
 -- index supports that filter cheaply for the pending+due case.
 CREATE INDEX outbox_due_pending ON outbox (next_attempt_at)
     WHERE status = 'pending';
+
+-- Supports earliest_pending_retry(intent_type), which the polling
+-- worker calls after every idle drain to clamp its post-drain
+-- sleep to the soonest scheduled retry. With multiple intent
+-- types interleaved in the outbox, a single-column index on
+-- next_attempt_at requires scanning past rows of other intent
+-- types; the composite makes the lookup an index seek per intent
+-- type instead.
+CREATE INDEX outbox_pending_intent_next_attempt
+    ON outbox (intent_type, next_attempt_at)
+    WHERE status = 'pending';

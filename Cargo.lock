@@ -1016,6 +1016,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "morpholog-outbox"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "morpholog-core",
+ "morpholog-postgres",
+ "rand 0.9.4",
+ "rust_decimal",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "morpholog-postgres"
 version = "0.0.1"
 dependencies = [
