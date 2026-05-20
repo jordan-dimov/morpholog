@@ -1111,6 +1111,11 @@ pub fn propose(
             transition.transformation_name, transformation.name,
         )));
     }
+    if !matches!(transition.actor, EvalValue::Subject(_)) {
+        return Err(EvalError::TypeMismatch(
+            "transition actor must be a subject".to_string(),
+        ));
+    }
     if transition.args.len() != transformation.parameters.len() {
         return Err(EvalError::TypeMismatch(format!(
             "transformation `{}` expects {} args, got {}",

@@ -285,3 +285,35 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     };
     assert!(reason.contains("no_double_netting"), "got: {reason}");
 }
+
+// Pins the propose() guard that a Transition's transformation_name must
+// match the Transformation it is being evaluated against. Without this,
+// a misuse where the caller passes a transformation whose `name`
+// disagrees with the audit-recorded `transformation_name` could commit
+// with a misleading audit row. The guard surfaces as EvalError so the
+// adapter rolls back rather than committing inconsistent state.
+#[test]
+fn propose_rejects_transition_name_mismatch() {
+    use morpholog_core::{EvalError, Transition, propose};
+
+    let t = settlement_netting::create_net_settlement();
+    let pre = netting_pre_state(vec![]);
+    let transition = Transition {
+        transformation_name: "some_other_name".to_string(),
+        args: netting_args(),
+        actor: common::test_actor(),
+    };
+
+    let err = propose(&t, &transition, &pre, &settlement_netting::all_invariants())
+        .expect_err("name mismatch should be an EvalError, not Rejected");
+
+    match err {
+        EvalError::TypeMismatch(msg) => {
+            assert!(
+                msg.contains("some_other_name") && msg.contains(&t.name),
+                "error message should name both sides: got `{msg}`"
+            );
+        }
+        other => panic!("expected TypeMismatch, got {other:?}"),
+    }
+}

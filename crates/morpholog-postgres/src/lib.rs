@@ -92,6 +92,7 @@ pub enum PgError {
 pub enum PgProposalOutcome {
     Committed {
         transition_id: Uuid,
+        actor: EvalValue,
         asserted_claims: Vec<ClaimInstance>,
         retracted_claims: Vec<ClaimInstance>,
         emitted_intents: Vec<IntentInstance>,
@@ -157,6 +158,7 @@ pub async fn propose_against_pg(
             tx.commit().await.map_err(classify)?;
             Ok(PgProposalOutcome::Committed {
                 transition_id,
+                actor: transition.actor.clone(),
                 asserted_claims,
                 retracted_claims,
                 emitted_intents,

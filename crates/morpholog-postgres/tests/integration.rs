@@ -130,6 +130,7 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
         asserted_claims,
         retracted_claims,
         emitted_intents,
+        ..
     } = outcome
     else {
         panic!("expected Committed, got {outcome:?}");
@@ -1689,4 +1690,108 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
         outbox.is_empty(),
         "rejected transformation must not enqueue intents"
     );
+}
+
+// Pins that the actor supplied on a Transition round-trips through the
+// kernel, the audit-write codec, and list_audit_rows() unchanged.
+// Also pins that the actor surfaces on PgProposalOutcome::Committed so
+// the commit receipt is self-describing.
+#[tokio::test]
+async fn audit_row_records_actor() {
+    use morpholog_core::Transition;
+    use morpholog_postgres::propose_against_pg;
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let transformation = double_entry_ledger::post_simple_entry();
+    let actor = EvalValue::Subject("user:jordan".to_string());
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
+            subj("entry_actor_test"),
+            subj("d_2026_05_20"),
+            subj("p_actor_test"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        actor: actor.clone(),
+    };
+
+    let outcome = propose_against_pg(
+        &pool,
+        &transformation,
+        &transition,
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
+
+    let PgProposalOutcome::Committed {
+        transition_id,
+        actor: receipt_actor,
+        ..
+    } = outcome
+    else {
+        panic!("expected Committed, got {outcome:?}");
+    };
+
+    assert_eq!(
+        receipt_actor, actor,
+        "Committed receipt must echo the proposed actor"
+    );
+
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    assert_eq!(audit_rows.len(), 1);
+    let row = &audit_rows[0];
+    assert_eq!(row.transition_id, transition_id);
+    assert_eq!(
+        row.actor, actor,
+        "audit row must persist the actor unchanged"
+    );
+}
+
+// Pins that a Transition whose `actor` is not a Subject is rejected at
+// the kernel boundary as a typed error - not silently committed with a
+// nonsense actor encoded into audit. Future authority work assumes
+// actors are subject-shaped; this guard makes that contract testable.
+#[tokio::test]
+async fn propose_rejects_non_subject_actor() {
+    use morpholog_core::Transition;
+    use morpholog_postgres::{PgError, propose_against_pg};
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let transformation = double_entry_ledger::post_simple_entry();
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
+            subj("entry_bad_actor"),
+            subj("d_2026_05_20"),
+            subj("p_bad_actor"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        actor: dec(42), // decimal where a subject is required
+    };
+
+    let err = propose_against_pg(
+        &pool,
+        &transformation,
+        &transition,
+        &double_entry_ledger::all_invariants(),
+    )
+    .await
+    .expect_err("non-subject actor must surface as Kernel(TypeMismatch), not commit");
+
+    assert!(
+        matches!(err, PgError::Kernel(_)),
+        "expected PgError::Kernel(TypeMismatch), got {err:?}"
+    );
+
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    assert!(audit_rows.is_empty(), "rejected proposal must not audit");
 }

@@ -753,6 +753,7 @@ mod tests {
 
         let committed = PgProposalOutcome::Committed {
             transition_id: Uuid::nil(),
+            actor: EvalValue::Subject("jordan".to_string()),
             asserted_claims: vec![ClaimInstance {
                 predicate: "Foo".to_string(),
                 args: vec![],
@@ -766,6 +767,10 @@ mod tests {
             "committed outcome must carry status=committed, got: {json}"
         );
         assert!(json.contains(r#""transition_id":"00000000-0000-0000-0000-000000000000""#));
+        assert!(
+            json.contains(r#""actor":{"type":"subject","value":"jordan"}"#),
+            "committed outcome must carry actor on the wire, got: {json}"
+        );
 
         let rejected = PgProposalOutcome::Rejected {
             reason: "require failed".to_string(),
