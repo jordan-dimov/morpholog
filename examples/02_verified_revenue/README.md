@@ -65,7 +65,7 @@ The same scenario is proven at two layers.
 
 ```bash
 # In-memory (sync kernel)
-cargo test -p morpholog-core --test verified_revenue
+cargo test -p morpholog-examples --test verified_revenue
 
 # Durable (PostgreSQL adapter)
 DATABASE_URL=postgres:///morpholog_dev \

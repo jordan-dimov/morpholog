@@ -62,13 +62,17 @@ The shape is **keys, values, domain**: one row per distinct account; balance = s
 
 ```bash
 # In-memory (sync kernel)
-cargo test -p morpholog-core --test double_entry_ledger
-cargo test -p morpholog-core --test derived_claims
+cargo test -p morpholog-examples --test double_entry_ledger
+cargo test -p morpholog-examples --test derived_claims
 
 # Durable (PostgreSQL adapter)
 DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-postgres --test integration -- --test-threads=1 \
-    double_entry ledger_closed_period list_derived
+    double_entry_full_chain_through_pg \
+    ledger_closed_period_rejects_new_entry_and_writes_nothing \
+    list_derived_trial_balance_over_pg_ledger_state \
+    list_derived_on_empty_state_returns_no_rows \
+    list_derived_ignores_claims_outside_its_predicate_footprint
 ```
 
 In-memory tests cover: happy paths (simple and split entries balance and commit); rejection of unbalanced entries by the candidate-state invariant; period-close gate; double-close rejection; **restatement into closed periods preserves the original** (the load-bearing test); the empty-entry invariant; the at-most-one-direct-successor restriction. Read-side tests pin the `TrialBalanceRow` shape, enumeration semantics, and the v0 boundary that derived claims do not pollute admitted state.

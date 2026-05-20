@@ -46,7 +46,7 @@ Tying recorded approvals to live authority via an invariant would force the runt
 
 ```bash
 # In-memory
-cargo test -p morpholog-core --test approval_controls
+cargo test -p morpholog-examples --test approval_controls
 
 # Durable
 DATABASE_URL=postgres:///morpholog_dev \
