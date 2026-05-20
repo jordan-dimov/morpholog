@@ -2,15 +2,9 @@
 //! in one programme. See `examples/02_verified_revenue/README.md` for the
 //! business framing; this module is the IR.
 
-use morpholog_core::{Claim, Expr, Intent, Invariant, Stmt, Term, Transformation, Value};
+use morpholog_core::{Invariant, Term, Transformation};
 
-fn var(name: &str) -> Term {
-    Term::Var(name.to_string())
-}
-
-fn purpose(name: &str) -> Term {
-    Term::Literal(Value::Subject(name.to_string()))
-}
+use crate::helpers::*;
 
 /// The purpose subject identifying bank debt-service-coverage usage.
 pub const BANK_DEBT_SERVICE: &str = "bank_debt_service";
@@ -30,16 +24,13 @@ pub fn admissibility_has_provenance() -> Invariant {
     Invariant {
         name: "admissibility_has_provenance".to_string(),
         version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("v"), var("p")],
-            }),
-            right: Box::new(Expr::Claim {
-                predicate: "StandingGrantedBy".to_string(),
-                args: vec![var("v"), var("p"), Term::Wildcard, Term::Wildcard],
-            }),
-        },
+        body: implies(
+            claim("AdmissibleFor", vec![var("v"), var("p")]),
+            claim(
+                "StandingGrantedBy",
+                vec![var("v"), var("p"), Term::Wildcard, Term::Wildcard],
+            ),
+        ),
     }
 }
 
@@ -49,19 +40,13 @@ pub fn admissibility_excludes_revocation() -> Invariant {
     Invariant {
         name: "admissibility_excludes_revocation".to_string(),
         version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("v"), var("p")],
-            }),
-            right: Box::new(Expr::Not(Box::new(Expr::Exists {
-                binding: "r".to_string(),
-                body: Box::new(Expr::Claim {
-                    predicate: "StandingRevoked".to_string(),
-                    args: vec![var("v"), var("p"), var("r")],
-                }),
-            }))),
-        },
+        body: implies(
+            claim("AdmissibleFor", vec![var("v"), var("p")]),
+            not(exists(
+                "r",
+                claim("StandingRevoked", vec![var("v"), var("p"), var("r")]),
+            )),
+        ),
     }
 }
 
@@ -71,22 +56,19 @@ pub fn at_most_one_current_verification_per_asset_period() -> Invariant {
     Invariant {
         name: "at_most_one_current_verification_per_asset_period".to_string(),
         version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::And(vec![
-                Expr::Claim {
-                    predicate: "CurrentVerification".to_string(),
-                    args: vec![var("asset"), var("period"), var("a")],
-                },
-                Expr::Claim {
-                    predicate: "CurrentVerification".to_string(),
-                    args: vec![var("asset"), var("period"), var("b")],
-                },
-            ])),
-            right: Box::new(Expr::Eq(
-                Box::new(Expr::Term(var("a"))),
-                Box::new(Expr::Term(var("b"))),
-            )),
-        },
+        body: implies(
+            and(vec![
+                claim(
+                    "CurrentVerification",
+                    vec![var("asset"), var("period"), var("a")],
+                ),
+                claim(
+                    "CurrentVerification",
+                    vec![var("asset"), var("period"), var("b")],
+                ),
+            ]),
+            eq(term(var("a")), term(var("b"))),
+        ),
     }
 }
 
@@ -96,22 +78,13 @@ pub fn at_most_one_direct_successor() -> Invariant {
     Invariant {
         name: "at_most_one_direct_successor".to_string(),
         version: 1,
-        body: Expr::Implies {
-            left: Box::new(Expr::And(vec![
-                Expr::Claim {
-                    predicate: "Supersedes".to_string(),
-                    args: vec![var("new_a"), var("old")],
-                },
-                Expr::Claim {
-                    predicate: "Supersedes".to_string(),
-                    args: vec![var("new_b"), var("old")],
-                },
-            ])),
-            right: Box::new(Expr::Eq(
-                Box::new(Expr::Term(var("new_a"))),
-                Box::new(Expr::Term(var("new_b"))),
-            )),
-        },
+        body: implies(
+            and(vec![
+                claim("Supersedes", vec![var("new_a"), var("old")]),
+                claim("Supersedes", vec![var("new_b"), var("old")]),
+            ]),
+            eq(term(var("new_a")), term(var("new_b"))),
+        ),
     }
 }
 
@@ -120,41 +93,35 @@ pub fn at_most_one_direct_successor() -> Invariant {
 // ============================================================
 
 /// First admission of an independent verification figure for an
-/// `(asset, period)`. Asserts both the underlying claim and the
-/// singleton `CurrentVerification` pointer. Rejected if there is
-/// already a current verification for this asset/period - use
+/// `(asset, period)`. Rejected if there is already a current
+/// verification for this asset/period - use
 /// `correct_independent_verification` to update.
 pub fn admit_independent_verification() -> Transformation {
     Transformation {
         name: "admit_independent_verification".to_string(),
-        parameters: vec![
-            "asset".to_string(),
-            "period".to_string(),
-            "amount".to_string(),
-            "verification_id".to_string(),
-        ],
+        parameters: params(&["asset", "period", "amount", "verification_id"]),
         body: vec![
-            Stmt::Require(Expr::Not(Box::new(Expr::Claim {
-                predicate: "CurrentVerification".to_string(),
-                args: vec![var("asset"), var("period"), Term::Wildcard],
-            }))),
-            Stmt::Assert(Claim {
-                predicate: "IndependentlyVerifiedRevenue".to_string(),
-                args: vec![
+            require(not(claim(
+                "CurrentVerification",
+                vec![var("asset"), var("period"), Term::Wildcard],
+            ))),
+            assert_(
+                "IndependentlyVerifiedRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     var("amount"),
                     var("verification_id"),
                 ],
-            }),
-            Stmt::Assert(Claim {
-                predicate: "CurrentVerification".to_string(),
-                args: vec![var("asset"), var("period"), var("verification_id")],
-            }),
-            Stmt::Emit(Intent {
-                name: "IndependentVerificationAdmitted".to_string(),
-                args: vec![var("verification_id")],
-            }),
+            ),
+            assert_(
+                "CurrentVerification",
+                vec![var("asset"), var("period"), var("verification_id")],
+            ),
+            emit(
+                "IndependentVerificationAdmitted",
+                vec![var("verification_id")],
+            ),
         ],
     }
 }
@@ -163,267 +130,222 @@ pub fn admit_independent_verification() -> Transformation {
 /// stays in admitted state; the new figure is admitted; lineage is
 /// recorded as `Supersedes`; the singleton pointer moves to the new
 /// verification; and **any standing previously granted on the prior
-/// verification is retracted** - the authorities must re-issue
-/// standing on the corrected figure if they still agree with it.
+/// verification is retracted** - authorities must re-issue standing
+/// on the corrected figure if they still agree with it.
 ///
 /// Existing decisions admitted under the prior standing survive in
 /// admitted state. The runtime does not cascade-retract them.
 pub fn correct_independent_verification() -> Transformation {
     Transformation {
         name: "correct_independent_verification".to_string(),
-        parameters: vec![
-            "asset".to_string(),
-            "period".to_string(),
-            "new_amount".to_string(),
-            "new_verification_id".to_string(),
-            "prior_verification_id".to_string(),
-        ],
+        parameters: params(&[
+            "asset",
+            "period",
+            "new_amount",
+            "new_verification_id",
+            "prior_verification_id",
+        ]),
         body: vec![
-            Stmt::Require(Expr::Claim {
-                predicate: "IndependentlyVerifiedRevenue".to_string(),
-                args: vec![
+            require(claim(
+                "IndependentlyVerifiedRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     Term::Wildcard,
                     var("prior_verification_id"),
                 ],
-            }),
-            Stmt::Require(Expr::Not(Box::new(Expr::Claim {
-                predicate: "Supersedes".to_string(),
-                args: vec![Term::Wildcard, var("prior_verification_id")],
-            }))),
-            Stmt::Assert(Claim {
-                predicate: "IndependentlyVerifiedRevenue".to_string(),
-                args: vec![
+            )),
+            require(not(claim(
+                "Supersedes",
+                vec![Term::Wildcard, var("prior_verification_id")],
+            ))),
+            assert_(
+                "IndependentlyVerifiedRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     var("new_amount"),
                     var("new_verification_id"),
                 ],
-            }),
-            Stmt::Assert(Claim {
-                predicate: "Supersedes".to_string(),
-                args: vec![var("new_verification_id"), var("prior_verification_id")],
-            }),
-            Stmt::Retract {
-                predicate: "CurrentVerification".to_string(),
-                args: vec![var("asset"), var("period"), var("prior_verification_id")],
-            },
+            ),
+            assert_(
+                "Supersedes",
+                vec![var("new_verification_id"), var("prior_verification_id")],
+            ),
+            retract(
+                "CurrentVerification",
+                vec![var("asset"), var("period"), var("prior_verification_id")],
+            ),
             // Pattern-based retraction: every active AdmissibleFor for
             // the prior verification, for any purpose. Authorities
             // must re-issue standing if they accept the correction.
-            Stmt::Retract {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("prior_verification_id"), Term::Wildcard],
-            },
-            Stmt::Assert(Claim {
-                predicate: "CurrentVerification".to_string(),
-                args: vec![var("asset"), var("period"), var("new_verification_id")],
-            }),
-            Stmt::Emit(Intent {
-                name: "VerificationCorrected".to_string(),
-                args: vec![var("new_verification_id"), var("prior_verification_id")],
-            }),
+            retract(
+                "AdmissibleFor",
+                vec![var("prior_verification_id"), Term::Wildcard],
+            ),
+            assert_(
+                "CurrentVerification",
+                vec![var("asset"), var("period"), var("new_verification_id")],
+            ),
+            emit(
+                "VerificationCorrected",
+                vec![var("new_verification_id"), var("prior_verification_id")],
+            ),
         ],
     }
 }
 
 /// Grant `purpose` standing on `verification_id`, recording
 /// `authority` as the granting party and `grant_id` as the provenance
-/// handle.
-///
-/// Admission requires four things in order:
-///
-/// 1. **The verification exists.** Some `IndependentlyVerifiedRevenue`
-///    claim references the supplied `verification_id`. Standing
-///    cannot be granted on a phantom id.
-/// 2. **The verification is current.** It is the active
-///    `CurrentVerification` for its `(asset, period)`. Standing on a
-///    superseded verification is forbidden - future reliance must
-///    attach to the current figure. (Historical decisions admitted
-///    when the verification *was* current survive separately; they
-///    are decisions on the record, not future standing.)
-/// 3. **No revocation.** The `(verification, purpose)` pair has not
-///    been revoked - revocation is terminal in v0.
-/// 4. **No double-grant.** The pair does not already have active
-///    admissibility.
+/// handle. Admission requires the verification to exist, to be
+/// current, to have no prior revocation for this purpose, and to have
+/// no active admissibility yet.
 pub fn grant_standing() -> Transformation {
     Transformation {
         name: "grant_standing".to_string(),
-        parameters: vec![
-            "verification_id".to_string(),
-            "purpose".to_string(),
-            "authority".to_string(),
-            "grant_id".to_string(),
-        ],
+        parameters: params(&["verification_id", "purpose", "authority", "grant_id"]),
         body: vec![
-            Stmt::Require(Expr::Claim {
-                predicate: "IndependentlyVerifiedRevenue".to_string(),
-                args: vec![
+            require(claim(
+                "IndependentlyVerifiedRevenue",
+                vec![
                     Term::Wildcard,
                     Term::Wildcard,
                     Term::Wildcard,
                     var("verification_id"),
                 ],
-            }),
-            Stmt::Require(Expr::Claim {
-                predicate: "CurrentVerification".to_string(),
-                args: vec![Term::Wildcard, Term::Wildcard, var("verification_id")],
-            }),
-            Stmt::Require(Expr::Not(Box::new(Expr::Exists {
-                binding: "r".to_string(),
-                body: Box::new(Expr::Claim {
-                    predicate: "StandingRevoked".to_string(),
-                    args: vec![var("verification_id"), var("purpose"), var("r")],
-                }),
-            }))),
-            Stmt::Require(Expr::Not(Box::new(Expr::Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("verification_id"), var("purpose")],
-            }))),
-            Stmt::Assert(Claim {
-                predicate: "StandingGrantedBy".to_string(),
-                args: vec![
+            )),
+            require(claim(
+                "CurrentVerification",
+                vec![Term::Wildcard, Term::Wildcard, var("verification_id")],
+            )),
+            require(not(exists(
+                "r",
+                claim(
+                    "StandingRevoked",
+                    vec![var("verification_id"), var("purpose"), var("r")],
+                ),
+            ))),
+            require(not(claim(
+                "AdmissibleFor",
+                vec![var("verification_id"), var("purpose")],
+            ))),
+            assert_(
+                "StandingGrantedBy",
+                vec![
                     var("verification_id"),
                     var("purpose"),
                     var("authority"),
                     var("grant_id"),
                 ],
-            }),
-            Stmt::Assert(Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("verification_id"), var("purpose")],
-            }),
-            Stmt::Emit(Intent {
-                name: "StandingGranted".to_string(),
-                args: vec![var("grant_id")],
-            }),
+            ),
+            assert_(
+                "AdmissibleFor",
+                vec![var("verification_id"), var("purpose")],
+            ),
+            emit("StandingGranted", vec![var("grant_id")]),
         ],
     }
 }
 
-/// Revoke `purpose` standing for `verification_id`. Requires current
-/// admissibility to revoke. The historical `StandingGrantedBy` claim
-/// survives; the active `AdmissibleFor` is retracted; a new
-/// `StandingRevoked` is admitted (terminal in v0).
+/// Revoke `purpose` standing for `verification_id`. The historical
+/// `StandingGrantedBy` claim survives; the active `AdmissibleFor` is
+/// retracted; a new `StandingRevoked` is admitted (terminal in v0).
 pub fn revoke_standing() -> Transformation {
     Transformation {
         name: "revoke_standing".to_string(),
-        parameters: vec![
-            "verification_id".to_string(),
-            "purpose".to_string(),
-            "revocation_id".to_string(),
-        ],
+        parameters: params(&["verification_id", "purpose", "revocation_id"]),
         body: vec![
-            Stmt::Require(Expr::Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("verification_id"), var("purpose")],
-            }),
-            Stmt::Retract {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("verification_id"), var("purpose")],
-            },
-            Stmt::Assert(Claim {
-                predicate: "StandingRevoked".to_string(),
-                args: vec![var("verification_id"), var("purpose"), var("revocation_id")],
-            }),
-            Stmt::Emit(Intent {
-                name: "StandingRevocationAdmitted".to_string(),
-                args: vec![var("revocation_id")],
-            }),
+            require(claim(
+                "AdmissibleFor",
+                vec![var("verification_id"), var("purpose")],
+            )),
+            retract(
+                "AdmissibleFor",
+                vec![var("verification_id"), var("purpose")],
+            ),
+            assert_(
+                "StandingRevoked",
+                vec![var("verification_id"), var("purpose"), var("revocation_id")],
+            ),
+            emit("StandingRevocationAdmitted", vec![var("revocation_id")]),
         ],
     }
 }
 
 /// Admit a `DebtServiceRevenue` decision that relies on a specific
 /// `IndependentlyVerifiedRevenue` claim with active standing for the
-/// `bank_debt_service` purpose. The purpose is embedded as a literal
-/// in the require, so the transformation is intrinsically tied to
-/// its purpose.
+/// `bank_debt_service` purpose.
 pub fn admit_debt_service_revenue() -> Transformation {
     Transformation {
         name: "admit_debt_service_revenue".to_string(),
-        parameters: vec![
-            "asset".to_string(),
-            "period".to_string(),
-            "amount".to_string(),
-            "decision_id".to_string(),
-            "verification_id".to_string(),
-        ],
+        parameters: params(&[
+            "asset",
+            "period",
+            "amount",
+            "decision_id",
+            "verification_id",
+        ]),
         body: vec![
-            Stmt::Require(Expr::Claim {
-                predicate: "IndependentlyVerifiedRevenue".to_string(),
-                args: vec![
+            require(claim(
+                "IndependentlyVerifiedRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     var("amount"),
                     var("verification_id"),
                 ],
-            }),
-            Stmt::Require(Expr::Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("verification_id"), purpose(BANK_DEBT_SERVICE)],
-            }),
-            Stmt::Assert(Claim {
-                predicate: "DebtServiceRevenue".to_string(),
-                args: vec![
+            )),
+            require(claim(
+                "AdmissibleFor",
+                vec![var("verification_id"), lit_subj(BANK_DEBT_SERVICE)],
+            )),
+            assert_(
+                "DebtServiceRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     var("amount"),
                     var("decision_id"),
                     var("verification_id"),
                 ],
-            }),
-            Stmt::Emit(Intent {
-                name: "DebtServiceRevenueAdmitted".to_string(),
-                args: vec![var("decision_id")],
-            }),
+            ),
+            emit("DebtServiceRevenueAdmitted", vec![var("decision_id")]),
         ],
     }
 }
 
 /// Admit an `InvestorReportedRevenue` decision that relies on a
 /// specific `IndependentlyVerifiedRevenue` claim with active standing
-/// for the `investor_reporting` purpose. Same shape as
-/// [`admit_debt_service_revenue`].
+/// for the `investor_reporting` purpose.
 pub fn admit_investor_reported_revenue() -> Transformation {
     Transformation {
         name: "admit_investor_reported_revenue".to_string(),
-        parameters: vec![
-            "asset".to_string(),
-            "period".to_string(),
-            "amount".to_string(),
-            "report_id".to_string(),
-            "verification_id".to_string(),
-        ],
+        parameters: params(&["asset", "period", "amount", "report_id", "verification_id"]),
         body: vec![
-            Stmt::Require(Expr::Claim {
-                predicate: "IndependentlyVerifiedRevenue".to_string(),
-                args: vec![
+            require(claim(
+                "IndependentlyVerifiedRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     var("amount"),
                     var("verification_id"),
                 ],
-            }),
-            Stmt::Require(Expr::Claim {
-                predicate: "AdmissibleFor".to_string(),
-                args: vec![var("verification_id"), purpose(INVESTOR_REPORTING)],
-            }),
-            Stmt::Assert(Claim {
-                predicate: "InvestorReportedRevenue".to_string(),
-                args: vec![
+            )),
+            require(claim(
+                "AdmissibleFor",
+                vec![var("verification_id"), lit_subj(INVESTOR_REPORTING)],
+            )),
+            assert_(
+                "InvestorReportedRevenue",
+                vec![
                     var("asset"),
                     var("period"),
                     var("amount"),
                     var("report_id"),
                     var("verification_id"),
                 ],
-            }),
-            Stmt::Emit(Intent {
-                name: "InvestorReportedRevenueAdmitted".to_string(),
-                args: vec![var("report_id")],
-            }),
+            ),
+            emit("InvestorReportedRevenueAdmitted", vec![var("report_id")]),
         ],
     }
 }
@@ -437,9 +359,8 @@ pub fn all_invariants() -> Vec<Invariant> {
     ]
 }
 
-/// The verified-revenue example as a [`morpholog_core::Program`]: six
-/// transformations and four invariants. Stable identifier:
-/// `"verified_revenue"`.
+/// The verified-revenue example as a [`morpholog_core::Program`].
+/// Stable identifier: `"verified_revenue"`.
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "verified_revenue".to_string(),
