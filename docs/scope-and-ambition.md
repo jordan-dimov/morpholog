@@ -159,6 +159,8 @@ The richer worked examples. Each one combines several of the patterns the langua
 
 - **[Approval controls](../examples/04_approval_controls/).** Actor identity threading through transitions and into the audit log, with both unconditional authority (`MayApprove`) and quantitative authority via `Expr::Le` (`ApprovalLimit`). Forced `Term::Actor` and `Expr::Le`.
 
+- **[Insurance claim settlement](../examples/05_insurance_claim_settlement/).** Settlements consumed against a policy aggregate limit. The load-bearing rule `Le(Add(Sum(paid), proposed), aggregate_limit)` evaluates cumulative cap consumption at admission. Forced `Expr::Add`. The smallest forcing scenario - standing, correction, restatement, and reserve-revision patterns from earlier examples are not re-illustrated.
+
 - **As-of evaluation.** `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`. The trial-balance example demonstrates this end-to-end.
 
 The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; higher-order authority via predicate-pattern matching for regulated workflows; effective time as a separate axis) is the next forced territory. See [`docs/design-history.md`](design-history.md) for the design-archaeology record of what each forcing event added to the IR.
