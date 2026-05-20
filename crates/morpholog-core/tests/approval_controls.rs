@@ -1,0 +1,390 @@
+//! Integration tests for the approval controls example
+//! (`examples/06_approval_controls/`).
+//!
+//! Two-section coverage matching the example's two authority shapes:
+//!
+//! - **Unconditional authority** (`MayApprove`, `approve_document`):
+//!   actor consultation via `Term::Actor`, rejection without grant,
+//!   asserted `Approval` carries the proposing actor, one actor
+//!   cannot impersonate another, revocation preserves history.
+//!
+//! - **Quantitative authority** (`ApprovalLimit`, `approve_within_limit`):
+//!   the same shape with `Expr::Le` on amount-against-limit, boundary
+//!   equality, stacked grants, per-doc-type scoping, and the
+//!   ill-typed-limit doctrine.
+//!
+//! Plus kernel-level guards that make the require-vs-invariant
+//! doctrine catchable: `Term::Actor` in an invariant body raises
+//! `UnboundActor`, and the same error is position-independent in
+//! `find_claim_matches`.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod common;
+
+use common::{dec, has_claim, must_accept, must_accept_as, propose_as, subj};
+use morpholog_core::examples::approval_controls;
+use morpholog_core::{
+    ClaimInstance, EvalError, EvalValue, Expr, Invariant, Outcome, State, Term, Value,
+    eval_invariant,
+};
+
+fn empty_invariants() -> Vec<Invariant> {
+    approval_controls::all_invariants()
+}
+
+fn grant_authority(state: State, actor: &str, doc_type: &str) -> State {
+    must_accept(
+        &approval_controls::grant_approval_authority(),
+        vec![subj(actor), subj(doc_type)],
+        state,
+        &empty_invariants(),
+    )
+}
+
+fn grant_limit(state: State, actor: &str, doc_type: &str, limit: i64) -> State {
+    must_accept(
+        &approval_controls::grant_approval_limit(),
+        vec![subj(actor), subj(doc_type), dec(limit)],
+        state,
+        &empty_invariants(),
+    )
+}
+
+// ============================================================
+// Unconditional authority
+// ============================================================
+
+#[test]
+fn approve_without_authority_is_rejected_at_require() {
+    let pre = State::default();
+    let outcome = propose_as(
+        &approval_controls::approve_document(),
+        vec![subj("doc_001"), subj("vendor_onboarding")],
+        subj("jordan"),
+        &pre,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    let Outcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(reason.contains("require"), "got reason: {reason}");
+}
+
+#[test]
+fn approve_with_authority_carries_proposing_actor_on_asserted_claim() {
+    let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
+    let post = must_accept_as(
+        &approval_controls::approve_document(),
+        vec![subj("doc_001"), subj("vendor_onboarding")],
+        subj("jordan"),
+        pre,
+        &empty_invariants(),
+    );
+    assert!(
+        has_claim(
+            &post,
+            "Approval",
+            &[subj("doc_001"), subj("vendor_onboarding"), subj("jordan")],
+        ),
+        "Approval must carry the proposing actor as its third arg",
+    );
+}
+
+#[test]
+fn approve_uses_proposing_actor_not_a_caller_parameter() {
+    // jordan has authority; alice does not. alice cannot approve on
+    // jordan's behalf because $actor binds to the proposing actor,
+    // not to a parameter the caller controls.
+    let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
+    let outcome = propose_as(
+        &approval_controls::approve_document(),
+        vec![subj("doc_001"), subj("vendor_onboarding")],
+        subj("alice"),
+        &pre,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    let Outcome::Rejected { .. } = outcome else {
+        panic!("alice should not be able to approve without authority");
+    };
+}
+
+#[test]
+fn revoked_authority_blocks_future_but_preserves_past() {
+    let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
+    let after_approval = must_accept_as(
+        &approval_controls::approve_document(),
+        vec![subj("doc_001"), subj("vendor_onboarding")],
+        subj("jordan"),
+        pre,
+        &empty_invariants(),
+    );
+    let after_revoke = must_accept(
+        &approval_controls::revoke_approval_authority(),
+        vec![subj("jordan"), subj("vendor_onboarding")],
+        after_approval,
+        &empty_invariants(),
+    );
+
+    // History survives, future is blocked.
+    assert!(has_claim(
+        &after_revoke,
+        "Approval",
+        &[subj("doc_001"), subj("vendor_onboarding"), subj("jordan")],
+    ));
+    assert!(!has_claim(
+        &after_revoke,
+        "MayApprove",
+        &[subj("jordan"), subj("vendor_onboarding")],
+    ));
+    let outcome = propose_as(
+        &approval_controls::approve_document(),
+        vec![subj("doc_002"), subj("vendor_onboarding")],
+        subj("jordan"),
+        &after_revoke,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+// ============================================================
+// Quantitative authority
+// ============================================================
+
+#[test]
+fn limit_approval_without_grant_is_rejected() {
+    let outcome = propose_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_001"), subj("invoice"), dec(100)],
+        subj("jordan"),
+        &State::default(),
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn limit_approval_under_limit_commits_with_actor_and_amount() {
+    let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
+    let post = must_accept_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_001"), subj("invoice"), dec(750)],
+        subj("jordan"),
+        pre,
+        &empty_invariants(),
+    );
+    assert!(has_claim(
+        &post,
+        "LimitedApproval",
+        &[subj("inv_001"), subj("invoice"), dec(750), subj("jordan")],
+    ));
+}
+
+#[test]
+fn limit_approval_exactly_at_limit_commits() {
+    // Le is inclusive at the boundary.
+    let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
+    let post = must_accept_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_at_limit"), subj("invoice"), dec(1000)],
+        subj("jordan"),
+        pre,
+        &empty_invariants(),
+    );
+    assert!(has_claim(
+        &post,
+        "LimitedApproval",
+        &[
+            subj("inv_at_limit"),
+            subj("invoice"),
+            dec(1000),
+            subj("jordan")
+        ],
+    ));
+}
+
+#[test]
+fn limit_approval_above_limit_is_rejected() {
+    let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
+    let outcome = propose_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_over"), subj("invoice"), dec(1001)],
+        subj("jordan"),
+        &pre,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn limit_grant_is_per_actor_and_per_doc_type() {
+    // jordan has an invoice limit but not a contract limit.
+    let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
+
+    // alice cannot approve under jordan's invoice limit.
+    let outcome = propose_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_alice"), subj("invoice"), dec(10)],
+        subj("alice"),
+        &pre,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+
+    // jordan cannot use her invoice limit for contracts.
+    let outcome = propose_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("ct_001"), subj("contract"), dec(10)],
+        subj("jordan"),
+        &pre,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn multiple_grants_take_the_satisfying_one() {
+    // jordan holds two layered grants: 500 and 5000. An approval at
+    // 3000 satisfies the second but not the first; the And + binding
+    // shape of the require finds *some* satisfying limit.
+    let pre = grant_limit(State::default(), "jordan", "invoice", 500);
+    let pre = grant_limit(pre, "jordan", "invoice", 5000);
+    let post = must_accept_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_3k"), subj("invoice"), dec(3000)],
+        subj("jordan"),
+        pre,
+        &empty_invariants(),
+    );
+    assert!(has_claim(
+        &post,
+        "LimitedApproval",
+        &[subj("inv_3k"), subj("invoice"), dec(3000), subj("jordan")],
+    ));
+}
+
+#[test]
+fn revoking_a_limit_blocks_future_but_preserves_past() {
+    let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
+    let after_approval = must_accept_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_001"), subj("invoice"), dec(800)],
+        subj("jordan"),
+        pre,
+        &empty_invariants(),
+    );
+    let after_revoke = must_accept(
+        &approval_controls::revoke_approval_limit(),
+        vec![subj("jordan"), subj("invoice"), dec(1000)],
+        after_approval,
+        &empty_invariants(),
+    );
+
+    // History survives, future blocked.
+    assert!(has_claim(
+        &after_revoke,
+        "LimitedApproval",
+        &[subj("inv_001"), subj("invoice"), dec(800), subj("jordan")],
+    ));
+    assert!(!has_claim(
+        &after_revoke,
+        "ApprovalLimit",
+        &[subj("jordan"), subj("invoice"), dec(1000)],
+    ));
+    let outcome = propose_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_002"), subj("invoice"), dec(500)],
+        subj("jordan"),
+        &after_revoke,
+        &empty_invariants(),
+    )
+    .expect("propose should not error");
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
+    // Doctrine: ill-typed admitted claims are structural corruption,
+    // not business rejection. An `ApprovalLimit($actor, doc_type, X)`
+    // where `X` is not a decimal causes `Expr::Le(amount, limit)` to
+    // raise `EvalError::TypeMismatch`. Until typed predicates land,
+    // this example's callers are trusted to admit decimal limits.
+    let pre = State::from_claims(vec![ClaimInstance {
+        predicate: "ApprovalLimit".to_string(),
+        args: vec![
+            subj("jordan"),
+            subj("invoice"),
+            EvalValue::Subject("not_a_decimal".to_string()),
+        ],
+    }]);
+
+    let mut transition = common::test_transition(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_001"), subj("invoice"), dec(100)],
+    );
+    transition.actor = subj("jordan");
+
+    let err = morpholog_core::propose(
+        &approval_controls::approve_within_limit(),
+        &transition,
+        &pre,
+        &empty_invariants(),
+    )
+    .expect_err("non-decimal limit must surface as EvalError, not Rejected");
+    match err {
+        EvalError::TypeMismatch(msg) => {
+            assert!(
+                msg.contains("Le"),
+                "TypeMismatch should mention Le; got `{msg}`",
+            );
+        }
+        other => panic!("expected TypeMismatch, got {other:?}"),
+    }
+}
+
+// ============================================================
+// Kernel-level pins for Term::Actor
+// ============================================================
+
+#[test]
+fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
+    let inv = Invariant {
+        name: "improperly_uses_actor".to_string(),
+        version: 1,
+        body: Expr::Claim {
+            predicate: "AnyPredicate".to_string(),
+            args: vec![Term::Actor],
+        },
+    };
+    let err = eval_invariant(&inv, &State::default()).expect_err("must error");
+    assert!(matches!(err, EvalError::UnboundActor));
+}
+
+#[test]
+fn term_actor_unbound_error_is_position_independent() {
+    // Regression: an earlier ground arg with a missing bucket must
+    // NOT short-circuit before Term::Actor is checked. The
+    // pre-pass in find_claim_matches makes the doctrine
+    // position-independent.
+    let inv = Invariant {
+        name: "actor_masked_by_earlier_missing_literal".to_string(),
+        version: 1,
+        body: Expr::Claim {
+            predicate: "AnyPredicate".to_string(),
+            args: vec![
+                Term::Literal(Value::Subject("missing".to_string())),
+                Term::Actor,
+            ],
+        },
+    };
+    let err = eval_invariant(&inv, &State::default())
+        .expect_err("Term::Actor outside transition scope must error regardless of arg order");
+    assert!(matches!(err, EvalError::UnboundActor));
+}

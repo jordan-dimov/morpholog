@@ -12,8 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::examples::{
-    actor_authority, approval_limits, claim_standing, double_entry_ledger, revenue_restatement,
-    settlement_netting,
+    approval_controls, claim_standing, double_entry_ledger, revenue_restatement, settlement_netting,
 };
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_postgres::{
@@ -1804,214 +1803,207 @@ async fn propose_rejects_non_subject_actor() {
 }
 
 // ============================================================
-// Actor authority (Example 6) - durable proof that Term::Actor
-// flows through propose_against_pg, into the audit log, and into
-// the asserted Approval claim. The in-memory tests pin the kernel
-// semantics; these pin the round-trip through PostgreSQL.
+// Approval controls (Example 6) - durable proof that Term::Actor
+// and Expr::Le flow through propose_against_pg, into the audit log,
+// and into the asserted Approval / LimitedApproval claims. One
+// scenario walks both shapes (unconditional + quantitative) in
+// sequence; the in-memory test suite pins the kernel semantics for
+// each branch separately.
 // ============================================================
 
 #[tokio::test]
-async fn actor_authority_full_chain_through_pg() {
+async fn approval_controls_full_chain_through_pg() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let invariants = actor_authority::all_invariants();
+    let invariants = approval_controls::all_invariants();
 
-    // 1. Admin grants jordan authority for invoices.
+    // ---------- Unconditional authority ----------
+
+    // 1. jordan is granted unconditional authority for vendor onboarding.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &actor_authority::grant_approval_authority(),
-        vec![subj("jordan"), subj("invoice")],
+        &approval_controls::grant_approval_authority(),
+        vec![subj("jordan"), subj("vendor_onboarding")],
         &invariants,
     )
     .await
-    .expect("step 1 propose_against_pg should not error");
+    .expect("grant_approval_authority should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 2. jordan proposes the approval. require Term::Actor consults
-    // jordan; assert Term::Actor stamps jordan onto the Approval.
+    // 2. jordan approves; Term::Actor stamps her onto the Approval.
     let outcome = common::propose_pg_as(
         &pool,
-        &actor_authority::approve_document(),
-        vec![subj("doc_001"), subj("invoice")],
+        &approval_controls::approve_document(),
+        vec![subj("doc_001"), subj("vendor_onboarding")],
         subj("jordan"),
         &invariants,
     )
     .await
-    .expect("step 2 propose_against_pg should not error");
+    .expect("approve_document should not error");
     let PgProposalOutcome::Committed {
-        transition_id,
+        transition_id: approve_tid,
         actor: receipt_actor,
         asserted_claims,
-        emitted_intents,
         ..
     } = outcome
     else {
-        panic!("step 2 expected Committed, got {outcome:?}");
+        panic!("expected Committed, got {outcome:?}");
     };
     assert_eq!(receipt_actor, subj("jordan"));
-    let approval = asserted_claims
-        .iter()
-        .find(|c| c.predicate == "Approval")
-        .expect("Approval should be asserted");
-    assert_eq!(
-        approval.args,
-        vec![subj("doc_001"), subj("invoice"), subj("jordan")],
-        "asserted Approval must carry the proposing actor",
-    );
-    assert_eq!(emitted_intents[0].name, "DocumentApproved");
+    assert!(asserted_claims.iter().any(|c| c.predicate == "Approval"
+        && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
 
-    // 3. The audit row records the actor durably.
+    // 3. The audit row's actor column matches.
     let audit_rows = list_audit_rows(&pool).await.unwrap();
     let approve_row = audit_rows
         .iter()
-        .find(|r| r.transition_id == transition_id)
+        .find(|r| r.transition_id == approve_tid)
         .unwrap();
     assert_eq!(approve_row.actor, subj("jordan"));
 
-    // 4. The Approval claim is queryable from the durable claim set,
-    // carrying the proposing actor as its third argument.
-    let claims = list_claims(&pool).await.unwrap();
-    assert!(
-        claims.iter().any(|c| c.predicate == "Approval"
-            && c.args == vec![subj("doc_001"), subj("invoice"), subj("jordan")]),
-        "Approval with actor must be queryable from durable claims",
-    );
-
-    // 5. alice has no authority - her approval attempt is rejected.
-    // No audit row written, no Approval claim, no DocumentApproved
-    // intent enqueued.
+    // 4. alice has no authority; her attempt is rejected. Pin that
+    // rejection leaves no durable trace: no audit row, no outbox
+    // intent. `PgProposalOutcome::Rejected` carries no transition_id;
+    // we snapshot row counts before and after to assert the negative.
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
-        &actor_authority::approve_document(),
-        vec![subj("doc_002"), subj("invoice")],
+        &approval_controls::approve_document(),
+        vec![subj("doc_002"), subj("vendor_onboarding")],
         subj("alice"),
         &invariants,
     )
     .await
-    .expect("step 5 propose_against_pg should not error");
-    let PgProposalOutcome::Rejected { reason } = outcome else {
-        panic!("alice should be rejected; got {outcome:?}");
-    };
-    assert!(reason.contains("require"), "got reason: {reason}");
-
-    // 6. Authority revoked. Jordan's earlier approval is preserved
-    // (require-vs-invariant); her next attempt is rejected.
-    let outcome = common::propose_pg_with_test_actor(
-        &pool,
-        &actor_authority::revoke_approval_authority(),
-        vec![subj("jordan"), subj("invoice")],
-        &invariants,
-    )
-    .await
-    .expect("step 6 propose_against_pg should not error");
-    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
-
-    let claims = list_claims(&pool).await.unwrap();
-    assert!(
-        claims.iter().any(|c| c.predicate == "Approval"
-            && c.args == vec![subj("doc_001"), subj("invoice"), subj("jordan")]),
-        "historical Approval must survive authority revocation",
-    );
-    assert!(
-        !claims.iter().any(|c| c.predicate == "MayApprove"
-            && c.args == vec![subj("jordan"), subj("invoice")]),
-        "MayApprove must be gone after revoke",
-    );
-
-    let outcome = common::propose_pg_as(
-        &pool,
-        &actor_authority::approve_document(),
-        vec![subj("doc_003"), subj("invoice")],
-        subj("jordan"),
-        &invariants,
-    )
-    .await
-    .expect("step 6b propose_against_pg should not error");
+    .expect("propose should not error");
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
-}
+    assert_eq!(
+        list_audit_rows(&pool).await.unwrap().len(),
+        audit_before,
+        "rejected approval must not write an audit row",
+    );
+    assert_eq!(
+        list_pending_outbox(&pool).await.unwrap().len(),
+        outbox_before,
+        "rejected approval must not enqueue an outbox intent",
+    );
 
-// ============================================================
-// Approval limits (Example 7) - durable proof that Expr::Le flows
-// through propose_against_pg, including the round-trip of the
-// authorised amount onto the LimitedApproval claim.
-// ============================================================
+    // ---------- Quantitative authority ----------
 
-#[tokio::test]
-async fn approval_limits_full_chain_through_pg() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-
-    let invariants = approval_limits::all_invariants();
-
-    // 1. Admin grants jordan an invoice limit of 1000.
+    // 5. jordan is granted an invoice limit of 1000.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &approval_limits::grant_approval_limit(),
+        &approval_controls::grant_approval_limit(),
         vec![subj("jordan"), subj("invoice"), dec(1000)],
         &invariants,
     )
     .await
-    .expect("step 1 propose_against_pg should not error");
+    .expect("grant_approval_limit should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 2. jordan approves an invoice within the limit.
+    // 6. jordan approves a 750 invoice; Expr::Le admits. Pin the full
+    // round-trip: receipt actor, asserted claim, emitted intent
+    // staged to the outbox, and the audit row's actor column.
     let outcome = common::propose_pg_as(
         &pool,
-        &approval_limits::approve_within_limit(),
+        &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(750)],
         subj("jordan"),
         &invariants,
     )
     .await
-    .expect("step 2 propose_against_pg should not error");
+    .expect("approve_within_limit should not error");
     let PgProposalOutcome::Committed {
-        actor: receipt_actor,
+        transition_id: limit_approve_tid,
+        actor: limit_receipt_actor,
         asserted_claims,
+        emitted_intents,
         ..
     } = outcome
     else {
-        panic!("step 2 expected Committed, got {outcome:?}");
+        panic!("expected Committed");
     };
-    assert_eq!(receipt_actor, subj("jordan"));
-    let approval = asserted_claims
+    assert_eq!(limit_receipt_actor, subj("jordan"));
+    assert!(
+        asserted_claims
+            .iter()
+            .any(|c| c.predicate == "LimitedApproval"
+                && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")])
+    );
+    assert!(
+        emitted_intents
+            .iter()
+            .any(|i| i.name == "DocumentApprovedWithinLimit"),
+        "approve_within_limit must emit DocumentApprovedWithinLimit",
+    );
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    let limit_row = audit_rows
         .iter()
-        .find(|c| c.predicate == "LimitedApproval")
-        .expect("LimitedApproval should be asserted");
-    assert_eq!(
-        approval.args,
-        vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")],
-        "LimitedApproval must carry doc_id, doc_type, amount, and proposing actor",
+        .find(|r| r.transition_id == limit_approve_tid)
+        .expect("audit row for approve_within_limit must exist");
+    assert_eq!(limit_row.actor, subj("jordan"));
+    assert!(
+        list_pending_outbox(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.intent_type == "DocumentApprovedWithinLimit"),
+        "DocumentApprovedWithinLimit intent must be staged to the outbox",
     );
 
-    // 3. jordan tries to approve above the limit. Rejected at require.
+    // 7. An over-limit attempt is rejected at require. Same negative
+    // pin as step 4: no audit row, no outbox row.
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
-        &approval_limits::approve_within_limit(),
+        &approval_controls::approve_within_limit(),
         vec![subj("inv_over"), subj("invoice"), dec(2000)],
         subj("jordan"),
         &invariants,
     )
     .await
-    .expect("step 3 propose_against_pg should not error");
-    let PgProposalOutcome::Rejected { reason } = outcome else {
-        panic!("amount above limit must be rejected; got {outcome:?}");
-    };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    .expect("propose should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(list_audit_rows(&pool).await.unwrap().len(), audit_before);
+    assert_eq!(
+        list_pending_outbox(&pool).await.unwrap().len(),
+        outbox_before
+    );
 
-    // 4. Durable claim set carries jordan's approval, not the
-    // rejected one.
+    // ---------- Durable cross-cuts ----------
+
     let claims = list_claims(&pool).await.unwrap();
+    assert!(claims.iter().any(|c| c.predicate == "Approval"
+        && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
     assert!(claims.iter().any(|c| c.predicate == "LimitedApproval"
         && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")]));
+    // The two rejected attempts left no trace.
+    assert!(!claims.iter().any(|c| c.predicate == "Approval"
+        && c.args == vec![subj("doc_002"), subj("vendor_onboarding"), subj("alice")]));
     assert!(!claims.iter().any(|c| c.predicate == "LimitedApproval"
         && c.args == vec![subj("inv_over"), subj("invoice"), dec(2000), subj("jordan")]));
 
-    // 5. Audit log records the actor on the committed approval.
-    let audit_rows = list_audit_rows(&pool).await.unwrap();
-    let approve_row = audit_rows
-        .iter()
-        .find(|r| r.transformation_name == "approve_within_limit")
-        .expect("approve_within_limit audit row should exist");
-    assert_eq!(approve_row.actor, subj("jordan"));
+    // ---------- Require-vs-invariant: history survives revocation ----------
+
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &approval_controls::revoke_approval_authority(),
+        vec![subj("jordan"), subj("vendor_onboarding")],
+        &invariants,
+    )
+    .await
+    .expect("revoke should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    let claims_after_revoke = list_claims(&pool).await.unwrap();
+    assert!(claims_after_revoke.iter().any(|c| c.predicate == "Approval"
+        && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
+    assert!(
+        !claims_after_revoke
+            .iter()
+            .any(|c| c.predicate == "MayApprove"
+                && c.args == vec![subj("jordan"), subj("vendor_onboarding")])
+    );
 }

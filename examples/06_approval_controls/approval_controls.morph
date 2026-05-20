@@ -1,0 +1,70 @@
+-- Approval controls (v0).
+--
+-- Two authority shapes a real business uses side by side:
+--
+--   * Unconditional authority - "may sign off on documents of this
+--     kind". Vendor onboarding, policy changes, anything that is not
+--     about amounts. The actor either holds the authority or they
+--     do not.
+--
+--   * Quantitative authority - "may approve documents of this kind
+--     up to this amount". A clerk approves invoices up to £1,000;
+--     a director up to £100,000. Different ceilings for different
+--     people for different document kinds.
+--
+-- Both shapes share one doctrine point. The actor approving a
+-- document is *transition context*, not a transformation parameter.
+-- The approve transformations declare no `actor` parameter; the
+-- proposing actor is reached from inside the body via the reserved
+-- term `$actor` (Term::Actor in the IR). In an invariant body,
+-- `$actor` raises UnboundActor at evaluation time - authority lives
+-- in require, not in invariants.
+--
+-- No invariants. Tying a recorded approval to live authority via
+-- an invariant would either reject every revocation (because
+-- historical approvals now break the rule) or cascade-retract those
+-- historical approvals (which destroys the record). A document
+-- approved on June 30 stays approved even if the approver leaves
+-- on July 1. This is the require-vs-invariant lesson from Example 3.
+
+
+-- ===========================================================
+-- Unconditional authority
+-- ===========================================================
+
+transformation grant_approval_authority(actor, doc_type):
+    assert MayApprove(actor, doc_type)
+    emit ApprovalAuthorityGranted(actor, doc_type)
+
+
+transformation revoke_approval_authority(actor, doc_type):
+    require MayApprove(actor, doc_type)
+    retract MayApprove(actor, doc_type)
+    emit ApprovalAuthorityRevoked(actor, doc_type)
+
+
+transformation approve_document(doc_id, doc_type):
+    require MayApprove($actor, doc_type)
+    assert Approval(doc_id, doc_type, $actor)
+    emit DocumentApproved(doc_id, $actor)
+
+
+-- ===========================================================
+-- Quantitative authority
+-- ===========================================================
+
+transformation grant_approval_limit(actor, doc_type, limit):
+    assert ApprovalLimit(actor, doc_type, limit)
+    emit ApprovalLimitGranted(actor, doc_type, limit)
+
+
+transformation revoke_approval_limit(actor, doc_type, limit):
+    require ApprovalLimit(actor, doc_type, limit)
+    retract ApprovalLimit(actor, doc_type, limit)
+    emit ApprovalLimitRevoked(actor, doc_type, limit)
+
+
+transformation approve_within_limit(doc_id, doc_type, amount):
+    require ApprovalLimit($actor, doc_type, limit) and amount <= limit
+    assert LimitedApproval(doc_id, doc_type, amount, $actor)
+    emit DocumentApprovedWithinLimit(doc_id, $actor, amount)
