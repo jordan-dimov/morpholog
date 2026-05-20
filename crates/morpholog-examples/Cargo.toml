@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 morpholog-core = { path = "../morpholog-core" }
+
+[dev-dependencies]
 rust_decimal = { workspace = true }
 
 [lints]

@@ -1665,9 +1665,4 @@ mod tests {
             "every Expr variant that carries a predicate reference must contribute it"
         );
     }
-
-    // The trial-balance derived claim's predicate-footprint sanity
-    // check lived here when `examples` was a module of this crate. It
-    // moved to `morpholog-examples/tests/derived_claims.rs` along with
-    // the example modules.
 }
