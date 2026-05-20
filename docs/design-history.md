@@ -200,7 +200,7 @@ The other sketch leans that held into implementation:
 
 ### `Transition` value object and `audit.actor` (forced ahead of an example)
 
-**Honest disclosure:** this entry is the first deviation from the strict "forced by a worked example" discipline. The shape was paid for in PR #35 *before* an example required it. Recorded here so the deviation is visible rather than rationalised after the fact.
+The first deviation from "forced by a worked example": the shape was paid for in PR #35 before an example required it. The reasoning is in *Why pay this cost up front* below.
 
 **The pressure:** Example 3 left question 2 from the README - *who admitted this entry, and under what authority?* - only half answered. Audit rows recorded transformation, arguments, asserted/retracted claims, and the invariants that governed admission, but no actor identity. Closing the remaining half cleanly requires every committed transition to carry an actor; that in turn requires either (a) every transformation grows an `actor` parameter, polluting every domain payload, or (b) actor lives as transition context separate from the transformation's argument list.
 
