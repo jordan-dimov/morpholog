@@ -1862,7 +1862,12 @@ async fn approval_controls_full_chain_through_pg() {
         .unwrap();
     assert_eq!(approve_row.actor, subj("jordan"));
 
-    // 4. alice has no authority; her attempt is rejected.
+    // 4. alice has no authority; her attempt is rejected. Pin that
+    // rejection leaves no durable trace: no audit row, no outbox
+    // intent. `PgProposalOutcome::Rejected` carries no transition_id;
+    // we snapshot row counts before and after to assert the negative.
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
         &approval_controls::approve_document(),
@@ -1873,6 +1878,16 @@ async fn approval_controls_full_chain_through_pg() {
     .await
     .expect("propose should not error");
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(
+        list_audit_rows(&pool).await.unwrap().len(),
+        audit_before,
+        "rejected approval must not write an audit row",
+    );
+    assert_eq!(
+        list_pending_outbox(&pool).await.unwrap().len(),
+        outbox_before,
+        "rejected approval must not enqueue an outbox intent",
+    );
 
     // ---------- Quantitative authority ----------
 
@@ -1887,8 +1902,9 @@ async fn approval_controls_full_chain_through_pg() {
     .expect("grant_approval_limit should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 6. jordan approves a 750 invoice; Expr::Le admits, the proposing
-    // actor and authorised amount land on LimitedApproval.
+    // 6. jordan approves a 750 invoice; Expr::Le admits. Pin the full
+    // round-trip: receipt actor, asserted claim, emitted intent
+    // staged to the outbox, and the audit row's actor column.
     let outcome = common::propose_pg_as(
         &pool,
         &approval_controls::approve_within_limit(),
@@ -1899,19 +1915,47 @@ async fn approval_controls_full_chain_through_pg() {
     .await
     .expect("approve_within_limit should not error");
     let PgProposalOutcome::Committed {
-        asserted_claims, ..
+        transition_id: limit_approve_tid,
+        actor: limit_receipt_actor,
+        asserted_claims,
+        emitted_intents,
+        ..
     } = outcome
     else {
         panic!("expected Committed");
     };
+    assert_eq!(limit_receipt_actor, subj("jordan"));
     assert!(
         asserted_claims
             .iter()
             .any(|c| c.predicate == "LimitedApproval"
                 && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")])
     );
+    assert!(
+        emitted_intents
+            .iter()
+            .any(|i| i.name == "DocumentApprovedWithinLimit"),
+        "approve_within_limit must emit DocumentApprovedWithinLimit",
+    );
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    let limit_row = audit_rows
+        .iter()
+        .find(|r| r.transition_id == limit_approve_tid)
+        .expect("audit row for approve_within_limit must exist");
+    assert_eq!(limit_row.actor, subj("jordan"));
+    assert!(
+        list_pending_outbox(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.intent_type == "DocumentApprovedWithinLimit"),
+        "DocumentApprovedWithinLimit intent must be staged to the outbox",
+    );
 
-    // 7. An over-limit attempt is rejected at require.
+    // 7. An over-limit attempt is rejected at require. Same negative
+    // pin as step 4: no audit row, no outbox row.
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
         &approval_controls::approve_within_limit(),
@@ -1922,6 +1966,11 @@ async fn approval_controls_full_chain_through_pg() {
     .await
     .expect("propose should not error");
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(list_audit_rows(&pool).await.unwrap().len(), audit_before);
+    assert_eq!(
+        list_pending_outbox(&pool).await.unwrap().len(),
+        outbox_before
+    );
 
     // ---------- Durable cross-cuts ----------
 
