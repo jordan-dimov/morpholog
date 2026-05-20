@@ -15,9 +15,7 @@ mod common;
 
 use common::{dec, subj};
 use morpholog_core::examples::settlement_netting;
-use morpholog_core::{
-    ClaimInstance, EvalValue, Expr, Outcome, State, Stmt, eval_invariant, propose,
-};
+use morpholog_core::{ClaimInstance, EvalValue, Expr, Outcome, State, Stmt, eval_invariant};
 
 // ============================================================
 // IR shape — the example's invariants and transformation look
@@ -208,7 +206,7 @@ fn netting_args() -> Vec<EvalValue> {
 fn propose_accepts_well_formed_netting() {
     let pre = netting_pre_state(vec![]);
     let t = settlement_netting::create_net_settlement();
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &t,
         netting_args(),
         &pre,
@@ -248,7 +246,7 @@ fn propose_rejects_when_line_already_netted() {
     }];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &t,
         netting_args(),
         &pre,
@@ -274,7 +272,7 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     }];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
-    let outcome = propose(
+    let outcome = common::propose_with_test_actor(
         &t,
         netting_args(),
         &pre,

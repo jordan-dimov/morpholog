@@ -35,7 +35,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    EvalValue, State, enumerate_derived, examples::double_entry_ledger,
+    EvalValue, State, Transition, enumerate_derived, examples::double_entry_ledger,
     predicates_referenced_by_derived,
 };
 use morpholog_postgres::{
@@ -209,10 +209,10 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     let t = Instant::now();
-    let outcome = propose_against_pg(
-        &pool,
-        &double_entry_ledger::post_simple_entry(),
-        vec![
+    let transformation = double_entry_ledger::post_simple_entry();
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: vec![
             subj("entry_bench_target"),
             subj("d_2026_05_17"),
             subj("p_bench"),
@@ -220,6 +220,12 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
             subj("account_revenue"),
             dec(42),
         ],
+        actor: EvalValue::Subject("bench".to_string()),
+    };
+    let outcome = propose_against_pg(
+        &pool,
+        &transformation,
+        &transition,
         &double_entry_ledger::all_invariants(),
     )
     .await

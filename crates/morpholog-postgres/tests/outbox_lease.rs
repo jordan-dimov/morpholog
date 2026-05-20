@@ -15,11 +15,13 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use morpholog_core::EvalValue;
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
-    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row, propose_against_pg,
+    OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row,
     release_outbox_claim,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -55,7 +57,7 @@ fn dec(n: i64) -> EvalValue {
 /// `status='pending'`, no lease held, no `next_attempt_at`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     let invariants = double_entry_ledger::all_invariants();
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
         vec![

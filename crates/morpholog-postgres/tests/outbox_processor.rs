@@ -31,10 +31,11 @@ use morpholog_core::examples::double_entry_ledger;
 use morpholog_postgres::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
     ProcessOutcome, list_audit_rows, list_pending_outbox, process_one_outbox_row,
-    propose_against_pg,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -66,7 +67,7 @@ fn dec(n: i64) -> EvalValue {
 }
 
 async fn commit_post_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
-    let outcome = propose_against_pg(
+    let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
         vec![

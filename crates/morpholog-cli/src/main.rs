@@ -36,6 +36,7 @@
 
 use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
+use morpholog_core::{EvalValue, Transition};
 use morpholog_postgres::{
     PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_claims_at, list_derived,
     list_derived_at, list_pending_outbox, propose_against_pg,
@@ -177,6 +178,14 @@ struct ProposeArgs {
     #[arg(long)]
     args: String,
 
+    /// Subject value identifying the actor under whose authority this
+    /// transition is being proposed. Free-form subject string (e.g.
+    /// `jordan`, `user:jordan`, `desk:fx_spot`); the CLI wraps it as
+    /// an `EvalValue::Subject`. Persisted to `morpholog.audit.actor`
+    /// on commit. Required: every transition carries an actor.
+    #[arg(long)]
+    actor: String,
+
     /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
@@ -300,7 +309,12 @@ async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
     // should grow a small bounded-retry loop. Deferred until concurrent
     // CLI use is actually pressured.
     let pool = connect(&args.database_url).await?;
-    let outcome = propose_against_pg(&pool, transformation, eval_args, &program.invariants)
+    let transition = Transition {
+        transformation_name: transformation.name.clone(),
+        args: eval_args,
+        actor: EvalValue::Subject(args.actor.clone()),
+    };
+    let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
         .await
         .context("propose_against_pg failed")?;
 
@@ -623,6 +637,8 @@ mod tests {
             "post_simple_entry",
             "--args",
             "[]",
+            "--actor",
+            "jordan",
             "--database-url",
             "postgres:///morpholog_dev",
         ]);
@@ -632,6 +648,7 @@ mod tests {
         assert_eq!(args.program, "double_entry_ledger");
         assert_eq!(args.transformation, "post_simple_entry");
         assert_eq!(args.args, "[]");
+        assert_eq!(args.actor, "jordan");
         assert_eq!(args.database_url, "postgres:///morpholog_dev");
     }
 
@@ -642,10 +659,28 @@ mod tests {
             "propose",
             "double_entry_ledger",
             "post_simple_entry",
+            "--actor",
+            "jordan",
             "--database-url",
             "postgres:///morpholog_dev",
         ])
         .expect_err("missing --args should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn propose_missing_actor_flag_errors() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "propose",
+            "double_entry_ledger",
+            "post_simple_entry",
+            "--args",
+            "[]",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ])
+        .expect_err("missing --actor should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
@@ -658,6 +693,8 @@ mod tests {
             // missing transformation positional
             "--args",
             "[]",
+            "--actor",
+            "jordan",
             "--database-url",
             "postgres:///morpholog_dev",
         ])

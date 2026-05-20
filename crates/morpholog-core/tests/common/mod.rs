@@ -8,7 +8,8 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{
-    ClaimInstance, EvalValue, Invariant, Outcome, State, Transformation, propose,
+    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Transformation, Transition,
+    propose,
 };
 use rust_decimal::Decimal;
 
@@ -27,13 +28,40 @@ pub fn claim_instance(pred: &str, args: &[EvalValue]) -> ClaimInstance {
     }
 }
 
+pub fn test_actor() -> EvalValue {
+    subj("test_actor")
+}
+
+pub fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
+    Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor: test_actor(),
+    }
+}
+
+/// Convenience for tests that previously called `propose(t, args, ...)`
+/// directly. Constructs a `Transition` with the shared `test_actor()`
+/// and forwards to `propose`. Lets test sites keep their old shape
+/// after the `propose` signature change.
+pub fn propose_with_test_actor(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    pre: &State,
+    invariants: &[Invariant],
+) -> Result<Outcome, EvalError> {
+    let transition = test_transition(t, args);
+    propose(t, &transition, pre, invariants)
+}
+
 pub fn must_accept(
     t: &Transformation,
     args: Vec<EvalValue>,
     pre: State,
     invariants: &[Invariant],
 ) -> State {
-    match propose(t, args, &pre, invariants).expect("propose should not error") {
+    let transition = test_transition(t, args);
+    match propose(t, &transition, &pre, invariants).expect("propose should not error") {
         Outcome::Accepted {
             candidate_state, ..
         } => candidate_state,

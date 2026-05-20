@@ -22,11 +22,11 @@
 
 use morpholog_core::examples::double_entry_ledger;
 use morpholog_core::{EvalValue, IntentInstance, Invariant, Transformation};
-use morpholog_postgres::{
-    PgPool, PgProposalOutcome, list_audit_rows, list_pending_outbox, propose_against_pg,
-};
+use morpholog_postgres::{PgPool, PgProposalOutcome, list_audit_rows, list_pending_outbox};
 use rust_decimal::Decimal;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -204,9 +204,13 @@ async fn process_one_pending(
             // ledger never lies: an auditor reading the audit log
             // will see commit -> failure -> compensation.
             if let Some(comp) = compensation {
-                let outcome =
-                    propose_against_pg(pool, &comp.transformation, comp.args, &comp.invariants)
-                        .await?;
+                let outcome = common::propose_pg_with_test_actor(
+                    pool,
+                    &comp.transformation,
+                    comp.args,
+                    &comp.invariants,
+                )
+                .await?;
                 match outcome {
                     PgProposalOutcome::Committed { transition_id, .. } => Ok(Some(transition_id)),
                     PgProposalOutcome::Rejected { reason } => {
@@ -245,7 +249,7 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     //    cash debit 100, revenue credit 100. This commits and
     //    enqueues a JournalEntryPosted intent.
     let tid_commit = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             &pool,
             &double_entry_ledger::post_simple_entry(),
             vec![
@@ -357,7 +361,7 @@ async fn outbox_spike_marks_delivered_on_success() {
     // 1. Commit a transformation. Same shape as the failure test;
     //    the difference is the deliverer below.
     let _tid = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             &pool,
             &double_entry_ledger::post_simple_entry(),
             vec![

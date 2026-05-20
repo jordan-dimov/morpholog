@@ -16,10 +16,12 @@ use morpholog_core::examples::{double_entry_ledger, revenue_restatement};
 use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, list_claims, list_claims_at, list_derived, list_derived_at,
-    propose_against_pg, reconstruct_state_at,
+    reconstruct_state_at,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
+
+mod common;
 
 // ============================================================
 // Test infrastructure
@@ -71,7 +73,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let period = subj("p_as_of");
 
     let tid1 = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             pool,
             &double_entry_ledger::post_simple_entry(),
             vec![
@@ -89,7 +91,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     );
 
     let tid2 = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             pool,
             &double_entry_ledger::post_simple_entry(),
             vec![
@@ -107,7 +109,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     );
 
     let tid3 = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             pool,
             &double_entry_ledger::restate_entry(),
             vec![
@@ -318,7 +320,7 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     // tid; ask for the trial balance as of THIS tid.
     let invariants = revenue_restatement::all_invariants();
     let new_tid = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             &pool,
             &revenue_restatement::admit_independent_verification(),
             vec![
@@ -426,7 +428,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
 
     // Step 1: admit IV at 92.
     let _tid1 = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             &pool,
             &revenue_restatement::admit_independent_verification(),
             vec![asset.clone(), period.clone(), dec(92), subj("ver_001")],
@@ -438,7 +440,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
 
     // Step 2: recognise bank revenue at 92, with rec_001.
     let tid2 = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             &pool,
             &revenue_restatement::recognise_bank_revenue(),
             vec![asset.clone(), period.clone(), dec(92), subj("rec_001")],
@@ -452,7 +454,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     // transformation retracts CurrentBankRecognition as part of its
     // body - the contested-legitimacy semantics from PR #6.
     let tid3 = expect_committed(
-        propose_against_pg(
+        common::propose_pg_with_test_actor(
             &pool,
             &revenue_restatement::correct_independent_verification(),
             vec![asset, period, dec(91), subj("ver_002"), subj("ver_001")],
