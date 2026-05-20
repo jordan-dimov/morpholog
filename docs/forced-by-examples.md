@@ -95,7 +95,7 @@ Each entry below was actively considered during one of the early examples and de
 | `ReliedOnBy(decision_id, claim_id)` decision-snapshot pattern | Example 3's simpler `require`-based design proved sufficient; the snapshot pattern adds a third "claims-about-claims-about-claims" layer that would only earn its keep when the simple model breaks. |
 | `RevocationLifted` claim or grant-supersession to allow re-grant | Example 3 makes revocation terminal in v0. Re-granting after revocation would need a clear lifecycle model; deferred until a real example forces it. |
 | Temporal qualification claims (`OccurredOn`, `EffectiveFor`, `KnownAsOf`) | Mentioned in `scope-and-ambition.md` as candidates for the as-of operator. No example yet needs them. |
-| Actor context on transformations | Mentioned in `scope-and-ambition.md`. No example yet needs it. |
+| Actor context (consultation from invariants/requires via `Term::Actor`) | Mentioned in `scope-and-ambition.md`. No example yet needs it. Identity plumbing landed early; see the `Transition` entry below. |
 | Cascading retraction of historical decisions on standing revocation | Considered as option B for Example 3's design; rejected because it contradicts the "history is preserved" rule. |
 | Sharing IR fixture helpers across example modules | The `morpholog_core::examples::*` modules each re-declare their own IR fixtures; they happen to use the same predicate names (e.g. `IndependentlyVerifiedRevenue` in Examples 2 and 3) without sharing constructor code. Keeps examples independent. |
 | Per-example PostgreSQL schemas | All examples share `crates/morpholog-core/sql/schema.sql`. The schema is canonical runtime infrastructure (`claims`, `audit`, `outbox`); examples differ in which predicates they admit into those tables, not in their storage shape. |
@@ -187,3 +187,26 @@ The other sketch leans that held into implementation:
 **Pattern note:** this is the third instance of the same shape: a hot path used a `Vec` with linear scans for membership; replacing the membership check with a HashMap-backed structure made it amortised O(1). PR #23's predicate index on `State`, PR #25's predicate-scoped loading working set, and now PR #28-followup's `ReplaySet`. The pattern is the same; the venue moves with the workload. Worth recognising rather than re-discovering each time.
 
 **Implication for future examples:** the audit-replay path now scales for any workload that fits in memory (~300K claims at the current per-claim size is ~50 MB working state). Further scale concerns are about *fetching* the audit rows (Copilot #5: streaming sqlx queries instead of `fetch_all`), about *re-replaying* large logs repeatedly (snapshots / materialisation), or about retraction-heavy workloads (the ReplaySet already handles them O(1); the bench should add a retraction-heavy fixture to confirm empirically). None of these is forced today.
+
+### `Transition` value object and `audit.actor` (forced ahead of an example)
+
+**Honest disclosure:** this entry is the first deviation from the strict "forced by a worked example" discipline. The shape was paid for in PR #35 *before* an example required it. Recorded here so the deviation is visible rather than rationalised after the fact.
+
+**The pressure:** Example 3 left question 2 from the README - *who admitted this entry, and under what authority?* - only half answered. Audit rows recorded transformation, arguments, asserted/retracted claims, and the invariants that governed admission, but no actor identity. Closing the remaining half cleanly requires every committed transition to carry an actor; that in turn requires either (a) every transformation grows an `actor` parameter, polluting every domain payload, or (b) actor lives as transition context separate from the transformation's argument list.
+
+**The alternative we considered and rejected:** (a) - actor as a transformation parameter. Considered (and recommended by ChatGPT's initial review) because it is the smallest local change. Rejected because every transformation in the codebase, plus every future transformation, would have to declare and propagate an `actor` parameter that has nothing to do with its domain logic. That is the kind of cross-cutting plumbing that types-over-everything systems pay for elsewhere; option (b) keeps domain payloads clean.
+
+**What landed (PR #35):**
+
+- `Transition { transformation_name, args, actor }` in `morpholog-core`. The value object proposed against a `Transformation`. `propose()` takes `(&Transformation, &Transition, &State, &[Invariant])` and verifies that `transformation.name == transition.transformation_name`.
+- `actor: EvalValue` on `Transition`, validated at the kernel boundary to be `EvalValue::Subject(_)` (anything else surfaces as `EvalError::TypeMismatch`). Future authority work can assume actor identity is subject-shaped without a downstream defensive check.
+- `audit.actor jsonb NOT NULL` on the PostgreSQL schema; migration `004_audit_actor.sql` backfills existing rows to a sentinel `{"type":"subject","value":"unknown"}`.
+- `PgProposalOutcome::Committed.actor` so the commit receipt is self-describing; the `morpholog propose` CLI surfaces it on stdout.
+- A new required `--actor <subject>` flag on `morpholog propose`.
+- `system_actor()` helper for runtime-initiated transitions (today: the outbox compensation path). Returns `EvalValue::Subject("morpholog-system")`. A placeholder until first-class actor authority forces a lineage model that distinguishes runtime-initiated from user-initiated transitions.
+
+**What deliberately did NOT land:** `Term::Actor`. No IR construct yet consults the actor; the audit log records it but no invariant or `require` can reach for it. That lands when the first authority invariant earns it.
+
+**Why pay this cost up front:** the alternative was paying it later under more pressure, when the first authority worked example would have forced both the plumbing *and* the consultation primitive in one PR. Separating them keeps each PR honest. The two principles we hold the project to (subtract until it breaks; example forces shape) are in mild tension here, and this entry records that tension rather than papering over it.
+
+**Pattern note:** this is the first time a doctrinally-loaded refactor was paid for ahead of a worked example. The bar for doing so again is high; the test is whether the resulting code felt obviously right (it did, including in review). If a future ahead-of-example refactor leaves the codebase feeling speculatively shaped rather than obviously shaped, that is the signal that the discipline slipped.

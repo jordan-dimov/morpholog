@@ -101,18 +101,20 @@ This single primitive collapses the four temporal notions that ETRM and accounti
 
 No bitemporal schema is assumed at the modelling level. The v0 audit log already contains enough information to define as-of semantics by replay; performance may later require snapshots or materialised histories, but those are *implementation strategies* rather than *semantic primitives*. The semantics is "evaluate against the state that existed at T"; how to do that efficiently is a separate, contained question.
 
-### 4. Actor context on transformations
+### 4. Actor context on transitions
 
-A reserved `actor` parameter that every transformation may require:
+The actor under whose authority a transition is being proposed is **transition context**, not a transformation parameter. Every `Transition` carries an `actor`; the audit log persists it; an invariant or a `require` can consult it through a reserved `Term::Actor` term without each transformation having to declare it. The shape becomes:
 
 ```
-transformation approve_journal(actor, journal):
-    require HasRole(actor, finance_controller)
+transformation approve_journal(journal):
+    require HasRole($actor, finance_controller)
     require not Posted(journal)
-    assert JournalApproved(journal, actor)
+    assert JournalApproved(journal, $actor)
 ```
 
 Authority, delegation, approval limits, and segregation-of-duties are then modelled as claims (`HasRole(actor, role)`, `ApprovalAuthorityFor(actor, amount_cap)`, `DelegatedBy(delegate, delegator, scope)`), and invariants over those claims. No RBAC subsystem. No middleware. Just the affordance to put "who proposed this" into the invariant fragment, and the discipline to express authority itself as governed claims.
+
+The plumbing landed before the consultation primitive: `Transition.actor` and `audit.actor` exist today, threaded through `propose` and `propose_against_pg`. `Term::Actor` arrives when the first authority invariant earns it.
 
 ### What is not in this list
 
@@ -160,7 +162,7 @@ Proven by:
 
 The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; actor authority and approval-limit invariants for regulated workflows) is the next forced territory: see `docs/forced-by-examples.md` for the running list of what each example forced.
 
-Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor context likely follows from a worked example that needs `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims.
+Level 2 also drives the language affordances: typed predicate declarations remain candidate; derived claims are now committed in their non-recursive, non-materialised form. Actor identity is plumbed through the runtime (PR #35 added `Transition.actor` and `audit.actor`); the consultation primitive (`Term::Actor`) and the first authority invariant follow from a worked example needing `ApprovalAuthorityFor(actor, predicate_pattern, limit)`-shaped claims.
 
 ### Level 3 - Governed external and integration provenance
 
