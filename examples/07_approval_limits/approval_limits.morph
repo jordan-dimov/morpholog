@@ -1,0 +1,44 @@
+-- Approval limits - the smallest worked example exercising the
+-- decimal-comparison primitive (v0).
+--
+-- Domain: extends Example 6 (actor authority) with *quantitative*
+-- authority. Where Example 6 says "this actor may approve documents
+-- of this kind", Example 7 says "this actor may approve documents
+-- of this kind up to this amount". The shape is the natural one a
+-- business uses: a clerk approves expenses up to £1,000; a manager
+-- up to £10,000; a controller up to £100,000.
+--
+-- The forcing question: how do you say "amount <= limit" without
+-- smuggling the comparison through equality games or extending the
+-- aggregation sublanguage? `Expr::Le` is added in this PR as the
+-- single decimal-comparison primitive in the IR. `Lt`, `Gt`, `Ge`
+-- arrive when an example forces them; for approval ceilings, `<=`
+-- is what the business says.
+--
+-- No invariants. Same require-vs-invariant doctrine as Example 6:
+-- revoking a limit does not retroactively invalidate an approval
+-- that was admitted while the limit was in force.
+
+
+transformation grant_approval_limit(actor, doc_type, limit):
+    assert ApprovalLimit(actor, doc_type, limit)
+    emit ApprovalLimitGranted(actor, doc_type, limit)
+
+
+transformation revoke_approval_limit(actor, doc_type, limit):
+    require ApprovalLimit(actor, doc_type, limit)
+    retract ApprovalLimit(actor, doc_type, limit)
+    emit ApprovalLimitRevoked(actor, doc_type, limit)
+
+
+-- The transformation declares no `actor` parameter. The actor flows
+-- through transition context and is read via $actor (Term::Actor).
+--
+-- The require binds `limit` from an ApprovalLimit claim about the
+-- proposing actor and then compares it to the proposed amount via
+-- `<=`. A document worth 750 against a 1000 limit admits; one worth
+-- 1001 does not. At-the-boundary equality (amount == limit) admits.
+transformation approve_within_limit(doc_id, doc_type, amount):
+    require ApprovalLimit($actor, doc_type, limit) and amount <= limit
+    assert LimitedApproval(doc_id, doc_type, amount, $actor)
+    emit DocumentApprovedWithinLimit(doc_id, $actor, amount)
