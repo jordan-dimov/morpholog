@@ -137,35 +137,65 @@ pub async fn propose_against_pg(
     finalise_outcome(tx, transformation, transition, invariants, outcome).await
 }
 
+/// Three-way outcome returned by [`propose_against_pg_with_trace`].
+/// Distinguishes kernel-side outcomes (success, lawful rejection,
+/// kernel error) from PG-layer errors that flow through
+/// `Result::Err` (`Database`, `SerializationFailure`, `Encoding`,
+/// `InvalidState`).
+///
+/// The `KernelErrored` variant exists so the trace produced by the
+/// kernel before the error is raised is **not** discarded. This is
+/// the worst debugging case (multi-match `BindOne`, type-mismatch
+/// `DateLe`, multi-match `ValueOf`, unbound actor) and exactly the
+/// situation where the trace is most valuable; the previous
+/// `Result<(_, trace), PgError>` shape dropped it.
+#[derive(Debug, Clone)]
+pub enum PgTracedOutcome {
+    /// Kernel ran to a normal outcome (Committed or Rejected) and
+    /// the post-kernel persistence step succeeded. `trace` is the
+    /// kernel's per-statement diagnostic record.
+    Outcome {
+        outcome: PgProposalOutcome,
+        trace: Vec<TraceEntry>,
+    },
+    /// Kernel raised an [`EvalError`]. The SERIALIZABLE transaction
+    /// has been rolled back; `trace` carries every statement that
+    /// ran before the error - exactly the diagnostic surface that
+    /// would otherwise be lost.
+    KernelErrored {
+        error: EvalError,
+        trace: Vec<TraceEntry>,
+    },
+}
+
 /// `propose_against_pg` plus structured per-statement diagnostic
-/// trace. Returns the same `PgProposalOutcome` plus the
-/// `Vec<TraceEntry>` produced by the kernel's `propose_with_trace`.
+/// trace. Returns a [`PgTracedOutcome`] that carries the trace on
+/// **both** kernel success/rejection and kernel error paths.
 ///
 /// Trace preservation contract:
 ///
-/// - **Committed** / **Rejected** outcomes carry the full trace
-///   (every statement that ran plus every invariant check).
-/// - **`PgError`** is returned via `Result::Err` and **drops the
-///   trace**. This is a known v0 limitation: PG-layer errors
-///   (Database, SerializationFailure, Encoding, InvalidState,
-///   TransitionNotFound) happen outside the kernel call and have
-///   no kernel trace to preserve, but `PgError::Kernel(EvalError)`
-///   also lands here and discards what would otherwise be a
-///   useful partial trace. Callers needing the kernel-error trace
-///   should call `morpholog_core::propose_with_trace` directly
-///   against an in-memory state and reserve the PG wrapper for the
-///   ordinary commit/reject paths.
+/// - **Committed** / **Rejected** kernel outcomes -
+///   `Ok(PgTracedOutcome::Outcome { outcome, trace })`.
+/// - **Kernel error** (`EvalError` raised mid-transformation) -
+///   `Ok(PgTracedOutcome::KernelErrored { error, trace })`. The
+///   open SERIALIZABLE transaction is rolled back before returning.
+/// - **PG-layer error** (`Database`, `SerializationFailure`,
+///   `Encoding`, `InvalidState`) - `Err(PgError)`. These errors
+///   happen outside the kernel call and have no kernel trace to
+///   preserve.
 ///
-/// The CLI's `--trace` flag uses this function and emits the
-/// outcome + trace as a JSON object on stdout for committed and
-/// rejected outcomes. Kernel-error paths surface via anyhow's
-/// stderr error chain as the non-trace `propose` subcommand does.
+/// The CLI's `--trace` flag uses this function and emits a JSON
+/// object on stdout for each kernel-side variant:
+/// `{"result": <PgProposalOutcome>, "trace": [...]}` on Outcome,
+/// `{"result": {"status": "errored", "error": "..."}, "trace": [...]}`
+/// on KernelErrored. PG-layer errors surface via the existing anyhow
+/// stderr error chain.
 pub async fn propose_against_pg_with_trace(
     pool: &PgPool,
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
-) -> Result<(PgProposalOutcome, Vec<TraceEntry>), PgError> {
+) -> Result<PgTracedOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *tx)
@@ -174,24 +204,23 @@ pub async fn propose_against_pg_with_trace(
 
     let state = load_state(&mut tx).await?;
     let traced = propose_with_trace(transformation, transition, &state, invariants);
-    let (outcome, trace) = match traced {
-        TracedProposal::Completed { outcome, trace } => (outcome, trace),
-        TracedProposal::Errored { error, trace: _ } => {
-            // PR D2 limitation: trace dropped on kernel error at the
-            // PG boundary. Documented on the function rustdoc.
-            //
-            // Explicitly roll back the open SERIALIZABLE transaction
-            // before returning. The connection would eventually drop
-            // the transaction anyway, but doing it explicitly keeps
-            // the connection available sooner and surfaces any
-            // rollback-time DB failure as a `PgError::Database`
-            // rather than masking it behind the kernel error.
-            tx.rollback().await.map_err(classify)?;
-            return Err(error.into());
+    match traced {
+        TracedProposal::Completed { outcome, trace } => {
+            let outcome =
+                finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+            Ok(PgTracedOutcome::Outcome { outcome, trace })
         }
-    };
-    let outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
-    Ok((outcome, trace))
+        TracedProposal::Errored { error, trace } => {
+            // Roll back the open SERIALIZABLE transaction before
+            // returning. The transaction would drop anyway, but
+            // doing it explicitly keeps the connection available
+            // sooner and surfaces any rollback-time DB failure as a
+            // distinct `PgError::Database` rather than swallowing
+            // it.
+            tx.rollback().await.map_err(classify)?;
+            Ok(PgTracedOutcome::KernelErrored { error, trace })
+        }
+    }
 }
 
 /// Shared post-kernel persistence path used by both
@@ -279,10 +308,18 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>) -> Result<State, PgError
 /// active at admission time. Self-describing audit data is preferred over
 /// tuple compactness.
 ///
+/// Named `AuditedInvariantCheck` rather than `InvariantCheck` to
+/// disambiguate from the kernel's `TraceEntry::InvariantCheck` variant
+/// (in `morpholog_core::TraceEntry`). Both describe "an invariant was
+/// checked" but at different layers: this type is the durable audit
+/// record persisted alongside a committed transition; the kernel
+/// variant is a transient per-call diagnostic entry produced by
+/// `propose_with_trace`.
+///
 /// `Serialize` is derived so the CLI can re-emit audit rows as JSON
 /// without an intermediate hand-rolled mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InvariantCheck {
+pub struct AuditedInvariantCheck {
     pub name: String,
     pub version: u32,
 }
@@ -347,9 +384,9 @@ async fn write_accepted(
     }
 
     // Audit row.
-    let checked: Vec<InvariantCheck> = invariants
+    let checked: Vec<AuditedInvariantCheck> = invariants
         .iter()
-        .map(|inv| InvariantCheck {
+        .map(|inv| AuditedInvariantCheck {
             name: inv.name.clone(),
             version: inv.version,
         })
@@ -460,7 +497,7 @@ pub struct AuditRow {
     pub arguments: Vec<EvalValue>,
     pub actor: EvalValue,
     pub invariant_epoch: i32,
-    pub invariants_checked: Vec<InvariantCheck>,
+    pub invariants_checked: Vec<AuditedInvariantCheck>,
     pub asserted_claims: Vec<ClaimInstance>,
     pub retracted_claims: Vec<ClaimInstance>,
     pub emitted_intents: Vec<IntentInstance>,

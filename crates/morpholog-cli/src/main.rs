@@ -38,8 +38,9 @@ use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{EvalValue, Transition};
 use morpholog_postgres::{
-    PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_claims_at, list_derived,
-    list_derived_at, list_pending_outbox, propose_against_pg, propose_against_pg_with_trace,
+    PgPool, PgProposalOutcome, PgTracedOutcome, list_audit_rows, list_claims, list_claims_at,
+    list_derived, list_derived_at, list_pending_outbox, propose_against_pg,
+    propose_against_pg_with_trace,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -343,28 +344,49 @@ async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
         actor: EvalValue::Subject(args.actor.clone()),
     };
     // 5. Propose, with or without trace, and emit JSON accordingly.
-    //    Trace branch emits `{"result": ..., "trace": [...]}`; the
-    //    non-trace branch emits the bare outcome (its existing wire
-    //    shape) so scripts that parse stdout don't break.
-    let outcome = if args.trace {
-        let (outcome, trace) =
+    //    Trace branch emits `{"result": ..., "trace": [...]}` for
+    //    every kernel-side outcome (Committed, Rejected, and
+    //    Errored). Non-trace branch emits the bare outcome (its
+    //    existing wire shape) so scripts that parse stdout don't
+    //    break. PG-layer errors surface via anyhow on both branches.
+    if args.trace {
+        let traced =
             propose_against_pg_with_trace(&pool, transformation, &transition, &program.invariants)
                 .await
                 .context("propose_against_pg_with_trace failed")?;
-        print_json(&serde_json::json!({
-            "result": &outcome,
-            "trace": &trace,
-        }))?;
-        outcome
+        match traced {
+            PgTracedOutcome::Outcome { outcome, trace } => {
+                print_json(&serde_json::json!({
+                    "result": &outcome,
+                    "trace": &trace,
+                }))?;
+                if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
+                    std::process::exit(1);
+                }
+            }
+            PgTracedOutcome::KernelErrored { error, trace } => {
+                // Kernel error with structured trace preserved. Emit
+                // a tagged "errored" result alongside the trace so
+                // downstream JSON consumers can distinguish from a
+                // lawful rejection, then exit non-zero.
+                print_json(&serde_json::json!({
+                    "result": {
+                        "status": "errored",
+                        "error": format!("{error}"),
+                    },
+                    "trace": &trace,
+                }))?;
+                std::process::exit(1);
+            }
+        }
     } else {
         let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
             .await
             .context("propose_against_pg failed")?;
         print_json(&outcome)?;
-        outcome
-    };
-    if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
-        std::process::exit(1);
+        if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
+            std::process::exit(1);
+        }
     }
     Ok(())
 }

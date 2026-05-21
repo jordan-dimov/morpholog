@@ -544,3 +544,43 @@ The fix is a structured per-statement trace.
 - Persisting trace to the audit log. Out of scope.
 
 **Pattern note:** PR D2 is the closing piece of the refactor arc. The arc removed authoring friction without weakening the kernel discipline; the next substantive PR should either force a new IR primitive via a worked example, or address expression-internal tracing if a real debugging scenario demands the conjunct-level capability.
+
+### `PgTracedOutcome` + kernel-core module split + small cleanups
+
+**Forced by:** the closing-loop work after the trace arc. PR D2 documented the limitation that `propose_against_pg_with_trace` dropped the trace on `PgError::Kernel(EvalError)` - exactly the case where the trace is most valuable. With the trace surface settled, the cleaner shape became available without further design risk. Bundled with two structural improvements: splitting `morpholog-core`'s 3,800-line `lib.rs` into focused submodules, and renaming a name collision between two `InvariantCheck` types at different layers.
+
+**The PgTracedOutcome shape.** Replaces `Result<(PgProposalOutcome, Vec<TraceEntry>), PgError>` with `Result<PgTracedOutcome, PgError>` where `PgTracedOutcome` is `Outcome { outcome, trace } | KernelErrored { error, trace }`. Kernel-side outcomes (commit/reject/error) flow through `Ok`; PG-layer errors (Database, SerializationFailure, Encoding, InvalidState) flow through `Err`. The kernel-errored path explicitly rolls back the open SERIALIZABLE transaction before returning so the connection is released eagerly and any rollback-time DB failure surfaces as a distinct `PgError::Database` rather than being swallowed.
+
+**The CLI three-way fork.** `morpholog propose --trace` now emits a structured JSON object for every kernel-side outcome:
+- Committed / Rejected: `{"result": <PgProposalOutcome>, "trace": [...]}` (existing shape).
+- Kernel errored: `{"result": {"status": "errored", "error": "..."}, "trace": [...]}` (new). Exit code 1.
+- PG-layer errors still surface via the existing anyhow stderr chain.
+
+**The module split.** `morpholog-core/src/lib.rs` was 3,812 lines including 1,420 lines of inline tests. Split into focused submodules: `ir` (IR types), `state` (runtime state types), `eval` (the evaluator), `propose` (transformation execution + trace types), `derive` (invariant + derived-claim evaluation), `validate` (`Program::validate` machinery), `analysis` (predicate walkers, with the new `predicates_referenced_by_stmt`). Tests stayed inline in `lib.rs` with `pub(crate)` on items they touch; redistributing 40 tests across 7 modules was rejected on smallest-increment grounds. `lib.rs` is now ~1,500 lines (module declarations, re-exports, and tests) - the navigation win is the major change; the test surface stayed coherent.
+
+**predicates_referenced_by_stmt.** New analysis walker matching the existing `predicates_referenced_by_expr` and `predicates_referenced_by_derived` but at the statement layer. Unblocks a future predicate-scoped loading optimisation on `propose_against_pg`'s write path - currently the full claim table is loaded; with statement-level scoping, only the predicates a specific transformation actually touches need to load.
+
+**InvariantCheck rename.** `morpholog_postgres::InvariantCheck` (the audit-row entry persisted alongside committed transitions) is renamed to `AuditedInvariantCheck` to disambiguate from `morpholog_core::TraceEntry::InvariantCheck` (the kernel's per-call diagnostic entry). Same concept name; different layer; the rename surfaces the distinction.
+
+**Considered and rejected:**
+
+- *Redistributing the 1,420-line inline test module across submodule `mod tests` blocks.* The Rust-idiomatic shape; rejected because the test module's `super::*` import currently gives all production items at the kernel root, and breaking that up into per-module test trees would touch 40 tests for navigation gain only. The `pub(crate)` upgrade on internals plus explicit `use crate::eval::*` in the test module is the minimal change.
+- *Removing `PgError::Kernel`.* With the new shape, `propose_against_pg_with_trace` no longer produces `PgError::Kernel`. But `propose_against_pg` (non-trace) still does, so the variant stays.
+- *Adding `PartialEq` / `Eq` to `PgTracedOutcome`.* Would transitively require them on `PgProposalOutcome` (currently `Serialize`-only) and on its `EvalValue`/`ClaimInstance` contents. Not needed for the test patterns (which all destructure via `let-else`), so dropped from the derive.
+- *Splitting outbox machinery out of `morpholog-postgres/src/lib.rs` (1,984 lines).* Worth doing as its own PR; the same kind of mechanical change but on a different file. Not in this PR.
+
+**What landed:**
+
+- `PgTracedOutcome` enum in `morpholog-postgres`. `propose_against_pg_with_trace` returns it. Explicit `tx.rollback()` on the kernel-error branch.
+- CLI `--trace` flag handles the three-way fork (Outcome / KernelErrored / PG error).
+- `morpholog-core` split into `ir`, `state`, `eval`, `propose`, `derive`, `validate`, `analysis` submodules. `lib.rs` is now a slim re-export surface + tests.
+- New `predicates_referenced_by_stmt` walker in `analysis.rs`.
+- `morpholog_postgres::InvariantCheck` -> `AuditedInvariantCheck` rename.
+- New PG integration test pinning the kernel-errored trace-preservation contract end-to-end against PostgreSQL.
+
+**What deliberately did NOT land:**
+
+- Test redistribution across kernel submodules. Deferred as a navigation-quality follow-on.
+- `morpholog-postgres` outbox extraction. Deferred; same kind of work.
+- `enumerate_derived_with_trace`. Out of scope.
+- Expression-internal tracing. Still PR E territory.
