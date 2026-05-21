@@ -614,11 +614,11 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 - `compute_load_scope` helper in `morpholog-postgres/src/lib.rs`.
 - Both PG-adapter `propose` entry points call `compute_load_scope` before loading.
 - Kernel test pinning the read-set contract (`Stmt::Assert` excluded; `Stmt::Retract` included; sanity-check that the broad walker still includes `Assert`).
-- PG integration test: noise claims of an unreferenced predicate must not affect the outcome.
-- Parity: all 23 PG integration tests pass unchanged under scoped loading.
+- PG integration test: noise claims of an unreferenced predicate must not affect the outcome - assertions extended (per Copilot's review on PR #54) to pin the full Committed outcome shape against the no-noise baseline, not just `matches!(Committed)`.
+- Parity: all 23 pre-existing PG integration tests pass unchanged under scoped loading.
+- `--noise-claims K` flag on `morpholog-bench` to make the perf win visible. The bench README's "Observations" section now carries a four-row comparison (scoped vs. unscoped, with and without noise) at `N = 100 000`: with 200 000 noise claims, unscoped `propose_one` grows by ~54% (1 667 -> 2 562 ms) while scoped `propose_one` stays flat at ~1 600 ms.
 
 **What deliberately did NOT land:**
 
 - `predicates_written_by_stmt`. No forcing consumer.
-- Bench update. The bench is destructive (per CLAUDE.md) and not in CI; user should re-run it to validate the perf claim against a real 100K-claim ledger.
-- Fresh benchmark numbers in the bench README's table. The README prose now describes the scoped behaviour and flags that the existing table predates this work, but the numeric table itself stays unchanged until the bench is re-run (destructive, user-driven).
+- A `--noise-claims` axis on the `as-of` scenario. Its fixture bypasses `propose_against_pg` (audit rows are fabricated directly), so noise-tolerance is not a fair comparison there; this can come if `reconstruct_state_at_for_predicates` ever needs benchmarking under noise pressure.

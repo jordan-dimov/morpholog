@@ -97,6 +97,22 @@ struct ScenarioArgs {
     #[arg(long, default_value_t = 2)]
     accounts: usize,
 
+    /// Number of "noise" claims of an `UnrelatedNoise` predicate to
+    /// pre-populate alongside the ledger fixture. The predicate is
+    /// never referenced by `post_simple_entry`'s body or by any
+    /// invariant in the double-entry-ledger programme, so a correct
+    /// scoped `load_state` must skip these rows entirely; on an
+    /// older unscoped `load_state`, they show up linearly in
+    /// fetch + decode time.
+    ///
+    /// Default is `0` (no noise). Set to a value comparable to or
+    /// larger than `3 * N` to expose the predicate-scoping win on
+    /// the write path; with `noise-claims 0` and `N` large, the
+    /// fixture is the same shape as before this flag landed and
+    /// the scoped vs. unscoped difference is invisible.
+    #[arg(long, default_value_t = 0)]
+    noise_claims: usize,
+
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
     #[arg(long, env = "DATABASE_URL")]
@@ -201,11 +217,15 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
-    println!("scenario=write n={} accounts={}", args.n, args.accounts);
+    println!(
+        "scenario=write n={} accounts={} noise_claims={}",
+        args.n, args.accounts, args.noise_claims
+    );
 
     let t = Instant::now();
     reset_db(&pool).await?;
     insert_n_entries(&pool, args.n, args.accounts).await?;
+    insert_noise_claims(&pool, args.noise_claims).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     let t = Instant::now();
@@ -248,11 +268,15 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
-    println!("scenario=read n={} accounts={}", args.n, args.accounts);
+    println!(
+        "scenario=read n={} accounts={} noise_claims={}",
+        args.n, args.accounts, args.noise_claims
+    );
 
     let t = Instant::now();
     reset_db(&pool).await?;
     insert_n_entries(&pool, args.n, args.accounts).await?;
+    insert_noise_claims(&pool, args.noise_claims).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     // The read scenario bypasses `list_derived` and runs the three
@@ -575,6 +599,37 @@ async fn insert_n_entries(pool: &PgPool, n: usize, k: usize) -> Result<()> {
     .await
     .context("insert JournalLine credit-side fixture rows")?;
 
+    Ok(())
+}
+
+/// Insert `count` rows of `UnrelatedNoise(noise_i, i)` directly into
+/// `morpholog.claims`. The predicate is never referenced by the
+/// double-entry-ledger programme; a correct scoped `load_state`
+/// skips these entirely. With the older unscoped loader, they show
+/// up as linear fetch + decode cost in `propose_one`.
+async fn insert_noise_claims(pool: &PgPool, count: usize) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    let count_i: i64 = count
+        .try_into()
+        .map_err(|_| anyhow!("noise-claims={count} too large for i64"))?;
+    let fixture_id = Uuid::nil();
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'UnrelatedNoise',
+                jsonb_build_array(
+                    jsonb_build_object('type','subject','value','noise_' || i),
+                    jsonb_build_object('type','decimal','value', i::text)
+                ),
+                $1
+         FROM generate_series(1, $2) AS i",
+    )
+    .bind(fixture_id)
+    .bind(count_i)
+    .execute(pool)
+    .await
+    .context("insert noise fixture rows")?;
     Ok(())
 }
 

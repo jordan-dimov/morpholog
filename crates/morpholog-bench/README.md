@@ -16,6 +16,8 @@ Exploratory. The numbers this binary prints are not regression assertions and ar
 
 The `write` and `read` fixture distributes journal lines across `K` distinct accounts (default `K = 2`, configurable via `--accounts`). Entry `i` debits `account_{i mod K}` and credits `account_{(i+1) mod K}` for the same amount, so every entry is self-balancing and the `balanced_posted_entry` invariant holds. The trial-balance derived claim produces one row per distinct account that received at least one line; assertions on the read scenario check the loose bound `0 < rows <= K`.
 
+The `--noise-claims K` flag pre-populates K rows of an `UnrelatedNoise` predicate that no transformation or invariant in the double-entry-ledger programme touches. A correct predicate-scoped `load_state` skips these entirely (server-side, via `WHERE predicate_name = ANY($1)`); an older unscoped loader would fetch and JSONB-decode every one of them. The flag is the bench-side equivalent of the noise-claims regression test in `morpholog-postgres/tests/integration.rs`.
+
 Larger `K` stresses two things at once on the read path: `enumerate_derived`'s grouping (the BTreeSet that orders the K key tuples) and the per-account `Sum` lookups (one per account, each narrowed by the argument-position index on `JournalLine[1] = account`). The write path is largely independent of `K`; varying it mostly changes fixture characteristics.
 
 The `as-of` fixture is different: it fabricates audit rows directly via SQL (one `INSERT ... SELECT ... FROM generate_series`), bypassing `propose_against_pg`. The bench is measuring replay cost, not write cost - going through the kernel for every fabricated transition would make fixture build the dominant cost and obscure the replay signal. Each fabricated row carries the same 3-claim payload (1 JournalEntry + 2 JournalLines on `account_cash` / `account_revenue`) and a strictly-monotone `committed_at` so replay order is deterministic.
@@ -37,37 +39,52 @@ DATABASE_URL=postgres:///morpholog_dev \
 
 The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at. Do not point it at a database with anything you want to keep.
 
-## Observations (2026-05-17, local PostgreSQL 17)
+## Observations (2026-05-21, local PostgreSQL 17)
 
-Run on a developer workstation against a local `morpholog_dev` database. Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
+Run on a developer workstation against a local `morpholog_bench` database. Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
 
 ### Read path phase split
 
-The read scenario reports `list_scoped`, `build_state`, and `enumerate` separately. `list_scoped` fetches only claims for predicates the derived claim's body references (computed via `predicates_referenced_by_derived`); for `trial_balance_row` that means JournalLine only. At `N = 100 000` (300 000 total claims, 200 000 JournalLine):
+The read scenario reports `list_scoped`, `build_state`, and `enumerate` separately. `list_scoped` fetches only claims for predicates the derived claim's body references (computed via `predicates_referenced_by_derived`); for `trial_balance_row` that means JournalLine only.
 
-| K | list_scoped | build_state | enumerate | derived rows |
+At `N = 100 000`, K=2 (300 000 ledger claims, 200 000 JournalLine):
+
+| noise_claims | list_scoped | build_state | enumerate | derived rows |
 |--:|--:|--:|--:|--:|
-| 2 | ~1 100-1 400 ms | ~210 ms | ~460 ms | 2 |
-| 100 | ~1 200 ms | ~210 ms | ~410 ms | 100 |
+| 0 | ~909 ms | ~159 ms | ~384 ms | 2 |
+| 200 000 | ~1 029 ms | ~160 ms | ~372 ms | 2 |
 
-`list_scoped` fetches 200 000 rows instead of 300 000 (~33% fewer) since the scoped query is `WHERE predicate_name = ANY(['JournalLine'])`. The wall-clock saving is more modest than the row-count saving because JournalLine rows are bigger (4 args vs JournalEntry's 3), so the JSONB decode share per row is larger; skipping the smaller JournalEntry rows saves rows but proportionally less time. The ledger fixture is also nearly the worst case for this optimisation - only two distinct predicate types exist in the data, and the derived needs one of them. In a real workload with many unrelated predicates (e.g. claims from other examples co-existing in one database), the win compounds: the noise-claims correctness test in `morpholog-postgres/tests/integration.rs` verifies that 200 unrelated claims do not affect the answer; in production it would be the bench-visible time difference.
+The read path has been predicate-scoped since PR #25, so adding 200 000 noise claims of an unreferenced predicate has essentially no effect on the read path; the small variation is within run-to-run noise. The `WHERE predicate_name = ANY(['JournalLine'])` query short-circuits past every noise row server-side.
 
 Observations:
 
-- `list_scoped` still dominates (~65% of read time even after scoping). The next direction would be either a `--noise-claims K` axis on the bench to make the predicate-scoping win obvious at workload scales typical of multi-program databases, or a deeper PG-side optimisation (e.g. an index on `predicate_name`, or streaming the fetch).
-- `build_state` is ~14% (~210 ms for 200 000 claims). Builds both indexes from scratch. Linear in claim count and constant per claim.
-- `enumerate` is ~20%. Slightly *cheaper* at K=100 than at K=2, which is a positive signal about the argument-position index: the per-account `Sum` for each of 100 accounts touches roughly `2N/K` lines (so K=100 sums each touch ~6 000 lines instead of K=2 sums each touching ~300 000 lines). The argument-position index on `JournalLine[1] = account` is what makes this scale; without it, K=100 would be ~100x slower than K=2 for the enumerate phase.
+- `list_scoped` still dominates (~63% of read time). The next direction would be a deeper PG-side optimisation (e.g. an index on `predicate_name`, or streaming the fetch).
+- `build_state` is ~11% (~160 ms for 200 000 claims). Builds both indexes from scratch. Linear in claim count and constant per claim.
+- `enumerate` is ~26%. At K=100 the per-account `Sum` index work keeps enumerate cost flat (argument-position index on `JournalLine[1] = account` makes it `O(2N/K)` per account); historical observations on the previous fixture confirmed K=100 was actually *cheaper* than K=2 for enumerate at this N.
 
-### Write path
+### Write path - predicate-scoped loading
 
-| N | K | fixture_build | propose_one |
-|--:|--:|--:|--:|
-| 1 000 | 2 | 30 ms | ~15 ms |
-| 10 000 | 2 | ~300 ms | ~240 ms |
-| 10 000 | 100 | ~520 ms | ~240 ms |
-| 100 000 | 100 | ~5 200 ms | ~2 300 ms |
+The write path is also now predicate-scoped (this PR). `post_simple_entry`'s body reads `PeriodClosed` via its `require not PeriodClosed(period)` gate; the invariants `balanced_posted_entry`, `journal_entry_has_lines`, and `at_most_one_direct_successor` reference `JournalEntry`, `JournalLine`, and `Supersedes`. Anything else in `morpholog.claims` is skipped at the SQL layer.
 
-The remaining cost on `propose_one` is `load_state` + the indexed kernel work for `propose` + `INSERT` for claims/audit/outbox + COMMIT. With predicate-scoped loading on the write path now landed (mirroring the read path's existing scoping via `predicates_referenced_by_derived`), `load_state` fetches only claims of predicates the transformation body or invariants actually reference. On databases containing many unrelated predicates, this removes the previous full-table scan; the remaining load cost is proportional to the rows of predicates that *are* in scope. The numbers in the table above predate this scoping work — rerun the benchmark to quantify the new curve. The kernel itself is no longer the bottleneck at these sizes.
+The bench's `--noise-claims K` flag pre-populates K claims of an `UnrelatedNoise` predicate that no part of the double-entry-ledger programme touches. Comparing scoped (this PR) against an artificially-reverted unscoped `load_state` shows the win:
+
+`N = 100 000` ledger entries (300 000 ledger claims), `accounts K = 2`:
+
+| load_state | noise_claims | fixture_build | propose_one |
+|---|--:|--:|--:|
+| scoped (this PR) | 0 | ~3 939 ms | ~1 744 ms |
+| scoped (this PR) | 200 000 | ~5 919 ms | ~1 623 ms |
+| unscoped (pre-PR) | 0 | ~3 824 ms | ~1 667 ms |
+| unscoped (pre-PR) | 200 000 | ~6 185 ms | **~2 562 ms** |
+
+- With **no noise**, scoped and unscoped are roughly equal on `propose_one` (~1.7 s). Every claim in the database is in scope, so there's nothing for scoping to skip.
+- With **200 000 noise claims** (40% of total rows in the table), unscoped `propose_one` grows by ~54% (1 667 -> 2 562 ms): the extra cost is fetching, JSONB-decoding, and indexing rows the kernel will never look at. Scoped `propose_one` is unchanged (~1.6 s): the SQL filter skips noise rows server-side.
+
+The fixture_build delta is just the extra `INSERT ... SELECT generate_series` for the noise rows; it's the same on both code paths and not part of the optimisation's measurement.
+
+The win compounds with predicate diversity: in a multi-program database where dozens of unrelated predicates co-exist, the noise/signal ratio is much higher than 40%, and scoped `load_state` skips proportionally more.
+
+The remaining cost on `propose_one` is the SQL `INSERT` for claims/audit/outbox + COMMIT plus the (now bounded) `load_state` plus the indexed kernel work for `propose`. The kernel itself is no longer the bottleneck at these sizes.
 
 ### As-of replay path
 
