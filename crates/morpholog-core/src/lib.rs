@@ -1442,7 +1442,7 @@ fn resolve_claim(
     for t in &claim.args {
         if matches!(t, Term::Wildcard) {
             return Err(EvalError::TypeMismatch(
-                "wildcard not allowed in assert/retract".into(),
+                "wildcard not allowed in assert".into(),
             ));
         }
         args.push(resolve_term(t, bindings, actor)?);

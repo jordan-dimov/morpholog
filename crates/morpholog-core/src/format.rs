@@ -24,7 +24,12 @@
 //! - **One concept per line where possible.** Statement bodies expand
 //!   vertically; sub-expressions inline unless they contain claims or
 //!   `And`/`Or`-style branching.
-//! - **No trailing newline on the result.** The caller composes.
+//! - **Result ends with a trailing newline** so callers can append
+//!   directly to a `String` or write to a stream without composing
+//!   their own separator. Each per-section helper
+//!   (`format_invariant`, `format_transformation`,
+//!   `format_derived_claim`) likewise produces a newline-terminated
+//!   block.
 //!
 //! Cost: a deliberate cost. The exhaustive matches in this module
 //! mean every new IR variant ([`Expr`], [`Stmt`], [`Term`], [`Value`])
@@ -37,8 +42,9 @@ use crate::{
     Claim, DerivedClaim, Expr, Intent, Invariant, Program, Stmt, Term, Transformation, Value,
 };
 
-/// Top-level entry. Returns a multi-line string ready to `println!`
-/// (no trailing newline added).
+/// Top-level entry. Returns a multi-line string terminated by a
+/// final `\n`, so callers can write directly to a stream or append
+/// to an existing buffer.
 pub fn format_program(p: &Program) -> String {
     let mut out = String::new();
     out.push_str(&format!("program {}\n", p.name));
@@ -199,7 +205,12 @@ fn format_expr_inline(e: &Expr) -> String {
             let inner: Vec<String> = exprs.iter().map(format_expr_inline).collect();
             format!("and({})", inner.join(", "))
         }
-        Expr::Not(inner) => format!("not {}", format_expr_inline(inner)),
+        // Always wrap the negated expression in parens, even for
+        // claim-shaped inner expressions. Without parens, `not a == b`
+        // is genuinely ambiguous between `(not a) == b` and
+        // `not(a == b)`; the parens cost a few characters and remove
+        // the question.
+        Expr::Not(inner) => format!("not({})", format_expr_inline(inner)),
         Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::Term(t) => format_term(t),
         Expr::Eq(l, r) => format!("{} == {}", format_expr_inline(l), format_expr_inline(r)),
@@ -275,10 +286,33 @@ fn format_term(t: &Term) -> String {
 fn format_value(v: &Value) -> String {
     match v {
         // Subjects are quoted to disambiguate from variable names.
-        Value::Subject(s) => format!("\"{s}\""),
+        // Escape control characters and embedded quotes so a subject
+        // like `bad"name` or one containing a newline cannot break
+        // the rendering. Most subjects in practice are snake_case
+        // identifiers and pass through unchanged.
+        Value::Subject(s) => format!("\"{}\"", escape_subject(s)),
         Value::Decimal(s) => s.clone(),
         Value::Date(s) => s.clone(),
     }
+}
+
+/// Minimal escape for subject strings inside the pretty-printer.
+/// Mirrors Rust's source-string escaping for the characters that
+/// would otherwise produce ambiguous output: backslashes, double
+/// quotes, and newlines. Other characters pass through.
+fn escape_subject(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn indent(depth: usize) -> String {
@@ -356,7 +390,7 @@ mod tests {
 
         // Each variant contributes at least one recognisable token.
         assert!(s.contains("P(x, _)"));
-        assert!(s.contains("not Q(x)"));
+        assert!(s.contains("not(Q(x))"));
         assert!(s.contains("implies("));
         assert!(s.contains("exists(z"));
         assert!(s.contains("forall(w"));
@@ -389,5 +423,46 @@ mod tests {
         assert_eq!(format_term(&Term::Wildcard), "_");
         assert_eq!(format_term(&Term::Actor), "$actor");
         assert_eq!(format_term(&Term::Var("x".to_string())), "x");
+    }
+
+    /// Subjects containing characters that would break the
+    /// `"<subject>"` rendering must be escaped, not silently passed
+    /// through. Most subjects in real programmes are snake_case
+    /// identifiers and need no escaping; the test pins behaviour
+    /// for the pathological cases.
+    #[test]
+    fn format_term_escapes_special_chars_in_subject_literal() {
+        assert_eq!(
+            format_term(&Term::Literal(Value::Subject(r#"bad"name"#.to_string()))),
+            r#""bad\"name""#
+        );
+        assert_eq!(
+            format_term(&Term::Literal(Value::Subject("line\nbreak".to_string()))),
+            "\"line\\nbreak\""
+        );
+        assert_eq!(
+            format_term(&Term::Literal(Value::Subject("back\\slash".to_string()))),
+            "\"back\\\\slash\""
+        );
+    }
+
+    /// `format_program` documents that its output ends with a
+    /// trailing newline. Pin that contract so callers can rely on it
+    /// (write directly to a stream, append without composing a
+    /// separator).
+    #[test]
+    fn format_program_output_ends_with_newline() {
+        let p = Program {
+            name: "demo".to_string(),
+            invariants: vec![],
+            transformations: vec![Transformation {
+                name: "noop".to_string(),
+                parameters: vec![],
+                body: vec![],
+            }],
+            derived_claims: vec![],
+        };
+        let s = format_program(&p);
+        assert!(s.ends_with('\n'), "expected trailing newline; got: {s:?}");
     }
 }
