@@ -1277,7 +1277,7 @@ mod tests {
         assert!(matches!(
             trace[0],
             TraceEntry::BindOne {
-                outcome: BindOneOutcome::NoMatch,
+                outcome: BindOneOutcome::NoMatch { .. },
                 ..
             }
         ));
@@ -1535,5 +1535,308 @@ mod tests {
             panic!("expected Completed");
         };
         assert_eq!(outcome_a, outcome_b);
+    }
+
+    // ============================================================
+    // Expression failure-walk (PR-G)
+    //
+    // When `require` or `bind_one` rejects, the trace's
+    // `failing_sub_expression` field carries the most specific
+    // sub-expression responsible. These tests pin the failure-walk
+    // contract: which expression shapes drill in, which return None.
+    // ============================================================
+
+    fn extract_require_failure(trace: &[TraceEntry]) -> Option<&str> {
+        trace.iter().find_map(|e| match e {
+            TraceEntry::Require {
+                outcome:
+                    RequireOutcome::Rejected {
+                        failing_sub_expression,
+                        ..
+                    },
+                ..
+            } => failing_sub_expression.as_deref(),
+            _ => None,
+        })
+    }
+
+    /// `And(A, B, C)` where the second conjunct fails: the walker
+    /// renders the failing conjunct, not the whole And.
+    #[test]
+    fn failure_walk_and_points_at_first_failing_conjunct() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "A".to_string(),
+            args: vec![EvalValue::Subject("x".to_string())],
+        }]);
+        // A holds (x is in state); B does not (no Bs in state).
+        let t = Transformation {
+            name: "needs_a_and_b".to_string(),
+            parameters: vec![],
+            body: vec![require(and(vec![
+                claim("A", vec![Term::Literal(Value::Subject("x".to_string()))]),
+                claim("B", vec![Term::Literal(Value::Subject("x".to_string()))]),
+            ]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("B"),
+            "expected failing sub-expression to contain B; got: {failing}"
+        );
+        assert!(
+            !failing.contains("A("),
+            "expected failing sub-expression NOT to be the whole And; got: {failing}"
+        );
+    }
+
+    /// Nested And inside And: walker drills past the outer And to the
+    /// inner failing conjunct.
+    #[test]
+    fn failure_walk_and_recurses_through_nested_and() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "A".to_string(),
+            args: vec![EvalValue::Subject("x".to_string())],
+        }]);
+        // Outer And: [A, And(A, MissingPredicate)]. The nested And
+        // fails at its second conjunct (MissingPredicate). Walker
+        // should drill to that, not stop at the outer or inner And.
+        let t = Transformation {
+            name: "nested_and".to_string(),
+            parameters: vec![],
+            body: vec![require(and(vec![
+                claim("A", vec![Term::Literal(Value::Subject("x".to_string()))]),
+                and(vec![
+                    claim("A", vec![Term::Literal(Value::Subject("x".to_string()))]),
+                    claim(
+                        "MissingPredicate",
+                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                    ),
+                ]),
+            ]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("MissingPredicate"),
+            "expected drill-down to leaf-most failing predicate; got: {failing}"
+        );
+        // Should NOT render as `and(...)` - that would mean we stopped
+        // at the inner And without recursing.
+        assert!(
+            !failing.starts_with("and("),
+            "expected drill past inner And; got: {failing}"
+        );
+    }
+
+    /// `Implies(left, right)` where left holds and right fails:
+    /// walker points at right.
+    #[test]
+    fn failure_walk_implies_points_at_right_when_left_holds() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Trigger".to_string(),
+            args: vec![EvalValue::Subject("x".to_string())],
+        }]);
+        // Trigger(x) -> Required(x). Trigger holds, Required does not.
+        let t = Transformation {
+            name: "needs_required_when_triggered".to_string(),
+            parameters: vec![],
+            body: vec![require(implies(
+                claim(
+                    "Trigger",
+                    vec![Term::Literal(Value::Subject("x".to_string()))],
+                ),
+                claim(
+                    "Required",
+                    vec![Term::Literal(Value::Subject("x".to_string()))],
+                ),
+            ))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("Required"),
+            "expected drill into right side of Implies; got: {failing}"
+        );
+    }
+
+    /// `Forall { binding, source, body }` where the body fails for
+    /// at least one source binding: walker drills into the body.
+    #[test]
+    fn failure_walk_forall_drills_into_body() {
+        use dsl::*;
+        // Source: a collection [x, y]. Body: claim "AllGood(line)".
+        // State has AllGood(x) but not AllGood(y). The forall fails
+        // at iteration y; walker should point at the body, not the
+        // whole forall.
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "AllGood".to_string(),
+            args: vec![EvalValue::Subject("x".to_string())],
+        }]);
+        let t = Transformation {
+            name: "all_lines_good".to_string(),
+            parameters: vec!["lines".to_string()],
+            body: vec![require(forall(
+                "line",
+                in_(var("line"), var("lines")),
+                claim("AllGood", vec![var("line")]),
+            ))],
+        };
+        let transition = trace_transition(
+            &t,
+            vec![EvalValue::Collection(vec![
+                EvalValue::Subject("x".to_string()),
+                EvalValue::Subject("y".to_string()),
+            ])],
+        );
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("AllGood"),
+            "expected drill into forall body; got: {failing}"
+        );
+        assert!(
+            !failing.starts_with("forall"),
+            "expected drill past the forall wrapper; got: {failing}"
+        );
+    }
+
+    /// `Not(inner)` failure: walker returns None. Not's failure means
+    /// inner held; pointing at inner would say "this is what held"
+    /// rather than "this is what failed", conflating two diagnostic
+    /// models. Returning None is the safe choice in v0.
+    #[test]
+    fn failure_walk_not_returns_none() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Forbidden".to_string(),
+            args: vec![EvalValue::Subject("x".to_string())],
+        }]);
+        // `not(Forbidden(x))` fails because Forbidden(x) holds.
+        let t = Transformation {
+            name: "no_forbidden".to_string(),
+            parameters: vec![],
+            body: vec![require(not(claim(
+                "Forbidden",
+                vec![Term::Literal(Value::Subject("x".to_string()))],
+            )))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = trace.iter().find_map(|e| match e {
+            TraceEntry::Require {
+                outcome:
+                    RequireOutcome::Rejected {
+                        failing_sub_expression,
+                        ..
+                    },
+                ..
+            } => Some(failing_sub_expression.clone()),
+            _ => None,
+        });
+        let failing = failing.expect("expected to find the Require entry");
+        assert_eq!(
+            failing, None,
+            "Not failures should not produce a failing_sub_expression in v0"
+        );
+    }
+
+    /// Leaf-shaped expression (a single Claim) that rejects: the
+    /// walker returns None because the expression is already as
+    /// specific as the kernel can be. The outer `expression` field
+    /// of the trace entry already renders the leaf; duplicating it
+    /// in `failing_sub_expression` adds no information.
+    #[test]
+    fn failure_walk_leaf_claim_returns_none() {
+        use dsl::*;
+        let state = State::default();
+        let t = Transformation {
+            name: "needs_missing".to_string(),
+            parameters: vec![],
+            body: vec![require(claim(
+                "Missing",
+                vec![Term::Literal(Value::Subject("x".to_string()))],
+            ))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = trace.iter().find_map(|e| match e {
+            TraceEntry::Require {
+                outcome:
+                    RequireOutcome::Rejected {
+                        failing_sub_expression,
+                        ..
+                    },
+                ..
+            } => Some(failing_sub_expression.clone()),
+            _ => None,
+        });
+        let failing = failing.expect("expected to find the Require entry");
+        assert_eq!(
+            failing, None,
+            "Leaf failures (Claim, Le, etc.) should not produce a failing_sub_expression"
+        );
+    }
+
+    /// BindOne zero-match: the walker also applies to bind_one's
+    /// failure path. With a leaf-shaped Claim expression the result
+    /// is None (same as require); the test pins that bind_one wires
+    /// up the field at all.
+    #[test]
+    fn failure_walk_bind_one_no_match_carries_field() {
+        use dsl::*;
+        let state = State::default();
+        let t = Transformation {
+            name: "lookup_missing".to_string(),
+            parameters: vec![],
+            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let TraceEntry::BindOne {
+            outcome: BindOneOutcome::NoMatch {
+                failing_sub_expression,
+            },
+            ..
+        } = &trace[0]
+        else {
+            panic!("expected BindOne NoMatch, got {:?}", trace[0]);
+        };
+        // Leaf-shaped: walker returns None. Field is present (the
+        // value matters less than the structural presence).
+        assert_eq!(failing_sub_expression.as_deref(), None);
     }
 }

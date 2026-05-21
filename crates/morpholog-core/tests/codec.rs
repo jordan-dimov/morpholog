@@ -192,11 +192,37 @@ fn trace_entry_require_rejected_round_trips() {
         expression: "Bar(y)".to_string(),
         outcome: RequireOutcome::Rejected {
             reason: "require failed: Bar(y) did not hold over pre-state".to_string(),
+            failing_sub_expression: None,
         },
     };
     let json = serde_json::to_string(&entry).unwrap();
     assert!(json.contains(r#""status":"rejected""#));
     assert!(json.contains(r#""reason":"#));
+    // failing_sub_expression: None must be SKIPPED in JSON output
+    // (skip_serializing_if). Wire stays compact when the walker
+    // declines to drill in.
+    assert!(
+        !json.contains("failing_sub_expression"),
+        "None failing_sub_expression must be skipped from JSON: {json}"
+    );
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+/// `failing_sub_expression: Some(...)` must round-trip with the
+/// field present in JSON.
+#[test]
+fn trace_entry_require_rejected_round_trips_with_failing_sub_expression() {
+    let entry = TraceEntry::Require {
+        expression: "and(Foo(x), Bar(y))".to_string(),
+        outcome: RequireOutcome::Rejected {
+            reason: "require failed: and(Foo(x), Bar(y)) did not hold over pre-state".to_string(),
+            failing_sub_expression: Some("Bar(y)".to_string()),
+        },
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""status":"rejected""#));
+    assert!(json.contains(r#""failing_sub_expression":"Bar(y)""#));
     let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, entry);
 }
@@ -223,10 +249,16 @@ fn trace_entry_bind_one_bound_round_trips_with_sorted_bindings() {
 fn trace_entry_bind_one_no_match_round_trips() {
     let entry = TraceEntry::BindOne {
         expression: "Policy(pid, limit)".to_string(),
-        outcome: BindOneOutcome::NoMatch,
+        outcome: BindOneOutcome::NoMatch {
+            failing_sub_expression: None,
+        },
     };
     let json = serde_json::to_string(&entry).unwrap();
     assert!(json.contains(r#""status":"no_match""#));
+    assert!(
+        !json.contains("failing_sub_expression"),
+        "None failing_sub_expression must be skipped from JSON: {json}"
+    );
     let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, entry);
 }

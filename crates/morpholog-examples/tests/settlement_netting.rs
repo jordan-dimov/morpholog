@@ -240,24 +240,60 @@ fn propose_accepts_well_formed_netting() {
 
 #[test]
 fn propose_rejects_when_line_already_netted() {
+    // PR-G migration: the create_net_settlement transformation's
+    // single require is `forall(line in lines): and(approved, between,
+    // not(Netted(line)))`. With Netted(l1) admitted, the forall fails
+    // at the l1 iteration, and the failure-walk drills past forall and
+    // through the inner And to the failing `not(Netted(line))`
+    // conjunct. The old test could only prove "some require failed";
+    // this version pins which sub-expression rejected.
+    use morpholog_core::{
+        RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+    };
     let extra = vec![ClaimInstance {
         predicate: "Netted".to_string(),
         args: vec![subj("l1")],
     }];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
-    let outcome = common::propose_with_test_actor(
-        &t,
-        netting_args(),
-        &pre,
-        &settlement_netting::all_invariants(),
-    )
-    .expect("propose should not error");
-
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: netting_args(),
+        actor: subj("test_actor"),
     };
-    assert!(reason.contains("require failed"), "got: {reason}");
+    let TracedProposal::Completed { outcome, trace } =
+        propose_with_trace(&t, &transition, &pre, &settlement_netting::all_invariants())
+    else {
+        panic!("expected Completed");
+    };
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "expected Rejected, got {outcome:?}"
+    );
+    let failing = trace.iter().find_map(|e| match e {
+        TraceEntry::Require {
+            outcome:
+                RequireOutcome::Rejected {
+                    failing_sub_expression,
+                    ..
+                },
+            ..
+        } => failing_sub_expression.as_deref(),
+        _ => None,
+    });
+    let failing = failing.expect("expected failing_sub_expression on the require");
+    // The failure-walk should drill past forall + the inner And to
+    // the negated Netted clause. Pinning "Netted" alone is enough -
+    // the broader And contains other conjuncts (ApprovedSettlementLine,
+    // Between) and asserting on Netted specifically rules out them.
+    assert!(
+        failing.contains("Netted"),
+        "expected drill-down to the negated Netted clause; got: {failing}"
+    );
+    assert!(
+        !failing.starts_with("forall"),
+        "expected drill past the forall wrapper; got: {failing}"
+    );
 }
 
 #[test]

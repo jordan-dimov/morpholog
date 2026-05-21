@@ -622,3 +622,39 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 
 - `predicates_written_by_stmt`. No forcing consumer.
 - A `--noise-claims` axis on the `as-of` scenario. Its fixture bypasses `propose_against_pg` (audit rows are fabricated directly), so noise-tolerance is not a fair comparison there; this can come if `reconstruct_state_at_for_predicates` ever needs benchmarking under noise pressure.
+
+### Expression failure-walk on rejection paths
+
+**Forced by:** the parser arc. Today, while authoring is in Rust IR, "which conjunct of the failing `And` was false?" is workable because the developer can drop in `dbg!` calls. Once a `.morph` parser exists, end users won't have that escape hatch — the trace is their only diagnostic surface. PR D documented the gap honestly ("statement-level only, no conjunct-level diagnostics"). PR-G closes it before the parser lands.
+
+**The shape:**
+
+- New field `failing_sub_expression: Option<String>` on `RequireOutcome::Rejected` and `BindOneOutcome::NoMatch`. Carries the rendered most-specific sub-expression responsible for the rejection, or `None` when no useful drill-down applies.
+- New private helper `find_failing_subexpr` in `eval.rs`. Walk runs on rejection paths only; success-path cost is unchanged.
+- Drill-down rules: `And` recurses into the first failing conjunct; `Implies` recurses into the right side when the left held; `Forall` recurses into the body when some source binding fails it. `Not`, `Or`, `Exists`, and leaf expressions return `None`. Binding values are not substituted into rendered strings in v0 — the caller correlates separately.
+
+**Considered and rejected:**
+
+- *Option B (parallel structural ExprTrace mirroring `Expr`).* Would capture success paths too — which iteration of a forall matched, which exists-witness was chosen, which side of an or held. Much richer; much bigger. Rejected on smallest-increment grounds: the failure-walk closes the documented gap; the structural mirror should land when a real debugging case forces it.
+- *Option C (instrumented evaluator).* Thread a `TraceSink` through `find_matches` itself. Risks the drift that PR D's shared-executor design avoided. Rejected.
+- *Prose-style "note strings" inside `failing_sub_expression`* (e.g. `"all disjuncts failed"`, `"unexpectedly held"`). ChatGPT's PR-G review pushed back: that conflates two diagnostic models in one string field. The field stays semantically narrow — only a rendered sub-expression, or `None`. A future `failure_shape: Option<FailureShape>` field could carry structured failure-kind metadata if a worked example forces it.
+- *`Not` drilling into its inner.* When `Not(inner)` fails, the inner held — pointing at it describes what held, not what failed. That's a different question with the same field name. Returning `None` for `Not` in v0 is the safe choice.
+
+**What landed:**
+
+- `failing_sub_expression: Option<String>` on both rejection outcome variants. Serde derives `skip_serializing_if = "Option::is_none"` so the wire format stays compact when the walker declines to drill.
+- `find_failing_subexpr` walker with exhaustive `Expr` match (same compile-time gate as the other walkers).
+- Wired into `execute_stmt`'s Require and BindOne rejection branches.
+- 7 kernel tests: And-first-conjunct, And-nested (recursion), Implies-right-fails, Forall-body, Not-returns-None, leaf-returns-None, BindOne-field-presence.
+- Codec wire-format tests: round-trip with `Some` (field appears) and `None` (field skipped).
+- One example test migrated: settlement-netting's `propose_rejects_when_line_already_netted` now pins that the failing sub-expression is the `Not(Netted(...))` clause inside the forall body, not just "some require failed."
+- Updated `runtime-semantics.md` "Tracing proposals" section: scope changed from "statement-level only" to "statement-level plus failure-walk on rejection paths."
+
+**What deliberately did NOT land:**
+
+- Full structural ExprTrace (Option B).
+- Binding-value substitution in rendered `failing_sub_expression` strings for Forall iterations.
+- Drill-down for `Not`, `Or`, or `Exists`.
+- A `failure_shape` enum field for structured failure metadata.
+
+**Pattern note:** PR-G is the last kernel-diagnostic work before the parser. The parser arc that follows commits to surface-syntax decisions; the kernel's diagnostic surface is now what `.morph` users will see when their programmes reject.
