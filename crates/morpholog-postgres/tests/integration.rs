@@ -314,16 +314,28 @@ async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
     // held, let_new_subject ran, let ran, assert ran, then the For body's
     // bind_one tripped on iteration 0.
     assert!(!trace.is_empty(), "trace must not be empty on kernel error");
-    // The bind_one entry with MultipleMatches outcome should appear.
-    let saw_multi_match = trace.iter().any(|e| {
-        matches!(
-            e,
-            TraceEntry::For { .. } // For nests, so the inner trace has the MultipleMatches
-        )
+    // The MultipleMatches BindOne entry must appear inside one of the
+    // For iteration's nested traces. Walking explicitly into the For
+    // pins the actual failure shape rather than just verifying that
+    // a For entry exists.
+    use morpholog_core::{BindOneOutcome, ForIterationTrace};
+    let saw_multi_match = trace.iter().any(|e| match e {
+        TraceEntry::For { iterations, .. } => iterations.iter().any(|iter: &ForIterationTrace| {
+            iter.trace.iter().any(|inner| {
+                matches!(
+                    inner,
+                    TraceEntry::BindOne {
+                        outcome: BindOneOutcome::MultipleMatches { .. },
+                        ..
+                    }
+                )
+            })
+        }),
+        _ => false,
     });
     assert!(
         saw_multi_match,
-        "trace should contain the For entry whose iteration tripped the bind_one; got: {trace:#?}"
+        "trace should contain a BindOne::MultipleMatches entry inside a For iteration; got: {trace:#?}"
     );
 
     // No commit happened.

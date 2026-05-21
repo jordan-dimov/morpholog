@@ -248,26 +248,10 @@ pub fn propose(
     pre_state: &State,
     invariants: &[Invariant],
 ) -> Result<Outcome, EvalError> {
-    if transformation.name != transition.transformation_name {
-        return Err(EvalError::TypeMismatch(format!(
-            "transition names transformation `{}` but Transformation passed is `{}`",
-            transition.transformation_name, transformation.name,
-        )));
-    }
-    if !matches!(transition.actor, EvalValue::Subject(_)) {
-        return Err(EvalError::TypeMismatch(
-            "transition actor must be a subject".to_string(),
-        ));
-    }
-    if transition.args.len() != transformation.parameters.len() {
-        return Err(EvalError::TypeMismatch(format!(
-            "transformation `{}` expects {} args, got {}",
-            transformation.name,
-            transformation.parameters.len(),
-            transition.args.len(),
-        )));
-    }
-
+    // Input validation (transformation-name / actor-kind / arg-count
+    // matching) lives in `propose_inner` so both `propose` and
+    // `propose_with_trace` share a single source of truth and can't
+    // drift if one gate is updated.
     propose_inner(
         transformation,
         transition,
