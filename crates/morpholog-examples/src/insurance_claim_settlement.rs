@@ -38,11 +38,11 @@ pub fn paid_implies_authorised() -> Invariant {
 }
 
 /// At most one `Policy` per `policy_id`. The eternal structural rule
-/// that `authorise_settlement`'s `ValueOf(Policy(policy_id, _))`
-/// implicitly depends on - without it a duplicate-policy admission
-/// would turn a downstream settlement proposal into an
-/// `EvalError::ValueOfMultipleMatches` rather than rejecting cleanly.
-/// Reuses the singleton-shape from
+/// that `authorise_settlement`'s `bind_one Policy(policy_id,
+/// aggregate_limit)` implicitly depends on - without it a duplicate-
+/// policy admission would surface as `bind_one matched 2 candidates`
+/// (a kernel error) rather than a lawful business rejection. Reuses
+/// the singleton-shape from
 /// `verified_revenue::at_most_one_current_verification_per_asset_period`.
 pub fn at_most_one_policy_per_id() -> Invariant {
     Invariant {
@@ -60,8 +60,9 @@ pub fn at_most_one_policy_per_id() -> Invariant {
 
 /// At most one `ClaimReported` per `claim_id`. Mirrors
 /// `at_most_one_policy_per_id`; pins the structural uniqueness that
-/// `authorise_settlement`'s `ValueOf(ClaimReported(claim_id, _, _))`
-/// depends on. Duplicate reports must agree on every field.
+/// `authorise_settlement`'s `bind_one ClaimReported(claim_id,
+/// policy_id, _)` depends on. Duplicate reports must agree on every
+/// field.
 pub fn at_most_one_claim_report_per_id() -> Invariant {
     Invariant {
         name: "at_most_one_claim_report_per_id".to_string(),
@@ -125,7 +126,7 @@ pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
 /// duplicate `policy_id` admission is caught by
 /// `at_most_one_policy_per_id` against the candidate state -
 /// `authorise_settlement` later relies on this uniqueness through
-/// `ValueOf(Policy(policy_id, _))`.
+/// `bind_one Policy(policy_id, aggregate_limit)`.
 pub fn issue_policy() -> Transformation {
     Transformation {
         name: "issue_policy".to_string(),
@@ -143,7 +144,7 @@ pub fn issue_policy() -> Transformation {
 /// claimed amount. A duplicate `claim_id` admission is caught by
 /// `at_most_one_claim_report_per_id` against the candidate state -
 /// `authorise_settlement` later relies on this uniqueness through
-/// `ValueOf(ClaimReported(claim_id, _, _))`.
+/// `bind_one ClaimReported(claim_id, policy_id, _)`.
 pub fn report_claim() -> Transformation {
     Transformation {
         name: "report_claim".to_string(),

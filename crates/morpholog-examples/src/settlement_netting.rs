@@ -100,12 +100,16 @@ pub fn create_net_settlement() -> Transformation {
                 vec![
                     // Per-line amount lookup. bind_one rejects if a
                     // line has no LineAmount admitted and errors if
-                    // two LineAmount rows exist for one line (the
-                    // line-amount uniqueness is expected to be
-                    // pinned by an enclosing invariant when the
-                    // example grows; today the For-iteration alone
-                    // guarantees uniqueness through the candidate
-                    // collection).
+                    // multiple LineAmount rows exist for the same
+                    // line. The For-iteration alone does not
+                    // guarantee uniqueness - it iterates over a
+                    // candidate collection of lines, but each line
+                    // could in principle have multiple LineAmount
+                    // claims. A future structural invariant (or
+                    // predicate declaration when PR C lands) should
+                    // pin line-amount uniqueness if this example
+                    // grows; the per-line bind_one is correct either
+                    // way - it surfaces ambiguity as a kernel error.
                     bind_one(claim("LineAmount", vec![var("line"), var("amt")])),
                     assert_("SettlementLine", vec![var("line"), var("net"), var("amt")]),
                     assert_("Netted", vec![var("line")]),
