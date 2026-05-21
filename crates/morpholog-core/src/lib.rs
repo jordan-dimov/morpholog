@@ -1819,7 +1819,7 @@ mod tests {
     }
 
     /// Boundary case: equal dates admit. This pins the **inclusive**
-    /// semantics of validity windows in v0 — `effective_to ==
+    /// semantics of validity windows in v0 - `effective_to ==
     /// action_date` is admissible, not rejected. The clinical-trial
     /// enrolment example relies on this for "the protocol expires
     /// today" being a valid randomisation date.
@@ -1838,7 +1838,7 @@ mod tests {
         );
     }
 
-    /// `DateLe(a, b)` with `a > b` returns no matches — the lawful
+    /// `DateLe(a, b)` with `a > b` returns no matches - the lawful
     /// rejection path, distinct from `TypeMismatch`.
     #[test]
     fn date_le_rejects_after() {

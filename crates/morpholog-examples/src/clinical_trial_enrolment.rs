@@ -127,9 +127,10 @@ pub fn participant_randomised_once_per_trial() -> Invariant {
 
 // ============================================================
 // Setup transformations - the minimum to make the load-bearing
-// transformation reachable. Every emit names the resulting fact;
-// invariants enforce uniqueness where they would otherwise let
-// duplicates through.
+// transformation reachable. Each transformation asserts its
+// admitted claims and emits a matching outbox intent; invariants
+// enforce uniqueness where they would otherwise let duplicates
+// through.
 // ============================================================
 
 /// Open a trial. Unconditional in v0; downstream setup
