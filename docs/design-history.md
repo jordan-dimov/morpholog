@@ -621,4 +621,4 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 
 - `predicates_written_by_stmt`. No forcing consumer.
 - Bench update. The bench is destructive (per CLAUDE.md) and not in CI; user should re-run it to validate the perf claim against a real 100K-claim ledger.
-- Doc updates to the bench README's "Improvements here likely come from the same `load_state` work as the read path" line. The improvement is now landed; the bench README will be updated when the bench is re-run with new numbers.
+- Fresh benchmark numbers in the bench README's table. The README prose now describes the scoped behaviour and flags that the existing table predates this work, but the numeric table itself stays unchanged until the bench is re-run (destructive, user-driven).
