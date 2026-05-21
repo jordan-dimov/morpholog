@@ -38,11 +38,11 @@ pub fn paid_implies_authorised() -> Invariant {
 }
 
 /// At most one `Policy` per `policy_id`. The eternal structural rule
-/// that `authorise_settlement`'s `ValueOf(Policy(policy_id, _))`
-/// implicitly depends on - without it a duplicate-policy admission
-/// would turn a downstream settlement proposal into an
-/// `EvalError::ValueOfMultipleMatches` rather than rejecting cleanly.
-/// Reuses the singleton-shape from
+/// that `authorise_settlement`'s `bind_one Policy(policy_id,
+/// aggregate_limit)` implicitly depends on - without it a duplicate-
+/// policy admission would surface as `bind_one matched 2 candidates`
+/// (a kernel error) rather than a lawful business rejection. Reuses
+/// the singleton-shape from
 /// `verified_revenue::at_most_one_current_verification_per_asset_period`.
 pub fn at_most_one_policy_per_id() -> Invariant {
     Invariant {
@@ -60,8 +60,9 @@ pub fn at_most_one_policy_per_id() -> Invariant {
 
 /// At most one `ClaimReported` per `claim_id`. Mirrors
 /// `at_most_one_policy_per_id`; pins the structural uniqueness that
-/// `authorise_settlement`'s `ValueOf(ClaimReported(claim_id, _, _))`
-/// depends on. Duplicate reports must agree on every field.
+/// `authorise_settlement`'s `bind_one ClaimReported(claim_id,
+/// policy_id, _)` depends on. Duplicate reports must agree on every
+/// field.
 pub fn at_most_one_claim_report_per_id() -> Invariant {
     Invariant {
         name: "at_most_one_claim_report_per_id".to_string(),
@@ -125,7 +126,7 @@ pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
 /// duplicate `policy_id` admission is caught by
 /// `at_most_one_policy_per_id` against the candidate state -
 /// `authorise_settlement` later relies on this uniqueness through
-/// `ValueOf(Policy(policy_id, _))`.
+/// `bind_one Policy(policy_id, aggregate_limit)`.
 pub fn issue_policy() -> Transformation {
     Transformation {
         name: "issue_policy".to_string(),
@@ -143,7 +144,7 @@ pub fn issue_policy() -> Transformation {
 /// claimed amount. A duplicate `claim_id` admission is caught by
 /// `at_most_one_claim_report_per_id` against the candidate state -
 /// `authorise_settlement` later relies on this uniqueness through
-/// `ValueOf(ClaimReported(claim_id, _, _))`.
+/// `bind_one ClaimReported(claim_id, policy_id, _)`.
 pub fn report_claim() -> Transformation {
     Transformation {
         name: "report_claim".to_string(),
@@ -178,8 +179,8 @@ pub fn grant_settlement_authority() -> Transformation {
 }
 
 /// The load-bearing transformation. Pulls the claim's policy_id and
-/// the policy's aggregate_limit into bindings via `ValueOf`, then
-/// gates settlement authorisation on:
+/// the policy's aggregate_limit into bindings via `Stmt::BindOne`,
+/// then gates settlement authorisation on:
 ///
 /// 1. The proposing actor has settlement authority covering the
 ///    proposed amount (`actor_limit` bound by the authority claim,
@@ -197,34 +198,32 @@ pub fn grant_settlement_authority() -> Transformation {
 /// transition context as `actor()`, persisted to the
 /// authorisation record.
 ///
-/// A `require` gates on existence of the reported claim before
-/// `ValueOf` extracts `policy_id`. `Stmt::Require` is a yes/no
-/// predicate gate that does not propagate its match's bindings back
-/// into the active scope, so the value extraction has to happen
-/// separately via `Let` + `ValueOf` (same pattern settlement_netting
-/// uses for `LineAmount`). The Policy ValueOf does not need its own
-/// existence-require because `report_claim` already requires the
-/// policy to exist; a `ClaimReported` implies its `Policy`.
+/// Each `bind_one` looks up a uniquely-matching claim and binds its
+/// values into the surrounding context. `at_most_one_claim_report_per_id`
+/// and `at_most_one_policy_per_id` are the structural-uniqueness
+/// invariants that make these lookups safe: without them a duplicate
+/// admission would surface as `bind_one matched 2 candidates`
+/// (kernel error) rather than a lawful business rejection.
 pub fn authorise_settlement() -> Transformation {
     Transformation {
         name: "authorise_settlement".to_string(),
         parameters: params(&["claim_id", "settlement_id", "amount"]),
         body: vec![
-            require(claim(
+            // Unique-lookup pair: pull `policy_id` from the claim
+            // report, then `aggregate_limit` from the policy. Each
+            // bind_one rejects if zero matches (no such claim
+            // reported / no such policy) and surfaces a kernel
+            // error if multiple matches (programme bug -
+            // structural-uniqueness invariants exist precisely to
+            // prevent this).
+            bind_one(claim(
                 "ClaimReported",
-                vec![var("claim_id"), wildcard(), wildcard()],
+                vec![var("claim_id"), var("policy_id"), wildcard()],
             )),
-            let_(
-                "policy_id",
-                value_of(
-                    "ClaimReported",
-                    vec![var("claim_id"), wildcard(), wildcard()],
-                ),
-            ),
-            let_(
-                "aggregate_limit",
-                value_of("Policy", vec![var("policy_id"), wildcard()]),
-            ),
+            bind_one(claim(
+                "Policy",
+                vec![var("policy_id"), var("aggregate_limit")],
+            )),
             require(and(vec![
                 claim("SettlementAuthority", vec![actor(), var("actor_limit")]),
                 le(term(var("amount")), term(var("actor_limit"))),

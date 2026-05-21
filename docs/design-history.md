@@ -360,3 +360,52 @@ repeated across protocol, consent form, delegation, and assessment. Every prior 
 - A `Forall`-over-criteria eligibility shape. The current example admits if the protocol's single matching criterion has a valid assessment; a real trial has many criteria, and the natural shape combines `Forall` with `DateLe`. The kernel already supports `Forall`; layering it on top of the date-window primitive in this example would muddy the forcing pressure. A future example combining multi-criterion eligibility with restatement-on-correction would be the natural next step.
 
 **Pattern note:** `clinical_trial_enrolment` is the first non-finance worked example. The IR addition is small (one literal variant, one runtime variant, one expression variant, one helper), strictly subtractive in spirit (no second comparator, no instant type, no arithmetic), and the example itself stays tight - just enough surface to force the primitive. The civil-date / instant / zoned distinction is deliberately set up so future temporal primitives can be added without retrofitting `Date`. This sets the floor for any future "time-of-day," "time-zone," "gas day," "settlement period," "business calendar" work: each will arrive as its own value type with its own forcing example, and `Value::Date` will not silently widen to cover them.
+
+### `Stmt::BindOne` (forced by the refactor arc, not a worked example)
+
+**Forced by:** the bigger-refactor planning discussion that followed PR #46/#47/#48. The accidental-complexity audit identified `Stmt::Require` + `Stmt::Let` + `Expr::ValueOf` as a three-primitive workaround for one missing thing - extracting a uniquely-matching claim's values into the statement-level binding context. The doctrine was tripped on PR #45 (and almost re-tripped on PR #47); both ChatGPT and the in-house review converged on a narrower binding primitive.
+
+**The pressure:** every non-trivial transformation that needed a value from a uniquely-identified claim wrote the same shape:
+
+```
+require ClaimReported(claim_id, _, _)                    -- existence gate
+let policy_id = value_of ClaimReported(claim_id, _, _)   -- re-match, extract value
+let aggregate_limit = value_of Policy(policy_id, _)       -- another extract
+```
+
+Three statements with two redundant claim matches. The redundancy comes from `require` deliberately discarding its match's bindings (the "yes/no gate" semantics); `let + value_of` re-runs the same match to harvest the value. Conceptually one operation; mechanically three.
+
+**The design choice:** add a single new statement variant.
+
+- `Stmt::BindOne(Expr)`: evaluate a predicate-shaped expression against current state, bindings, and actor; on the single returned binding set, replace the current binding context. Zero matches → lawful `Outcome::Rejected`. Multiple matches → `EvalError::TypeMismatch` (kernel error; programme expected unique state but admitted ambiguous state).
+
+**Considered and rejected:**
+
+- *A `Stmt::Filter` that propagates all surviving bindings, branching on multiplicity.* Mechanically equivalent to a multi-match handler, but moves transformation execution toward Datalog-style query plans: would `assert` then run once per binding, or branch the outcome? Both answers change Morpholog's semantic model. Rejected: BindOne preserves single-path execution.
+- *Picking the "first" match arbitrarily on multi-match.* Non-deterministic by construction. Rejected.
+- *Returning `Outcome::Rejected` on multi-match.* Considered, but multi-match means the programme is wrong (missing uniqueness invariant or corrupted state), not that the business rule failed. Surfacing as a kernel error makes the diagnostic loud rather than hiding it behind a business rejection.
+- *Deleting `Expr::ValueOf` entirely.* Considered, but ValueOf remains the right tool in value-producing positions where a statement-level binding extension does not fit: inside `Sum`, `Add`, `Sub`, `Le`, `DateLe`, or inside a `DerivedClaim` value expression. Demoted to "prefer BindOne in transformation bodies" in the rustdoc and runtime-semantics doc.
+- *Restricting `BindOne` to `Expr::Claim`.* Considered for safety. Rejected because the runtime's existing `NotPredicate` guard already rejects value-only expressions, and permitting `bind_one(and(claim_a, claim_b))` for joined unique lookups is a coherent natural extension.
+
+**What landed:**
+
+- `Stmt::BindOne(Expr)`. Replace-not-extend bindings on a single match (the matcher's returned set is the new authoritative context; `find_matches` already threads `base` through). Zero → `Outcome::Rejected`; reason includes the rendered expression. Multiple → `EvalError::TypeMismatch` with multiplicity + rendered expression.
+- `dsl::bind_one(expr)` constructor.
+- `format_stmt` arm rendering `bind_one <expr>` on a single line.
+- `format::format_expr_inline` promoted to `pub` so the kernel can use the rendered expression in rejection reasons and multi-match errors. `Stmt::Require`'s reason also picked up the rendered-expression upgrade as part of the same change ("require failed: `<expr>` did not hold over pre-state").
+- `Stmt::For` properly scopes its body. Variables bound inside the body are reset to a snapshot at the start of each iteration and restored after the loop. Without this scoping, a `bind_one` inside a `for` would have iteration-2's lookup constrained by iteration-1's residual binding - a latent footgun made acute by BindOne but already present for any future statement that exposed iteration-level state. The `bindings.remove(binding)` cleanup that the previous For arm did is subsumed by the snapshot/restore.
+- 7 new kernel tests pinning: unique-match-extends-for-next-statement, zero-rejects-with-named-predicate, multi-errors-with-count, pre-bound-var-narrows-match, inside-for-body-composes (also exercises the For scoping fix), with-actor-in-pattern, rejects-value-expr-as-NotPredicate.
+- Migrations: `insurance_claim_settlement::authorise_settlement` (the three-line `require + let + value_of` pair collapsed to two `bind_one`s); `settlement_netting::create_net_settlement` (the per-line `let amt = value_of(...)` inside the For body collapsed to a single `bind_one`).
+- `.morph` illustrative files updated for both examples.
+- `runtime-semantics.md` doctrine section rewritten as the four-way carve: require (gate), bind_one (unique lookup), let (value computation), for (iteration).
+- `ValueOf` rustdoc demoted with the cross-reference to `bind_one`.
+
+**What deliberately did NOT land:**
+
+- `predicates_referenced_by_stmt`. The natural place for a statement-level predicate walker, and BindOne would slot into the same exhaustive match. But no current consumer exists - the future predicate-scoped write-path PR is the forcing pressure, and the walker should arrive then.
+- Deleting `Expr::ValueOf`. Kept for value-producing positions.
+- Changing `Require` semantics. Require still discards its match's bindings; the difference between require and bind_one is now load-bearing doctrine, not a footgun.
+- Predicate declarations. The metadata layer that lets the kernel validate arity at construction time is PR C, not this PR.
+- `propose_with_trace`. The structured-trace diagnostic API is PR D.
+
+**Pattern note:** BindOne is the first PR in the bigger-refactor arc that's not "forced by a worked example" in the original sense. The forcing function is the **authoring experience itself**: every example pays the require-vs-let workaround, and the doctrine had to be rediscovered by reviewers on PR after PR. Subtracting the workaround is its own kind of forcing pressure. The discipline that "no IR change lands without a worked example" was correct for v0 when primitives were the scarce thing; the next phase tunes the **shape** of those primitives so authoring against them stops accumulating ceremony. The same logic will land predicate declarations next (PR C) and `propose_with_trace` after (PR D).

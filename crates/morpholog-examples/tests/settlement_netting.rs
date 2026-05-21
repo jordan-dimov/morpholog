@@ -104,13 +104,13 @@ fn create_net_settlement_has_expected_shape() {
 }
 
 #[test]
-fn for_body_contains_let_and_two_asserts() {
+fn for_body_contains_bind_one_and_two_asserts() {
     let t = settlement_netting::create_net_settlement();
     let Stmt::For { body, .. } = &t.body[4] else {
         panic!("body[4] should be Stmt::For");
     };
     assert_eq!(body.len(), 3);
-    assert!(matches!(body[0], Stmt::Let { .. }));
+    assert!(matches!(body[0], Stmt::BindOne(_)));
     assert!(matches!(body[1], Stmt::Assert(_)));
     assert!(matches!(body[2], Stmt::Assert(_)));
 }
