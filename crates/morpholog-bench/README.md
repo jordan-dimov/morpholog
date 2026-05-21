@@ -67,7 +67,7 @@ Observations:
 | 10 000 | 100 | ~520 ms | ~240 ms |
 | 100 000 | 100 | ~5 200 ms | ~2 300 ms |
 
-The remaining cost on `propose_one` is `load_state` + the indexed kernel work for `propose` + `INSERT` for claims/audit/outbox + COMMIT. With predicate-scoped loading on the write path now landed (mirroring the read path's existing scoping via `predicates_referenced_by_derived`), `load_state` only fetches claims of predicates the transformation body or invariants actually reference; the `post_simple_entry` transformation reads three predicates (`PeriodClosed`, plus the invariants' `JournalEntry` and `JournalLine`), so on a multi-program database the previously-dominant linear scan is gone. The kernel itself is no longer the bottleneck at these sizes.
+The remaining cost on `propose_one` is `load_state` + the indexed kernel work for `propose` + `INSERT` for claims/audit/outbox + COMMIT. With predicate-scoped loading on the write path now landed (mirroring the read path's existing scoping via `predicates_referenced_by_derived`), `load_state` fetches only claims of predicates the transformation body or invariants actually reference. On databases containing many unrelated predicates, this removes the previous full-table scan; the remaining load cost is proportional to the rows of predicates that *are* in scope. The numbers in the table above predate this scoping work — rerun the benchmark to quantify the new curve. The kernel itself is no longer the bottleneck at these sizes.
 
 ### As-of replay path
 
