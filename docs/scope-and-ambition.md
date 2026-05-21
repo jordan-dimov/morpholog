@@ -65,7 +65,7 @@ Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predic
 
 This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
 
-**Status:** landed via the four-PR refactor arc. Every `Program` now carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity: every claim/assert/retract/value_of/derived-claim reference must target a declared predicate. The CLI exposes the declarations via `morpholog inspect predicates <program>`. Kind validation against the kinds of values flowing through the binding context is not yet enforced (the metadata is recorded; enforcement is a future evaluator pass).
+**Status:** landed via the refactor arc. Every `Program` now carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity: every claim/assert/retract/value_of/derived-claim reference must target a declared predicate. The CLI exposes the declarations via `morpholog inspect predicates <program>`. Kind validation against the kinds of values flowing through the binding context is not yet enforced (the metadata is recorded; enforcement is a future evaluator pass).
 
 ### 2. Derived claims
 
@@ -167,11 +167,11 @@ The richer worked examples. Each one combines several of the patterns the langua
 
 - **As-of evaluation.** `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`. The trial-balance example demonstrates this end-to-end.
 
-**The authoring-surface refactor arc (PRs A through D2).** After the six worked examples crystallised the kernel's primitive set, a four-PR arc made the IR pleasant to author against:
-- *PR A* — promoted the IR-construction helpers to a public `morpholog_core::dsl` module; added `morpholog-test-support` to eliminate per-crate test-helper duplication; added `format_program` for human-readable IR rendering.
-- *PR B* — introduced `Stmt::BindOne` as a deterministic unique-lookup binding statement. Collapses the `require + let + value_of` workaround that every non-trivial example was paying. Demoted `ValueOf` to value-position contexts.
-- *PR C* — added `Program::predicates: Vec<PredicateDecl>` with strict arity validation. Every reference to every predicate is now structurally checked; CLI exposes the declarations via `morpholog inspect predicates`.
-- *PR D / D2* — added `propose_with_trace` returning structured per-statement diagnostic trace on both success and kernel-error paths. CLI `--trace` flag and `propose_against_pg_with_trace` complete the surface.
+**The authoring-surface refactor arc (PRs A through D2).** After the the worked examples crystallised the kernel's primitive set, a refactor arc made the IR pleasant to author against:
+- *PR A* - promoted the IR-construction helpers to a public `morpholog_core::dsl` module; added `morpholog-test-support` to eliminate per-crate test-helper duplication; added `format_program` for human-readable IR rendering.
+- *PR B* - introduced `Stmt::BindOne` as a deterministic unique-lookup binding statement. Collapses the `require + let + value_of` workaround that every non-trivial example was paying. Demoted `ValueOf` to value-position contexts.
+- *PR C* - added `Program::predicates: Vec<PredicateDecl>` with strict arity validation. Every reference to every predicate is now structurally checked; CLI exposes the declarations via `morpholog inspect predicates`.
+- *PR D / D2* - added `propose_with_trace` returning structured per-statement diagnostic trace on both success and kernel-error paths. CLI `--trace` flag and `propose_against_pg_with_trace` complete the surface.
 
 After this arc a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with execution that's structurally inspectable. The kernel discipline stayed the same; the authoring layer above it became materially more usable.
 

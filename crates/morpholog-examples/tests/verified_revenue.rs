@@ -178,21 +178,57 @@ fn decision_admits_only_with_matching_standing() {
     let pre = admit_iv(State::default(), 91, "ver_001");
 
     // No standing for bank yet; admit_debt_service_revenue is
-    // rejected.
-    let outcome = common::propose_with_test_actor(
-        &verified_revenue::admit_debt_service_revenue(),
-        vec![
+    // rejected. Asserts via the trace that the first require
+    // (IndependentlyVerifiedRevenue exists) Held, while the second
+    // require (AdmissibleFor on bank_debt_service) Rejected. The
+    // standing-gate distinction is the load-bearing semantics of
+    // this example; trace lets us pin it precisely instead of
+    // settling for `matches!(outcome, Rejected { .. })`.
+    use morpholog_core::{
+        RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+    };
+    let t = verified_revenue::admit_debt_service_revenue();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
             asset(),
             period(),
             dec(91),
             subj("decision_001"),
             subj("ver_001"),
         ],
-        &pre,
-        &invariants(),
-    )
-    .expect("propose should not error");
+        actor: subj("test_actor"),
+    };
+    let TracedProposal::Completed { outcome, trace } =
+        propose_with_trace(&t, &transition, &pre, &invariants())
+    else {
+        panic!("expected Completed");
+    };
     assert!(matches!(outcome, Outcome::Rejected { .. }));
+    let require_outcomes: Vec<(&str, &RequireOutcome)> = trace
+        .iter()
+        .filter_map(|e| match e {
+            TraceEntry::Require {
+                expression,
+                outcome,
+            } => Some((expression.as_str(), outcome)),
+            _ => None,
+        })
+        .collect();
+    let held_verification = require_outcomes.iter().any(|(expr, out)| {
+        expr.contains("IndependentlyVerifiedRevenue") && matches!(out, RequireOutcome::Held { .. })
+    });
+    let rejected_standing = require_outcomes.iter().any(|(expr, out)| {
+        expr.contains("AdmissibleFor") && matches!(out, RequireOutcome::Rejected { .. })
+    });
+    assert!(
+        held_verification,
+        "expected the IndependentlyVerifiedRevenue gate to hold; trace: {trace:#?}"
+    );
+    assert!(
+        rejected_standing,
+        "expected the AdmissibleFor gate to reject; trace: {trace:#?}"
+    );
 
     // Bank grants standing; admit succeeds.
     let pre = grant(

@@ -178,7 +178,15 @@ pub async fn propose_against_pg_with_trace(
         TracedProposal::Completed { outcome, trace } => (outcome, trace),
         TracedProposal::Errored { error, trace: _ } => {
             // PR D2 limitation: trace dropped on kernel error at the
-            // PG boundary. Documented above.
+            // PG boundary. Documented on the function rustdoc.
+            //
+            // Explicitly roll back the open SERIALIZABLE transaction
+            // before returning. The connection would eventually drop
+            // the transaction anyway, but doing it explicitly keeps
+            // the connection available sooner and surfaces any
+            // rollback-time DB failure as a `PgError::Database`
+            // rather than masking it behind the kernel error.
+            tx.rollback().await.map_err(classify)?;
             return Err(error.into());
         }
     };
