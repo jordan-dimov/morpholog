@@ -140,11 +140,11 @@ Morpholog isn't the whole stack - UIs, dashboards, dataloaders, ML pipelines sta
 
 ## Project status
 
-Active. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples all work and are tested. Every committed transition records its actor. Writes scale linearly (~1.6s per commit against a 100,000-entry ledger); as-of replay also linear (~1.5s for 100,000 transitions). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the performance story.
+Active. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples all work and are tested. Every committed transition records its actor. Writes scale linearly (~1.6s per commit against a 100,000-entry ledger); as-of replay also linear (~1.5s for 100,000 transitions). Predicate-scoped loading on both read and write paths means a transformation only loads claims it actually consults. See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the performance story.
 
-Programmes are **declared-vocabulary objects**: every claim shape is enumerated in a predicate-declaration block, every transformation body is structurally arity-validated, and the kernel's `propose_with_trace` returns a per-statement diagnostic trace alongside the outcome. The trace surfaces through the CLI's `morpholog propose --trace` flag for committed and rejected outcomes.
+Programmes are **declared-vocabulary objects**: every claim shape is enumerated in a predicate-declaration block, every transformation body is structurally arity-validated, and the kernel's `propose_with_trace` returns a per-statement diagnostic trace alongside the outcome. When a `require` or `bind_one` rejects, the trace identifies the most specific sub-expression responsible (the failing conjunct of an `And`, the right side of an `Implies`, the body of a `Forall`). The trace surfaces through the CLI's `morpholog propose --trace` flag for committed, rejected, and kernel-errored outcomes.
 
-Not in the box yet: a parser; a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching / higher-order authority (quantitative authority works today via `Expr::Le`); user-supplied program loading; materialised derived claims; expression-internal tracing (the trace today is statement-level, not conjunct-level). Each lands when a worked example forces the shape.
+Not in the box yet: a parser; a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching / higher-order authority (quantitative authority works today via `Expr::Le`); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
 
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
@@ -162,20 +162,16 @@ The workspace: `morpholog-core` (sync kernel, no I/O), `morpholog-examples` (wor
 
 ## Where this is heading
 
-The runtime today is operationally complete enough to defend a number; the next arc is making it operationally complete enough to defend an *organisation*. Framed in business shapes, not feature names:
+The next major investment is **surface syntax**: a parser that turns `.morph` source into the IR the kernel already runs. The natural reader of a Morpholog programme is a domain expert (a controller, an auditor, the person who actually understands the business rules) - not a Rust developer. After the parser lands, the next gap is **legibility tooling** for that same audience: `morpholog inspect` subcommands that answer "what does this programme forbid?" before "what does it enable?" - exclusion matrices, transformation graphs, subject-flow profiles, all derived from static analysis of parsed programmes.
 
-- **A worker supervisor with circuit breakers and an HTTP-aware deliverer.** The polling worker exists and ships a `StdoutDeliverer`; what's missing is a supervisor running multiple workers under restart-with-intensity, per-target circuit breakers, and an `HttpDeliverer`.
-- **Predicate-pattern matching and higher-order authority.** Quantitative authority works today (see [Approval Controls](examples/04_approval_controls/)). With programmes now carrying a declared predicate vocabulary, the next shape - *one* authority claim governing a *family* of transformations - has a metadata home. Forces predicate names as first-class IR values.
-- **Effective time as a first-class temporal axis.** As-of already gives *knowledge* time. Effective time - the day a contract becomes binding, the period a posting reflects - is expressible as ordinary claims; combining the two gives full bitemporal addressability without any `valid_from`/`valid_to` columns.
-- **A surface syntax and parser.** Programs are Rust IR today, but the kernel exposes a public `dsl` module that reads like a builder for the surface that will eventually exist. A parser commits to a dozen choices (file layout, module system, error spans, literal syntax) that should be ratified by a real outside user, not pre-decided.
-- **Expression-internal tracing.** Today's `propose_with_trace` is statement-level - it identifies which `require` or `bind_one` failed, but not which conjunct of an `And` was false. Conjunct-level diagnosis is a separate evaluator refactor and the natural next step after a worked example forces it.
-- **Materialised derived claims.** Reports are recomputed on demand. For long audit logs and frequent queries, materialised snapshots will become forced.
+Performance: the bench shows linear scaling on additive workloads. A retraction-heavy bench scenario is the next measurement to take before any snapshot/lattice work is justified.
 
-None of these are speculative; each has a concrete forcing scenario in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) or [`docs/design-history.md`](docs/design-history.md). Each lands when an example actually demands it.
+The full forward-looking picture - what's imminent, what's deferred, what's deliberately out of scope - lives in [`docs/roadmap.md`](docs/roadmap.md). The kernel discipline is unchanged: primitives land alongside the worked examples that force them.
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the affordances on the roadmap, the three-level expansion ladder, and non-goals.
+- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the affordances on the design horizon, the three-level expansion ladder, and non-goals.
+- [`docs/roadmap.md`](docs/roadmap.md) - what the project is doing next: the parser arc, legibility tooling, performance work when forced, and the long deferred-until-an-example list.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - semantics the `morpholog-core` kernel realises.
 - [`docs/design-history.md`](docs/design-history.md) - for each significant runtime/IR decision, which worked example forced it and why.
 - [`docs/outbox-sketch.md`](docs/outbox-sketch.md) - the "Morpholog plus an Outside Coordinator" doctrine for the outbox worker.
