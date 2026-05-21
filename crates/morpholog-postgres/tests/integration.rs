@@ -20,11 +20,11 @@ use morpholog_postgres::{
     PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_derived,
     list_pending_outbox,
 };
-use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 mod common;
+use common::{dec, subj};
 
 // ============================================================
 // Test infrastructure
@@ -65,14 +65,6 @@ async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
         .await
         .unwrap();
     }
-}
-
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
-
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
 }
 
 fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {

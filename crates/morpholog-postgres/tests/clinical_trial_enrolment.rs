@@ -14,7 +14,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use jiff::civil::Date;
 use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_examples::clinical_trial_enrolment::{
     self as cte, ROLE_RANDOMISE_PARTICIPANT, all_invariants, randomise_participant,
@@ -23,6 +22,7 @@ use morpholog_postgres::{PgPool, PgProposalOutcome, list_claims, list_pending_ou
 use uuid::Uuid;
 
 mod common;
+use common::{date, subj};
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
@@ -39,14 +39,6 @@ async fn reset_db(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("failed to truncate test DB");
-}
-
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
-
-fn date(s: &str) -> EvalValue {
-    EvalValue::Date(s.parse::<Date>().expect("valid ISO civil date"))
 }
 
 /// Helper: run a setup transformation and assert it committed,

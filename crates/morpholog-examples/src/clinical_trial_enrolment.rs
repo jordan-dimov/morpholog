@@ -11,9 +11,9 @@
 //! randomisation. See `examples/06_clinical_trial_enrolment/README.md`
 //! for the business framing.
 
-use morpholog_core::{Invariant, Term, Transformation};
+use morpholog_core::{Invariant, Transformation};
 
-use crate::helpers::*;
+use morpholog_core::dsl::*;
 
 /// Subject literal used as the `role` argument of a
 /// `DelegatedInvestigator` claim when the delegation grants
@@ -473,7 +473,7 @@ pub fn randomise_participant() -> Transformation {
                 date_le(term(var("randomised_on")), term(var("protocol_to"))),
                 claim(
                     "ProtocolApprovedBy",
-                    vec![var("protocol_version"), Term::Wildcard, Term::Wildcard],
+                    vec![var("protocol_version"), wildcard(), wildcard()],
                 ),
                 claim(
                     "ConsentFormVersion",
@@ -488,7 +488,7 @@ pub fn randomise_participant() -> Transformation {
                 date_le(term(var("randomised_on")), term(var("consent_to"))),
                 claim(
                     "ConsentFormApprovedBy",
-                    vec![var("consent_form_version"), Term::Wildcard, Term::Wildcard],
+                    vec![var("consent_form_version"), wildcard(), wildcard()],
                 ),
                 claim(
                     "InformedConsentObtained",
@@ -497,16 +497,16 @@ pub fn randomise_participant() -> Transformation {
                         var("trial_id"),
                         var("consent_form_version"),
                         var("consented_on"),
-                        Term::Wildcard,
+                        wildcard(),
                     ],
                 ),
                 date_le(term(var("consented_on")), term(var("randomised_on"))),
                 claim(
                     "DelegatedInvestigator",
                     vec![
-                        Term::Actor,
+                        actor(),
                         var("trial_id"),
-                        lit_subj(ROLE_RANDOMISE_PARTICIPANT),
+                        role(ROLE_RANDOMISE_PARTICIPANT),
                         var("del_from"),
                         var("del_to"),
                     ],
@@ -535,7 +535,7 @@ pub fn randomise_participant() -> Transformation {
                 date_le(term(var("randomised_on")), term(var("expires_on"))),
                 not(claim(
                     "ImportantProtocolDeviationOpen",
-                    vec![var("participant_id"), var("trial_id"), Term::Wildcard],
+                    vec![var("participant_id"), var("trial_id"), wildcard()],
                 )),
             ])),
             assert_(
@@ -545,7 +545,7 @@ pub fn randomise_participant() -> Transformation {
                     var("trial_id"),
                     var("protocol_version"),
                     var("randomised_on"),
-                    Term::Actor,
+                    actor(),
                 ],
             ),
             emit("ParticipantRandomised", vec![var("participant_id")]),

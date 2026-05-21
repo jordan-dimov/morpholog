@@ -27,20 +27,13 @@
 mod common;
 
 use common::{
-    dec, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
+    dec, dec_str, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
 };
-use morpholog_core::{
-    ClaimInstance, EvalValue, Invariant, Outcome, State, enumerate_derived, eval_invariant,
-};
+use morpholog_core::{ClaimInstance, Invariant, Outcome, State, enumerate_derived, eval_invariant};
 use morpholog_examples::insurance_claim_settlement;
-use rust_decimal::Decimal;
 
 fn invariants() -> Vec<Invariant> {
     insurance_claim_settlement::all_invariants()
-}
-
-fn dec_str(s: &str) -> EvalValue {
-    EvalValue::Decimal(s.parse::<Decimal>().expect("valid decimal"))
 }
 
 fn issue(state: State, policy_id: &str, aggregate_limit: i64) -> State {

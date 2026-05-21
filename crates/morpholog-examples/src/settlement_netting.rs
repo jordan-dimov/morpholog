@@ -2,9 +2,9 @@
 //!
 //! Surface-syntax form: `examples/01_settlement_netting/netting.morph`.
 
-use morpholog_core::{Invariant, Term, Transformation};
+use morpholog_core::{Invariant, Transformation};
 
-use crate::helpers::*;
+use morpholog_core::dsl::*;
 
 pub fn net_settlement_has_lines() -> Invariant {
     Invariant {
@@ -13,14 +13,11 @@ pub fn net_settlement_has_lines() -> Invariant {
         body: implies(
             claim(
                 "NetSettlement",
-                vec![var("net"), Term::Wildcard, Term::Wildcard, Term::Wildcard],
+                vec![var("net"), wildcard(), wildcard(), wildcard()],
             ),
             exists(
                 "line",
-                claim(
-                    "SettlementLine",
-                    vec![var("line"), var("net"), Term::Wildcard],
-                ),
+                claim("SettlementLine", vec![var("line"), var("net"), wildcard()]),
             ),
         ),
     }
@@ -33,14 +30,14 @@ pub fn net_amount_equals_lines() -> Invariant {
         body: implies(
             claim(
                 "NetSettlement",
-                vec![var("net"), Term::Wildcard, Term::Wildcard, var("amount")],
+                vec![var("net"), wildcard(), wildcard(), var("amount")],
             ),
             eq(
                 term(var("amount")),
                 sum(
                     var("x"),
                     "x",
-                    claim("SettlementLine", vec![Term::Wildcard, var("net"), var("x")]),
+                    claim("SettlementLine", vec![wildcard(), var("net"), var("x")]),
                 ),
             ),
         ),
@@ -52,16 +49,13 @@ pub fn no_double_netting() -> Invariant {
         name: "no_double_netting".to_string(),
         version: 1,
         body: implies(
-            claim(
-                "SettlementLine",
-                vec![var("line"), var("net"), Term::Wildcard],
-            ),
+            claim("SettlementLine", vec![var("line"), var("net"), wildcard()]),
             not(exists(
                 "other",
                 and(vec![
                     claim(
                         "SettlementLine",
-                        vec![var("line"), var("other"), Term::Wildcard],
+                        vec![var("line"), var("other"), wildcard()],
                     ),
                     neq(var("other"), var("net")),
                 ]),
@@ -104,10 +98,7 @@ pub fn create_net_settlement() -> Transformation {
                 "line",
                 term(var("lines")),
                 vec![
-                    let_(
-                        "amt",
-                        value_of("LineAmount", vec![var("line"), Term::Wildcard]),
-                    ),
+                    let_("amt", value_of("LineAmount", vec![var("line"), wildcard()])),
                     assert_("SettlementLine", vec![var("line"), var("net"), var("amt")]),
                     assert_("Netted", vec![var("line")]),
                 ],

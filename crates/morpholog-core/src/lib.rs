@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
+pub mod dsl;
+pub mod format;
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is
@@ -1439,7 +1442,7 @@ fn resolve_claim(
     for t in &claim.args {
         if matches!(t, Term::Wildcard) {
             return Err(EvalError::TypeMismatch(
-                "wildcard not allowed in assert/retract".into(),
+                "wildcard not allowed in assert".into(),
             ));
         }
         args.push(resolve_term(t, bindings, actor)?);

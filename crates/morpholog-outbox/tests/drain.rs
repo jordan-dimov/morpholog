@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::{EvalValue, Transition};
+use morpholog_core::Transition;
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
@@ -22,7 +22,7 @@ use morpholog_postgres::{
     propose_against_pg,
     testing::{AlwaysDelivers, AlwaysTransient},
 };
-use rust_decimal::Decimal;
+use morpholog_test_support::{dec, subj};
 use uuid::Uuid;
 
 // ============================================================
@@ -44,14 +44,6 @@ async fn reset_db(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("failed to truncate test DB");
-}
-
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
-
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
 }
 
 async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {

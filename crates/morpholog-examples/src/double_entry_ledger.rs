@@ -3,9 +3,9 @@
 //! programme's read-side projection. See
 //! `examples/03_double_entry_ledger/README.md` for the business framing.
 
-use morpholog_core::{Invariant, Term, Transformation};
+use morpholog_core::{Invariant, Transformation};
 
-use crate::helpers::*;
+use morpholog_core::dsl::*;
 
 // ============================================================
 // Invariants - eternal rules over admitted state.
@@ -27,17 +27,14 @@ pub fn balanced_posted_entry() -> Invariant {
         name: "balanced_posted_entry".to_string(),
         version: 1,
         body: implies(
-            claim(
-                "JournalEntry",
-                vec![var("entry"), Term::Wildcard, Term::Wildcard],
-            ),
+            claim("JournalEntry", vec![var("entry"), wildcard(), wildcard()]),
             eq(
                 sum(
                     var("d"),
                     "d",
                     claim(
                         "JournalLine",
-                        vec![var("entry"), Term::Wildcard, var("d"), Term::Wildcard],
+                        vec![var("entry"), wildcard(), var("d"), wildcard()],
                     ),
                 ),
                 sum(
@@ -45,7 +42,7 @@ pub fn balanced_posted_entry() -> Invariant {
                     "c",
                     claim(
                         "JournalLine",
-                        vec![var("entry"), Term::Wildcard, Term::Wildcard, var("c")],
+                        vec![var("entry"), wildcard(), wildcard(), var("c")],
                     ),
                 ),
             ),
@@ -64,13 +61,10 @@ pub fn journal_entry_has_lines() -> Invariant {
         name: "journal_entry_has_lines".to_string(),
         version: 1,
         body: implies(
-            claim(
-                "JournalEntry",
-                vec![var("entry"), Term::Wildcard, Term::Wildcard],
-            ),
+            claim("JournalEntry", vec![var("entry"), wildcard(), wildcard()]),
             claim(
                 "JournalLine",
-                vec![var("entry"), Term::Wildcard, Term::Wildcard, Term::Wildcard],
+                vec![var("entry"), wildcard(), wildcard(), wildcard()],
             ),
         ),
     }
@@ -120,7 +114,7 @@ pub fn post_simple_entry() -> Transformation {
                     var("entry_id"),
                     var("debit_account"),
                     var("amount"),
-                    lit_dec("0"),
+                    dec("0"),
                 ],
             ),
             assert_(
@@ -128,7 +122,7 @@ pub fn post_simple_entry() -> Transformation {
                 vec![
                     var("entry_id"),
                     var("credit_account"),
-                    lit_dec("0"),
+                    dec("0"),
                     var("amount"),
                 ],
             ),
@@ -167,7 +161,7 @@ pub fn post_split_entry() -> Transformation {
                     var("entry_id"),
                     var("debit_account"),
                     var("debit_amount"),
-                    lit_dec("0"),
+                    dec("0"),
                 ],
             ),
             assert_(
@@ -175,7 +169,7 @@ pub fn post_split_entry() -> Transformation {
                 vec![
                     var("entry_id"),
                     var("credit_a_account"),
-                    lit_dec("0"),
+                    dec("0"),
                     var("credit_a_amount"),
                 ],
             ),
@@ -184,7 +178,7 @@ pub fn post_split_entry() -> Transformation {
                 vec![
                     var("entry_id"),
                     var("credit_b_account"),
-                    lit_dec("0"),
+                    dec("0"),
                     var("credit_b_amount"),
                 ],
             ),
@@ -237,7 +231,7 @@ pub fn restate_entry() -> Transformation {
         body: vec![
             require(claim(
                 "JournalEntry",
-                vec![var("prior_entry_id"), Term::Wildcard, var("period")],
+                vec![var("prior_entry_id"), wildcard(), var("period")],
             )),
             require(not(exists(
                 "newer",
@@ -253,7 +247,7 @@ pub fn restate_entry() -> Transformation {
                     var("new_entry_id"),
                     var("debit_account"),
                     var("amount"),
-                    lit_dec("0"),
+                    dec("0"),
                 ],
             ),
             assert_(
@@ -261,7 +255,7 @@ pub fn restate_entry() -> Transformation {
                 vec![
                     var("new_entry_id"),
                     var("credit_account"),
-                    lit_dec("0"),
+                    dec("0"),
                     var("amount"),
                 ],
             ),
@@ -307,7 +301,7 @@ pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
                     "d",
                     claim(
                         "JournalLine",
-                        vec![Term::Wildcard, var("account"), var("d"), Term::Wildcard],
+                        vec![wildcard(), var("account"), var("d"), wildcard()],
                     ),
                 ),
                 sum(
@@ -315,19 +309,14 @@ pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
                     "c",
                     claim(
                         "JournalLine",
-                        vec![Term::Wildcard, var("account"), Term::Wildcard, var("c")],
+                        vec![wildcard(), var("account"), wildcard(), var("c")],
                     ),
                 ),
             ),
         }],
         domain: claim(
             "JournalLine",
-            vec![
-                Term::Wildcard,
-                var("account"),
-                Term::Wildcard,
-                Term::Wildcard,
-            ],
+            vec![wildcard(), var("account"), wildcard(), wildcard()],
         ),
     }
 }
