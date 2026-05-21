@@ -13,7 +13,8 @@
 
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
 use morpholog_examples::{
-    approval_controls, double_entry_ledger, settlement_netting, verified_revenue,
+    approval_controls, double_entry_ledger, insurance_claim_settlement, settlement_netting,
+    verified_revenue,
 };
 use morpholog_postgres::{
     PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_derived,
@@ -1771,5 +1772,192 @@ async fn approval_controls_full_chain_through_pg() {
             .iter()
             .any(|c| c.predicate == "MayApprove"
                 && c.args == vec![subj("jordan"), subj("vendor_onboarding")])
+    );
+}
+
+// ============================================================
+// Example 5: insurance claim settlement
+// ============================================================
+
+/// Walks the full insurance_claim_settlement chain through
+/// `propose_against_pg`: policy issuance, claim reporting, settlement
+/// authority grant, a first settlement under cap (admitted), a
+/// boundary-equality settlement that exactly fills the aggregate
+/// (admitted), an over-cap attempt (rejected, no audit/outbox), and
+/// the `PolicyLimitUsage` derived claim read back from the same
+/// state. Pins the load-bearing `Expr::Add` shape under durable
+/// commit semantics.
+#[tokio::test]
+async fn insurance_claim_settlement_full_chain_through_pg() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let invariants = insurance_claim_settlement::all_invariants();
+
+    // 1. Issue a £100k aggregate policy.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &insurance_claim_settlement::issue_policy(),
+        vec![subj("policy_001"), dec(100_000)],
+        &invariants,
+    )
+    .await
+    .expect("issue_policy should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    // 2. Grant alex £100k of settlement authority.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &insurance_claim_settlement::grant_settlement_authority(),
+        vec![subj("alex"), dec(100_000)],
+        &invariants,
+    )
+    .await
+    .expect("grant_settlement_authority should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    // 3. Report two claims against the policy.
+    for (claim_id, amount) in [("claim_001", 60_000_i64), ("claim_002", 40_000)] {
+        let outcome = common::propose_pg_with_test_actor(
+            &pool,
+            &insurance_claim_settlement::report_claim(),
+            vec![subj(claim_id), subj("policy_001"), dec(amount)],
+            &invariants,
+        )
+        .await
+        .expect("report_claim should not error");
+        assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+    }
+
+    // 4. First settlement: £60k under the £100k aggregate. Admitted.
+    // Pin the receipt actor, the durable claim, the audit row, and
+    // the outbox intent.
+    let outcome = common::propose_pg_as(
+        &pool,
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
+        subj("alex"),
+        &invariants,
+    )
+    .await
+    .expect("first authorise_settlement should not error");
+    let PgProposalOutcome::Committed {
+        transition_id: first_tid,
+        actor: first_receipt_actor,
+        asserted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("expected Committed");
+    };
+    assert_eq!(first_receipt_actor, subj("alex"));
+    assert!(
+        asserted_claims
+            .iter()
+            .any(|c| c.predicate == "SettlementAuthorised"
+                && c.args
+                    == vec![
+                        subj("claim_001"),
+                        subj("settlement_001"),
+                        dec(60_000),
+                        subj("alex"),
+                    ])
+    );
+    assert!(
+        asserted_claims
+            .iter()
+            .any(|c| c.predicate == "SettlementPaid"
+                && c.args
+                    == vec![
+                        subj("policy_001"),
+                        subj("claim_001"),
+                        subj("settlement_001"),
+                        dec(60_000),
+                    ])
+    );
+    assert!(
+        emitted_intents
+            .iter()
+            .any(|i| i.name == "ClaimPaymentRequested"),
+        "authorise_settlement must emit ClaimPaymentRequested",
+    );
+    let audit_rows = list_audit_rows(&pool).await.unwrap();
+    let first_row = audit_rows
+        .iter()
+        .find(|r| r.transition_id == first_tid)
+        .unwrap();
+    assert_eq!(first_row.actor, subj("alex"));
+    assert!(
+        list_pending_outbox(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.intent_type == "ClaimPaymentRequested"),
+        "ClaimPaymentRequested intent must be staged to the outbox",
+    );
+
+    // 5. Second settlement: £40k. Cumulative 60 + 40 = 100 - the
+    // exact aggregate. Boundary equality admits.
+    let outcome = common::propose_pg_as(
+        &pool,
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("claim_002"), subj("settlement_002"), dec(40_000)],
+        subj("alex"),
+        &invariants,
+    )
+    .await
+    .expect("boundary-fill authorise_settlement should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    // 6. Third settlement attempted on a third reported claim:
+    // would push cumulative past the aggregate. Rejected at admission.
+    // Pin that rejection leaves no durable trace.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &insurance_claim_settlement::report_claim(),
+        vec![subj("claim_003"), subj("policy_001"), dec(30_000)],
+        &invariants,
+    )
+    .await
+    .expect("report_claim 003 should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
+    let outcome = common::propose_pg_as(
+        &pool,
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("claim_003"), subj("settlement_003"), dec(30_000)],
+        subj("alex"),
+        &invariants,
+    )
+    .await
+    .expect("over-cap propose should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(
+        list_audit_rows(&pool).await.unwrap().len(),
+        audit_before,
+        "rejected settlement must not write an audit row",
+    );
+    assert_eq!(
+        list_pending_outbox(&pool).await.unwrap().len(),
+        outbox_before,
+        "rejected settlement must not enqueue an outbox intent",
+    );
+
+    // 7. Derived `PolicyLimitUsage` matches the cumulative paid.
+    let usage_rows = list_derived(&pool, &insurance_claim_settlement::policy_limit_usage())
+        .await
+        .unwrap();
+    assert_eq!(
+        usage_rows.len(),
+        1,
+        "exactly one policy has admitted settlements"
+    );
+    assert_eq!(
+        usage_rows[0].args,
+        vec![subj("policy_001"), dec(100_000)],
+        "PolicyLimitUsage should show £100k consumed",
     );
 }

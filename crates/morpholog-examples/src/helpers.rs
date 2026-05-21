@@ -80,6 +80,10 @@ pub(crate) fn sub(lhs: Expr, rhs: Expr) -> Expr {
     Expr::Sub(Box::new(lhs), Box::new(rhs))
 }
 
+pub(crate) fn add(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::Add(Box::new(lhs), Box::new(rhs))
+}
+
 pub(crate) fn sum(value: Term, binding: &str, body: Expr) -> Expr {
     Expr::Sum {
         value,

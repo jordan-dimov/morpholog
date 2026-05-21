@@ -17,7 +17,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_examples::{
-    approval_controls, double_entry_ledger, settlement_netting, verified_revenue,
+    approval_controls, double_entry_ledger, insurance_claim_settlement, settlement_netting,
+    verified_revenue,
 };
 
 #[test]
@@ -86,6 +87,27 @@ fn double_entry_ledger_program_has_expected_shape() {
 }
 
 #[test]
+fn insurance_claim_settlement_program_has_expected_shape() {
+    let p = insurance_claim_settlement::program();
+    assert_eq!(p.name, "insurance_claim_settlement");
+    assert_eq!(p.invariants.len(), 4);
+    assert_eq!(p.transformations.len(), 4);
+
+    assert!(p.transformation("issue_policy").is_some());
+    assert!(p.transformation("report_claim").is_some());
+    assert!(p.transformation("grant_settlement_authority").is_some());
+    assert!(p.transformation("authorise_settlement").is_some());
+
+    assert!(p.invariant("paid_implies_authorised").is_some());
+    assert!(p.invariant("at_most_one_policy_per_id").is_some());
+    assert!(p.invariant("at_most_one_claim_report_per_id").is_some());
+    assert!(
+        p.invariant("settlement_id_uniquely_identifies_payment")
+            .is_some()
+    );
+}
+
+#[test]
 fn program_is_composition_not_a_parallel_definition() {
     // Pin the contract that program() composes the existing constructor
     // functions rather than redefining the IR. If a future refactor
@@ -136,6 +158,7 @@ fn all_programs_registry_contains_every_per_example_program() {
         verified_revenue::program().name.as_str(),
         double_entry_ledger::program().name.as_str(),
         approval_controls::program().name.as_str(),
+        insurance_claim_settlement::program().name.as_str(),
     ] {
         assert!(
             registry_names.contains(&expected_name),

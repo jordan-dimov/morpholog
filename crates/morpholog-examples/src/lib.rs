@@ -18,6 +18,7 @@ mod helpers;
 
 pub mod approval_controls;
 pub mod double_entry_ledger;
+pub mod insurance_claim_settlement;
 pub mod settlement_netting;
 pub mod verified_revenue;
 
@@ -36,5 +37,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         verified_revenue::program(),
         double_entry_ledger::program(),
         approval_controls::program(),
+        insurance_claim_settlement::program(),
     ]
 }
