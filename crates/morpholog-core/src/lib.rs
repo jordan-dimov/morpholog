@@ -2018,11 +2018,13 @@ fn propose_inner(
 
     for inv in invariants {
         let held = eval_invariant(inv, &candidate)?;
-        trace.push(TraceEntry::InvariantCheck {
-            name: inv.name.clone(),
-            expression: format::format_expr_inline(&inv.body),
-            held,
-        });
+        if trace.is_on() {
+            trace.push(TraceEntry::InvariantCheck {
+                name: inv.name.clone(),
+                expression: format::format_expr_inline(&inv.body),
+                held,
+            });
+        }
         if !held {
             return Ok(Outcome::Rejected {
                 reason: format!("invariant `{}` violated", inv.name),
@@ -2053,24 +2055,31 @@ fn execute_stmt(
         Stmt::Require(expr) => {
             let matches = find_matches(expr, pre_state, bindings, actor)?;
             if matches.is_empty() {
-                let reason = format!(
-                    "require failed: {} did not hold over pre-state",
-                    format::format_expr_inline(expr)
-                );
-                trace.push(TraceEntry::Require {
-                    expression: format::format_expr_inline(expr),
-                    outcome: RequireOutcome::Rejected {
-                        reason: reason.clone(),
-                    },
-                });
+                // The rejection path renders the expression for the
+                // reason string regardless of tracing (existing
+                // behaviour from PR B); reuse the same rendering for
+                // the trace entry rather than calling
+                // format_expr_inline twice.
+                let rendered = format::format_expr_inline(expr);
+                let reason = format!("require failed: {rendered} did not hold over pre-state");
+                if trace.is_on() {
+                    trace.push(TraceEntry::Require {
+                        expression: rendered,
+                        outcome: RequireOutcome::Rejected {
+                            reason: reason.clone(),
+                        },
+                    });
+                }
                 Ok(StmtOutcome::Rejected(reason))
             } else {
-                trace.push(TraceEntry::Require {
-                    expression: format::format_expr_inline(expr),
-                    outcome: RequireOutcome::Held {
-                        match_count: matches.len(),
-                    },
-                });
+                if trace.is_on() {
+                    trace.push(TraceEntry::Require {
+                        expression: format::format_expr_inline(expr),
+                        outcome: RequireOutcome::Held {
+                            match_count: matches.len(),
+                        },
+                    });
+                }
                 Ok(StmtOutcome::Continue)
             }
         }
@@ -2079,17 +2088,24 @@ fn execute_stmt(
             // rustdoc for the multi-outcome contract. Crucially, on a
             // unique match we *replace* the binding context with the
             // returned match rather than extending.
+            //
+            // For 0 / N>1 branches, the rejection reason / error
+            // message renders the expression regardless of tracing
+            // (existing behaviour from PR B); the trace entry reuses
+            // that single rendering rather than calling
+            // format_expr_inline a second time.
             let mut matches = find_matches(expr, pre_state, bindings, actor)?;
             match matches.len() {
                 0 => {
-                    trace.push(TraceEntry::BindOne {
-                        expression: format::format_expr_inline(expr),
-                        outcome: BindOneOutcome::NoMatch,
-                    });
-                    Ok(StmtOutcome::Rejected(format!(
-                        "bind_one failed: {} matched no candidates",
-                        format::format_expr_inline(expr)
-                    )))
+                    let rendered = format::format_expr_inline(expr);
+                    let reason = format!("bind_one failed: {rendered} matched no candidates");
+                    if trace.is_on() {
+                        trace.push(TraceEntry::BindOne {
+                            expression: rendered,
+                            outcome: BindOneOutcome::NoMatch,
+                        });
+                    }
+                    Ok(StmtOutcome::Rejected(reason))
                 }
                 1 => {
                     let new_bindings = matches.swap_remove(0);
@@ -2108,14 +2124,17 @@ fn execute_stmt(
                     Ok(StmtOutcome::Continue)
                 }
                 n => {
-                    trace.push(TraceEntry::BindOne {
-                        expression: format::format_expr_inline(expr),
-                        outcome: BindOneOutcome::MultipleMatches { count: n },
-                    });
-                    Err(EvalError::TypeMismatch(format!(
-                        "bind_one matched {n} candidates; expected exactly one: {}",
-                        format::format_expr_inline(expr)
-                    )))
+                    let rendered = format::format_expr_inline(expr);
+                    let err_msg = format!(
+                        "bind_one matched {n} candidates; expected exactly one: {rendered}"
+                    );
+                    if trace.is_on() {
+                        trace.push(TraceEntry::BindOne {
+                            expression: rendered,
+                            outcome: BindOneOutcome::MultipleMatches { count: n },
+                        });
+                    }
+                    Err(EvalError::TypeMismatch(err_msg))
                 }
             }
         }
@@ -2153,22 +2172,36 @@ fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            let mut retracted_here: Vec<ClaimInstance> = vec![];
-            for claim in pre_state.claims_for(predicate) {
-                if claim.args.len() != args.len() {
-                    continue;
-                }
-                if unify_args(args, &claim.args, bindings, actor).is_some() {
-                    retracted_here.push(claim.clone());
-                }
-            }
+            // Branch on trace.is_on() to keep the non-trace path
+            // streaming clones directly into `retracted` (its
+            // pre-PR-D shape). On the trace path, build an
+            // intermediate Vec so the trace entry can carry the
+            // actual retracted claims rather than a count.
             if trace.is_on() {
+                let mut retracted_here: Vec<ClaimInstance> = vec![];
+                for claim in pre_state.claims_for(predicate) {
+                    if claim.args.len() != args.len() {
+                        continue;
+                    }
+                    if unify_args(args, &claim.args, bindings, actor).is_some() {
+                        retracted_here.push(claim.clone());
+                    }
+                }
                 trace.push(TraceEntry::Retract {
                     predicate: predicate.clone(),
                     retracted: retracted_here.clone(),
                 });
+                retracted.extend(retracted_here);
+            } else {
+                for claim in pre_state.claims_for(predicate) {
+                    if claim.args.len() != args.len() {
+                        continue;
+                    }
+                    if unify_args(args, &claim.args, bindings, actor).is_some() {
+                        retracted.push(claim.clone());
+                    }
+                }
             }
-            retracted.extend(retracted_here);
             Ok(StmtOutcome::Continue)
         }
         Stmt::For {
@@ -2182,90 +2215,100 @@ fn execute_stmt(
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),
             };
             // Iteration scope (see PR B): snapshot outer bindings,
-            // reset per iteration, restore on exit. Trace builds a
-            // nested per-iteration sub-trace when tracing is on.
+            // reset per iteration, restore on exit.
+            //
+            // Branched on `trace.is_on()` to keep the non-trace path
+            // tight: no per-iteration `iter_entries` allocation, no
+            // `item.clone()` (the value moves directly into bindings),
+            // no `iterations` Vec. The trace path opts into all of
+            // those for diagnostic completeness.
             let outer = bindings.clone();
-            let mut iterations: Vec<ForIterationTrace> = vec![];
-            for item in items {
-                bindings.clone_from(&outer);
-                bindings.insert(binding.clone(), item.clone());
-                let mut iter_entries: Vec<TraceEntry> = vec![];
-                // Labeled block scopes the iter_sink so its borrow on
-                // iter_entries ends before we move iter_entries into
-                // the ForIterationTrace below. The block returns the
-                // iteration outcome (Continue / Rejected / Errored)
-                // and the executor's borrow naturally goes out of
-                // scope with the block.
-                let iter_result: Result<Option<String>, EvalError> = 'inner: {
-                    let mut iter_sink = if trace.is_on() {
-                        TraceSink::On(&mut iter_entries)
-                    } else {
-                        TraceSink::Off
-                    };
-                    for inner in body {
-                        match execute_stmt(
-                            inner,
-                            pre_state,
-                            bindings,
-                            actor,
-                            asserted,
-                            retracted,
-                            emitted,
-                            &mut iter_sink,
-                        ) {
-                            Ok(StmtOutcome::Continue) => {}
-                            Ok(StmtOutcome::Rejected(r)) => break 'inner Ok(Some(r)),
-                            Err(e) => break 'inner Err(e),
+            if trace.is_on() {
+                let mut iterations: Vec<ForIterationTrace> = vec![];
+                for item in items {
+                    bindings.clone_from(&outer);
+                    let item_for_trace = item.clone();
+                    bindings.insert(binding.clone(), item);
+                    let mut iter_entries: Vec<TraceEntry> = vec![];
+                    // Labeled block scopes the iter_sink so its borrow
+                    // on iter_entries ends before we move iter_entries
+                    // into ForIterationTrace.
+                    let iter_result: Result<Option<String>, EvalError> = 'inner: {
+                        let mut iter_sink = TraceSink::On(&mut iter_entries);
+                        for inner in body {
+                            match execute_stmt(
+                                inner,
+                                pre_state,
+                                bindings,
+                                actor,
+                                asserted,
+                                retracted,
+                                emitted,
+                                &mut iter_sink,
+                            ) {
+                                Ok(StmtOutcome::Continue) => {}
+                                Ok(StmtOutcome::Rejected(r)) => break 'inner Ok(Some(r)),
+                                Err(e) => break 'inner Err(e),
+                            }
                         }
-                    }
-                    Ok(None)
-                };
-                match iter_result {
-                    Err(e) => {
-                        // Errored: record the partial iteration trace
-                        // plus the partial For trace so the outer
-                        // TracedProposal sees both before bubbling up.
-                        if trace.is_on() {
+                        Ok(None)
+                    };
+                    match iter_result {
+                        Err(e) => {
                             iterations.push(ForIterationTrace {
-                                item: item.clone(),
+                                item: item_for_trace,
                                 trace: iter_entries,
                             });
                             trace.push(TraceEntry::For {
                                 binding: binding.clone(),
                                 iterations,
                             });
+                            *bindings = outer;
+                            return Err(e);
                         }
-                        *bindings = outer;
-                        return Err(e);
-                    }
-                    Ok(maybe_rejected) => {
-                        if trace.is_on() {
+                        Ok(maybe_rejected) => {
                             iterations.push(ForIterationTrace {
-                                item,
+                                item: item_for_trace,
                                 trace: iter_entries,
                             });
-                        }
-                        if let Some(r) = maybe_rejected {
-                            if trace.is_on() {
+                            if let Some(r) = maybe_rejected {
                                 trace.push(TraceEntry::For {
                                     binding: binding.clone(),
                                     iterations,
                                 });
+                                *bindings = outer;
+                                return Ok(StmtOutcome::Rejected(r));
                             }
-                            *bindings = outer;
-                            return Ok(StmtOutcome::Rejected(r));
                         }
                     }
                 }
-            }
-            *bindings = outer;
-            if trace.is_on() {
+                *bindings = outer;
                 trace.push(TraceEntry::For {
                     binding: binding.clone(),
                     iterations,
                 });
+                Ok(StmtOutcome::Continue)
+            } else {
+                let mut off = TraceSink::Off;
+                for item in items {
+                    bindings.clone_from(&outer);
+                    bindings.insert(binding.clone(), item);
+                    for inner in body {
+                        match execute_stmt(
+                            inner, pre_state, bindings, actor, asserted, retracted, emitted,
+                            &mut off,
+                        )? {
+                            StmtOutcome::Continue => {}
+                            StmtOutcome::Rejected(r) => {
+                                *bindings = outer;
+                                return Ok(StmtOutcome::Rejected(r));
+                            }
+                        }
+                    }
+                }
+                *bindings = outer;
+                Ok(StmtOutcome::Continue)
             }
-            Ok(StmtOutcome::Continue)
         }
         Stmt::Emit(intent) => {
             let instance = resolve_intent(intent, bindings, actor)?;
