@@ -17,8 +17,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_examples::{
-    approval_controls, double_entry_ledger, insurance_claim_settlement, settlement_netting,
-    verified_revenue,
+    approval_controls, clinical_trial_enrolment, double_entry_ledger, insurance_claim_settlement,
+    settlement_netting, verified_revenue,
 };
 
 #[test]
@@ -108,6 +108,45 @@ fn insurance_claim_settlement_program_has_expected_shape() {
 }
 
 #[test]
+fn clinical_trial_enrolment_program_has_expected_shape() {
+    let p = clinical_trial_enrolment::program();
+    assert_eq!(p.name, "clinical_trial_enrolment");
+    assert_eq!(p.invariants.len(), 3);
+    assert_eq!(p.transformations.len(), 10);
+
+    // Setup transformations.
+    assert!(p.transformation("open_trial").is_some());
+    assert!(p.transformation("approve_protocol_version").is_some());
+    assert!(p.transformation("approve_consent_form_version").is_some());
+    assert!(p.transformation("delegate_investigator").is_some());
+    assert!(p.transformation("screen_participant").is_some());
+    assert!(p.transformation("record_consent").is_some());
+    assert!(p.transformation("record_eligibility_criterion").is_some());
+    assert!(p.transformation("record_eligibility_assessment").is_some());
+    assert!(
+        p.transformation("open_important_protocol_deviation")
+            .is_some()
+    );
+
+    // The load-bearing transformation.
+    assert!(p.transformation("randomise_participant").is_some());
+
+    // Structural-uniqueness invariants.
+    assert!(
+        p.invariant("at_most_one_protocol_window_per_version")
+            .is_some()
+    );
+    assert!(
+        p.invariant("at_most_one_consent_window_per_version")
+            .is_some()
+    );
+    assert!(
+        p.invariant("participant_randomised_once_per_trial")
+            .is_some()
+    );
+}
+
+#[test]
 fn program_is_composition_not_a_parallel_definition() {
     // Pin the contract that program() composes the existing constructor
     // functions rather than redefining the IR. If a future refactor
@@ -159,6 +198,7 @@ fn all_programs_registry_contains_every_per_example_program() {
         double_entry_ledger::program().name.as_str(),
         approval_controls::program().name.as_str(),
         insurance_claim_settlement::program().name.as_str(),
+        clinical_trial_enrolment::program().name.as_str(),
     ] {
         assert!(
             registry_names.contains(&expected_name),

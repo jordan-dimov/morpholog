@@ -10,6 +10,7 @@ repository.workspace = true
 morpholog-core = { path = "../morpholog-core" }
 
 [dev-dependencies]
+jiff = { workspace = true }
 rust_decimal = { workspace = true }
 
 [lints]

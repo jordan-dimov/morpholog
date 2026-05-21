@@ -76,6 +76,10 @@ pub(crate) fn le(lhs: Expr, rhs: Expr) -> Expr {
     Expr::Le(Box::new(lhs), Box::new(rhs))
 }
 
+pub(crate) fn date_le(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::DateLe(Box::new(lhs), Box::new(rhs))
+}
+
 pub(crate) fn sub(lhs: Expr, rhs: Expr) -> Expr {
     Expr::Sub(Box::new(lhs), Box::new(rhs))
 }

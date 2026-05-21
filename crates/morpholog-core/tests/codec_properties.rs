@@ -11,6 +11,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use jiff::civil::Date;
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance};
 use proptest::prelude::*;
 use rust_decimal::Decimal;
@@ -35,14 +36,26 @@ fn arb_subject() -> impl Strategy<Value = String> {
     "[a-zA-Z][a-zA-Z0-9_]{0,16}".prop_map(|s| s)
 }
 
+/// Generate civil dates from a bounded calendar range. The codec
+/// contract being exercised (date → JSON string → date, exactness
+/// preserved) does not depend on extreme years; constraining to a
+/// realistic window keeps shrinking reports small. February overflow
+/// (day 30/31 in a 28/29-day month) is handled by `Date::new`
+/// returning an error, which the strategy filters out.
+fn arb_civil_date() -> impl Strategy<Value = Date> {
+    (1970i16..=2100i16, 1i8..=12i8, 1i8..=31i8)
+        .prop_filter_map("invalid civil date", |(y, m, d)| Date::new(y, m, d).ok())
+}
+
 /// Recursive `EvalValue` strategy. Leaves are decimals, subjects,
-/// and booleans; collections wrap an inner strategy. Bounded depth
-/// keeps generation finite.
+/// booleans, and civil dates; collections wrap an inner strategy.
+/// Bounded depth keeps generation finite.
 fn arb_eval_value() -> impl Strategy<Value = EvalValue> {
     let leaf = prop_oneof![
         arb_decimal().prop_map(EvalValue::Decimal),
         arb_subject().prop_map(EvalValue::Subject),
         any::<bool>().prop_map(EvalValue::Bool),
+        arb_civil_date().prop_map(EvalValue::Date),
     ];
     leaf.prop_recursive(
         3, // max depth: leaf, leaf-in-collection, collection-in-collection
