@@ -1664,11 +1664,10 @@ pub enum DeliveryOutcome {
 ///
 /// The trait bakes in `Send + Sync` on the implementor and `Send`
 /// on the returned future so that polling loops that spawn one
-/// worker per intent_type (the shape forming in PR 3) can
-/// `tokio::spawn(deliverer.deliver(...))` against an arbitrary
-/// `D: Deliverer`. RPITIT (return position impl trait in trait)
-/// does not let callers add a `Send` bound on the anonymous
-/// future later, so the bound is fixed here rather than
+/// worker per intent type can `tokio::spawn(deliverer.deliver(...))`
+/// against an arbitrary `D: Deliverer`. RPITIT (return position impl
+/// trait in trait) does not let callers add a `Send` bound on the
+/// anonymous future later, so the bound is fixed here rather than
 /// reintroduced as a breaking change.
 pub trait Deliverer: Send + Sync {
     fn deliver(&self, row: &OutboxRow)
