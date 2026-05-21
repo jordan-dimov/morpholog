@@ -1839,4 +1839,296 @@ mod tests {
         // value matters less than the structural presence).
         assert_eq!(failing_sub_expression.as_deref(), None);
     }
+
+    // ============================================================
+    // Additional failure-walk coverage (ChatGPT + Copilot PR #55)
+    // ============================================================
+
+    /// Regression for the And binding-flow bug. The walker must
+    /// thread bindings through conjuncts the same way the evaluator
+    /// does. Without that, this case returns `None` because A(x) and
+    /// B(x) each succeed against the original (empty) binding
+    /// context - even though no x value satisfies both.
+    #[test]
+    fn failure_walk_and_threads_bindings_through_conjuncts() {
+        use dsl::*;
+        // A(a1) holds, B(b2) holds, but no x satisfies BOTH A(x) and
+        // B(x).
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "A".to_string(),
+                args: vec![EvalValue::Subject("a1".to_string())],
+            },
+            ClaimInstance {
+                predicate: "B".to_string(),
+                args: vec![EvalValue::Subject("b2".to_string())],
+            },
+        ]);
+        let t = Transformation {
+            name: "needs_shared_x".to_string(),
+            parameters: vec![],
+            body: vec![require(and(vec![
+                claim("A", vec![var("x")]),
+                claim("B", vec![var("x")]),
+            ]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace);
+        // Under the bug, this would be None (each conjunct evaluated
+        // against the original empty bindings has matches). Under
+        // the fix, after A binds x = a1, B(x = a1) fails - so B is
+        // the failing conjunct.
+        let failing = failing.expect(
+            "binding-flow bug: walker should drill to the failing conjunct under threaded bindings",
+        );
+        assert!(
+            failing.contains("B"),
+            "expected failing conjunct B (no B(a1) in state); got: {failing}"
+        );
+    }
+
+    /// `Implies(left, right)` where `left` itself fails: the implies
+    /// is vacuously true at that branch, so a top-level rejection
+    /// can't be attributed to either side meaningfully. Walker
+    /// returns None.
+    #[test]
+    fn failure_walk_implies_with_failing_left_returns_none() {
+        use dsl::*;
+        // Trigger does not hold for x. Implies is vacuously true at
+        // every iteration. But we need the implies to actually fail
+        // overall to trigger the walker - so wrap it in an And with
+        // a separately-failing conjunct, then assert that the walker
+        // points at the failing And conjunct, not at the implies.
+        let state = State::default();
+        let t = Transformation {
+            name: "needs_failing_conjunct".to_string(),
+            parameters: vec![],
+            body: vec![require(and(vec![
+                // Implies with failing left: vacuously true; not a
+                // useful drill-down target.
+                implies(
+                    claim(
+                        "Trigger",
+                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                    ),
+                    claim(
+                        "Consequent",
+                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                    ),
+                ),
+                // This conjunct genuinely fails.
+                claim(
+                    "RealRequirement",
+                    vec![Term::Literal(Value::Subject("x".to_string()))],
+                ),
+            ]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("RealRequirement"),
+            "expected the genuinely-failing conjunct, not the vacuous implies; got: {failing}"
+        );
+    }
+
+    /// `Implies(left, right)` where right is itself compound: walker
+    /// drills recursively into the failing inner sub-expression.
+    #[test]
+    fn failure_walk_implies_recurses_into_compound_right() {
+        use dsl::*;
+        // Trigger(x) holds; right is `And(StepA(x), StepB(x))`;
+        // StepA holds, StepB fails. Walker should drill past Implies
+        // and past the inner And to StepB.
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "Trigger".to_string(),
+                args: vec![EvalValue::Subject("x".to_string())],
+            },
+            ClaimInstance {
+                predicate: "StepA".to_string(),
+                args: vec![EvalValue::Subject("x".to_string())],
+            },
+        ]);
+        let t = Transformation {
+            name: "needs_both_steps".to_string(),
+            parameters: vec![],
+            body: vec![require(implies(
+                claim(
+                    "Trigger",
+                    vec![Term::Literal(Value::Subject("x".to_string()))],
+                ),
+                and(vec![
+                    claim(
+                        "StepA",
+                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                    ),
+                    claim(
+                        "StepB",
+                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                    ),
+                ]),
+            ))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("StepB"),
+            "expected drill-down through Implies + And to StepB; got: {failing}"
+        );
+    }
+
+    /// `Forall` body recursion: when the body is itself compound,
+    /// walker drills into the failing sub-expression of the body
+    /// under the failing source binding.
+    #[test]
+    fn failure_walk_forall_recurses_into_compound_body() {
+        use dsl::*;
+        // Source: [x, y]. Body: And(A(line), B(line)). A holds for
+        // both x and y; B only holds for x. Walker should drill into
+        // the And and identify B as the failing conjunct under the y
+        // iteration.
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "A".to_string(),
+                args: vec![EvalValue::Subject("x".to_string())],
+            },
+            ClaimInstance {
+                predicate: "A".to_string(),
+                args: vec![EvalValue::Subject("y".to_string())],
+            },
+            ClaimInstance {
+                predicate: "B".to_string(),
+                args: vec![EvalValue::Subject("x".to_string())],
+            },
+        ]);
+        let t = Transformation {
+            name: "every_line_has_a_and_b".to_string(),
+            parameters: vec!["lines".to_string()],
+            body: vec![require(forall(
+                "line",
+                in_(var("line"), var("lines")),
+                and(vec![
+                    claim("A", vec![var("line")]),
+                    claim("B", vec![var("line")]),
+                ]),
+            ))],
+        };
+        let transition = trace_transition(
+            &t,
+            vec![EvalValue::Collection(vec![
+                EvalValue::Subject("x".to_string()),
+                EvalValue::Subject("y".to_string()),
+            ])],
+        );
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
+        assert!(
+            failing.contains("B"),
+            "expected drill past forall + into And, identifying B as failing; got: {failing}"
+        );
+        assert!(
+            !failing.starts_with("forall") && !failing.starts_with("and("),
+            "expected drill all the way to leaf; got: {failing}"
+        );
+    }
+
+    /// `Exists` failure: structurally no single binding satisfied
+    /// the body; pointing at the body would describe "what we
+    /// looked for" rather than "what failed". Returns None.
+    #[test]
+    fn failure_walk_exists_returns_none() {
+        use dsl::*;
+        let state = State::default();
+        let t = Transformation {
+            name: "needs_some_x".to_string(),
+            parameters: vec![],
+            body: vec![require(exists("x", claim("Missing", vec![var("x")])))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let failing = trace.iter().find_map(|e| match e {
+            TraceEntry::Require {
+                outcome:
+                    RequireOutcome::Rejected {
+                        failing_sub_expression,
+                        ..
+                    },
+                ..
+            } => Some(failing_sub_expression.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            failing.expect("expected to find the Require entry"),
+            None,
+            "Exists failures should not produce a failing_sub_expression"
+        );
+    }
+
+    /// `BindOne` with a compound expression: walker drills into the
+    /// expression the same way it does for Require. Pin that the
+    /// path is wired up symmetrically.
+    #[test]
+    fn failure_walk_bind_one_drills_into_compound_expression() {
+        use dsl::*;
+        // BindOne expects a unique match for And(Approved(x),
+        // Active(x)). Approved holds for x; Active does not. The
+        // walker should drill into the And and identify Active.
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Approved".to_string(),
+            args: vec![EvalValue::Subject("x".to_string())],
+        }]);
+        let t = Transformation {
+            name: "unique_approved_and_active".to_string(),
+            parameters: vec![],
+            body: vec![bind_one(and(vec![
+                claim("Approved", vec![var("x")]),
+                claim("Active", vec![var("x")]),
+            ]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        let TraceEntry::BindOne {
+            outcome: BindOneOutcome::NoMatch {
+                failing_sub_expression,
+            },
+            ..
+        } = &trace[0]
+        else {
+            panic!("expected BindOne NoMatch, got {:?}", trace[0]);
+        };
+        let failing = failing_sub_expression
+            .as_deref()
+            .expect("expected drill-down on compound bind_one");
+        assert!(
+            failing.contains("Active"),
+            "expected drill into BindOne's And to Active; got: {failing}"
+        );
+    }
 }

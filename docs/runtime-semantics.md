@@ -203,7 +203,7 @@ One trace entry per transformation statement and per invariant check. `For` is n
 - `And(A, B, C)` failing at B: walker drills to B (recursively if B is itself compound).
 - `Implies(left, right)` failing with left held: walker drills to `right`.
 - `Forall { binding, source, body }` failing at some iteration: walker drills to `body`. Binding values are not substituted into the rendered string in v0; callers correlate iteration separately.
-- `Not`, `Or`, `Exists`, leaf expressions (`Claim`, `Le`, arithmetic, `Sum`, `ValueOf`, etc.): `None`. Either structurally has no single sub-expression that's "the one responsible," or the leaf is already as specific as the kernel can be.
+- `Not`, `Exists`, leaf expressions (`Claim`, `Le`, arithmetic, `Sum`, `ValueOf`, etc.): `None`. Either structurally has no single sub-expression that's "the one responsible," or the leaf is already as specific as the kernel can be.
 
 The walker runs **only on rejection paths**. Success-path performance is unchanged. The field is omitted from JSON when `None` (`skip_serializing_if`), so existing trace consumers see no shape change.
 

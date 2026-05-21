@@ -494,7 +494,7 @@ pub(crate) fn resolve_term(
 /// - `Implies { left, right }`: if `left` held (non-empty matches),
 ///   the failure is in `right`. Recurse into `right` and fall back
 ///   to rendering it. If `left` failed, the implies is vacuously
-///   true — caller should not have invoked us; return `None` as
+///   true - caller should not have invoked us; return `None` as
 ///   safety.
 /// - `Forall { binding, source, body }`: find the first source-match
 ///   under which `body` fails, recurse into `body` under that
@@ -502,10 +502,10 @@ pub(crate) fn resolve_term(
 ///   values are **not substituted** into the rendered string in v0
 ///   (per the PR-G review constraint); the caller correlates the
 ///   failing iteration separately if needed.
-/// - `Not`, `Or`, `Exists`: return `None`. Structurally these have
-///   no single sub-expression that's "the one responsible" — `Not`
+/// - `Not`, `Exists`: return `None`. Structurally these have
+///   no single sub-expression that's "the one responsible": `Not`
 ///   describes what *held* rather than what failed; `Exists` and
-///   `Or` failures mean "no member of the set satisfied", which is
+///   `Exists` failures mean "no member of the set satisfied", which is
 ///   the whole expression, not any sub-part.
 /// - Leaf expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
 ///   `Term`, `Sub`, `Add`, `Sum`, `ValueOf`): return `None`. Already
@@ -524,14 +524,31 @@ pub(crate) fn find_failing_subexpr(
 ) -> Option<String> {
     match expr {
         Expr::And(conjuncts) => {
+            // Thread bindings through conjuncts the same way
+            // `find_conjunction` does in the evaluator: each conjunct
+            // runs against the contexts produced by the previous one.
+            // Evaluating each conjunct against the *original*
+            // `bindings` would miss failures that only show up after
+            // a prior conjunct narrowed the binding context (e.g.
+            // `And(A(x), B(x))` where some `A(a1)` holds and some
+            // `B(b2)` holds but no `x` exists where both hold).
+            let mut current: Vec<Bindings> = vec![bindings.clone()];
             for c in conjuncts {
-                let matches = find_matches(c, state, bindings, actor).ok()?;
-                if matches.is_empty() {
+                let mut next: Vec<Bindings> = Vec::new();
+                for ctx in &current {
+                    next.extend(find_matches(c, state, ctx, actor).ok()?);
+                }
+                if next.is_empty() {
+                    // This conjunct kills the chain. Diagnose under
+                    // one of the binding contexts that survived to
+                    // this point; the first is fine.
+                    let failing_ctx = current.first().unwrap_or(bindings);
                     return Some(
-                        find_failing_subexpr(c, state, bindings, actor)
+                        find_failing_subexpr(c, state, failing_ctx, actor)
                             .unwrap_or_else(|| crate::format::format_expr_inline(c)),
                     );
                 }
+                current = next;
             }
             None
         }
@@ -558,18 +575,19 @@ pub(crate) fn find_failing_subexpr(
             None
         }
         Expr::Forall {
-            binding,
+            binding: _,
             source,
             body,
         } => {
+            // Mirror find_matches's Forall: iterate every source
+            // binding extension and test the body against it. No
+            // `contains_key` filter here - the evaluator does not
+            // filter source matches that way, and a walker that
+            // diverged from the evaluator's iteration order could
+            // identify a "failing" iteration the evaluator never
+            // tried.
             let source_matches = find_matches(source, state, bindings, actor).ok()?;
             for ext in &source_matches {
-                // Skip iterations where the binding variable isn't
-                // actually bound by the source match (defensive; the
-                // evaluator's own forall logic does the same).
-                if !ext.contains_key(binding) {
-                    continue;
-                }
                 let body_matches = find_matches(body, state, ext, actor).ok()?;
                 if body_matches.is_empty() {
                     return Some(

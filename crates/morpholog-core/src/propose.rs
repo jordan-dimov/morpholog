@@ -203,8 +203,8 @@ pub enum RequireOutcome {
         ///   caller correlates separately.
         ///
         /// `None` when no more specific sub-expression usefully
-        /// applies: `Or` / `Exists` failures are structural (no
-        /// single sub-expression is "the one"); `Not` failures
+        /// applies: `Exists` failures are structural (no single
+        /// sub-expression is "the one"); `Not` failures
         /// describe what *held* rather than what failed; leaf
         /// expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
         /// `Term`, arithmetic, `Sum`, `ValueOf`) are already as
