@@ -105,15 +105,66 @@ jobs:
       - name: test (examples, parallel)
         run: cargo test -p morpholog-examples --all-targets --locked
 
-      - name: test (cli, parallel)
-        run: cargo test -p morpholog-cli --all-targets --locked
+      # PG-backed integration tests share one schema; each test
+      # truncates it on entry, so they must run serially.
+      - name: test (cli, serial)
+        run: cargo test -p morpholog-cli --all-targets --locked -- --test-threads=1
 
-      # PG integration tests share one schema and must run serially.
       - name: test (postgres, serial)
         run: cargo test -p morpholog-postgres --all-targets --locked -- --test-threads=1
 
-      # morpholog-outbox integration tests also share the schema
-      # and must run serially. Same DB, same serial constraint as
-      # the postgres-adapter tests above.
       - name: test (outbox, serial)
         run: cargo test -p morpholog-outbox --all-targets --locked -- --test-threads=1
+
+  coverage:
+    name: coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain with llvm-tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+
+      # Pre-built binary download instead of compiling from source.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Apply Morpholog schema
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -f crates/morpholog-core/sql/schema.sql
+
+      # Coverage runs the full workspace test suite under llvm-cov.
+      # PG-backed tests share one schema and must run serially.
+      # No threshold gating - the summary is a visibility tool, not
+      # a merge gate, so a coverage dip is a review prompt rather
+      # than a hard fail.
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --workspace --locked --summary-only -- --test-threads=1
