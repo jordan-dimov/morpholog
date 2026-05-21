@@ -41,7 +41,8 @@ mod state;
 mod validate;
 
 pub use analysis::{
-    predicates_referenced_by_derived, predicates_referenced_by_expr, predicates_referenced_by_stmt,
+    predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_expr,
+    predicates_referenced_by_stmt,
 };
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::EvalError;
@@ -340,6 +341,57 @@ mod tests {
         assert_eq!(
             got, expected,
             "every Expr variant that carries a predicate reference must contribute it"
+        );
+    }
+
+    /// `predicates_read_by_stmt` includes every predicate the
+    /// statement reads from pre-state (Require, BindOne, Let value,
+    /// For collection + body, Retract pattern) and excludes
+    /// `Stmt::Assert`'s output predicate.
+    #[test]
+    fn predicates_read_by_stmt_excludes_assert_includes_retract_and_reads() {
+        use dsl::*;
+        let body = vec![
+            // Reads via require.
+            require(claim("P_require", vec![var("x")])),
+            // Reads via bind_one.
+            bind_one(claim("P_bind", vec![var("y"), var("z")])),
+            // Reads via Let value (claim is read).
+            let_("v", claim("P_let", vec![var("y")])),
+            // Writes only: P_assert MUST NOT appear in the read set.
+            assert_("P_assert", vec![var("y")]),
+            // Reads via retract pattern (pre-state matched).
+            retract("P_retract", vec![wildcard()]),
+            // For collection (read) + body (recurses).
+            for_(
+                "i",
+                term(var("xs")),
+                vec![require(claim("P_for_inner", vec![var("i")]))],
+            ),
+            // Intent: nothing.
+            emit("Notified", vec![var("y")]),
+        ];
+        let mut got = BTreeSet::new();
+        for stmt in &body {
+            predicates_read_by_stmt(stmt, &mut got);
+        }
+        let expected: BTreeSet<String> =
+            ["P_require", "P_bind", "P_let", "P_retract", "P_for_inner"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert_eq!(
+            got, expected,
+            "read-set must include every pre-state read and exclude Stmt::Assert's output"
+        );
+        // Sanity: the broad walker DOES include P_assert.
+        let mut broad = BTreeSet::new();
+        for stmt in &body {
+            predicates_referenced_by_stmt(stmt, &mut broad);
+        }
+        assert!(
+            broad.contains("P_assert"),
+            "broad walker must include Assert; got: {broad:?}"
         );
     }
 

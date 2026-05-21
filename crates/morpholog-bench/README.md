@@ -10,7 +10,7 @@ Exploratory. The numbers this binary prints are not regression assertions and ar
 
 | Scenario | Setup | Hot path | What it stresses |
 |---|---|---|---|
-| `write` | N synthetic journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | `load_state` + invariant evaluation over the full candidate state + commit |
+| `write` | N synthetic journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | scoped `load_state` + invariant evaluation over the candidate state + commit |
 | `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived` with each phase timed separately | the three layers of the read path, so the dominant cost is visible directly |
 | `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N (number of rows) and `--at <fraction>` (how far through the log the target sits) |
 
@@ -67,7 +67,7 @@ Observations:
 | 10 000 | 100 | ~520 ms | ~240 ms |
 | 100 000 | 100 | ~5 200 ms | ~2 300 ms |
 
-Linear in `N` and essentially independent of `K`. The remaining cost on `propose_one` is `load_state` + the indexed kernel work for `propose` + `INSERT` for claims/audit/outbox + COMMIT. Improvements here likely come from the same `load_state` work as the read path; the kernel itself is no longer the bottleneck at these sizes.
+The remaining cost on `propose_one` is `load_state` + the indexed kernel work for `propose` + `INSERT` for claims/audit/outbox + COMMIT. With predicate-scoped loading on the write path now landed (mirroring the read path's existing scoping via `predicates_referenced_by_derived`), `load_state` only fetches claims of predicates the transformation body or invariants actually reference; the `post_simple_entry` transformation reads three predicates (`PeriodClosed`, plus the invariants' `JournalEntry` and `JournalLine`), so on a multi-program database the previously-dominant linear scan is gone. The kernel itself is no longer the bottleneck at these sizes.
 
 ### As-of replay path
 
