@@ -345,6 +345,55 @@ pub fn admit_investor_reported_revenue() -> Transformation {
     }
 }
 
+pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
+    vec![
+        predicate("IndependentlyVerifiedRevenue")
+            .subject("asset")
+            .subject("period")
+            .decimal("amount")
+            .subject("verification_id")
+            .build(),
+        predicate("CurrentVerification")
+            .subject("asset")
+            .subject("period")
+            .subject("verification_id")
+            .build(),
+        predicate("Supersedes")
+            .subject("new_verification_id")
+            .subject("prior_verification_id")
+            .build(),
+        predicate("StandingGrantedBy")
+            .subject("verification_id")
+            .subject("purpose")
+            .subject("authority")
+            .subject("grant_id")
+            .build(),
+        predicate("AdmissibleFor")
+            .subject("verification_id")
+            .subject("purpose")
+            .build(),
+        predicate("StandingRevoked")
+            .subject("verification_id")
+            .subject("purpose")
+            .subject("revocation_id")
+            .build(),
+        predicate("DebtServiceRevenue")
+            .subject("asset")
+            .subject("period")
+            .decimal("amount")
+            .subject("decision_id")
+            .subject("verification_id")
+            .build(),
+        predicate("InvestorReportedRevenue")
+            .subject("asset")
+            .subject("period")
+            .decimal("amount")
+            .subject("report_id")
+            .subject("verification_id")
+            .build(),
+    ]
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         admissibility_has_provenance(),
@@ -359,6 +408,7 @@ pub fn all_invariants() -> Vec<Invariant> {
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "verified_revenue".to_string(),
+        predicates: all_predicates(),
         invariants: all_invariants(),
         transformations: vec![
             admit_independent_verification(),

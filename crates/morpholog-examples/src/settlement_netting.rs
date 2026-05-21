@@ -120,6 +120,35 @@ pub fn create_net_settlement() -> Transformation {
     }
 }
 
+pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
+    vec![
+        predicate("NetSettlement")
+            .subject("net_id")
+            .subject("party_a")
+            .subject("party_b")
+            .decimal("amount")
+            .build(),
+        predicate("SettlementLine")
+            .subject("line_id")
+            .subject("net_id")
+            .decimal("amount")
+            .build(),
+        predicate("ApprovedSettlementLine")
+            .subject("line_id")
+            .build(),
+        predicate("Between")
+            .subject("line_id")
+            .subject("party_a")
+            .subject("party_b")
+            .build(),
+        predicate("LineAmount")
+            .subject("line_id")
+            .decimal("amount")
+            .build(),
+        predicate("Netted").subject("line_id").build(),
+    ]
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         net_settlement_has_lines(),
@@ -134,6 +163,7 @@ pub fn all_invariants() -> Vec<Invariant> {
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "settlement_netting".to_string(),
+        predicates: all_predicates(),
         invariants: all_invariants(),
         transformations: vec![create_net_settlement()],
         derived_claims: vec![],

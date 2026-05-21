@@ -39,7 +39,8 @@
 //! rendering.
 
 use crate::{
-    Claim, DerivedClaim, Expr, Intent, Invariant, Program, Stmt, Term, Transformation, Value,
+    Claim, DerivedClaim, Expr, Intent, Invariant, PredicateArgKind, PredicateDecl, Program, Stmt,
+    Term, Transformation, Value,
 };
 
 /// Top-level entry. Returns a multi-line string terminated by a
@@ -48,6 +49,14 @@ use crate::{
 pub fn format_program(p: &Program) -> String {
     let mut out = String::new();
     out.push_str(&format!("program {}\n", p.name));
+
+    // Predicates render between the header and the invariants - they
+    // are the programme's vocabulary contract, and seeing them first
+    // helps the reader interpret every subsequent claim reference.
+    for decl in &p.predicates {
+        out.push('\n');
+        out.push_str(&format_predicate_decl(decl));
+    }
 
     for inv in &p.invariants {
         out.push('\n');
@@ -65,6 +74,28 @@ pub fn format_program(p: &Program) -> String {
     }
 
     out
+}
+
+/// Render a single [`PredicateDecl`] as one line:
+/// `predicate Name(arg1: Kind, arg2: Kind)`.
+pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
+    let args: Vec<String> = decl
+        .args
+        .iter()
+        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(a.kind)))
+        .collect();
+    format!("predicate {}({})\n", decl.name, args.join(", "))
+}
+
+fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
+    match k {
+        PredicateArgKind::Subject => "Subject",
+        PredicateArgKind::Decimal => "Decimal",
+        PredicateArgKind::Date => "Date",
+        PredicateArgKind::Bool => "Bool",
+        PredicateArgKind::Collection => "Collection",
+        PredicateArgKind::Any => "Any",
+    }
 }
 
 pub fn format_invariant(inv: &Invariant) -> String {
@@ -340,6 +371,7 @@ mod tests {
     #[test]
     fn format_program_starts_with_program_header() {
         let p = Program {
+            predicates: vec![],
             name: "demo".to_string(),
             invariants: vec![],
             transformations: vec![],
@@ -471,6 +503,7 @@ mod tests {
     #[test]
     fn format_program_output_ends_with_newline() {
         let p = Program {
+            predicates: vec![],
             name: "demo".to_string(),
             invariants: vec![],
             transformations: vec![Transformation {

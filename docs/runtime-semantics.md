@@ -42,6 +42,8 @@ These are not contradictions. They are four admitted claims from four authoritie
 
 **v0 implications:** claims carry only `(predicate_name, arguments)`. Authority, epoch, validity windows, and exception status are deliberately deferred until a real example demands them. The minimalism rule stands: do not add fields without forcing pressure from a worked example. When a property wants to be metadata, first try to re-express it as a separate claim (a "claim about a claim").
 
+**Programme vocabulary contract.** A [`Program`] declares the *vocabulary* of admissible claim shapes via `Program::predicates: Vec<PredicateDecl>`. Each `PredicateDecl` carries a name and a positional argument list with named, kinded positions. The kernel's `Program::validate()` is strict: every `claim`/`assert`/`retract`/`value_of`/derived-claim reference must target a declared predicate, and every reference must match the declared arity. Argument **kinds** (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`) are recorded as metadata and surface in `morpholog inspect predicates`; kind validation against the kinds of values flowing through the binding context is deferred until a worked example forces it. Intent declarations are deliberately out of scope - intents are outbox vocabulary, not claim vocabulary, and the asymmetry is captured rather than papered over.
+
 ## Claim semantics
 
 Claims are **set-valued** in v0.
