@@ -65,21 +65,20 @@ transformation grant_settlement_authority(actor, limit):
 --      proposed amount.
 --   2. The cumulative-cap rule holds against the policy aggregate.
 --
--- The Let bindings pull policy_id and aggregate_limit into scope so
--- the cumulative-cap require can reference both. Stmt::Require is a
--- yes/no gate that does not propagate its match's bindings back into
--- the active scope - which is why value extraction goes through Let
--- and ValueOf rather than through the existence requires alone.
+-- bind_one pulls policy_id and aggregate_limit into scope from
+-- their uniquely-matching claims. Where require is a yes/no
+-- existence gate that does not export bindings, bind_one is a
+-- deterministic unique lookup that does. Together with let (for
+-- value-producing expressions like sum) and for (for iteration),
+-- this is the statement-level binding doctrine.
 -- ============================================================
 transformation authorise_settlement(claim_id, settlement_id, amount):
-    -- gate: the claim was reported
-    require ClaimReported(claim_id, _, _)
-
-    -- extract policy_id from the reported claim, then aggregate_limit
-    -- from the policy. The Policy ValueOf needs no separate guard
-    -- because report_claim already ensured the policy exists.
-    let policy_id = value_of ClaimReported(claim_id, _, _)
-    let aggregate_limit = value_of Policy(policy_id, _)
+    -- Pull policy_id from the reported claim, then aggregate_limit
+    -- from the policy. Zero matches reject lawfully; multiple
+    -- matches surface a kernel error (the at_most_one_*
+    -- structural-uniqueness invariants exist to prevent this).
+    bind_one ClaimReported(claim_id, policy_id, _)
+    bind_one Policy(policy_id, aggregate_limit)
 
     -- actor authority gate
     require SettlementAuthority($actor, actor_limit)

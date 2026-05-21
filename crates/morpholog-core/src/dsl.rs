@@ -206,6 +206,14 @@ pub fn in_(elem: Term, coll: Term) -> Expr {
 /// supplied; multiple matches always errors. Constructed without a
 /// default by this helper; use [`value_of_with_default`] for the
 /// fallback form.
+///
+/// **Prefer [`bind_one`] in transformation bodies.** When the goal
+/// is to extract a uniquely-matching claim's values into the
+/// statement-level binding context, `bind_one` reads more directly
+/// and rejects lawfully on zero matches. Reach for `value_of` only
+/// in value-producing positions (inside arithmetic, comparisons,
+/// `Sum`, `Let`, or a `DerivedClaim` value expression) where a
+/// statement form does not fit.
 pub fn value_of(predicate: &str, args: Vec<Term>) -> Expr {
     Expr::ValueOf {
         predicate: predicate.to_string(),
@@ -230,6 +238,27 @@ pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: Expr) ->
 
 pub fn require(expr: Expr) -> Stmt {
     Stmt::Require(expr)
+}
+
+/// Deterministic unique-lookup binding statement. The companion to
+/// [`require`]: where `require` is a yes/no gate that does not
+/// export bindings, `bind_one` evaluates a predicate-shaped
+/// expression, *replaces* the current binding context with the
+/// single matching binding set, and short-circuits with a kernel
+/// error if more than one claim matches (programme bug) or with a
+/// lawful rejection if no claim matches (business outcome).
+///
+/// Idiomatic shape for extracting a uniquely-identified claim's
+/// values into the binding context:
+///
+/// ```ignore
+/// bind_one(claim("Policy", vec![var("policy_id"), var("aggregate_limit")]))
+/// ```
+///
+/// After this statement, both `policy_id` and `aggregate_limit`
+/// are bound for the rest of the transformation body.
+pub fn bind_one(expr: Expr) -> Stmt {
+    Stmt::BindOne(expr)
 }
 
 pub fn assert_(predicate: &str, args: Vec<Term>) -> Stmt {

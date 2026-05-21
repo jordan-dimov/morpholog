@@ -98,7 +98,15 @@ pub fn create_net_settlement() -> Transformation {
                 "line",
                 term(var("lines")),
                 vec![
-                    let_("amt", value_of("LineAmount", vec![var("line"), wildcard()])),
+                    // Per-line amount lookup. bind_one rejects if a
+                    // line has no LineAmount admitted and errors if
+                    // two LineAmount rows exist for one line (the
+                    // line-amount uniqueness is expected to be
+                    // pinned by an enclosing invariant when the
+                    // example grows; today the For-iteration alone
+                    // guarantees uniqueness through the candidate
+                    // collection).
+                    bind_one(claim("LineAmount", vec![var("line"), var("amt")])),
                     assert_("SettlementLine", vec![var("line"), var("net"), var("amt")]),
                     assert_("Netted", vec![var("line")]),
                 ],

@@ -121,6 +121,7 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
     let pad = indent(depth);
     match s {
         Stmt::Require(e) => format!("{pad}require {}", format_expr_inline(e)),
+        Stmt::BindOne(e) => format!("{pad}bind_one {}", format_expr_inline(e)),
         Stmt::Let { name, value } => {
             format!("{pad}let {name} = {}", format_expr_inline(value))
         }
@@ -189,8 +190,12 @@ fn format_expr(e: &Expr, depth: usize) -> String {
 }
 
 /// One-line expression rendering. Used inline in `require`, `let`,
-/// and as the base case of [`format_expr`] for leaf-shaped nodes.
-fn format_expr_inline(e: &Expr) -> String {
+/// and `bind_one` statements, as the base case of the indented
+/// multi-line printer for leaf-shaped nodes, and by kernel
+/// diagnostic paths (`bind_one` rejection reasons, `bind_one`
+/// multi-match errors) that need a compact human-readable rendering
+/// of an expression.
+pub fn format_expr_inline(e: &Expr) -> String {
     match e {
         Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
         Expr::Implies { left, right } => format!(
@@ -358,6 +363,19 @@ mod tests {
         assert!(s.contains("transformation open_trial(trial_id):"));
         assert!(s.contains("  assert Trial(trial_id)"));
         assert!(s.contains("  emit TrialOpened(trial_id)"));
+    }
+
+    /// `Stmt::BindOne` renders as `bind_one <expr>` with the inner
+    /// expression formatted inline. Mirrors the `require <expr>`
+    /// shape; the two read in parallel in any pretty-printed
+    /// transformation body.
+    #[test]
+    fn format_stmt_renders_bind_one_with_inline_expression() {
+        let s = format_stmt(
+            &bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
+            1,
+        );
+        assert_eq!(s, "  bind_one Policy(policy_id, limit)");
     }
 
     #[test]

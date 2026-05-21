@@ -122,9 +122,21 @@ pub enum Expr {
         body: Box<Expr>,
     },
     In(Term, Term),
-    /// Reads exactly one matching claim and yields its value-position binding.
-    /// Wildcards in `args` mark the value position(s). Zero matches is an
-    /// error unless `default` is supplied; multiple matches is always an error.
+    /// Reads exactly one matching claim and yields its value-position
+    /// binding. Wildcards in `args` mark the value position(s). Zero
+    /// matches is an error unless `default` is supplied; multiple
+    /// matches is always an error.
+    ///
+    /// **Prefer [`Stmt::BindOne`] in transformation bodies.** When
+    /// the goal is to extract a uniquely-matching claim's values
+    /// into the statement-level binding context, `bind_one` reads
+    /// more directly and rejects lawfully on zero matches (where
+    /// `ValueOf` raises a kernel error). `ValueOf` remains the
+    /// right tool for **value-producing positions** that aren't
+    /// statement-level binding extensions: inside `Sum`, `Add`,
+    /// `Sub`, `Eq`, `Le`, or `DateLe` expressions, inside a `Let`
+    /// computing a derived value, or inside a `DerivedClaim` value
+    /// expression where a statement form does not fit.
     ValueOf {
         predicate: String,
         args: Vec<Term>,
@@ -200,14 +212,51 @@ pub struct Intent {
 }
 
 /// One step inside a transformation body. Statements run in declared
-/// order against a binding context; a failing `Require` short-circuits
-/// the transformation, while `Assert`, `Retract`, `Emit`, `Let`,
-/// `LetNewSubject`, and `For` extend the staged outcome or the binding
-/// context. `Retract` of a non-existent claim is an idempotent no-op
-/// (see the variant doc), not a short-circuit.
+/// order against a binding context; a failing `Require` or `BindOne`
+/// short-circuits the transformation, while `Assert`, `Retract`,
+/// `Emit`, `Let`, `LetNewSubject`, and `For` extend the staged
+/// outcome or the binding context. `Retract` of a non-existent claim
+/// is an idempotent no-op (see the variant doc), not a short-circuit.
+///
+/// The statement-level binding doctrine is a four-way carve:
+///
+/// - [`Stmt::Require`] is a yes/no gate; bindings unchanged on
+///   success, transformation rejected on failure.
+/// - [`Stmt::BindOne`] is a deterministic unique lookup; on
+///   success the current binding context is *replaced* with the
+///   matching binding set, transformation rejected on zero matches,
+///   kernel error on multiple matches.
+/// - [`Stmt::Let`] computes a value-producing expression and binds
+///   its result under a new variable name.
+/// - [`Stmt::For`] iterates over a collection, executing its body
+///   once per element.
+///
+/// See `docs/runtime-semantics.md` for the require/bind_one/let/for
+/// trinity in full.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Require(Expr),
+    /// Deterministic unique-lookup binding statement. Evaluates a
+    /// predicate-shaped expression against current state and
+    /// bindings; the surviving binding set is treated as the next
+    /// binding context.
+    ///
+    /// Semantics:
+    /// - Zero matches: transformation rejected (lawful business
+    ///   outcome; the expected governed record is not present).
+    /// - One match: the returned binding set *replaces* the current
+    ///   bindings. Statements after a successful `BindOne` see the
+    ///   newly-bound variables.
+    /// - Multiple matches: `EvalError::TypeMismatch` (kernel error;
+    ///   the programme expected unique state but admitted ambiguous
+    ///   state - missing structural-uniqueness invariant or
+    ///   corruption).
+    ///
+    /// Replaces the `require + let + value_of` chain that previous
+    /// examples used to extract a uniquely-matching claim's values
+    /// into the binding context. Added with the insurance-claim-
+    /// settlement migration; see `docs/design-history.md`.
+    BindOne(Expr),
     Let {
         name: String,
         value: Expr,
@@ -1370,11 +1419,38 @@ fn execute_stmt(
         Stmt::Require(expr) => {
             let matches = find_matches(expr, pre_state, bindings, actor)?;
             if matches.is_empty() {
-                Ok(StmtOutcome::Rejected(
-                    "require failed: predicate did not hold over pre-state".to_string(),
-                ))
+                Ok(StmtOutcome::Rejected(format!(
+                    "require failed: {} did not hold over pre-state",
+                    format::format_expr_inline(expr)
+                )))
             } else {
                 Ok(StmtOutcome::Continue)
+            }
+        }
+        Stmt::BindOne(expr) => {
+            // Single-path deterministic unique lookup. See `Stmt::BindOne`
+            // rustdoc for the multi-outcome contract. Crucially, on a
+            // unique match we *replace* the binding context with the
+            // returned match rather than extending. `find_matches` already
+            // evaluates `expr` against the incoming `bindings`, so the
+            // single returned entry is the new authoritative context;
+            // extending would be redundant and risks subtle drift when
+            // an already-bound variable is also constrained by the
+            // expression.
+            let mut matches = find_matches(expr, pre_state, bindings, actor)?;
+            match matches.len() {
+                0 => Ok(StmtOutcome::Rejected(format!(
+                    "bind_one failed: {} matched no candidates",
+                    format::format_expr_inline(expr)
+                ))),
+                1 => {
+                    *bindings = matches.swap_remove(0);
+                    Ok(StmtOutcome::Continue)
+                }
+                n => Err(EvalError::TypeMismatch(format!(
+                    "bind_one matched {n} candidates; expected exactly one: {}",
+                    format::format_expr_inline(expr)
+                ))),
             }
         }
         Stmt::Let { name, value } => {
@@ -1412,7 +1488,21 @@ fn execute_stmt(
                 EvalValue::Collection(v) => v,
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),
             };
+            // Iteration scope. Variables bound inside the body must not
+            // leak across iterations or escape the loop. With `Stmt::Let`
+            // alone this was harmless (each Let overwrote the same key
+            // every iteration), but `Stmt::BindOne` exposes the latent
+            // footgun: a residual binding from iteration N constrains
+            // the find_matches narrowing in iteration N+1 and turns a
+            // valid lookup into a zero-match rejection. We snapshot the
+            // surrounding bindings before the loop, reset to that
+            // snapshot plus the iteration variable at the start of each
+            // iteration, and restore the snapshot when the loop
+            // completes. The body sees only `outer ++ {binding ->
+            // item}`, never the residue of a prior iteration.
+            let outer = bindings.clone();
             for item in items {
+                *bindings = outer.clone();
                 bindings.insert(binding.clone(), item);
                 for inner in body {
                     match execute_stmt(
@@ -1423,7 +1513,7 @@ fn execute_stmt(
                     }
                 }
             }
-            bindings.remove(binding);
+            *bindings = outer;
             Ok(StmtOutcome::Continue)
         }
         Stmt::Emit(intent) => {
@@ -1981,5 +2071,340 @@ mod tests {
         )
         .unwrap();
         assert!(matches.is_empty(), "60 + 50 <= 100 should reject");
+    }
+
+    // ============================================================
+    // Stmt::BindOne
+    //
+    // The deterministic unique-lookup binding statement. The
+    // doctrine these tests pin:
+    //
+    //   require  = gate; does not export bindings
+    //   bind_one = unique lookup; exports bindings
+    //   let      = compute a value expression
+    //
+    // BindOne sits between Require (no binding export) and Let (a
+    // value-producing expression). The tests below cover every
+    // load-bearing branch: zero matches reject lawfully, one match
+    // extends the binding context, two-or-more matches surface a
+    // kernel error, the binding flows into subsequent statements,
+    // and the existing NotPredicate path catches value-only
+    // expressions slid into a BindOne by mistake.
+    // ============================================================
+
+    /// Build a one-statement transformation body containing the given
+    /// statement, parameterless. Used by BindOne tests to drive the
+    /// full `propose` path so we exercise the statement contract
+    /// against a real transformation, not just `find_matches`.
+    fn single_stmt_transformation(name: &str, body: Vec<Stmt>) -> Transformation {
+        Transformation {
+            name: name.to_string(),
+            parameters: vec![],
+            body,
+        }
+    }
+
+    fn run(t: &Transformation, state: &State) -> Result<Outcome, EvalError> {
+        let transition = Transition {
+            transformation_name: t.name.clone(),
+            args: vec![],
+            actor: EvalValue::Subject("test_actor".to_string()),
+        };
+        propose(t, &transition, state, &[])
+    }
+
+    /// `bind_one` with a uniquely matching claim binds the variable
+    /// for use by subsequent statements. Pinned against `propose`,
+    /// not `execute_stmt` directly, so the test exercises the same
+    /// path a real transformation does.
+    #[test]
+    fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Policy".to_string(),
+            args: vec![
+                EvalValue::Subject("p1".to_string()),
+                EvalValue::Decimal(Decimal::new(100, 0)),
+            ],
+        }]);
+        let t = single_stmt_transformation(
+            "extract_then_assert",
+            vec![
+                bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
+                assert_("Echo", vec![var("policy_id"), var("limit")]),
+            ],
+        );
+        let Outcome::Accepted {
+            asserted_claims, ..
+        } = run(&t, &state).unwrap()
+        else {
+            panic!("expected Accepted");
+        };
+        assert_eq!(asserted_claims.len(), 1);
+        assert_eq!(asserted_claims[0].predicate, "Echo");
+        assert_eq!(
+            asserted_claims[0].args,
+            vec![
+                EvalValue::Subject("p1".to_string()),
+                EvalValue::Decimal(Decimal::new(100, 0)),
+            ],
+            "bind_one must have bound policy_id and limit for the assert"
+        );
+    }
+
+    /// `bind_one` against a state with no matching claim rejects
+    /// lawfully. The rejection reason names the expression so
+    /// debugging is possible from the reason alone.
+    #[test]
+    fn bind_one_with_zero_matches_rejects_with_named_predicate() {
+        use dsl::*;
+        let state = State::default();
+        let t = single_stmt_transformation(
+            "extract_missing",
+            vec![bind_one(claim(
+                "Policy",
+                vec![var("policy_id"), var("limit")],
+            ))],
+        );
+        let Outcome::Rejected { reason } = run(&t, &state).unwrap() else {
+            panic!("expected Rejected");
+        };
+        assert!(
+            reason.contains("bind_one failed"),
+            "reason should start with bind_one failed: {reason}"
+        );
+        assert!(
+            reason.contains("Policy(policy_id, limit)"),
+            "reason should name the expression: {reason}"
+        );
+    }
+
+    /// `bind_one` against a state with two matching claims surfaces
+    /// a kernel error, not a lawful rejection. Two matches means
+    /// the programme expected unique state but admitted ambiguous
+    /// state - missing structural-uniqueness invariant or
+    /// corruption.
+    #[test]
+    fn bind_one_with_multiple_matches_is_kernel_error() {
+        use dsl::*;
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "Policy".to_string(),
+                args: vec![
+                    EvalValue::Subject("p1".to_string()),
+                    EvalValue::Decimal(Decimal::new(100, 0)),
+                ],
+            },
+            ClaimInstance {
+                predicate: "Policy".to_string(),
+                args: vec![
+                    EvalValue::Subject("p2".to_string()),
+                    EvalValue::Decimal(Decimal::new(200, 0)),
+                ],
+            },
+        ]);
+        let t = single_stmt_transformation(
+            "ambiguous_lookup",
+            vec![bind_one(claim(
+                "Policy",
+                vec![var("policy_id"), var("limit")],
+            ))],
+        );
+        let err = run(&t, &state).expect_err("expected EvalError");
+        match err {
+            EvalError::TypeMismatch(msg) => {
+                assert!(
+                    msg.contains("bind_one matched 2 candidates"),
+                    "error should report multiplicity: {msg}"
+                );
+            }
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// A bind_one whose pattern uses an already-bound variable narrows
+    /// the candidate set by that variable. With `policy_id` pre-bound
+    /// (e.g. by an enclosing parameter or earlier bind_one), the
+    /// pattern matches only the row carrying that policy_id.
+    #[test]
+    fn bind_one_with_pre_bound_var_constrains_match() {
+        use dsl::*;
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "Policy".to_string(),
+                args: vec![
+                    EvalValue::Subject("p1".to_string()),
+                    EvalValue::Decimal(Decimal::new(100, 0)),
+                ],
+            },
+            ClaimInstance {
+                predicate: "Policy".to_string(),
+                args: vec![
+                    EvalValue::Subject("p2".to_string()),
+                    EvalValue::Decimal(Decimal::new(200, 0)),
+                ],
+            },
+        ]);
+        // Two bind_ones in sequence: the first binds policy_id from
+        // a literal subject; the second uses that binding to narrow
+        // the Policy pattern. Without the narrowing, the second
+        // bind_one would see two Policy candidates and error.
+        let t = Transformation {
+            name: "narrow_by_var".to_string(),
+            parameters: vec![],
+            body: vec![
+                let_(
+                    "policy_id",
+                    term(Term::Literal(Value::Subject("p2".to_string()))),
+                ),
+                bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
+                assert_("Echo", vec![var("limit")]),
+            ],
+        };
+        let Outcome::Accepted {
+            asserted_claims, ..
+        } = run(&t, &state).unwrap()
+        else {
+            panic!("expected Accepted");
+        };
+        assert_eq!(
+            asserted_claims[0].args,
+            vec![EvalValue::Decimal(Decimal::new(200, 0))],
+            "bound policy_id should narrow to p2's limit, not p1's"
+        );
+    }
+
+    /// `bind_one` composes inside `For` bodies. The settlement-
+    /// netting migration relies on this - the per-line value lookup
+    /// (`bind_one LineAmount(line, amt)`) lives inside a
+    /// `for line in lines:` body. Also pins the For-scoping fix:
+    /// iteration 2 of the loop must not see iteration 1's `amt`
+    /// binding, or its bind_one would narrow to the wrong row.
+    #[test]
+    fn bind_one_inside_for_body_composes() {
+        use dsl::*;
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "LineAmount".to_string(),
+                args: vec![
+                    EvalValue::Subject("L1".to_string()),
+                    EvalValue::Decimal(Decimal::new(60, 0)),
+                ],
+            },
+            ClaimInstance {
+                predicate: "LineAmount".to_string(),
+                args: vec![
+                    EvalValue::Subject("L2".to_string()),
+                    EvalValue::Decimal(Decimal::new(40, 0)),
+                ],
+            },
+        ]);
+        let t = Transformation {
+            name: "iterate_lines".to_string(),
+            parameters: vec!["lines".to_string()],
+            body: vec![for_(
+                "line",
+                term(var("lines")),
+                vec![
+                    bind_one(claim("LineAmount", vec![var("line"), var("amt")])),
+                    assert_("Echo", vec![var("line"), var("amt")]),
+                ],
+            )],
+        };
+        let transition = Transition {
+            transformation_name: t.name.clone(),
+            args: vec![EvalValue::Collection(vec![
+                EvalValue::Subject("L1".to_string()),
+                EvalValue::Subject("L2".to_string()),
+            ])],
+            actor: EvalValue::Subject("test_actor".to_string()),
+        };
+        let Outcome::Accepted {
+            asserted_claims, ..
+        } = propose(&t, &transition, &state, &[]).unwrap()
+        else {
+            panic!("expected Accepted");
+        };
+        assert_eq!(asserted_claims.len(), 2);
+        assert_eq!(
+            asserted_claims[0].args[0],
+            EvalValue::Subject("L1".to_string())
+        );
+        assert_eq!(
+            asserted_claims[0].args[1],
+            EvalValue::Decimal(Decimal::new(60, 0))
+        );
+        assert_eq!(
+            asserted_claims[1].args[0],
+            EvalValue::Subject("L2".to_string())
+        );
+        assert_eq!(
+            asserted_claims[1].args[1],
+            EvalValue::Decimal(Decimal::new(40, 0))
+        );
+    }
+
+    /// `Term::Actor` is resolvable inside a `bind_one` expression,
+    /// because `bind_one` runs inside a transformation body (which
+    /// has a transition in scope). Pinned because the
+    /// `DelegatedInvestigator` pattern in the clinical-trial
+    /// example - and any future authority lookup migrated to
+    /// `bind_one` - depends on this.
+    #[test]
+    fn bind_one_with_actor_in_pattern() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Authority".to_string(),
+            args: vec![
+                EvalValue::Subject("dr_smith".to_string()),
+                EvalValue::Decimal(Decimal::new(50_000, 0)),
+            ],
+        }]);
+        let t = Transformation {
+            name: "lookup_my_authority".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("Authority", vec![actor(), var("limit")])),
+                assert_("Echo", vec![var("limit")]),
+            ],
+        };
+        let transition = Transition {
+            transformation_name: t.name.clone(),
+            args: vec![],
+            actor: EvalValue::Subject("dr_smith".to_string()),
+        };
+        let Outcome::Accepted {
+            asserted_claims, ..
+        } = propose(&t, &transition, &state, &[]).unwrap()
+        else {
+            panic!("expected Accepted");
+        };
+        assert_eq!(
+            asserted_claims[0].args,
+            vec![EvalValue::Decimal(Decimal::new(50_000, 0))]
+        );
+    }
+
+    /// A value-producing expression (e.g. `Add`) inside `bind_one`
+    /// surfaces as `EvalError::NotPredicate`, via the existing
+    /// `find_matches` guardrail. Pinned because the public DSL
+    /// permits the construction; the runtime is the right place
+    /// to enforce the predicate-shaped contract.
+    #[test]
+    fn bind_one_rejects_value_expr_as_not_predicate() {
+        use dsl::*;
+        let state = State::default();
+        let t = single_stmt_transformation(
+            "misuse_value_expr",
+            vec![bind_one(add(
+                term(Term::Literal(Value::Decimal("1".to_string()))),
+                term(Term::Literal(Value::Decimal("2".to_string()))),
+            ))],
+        );
+        let err = run(&t, &state).expect_err("expected EvalError");
+        assert!(
+            matches!(err, EvalError::NotPredicate),
+            "expected NotPredicate, got {err:?}"
+        );
     }
 }

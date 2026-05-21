@@ -147,24 +147,34 @@ AuditRecord
 
 External side effects fire only after commit, delivered by workers reading the outbox.
 
-## Statements: gating vs binding
+## Statements: the require / bind_one / let / for trinity
 
-Two statement classes serve different purposes; conflating them is the most common modelling mistake when authoring a transformation.
+Four statement classes serve different purposes; conflating them is the most common modelling mistake when authoring a transformation.
 
-- **`require Expression` is a yes/no gate.** It evaluates `Expression` against the pre-state snapshot; if the expression admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
+- **`require Expression`** is a **yes/no gate**. It evaluates `Expression` against the pre-state snapshot; if the expression admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
 
-- **`let name = Expression` is the binding primitive.** It evaluates `Expression` to a single value and binds `name` in the active scope for every subsequent statement (including later `require`s, `assert`s, `retract`s, intent `emit`s, and the body of a `for`). When `Expression` is `ValueOf(predicate, args)`, the let extracts a value position from a uniquely-matching claim.
+- **`bind_one Expression`** is a **deterministic unique lookup**. It evaluates a predicate-shaped `Expression` against the pre-state, current bindings, and transition actor; the surviving binding set is treated as the next binding context.
+  - Zero matches: the transformation is rejected (lawful business outcome: the expected governed record is not present).
+  - One match: the returned binding set **replaces** the current binding context. Statements after a successful `bind_one` see the newly-bound variables.
+  - Multiple matches: kernel error (`EvalError::TypeMismatch`). Multi-match means the programme thought something was unique but the admitted state did not make it unique - typically a missing structural-uniqueness invariant.
+  
+  `bind_one` is not iteration and does not branch. Use `for` for iteration. Use `require` for gates that should not export bindings. Use `let` for value-producing expressions.
 
-The idiomatic pattern for "this claim exists and I need a value from it" - lifted verbatim from `examples/05_insurance_claim_settlement/insurance_claim_settlement.morph`:
+- **`let name = Expression`** is the **value-producing binding** primitive. It evaluates `Expression` to a single value and binds `name` in the active scope for every subsequent statement. Use `let` for `Sum`, `Add`, `Sub`, `ValueOf` inside value position, and any other expression that computes rather than looks up.
+
+- **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
+
+The idiomatic pattern for "this claim exists and I need values from it" - lifted from `examples/05_insurance_claim_settlement/insurance_claim_settlement.morph`:
 
 ```
-require ClaimReported(claim_id, _, _)                       -- gate: the claim has been reported
-let policy_id = value_of ClaimReported(claim_id, _, _)      -- extract: binds policy_id to the
-                                                            -- first wildcard's position
-... statements that reference policy_id ...
+bind_one ClaimReported(claim_id, policy_id, _)              -- existence + extraction in one step
+bind_one Policy(policy_id, aggregate_limit)                 -- bound policy_id narrows; binds aggregate_limit
+... statements that reference policy_id and aggregate_limit ...
 ```
 
-`value_of` finds a single claim matching the given pattern and returns the value at the first wildcard position (here, the second argument); zero matches surfaces as `EvalError::ValueOfZeroMatches`, more than one as `EvalError::ValueOfMultipleMatches`. The guard `require` rejects the proposal cleanly when the claim is absent; the subsequent `let` then extracts the value, with the structural guarantee that the lookup is single-valued (a property the programme must enforce via an invariant - e.g. `at_most_one_X_per_id`, the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use).
+The structural guarantee that each `bind_one` is single-valued comes from a programme-level invariant - e.g. `at_most_one_X_per_id` (the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use). Without that invariant, a duplicate admission would surface as `bind_one matched 2 candidates` (kernel error) rather than a lawful rejection.
+
+The legacy `require + let + value_of` chain remains expressible (`Expr::ValueOf` is not deleted), and is the right tool when a value-producing position needs a lookup that does not fit a statement-level binding extension - inside arithmetic, inside `Sum`, or inside a derived-claim value expression.
 
 Inside a `require` body, multiple sub-expressions composed with `And` *do* propagate bindings forward within that single require: the matcher's binding extensions are threaded through the conjuncts. So a require like
 

@@ -45,7 +45,7 @@ transformation create_net_settlement(party_a, party_b, lines):
     assert NetSettlement(net, party_a, party_b, amount)
 
     for line in lines:
-        let amt = value LineAmount(line, _)
+        bind_one LineAmount(line, amt)
         assert SettlementLine(line, net, amt)
         assert Netted(line)
 
