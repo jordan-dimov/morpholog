@@ -176,6 +176,94 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
     assert_eq!(outbox_intent_type, "NetSettlementCreated");
 }
 
+/// Predicate-scoped load: noise claims of a predicate the
+/// transformation does not reference must not affect the outcome.
+///
+/// Setup: standard happy-path netting pre-state, plus a pile of
+/// noise claims for an `UnrelatedNoise` predicate that no
+/// transformation or invariant in the settlement-netting programme
+/// ever references. The kernel never sees these claims; the PG
+/// adapter's `load_state` must scope past them.
+#[tokio::test]
+async fn propose_against_pg_does_not_load_unreferenced_predicates() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let mut claims = netting_pre_state_claims();
+    for i in 0..50 {
+        claims.push(claim(
+            "UnrelatedNoise",
+            vec![subj(&format!("noise_{i}")), dec(i as i64)],
+        ));
+    }
+    insert_pre_state(&pool, claims).await;
+
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &settlement_netting::create_net_settlement(),
+        netting_args(),
+        &settlement_netting::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg should commit despite noise claims");
+
+    // Pin the FULL outcome against the no-noise baseline: same
+    // assert count, same retract count, same emitted-intent shape.
+    // Just checking `Committed` proves scoping doesn't crash; this
+    // pins the stronger contract that the *observable* result is
+    // identical to the noise-free happy path.
+    let PgProposalOutcome::Committed {
+        asserted_claims,
+        retracted_claims,
+        emitted_intents,
+        ..
+    } = outcome
+    else {
+        panic!("expected Committed, got {outcome:?}");
+    };
+    assert_eq!(
+        asserted_claims.len(),
+        5,
+        "scoped load must produce the same 5 asserts as the no-noise baseline"
+    );
+    assert_eq!(retracted_claims.len(), 0);
+    assert_eq!(emitted_intents.len(), 1);
+    assert_eq!(emitted_intents[0].name, "NetSettlementCreated");
+
+    // DB-side: same audit/outbox shape as the no-noise baseline,
+    // and the noise claims must still be there (the transformation
+    // never touched them).
+    let noise_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM morpholog.claims WHERE predicate_name = 'UnrelatedNoise'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(noise_count, 50, "noise claims preserved across the commit");
+
+    let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM morpholog.audit")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(audit_count, 1, "exactly one audit row, same as baseline");
+
+    let outbox_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM morpholog.outbox")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        outbox_count, 1,
+        "exactly one outbox intent, same as baseline"
+    );
+
+    let outbox_intent_type: String =
+        sqlx::query_scalar("SELECT intent_type FROM morpholog.outbox LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(outbox_intent_type, "NetSettlementCreated");
+}
+
 #[tokio::test]
 async fn require_failure_writes_nothing() {
     let pool = test_pool().await;

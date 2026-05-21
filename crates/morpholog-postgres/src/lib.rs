@@ -132,7 +132,8 @@ pub async fn propose_against_pg(
         .await
         .map_err(classify)?;
 
-    let state = load_state(&mut tx).await?;
+    let scope = compute_load_scope(transformation, invariants);
+    let state = load_state(&mut tx, &scope).await?;
     let outcome = propose(transformation, transition, &state, invariants)?;
     finalise_outcome(tx, transformation, transition, invariants, outcome).await
 }
@@ -202,7 +203,8 @@ pub async fn propose_against_pg_with_trace(
         .await
         .map_err(classify)?;
 
-    let state = load_state(&mut tx).await?;
+    let scope = compute_load_scope(transformation, invariants);
+    let state = load_state(&mut tx, &scope).await?;
     let traced = propose_with_trace(transformation, transition, &state, invariants);
     match traced {
         TracedProposal::Completed { outcome, trace } => {
@@ -288,12 +290,42 @@ fn classify(err: sqlx::Error) -> PgError {
     PgError::Database(err)
 }
 
-async fn load_state(tx: &mut Transaction<'_, Postgres>) -> Result<State, PgError> {
-    let rows: Vec<(String, serde_json::Value)> =
-        sqlx::query_as("SELECT predicate_name, arguments FROM morpholog.claims")
-            .fetch_all(&mut **tx)
-            .await
-            .map_err(classify)?;
+/// Load the pre-state for a `propose_against_pg` call, scoped to a
+/// specific set of predicate names.
+///
+/// `scope` is the list of predicate names the transformation body
+/// (per [`morpholog_core::predicates_read_by_stmt`]) and the active
+/// invariants (per [`morpholog_core::predicates_referenced_by_expr`])
+/// will consult. Claims of any other predicate are not loaded - they
+/// cannot affect the kernel's evaluation of this transformation.
+///
+/// Empty scope returns an empty state without issuing a query
+/// (mirrors [`list_claims_for_predicates`]'s contract). A
+/// transformation with no body statements that read state and no
+/// invariants will see an empty `State`; that is correct behaviour,
+/// not a bug.
+///
+/// The scoping is a substantial perf win on large claim tables: a
+/// transformation that touches three predicates with low cardinality
+/// no longer pays the linear cost of fetching and decoding every
+/// row in `morpholog.claims`.
+async fn load_state(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &[String],
+) -> Result<State, PgError> {
+    if scope.is_empty() {
+        return Ok(State::default());
+    }
+
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT predicate_name, arguments
+         FROM morpholog.claims
+         WHERE predicate_name = ANY($1)",
+    )
+    .bind(scope)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(classify)?;
 
     let mut claims = Vec::with_capacity(rows.len());
     for (predicate, args_json) in rows {
@@ -301,6 +333,32 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>) -> Result<State, PgError
         claims.push(ClaimInstance { predicate, args });
     }
     Ok(State::from_claims(claims))
+}
+
+/// Compute the predicate scope that `load_state` must fetch to
+/// evaluate this transformation correctly. The union of:
+///
+/// - Every predicate read by every statement in the transformation
+///   body (via `morpholog_core::predicates_read_by_stmt`).
+/// - Every predicate referenced by every invariant body (via
+///   `morpholog_core::predicates_referenced_by_expr`). Invariants
+///   evaluate against the candidate state - which is built from the
+///   pre-state plus asserts minus retracts - so any predicate an
+///   invariant inspects must be loaded.
+///
+/// `Stmt::Assert`'s output predicate is deliberately NOT in the read
+/// set; the assert stages a new claim, it doesn't read existing
+/// ones. If an invariant *also* references that predicate, it's
+/// picked up via the invariant walker and loaded.
+fn compute_load_scope(transformation: &Transformation, invariants: &[Invariant]) -> Vec<String> {
+    let mut scope = std::collections::BTreeSet::new();
+    for stmt in &transformation.body {
+        morpholog_core::predicates_read_by_stmt(stmt, &mut scope);
+    }
+    for inv in invariants {
+        morpholog_core::predicates_referenced_by_expr(&inv.body, &mut scope);
+    }
+    scope.into_iter().collect()
 }
 
 /// One entry in an audit row's `invariants_checked` JSONB array. Recorded

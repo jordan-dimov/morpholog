@@ -94,21 +94,25 @@ pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<Stri
 
 /// Return every predicate name a statement references in its tree.
 /// Symmetric with [`predicates_referenced_by_expr`] but operates at
-/// the statement level so callers can walk transformation bodies.
+/// the statement level. This walker is the **broad** set; it includes
+/// predicates the statement *reads from pre-state* (Require, BindOne,
+/// Let-value, For-collection, Retract pattern) and predicates the
+/// statement *writes* (Assert).
 ///
-/// This is the analysis a future predicate-scoped loading
-/// optimisation on the PG adapter's *write* path would build on:
-/// `propose_against_pg` currently loads the full claim table; once
-/// statement-level predicate scoping exists, the adapter can load
-/// only the predicates a specific transformation needs.
+/// For scoped pre-state loading on the PG adapter's write path, use
+/// [`predicates_read_by_stmt`] instead: it excludes Assert's output
+/// predicate (which doesn't need pre-loading) but keeps Retract
+/// (which pattern-matches against pre-state to find what to retract).
+///
+/// This broad walker stays available for callers that want every
+/// predicate the statement *mentions* in either direction - dependency
+/// tracing, docs generation, future tooling.
 ///
 /// The match below is exhaustive over `Stmt` variants on purpose; a
 /// future `Stmt` variant would break compilation here until handled.
 ///
 /// `Stmt::Emit` contributes nothing - intents are not part of the
-/// admitted-claim vocabulary, and the analysis is about claims that
-/// must be loaded from `State`, not about intents that will be
-/// enqueued.
+/// admitted-claim vocabulary.
 ///
 /// `Stmt::LetNewSubject` contributes nothing - it mints a fresh
 /// subject identifier without consulting state.
@@ -129,6 +133,59 @@ pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
             predicates_referenced_by_expr(collection, out);
             for inner in body {
                 predicates_referenced_by_stmt(inner, out);
+            }
+        }
+        Stmt::Emit(_) => {}
+    }
+}
+
+/// Return every predicate name a statement **reads from pre-state**.
+/// Distinguished from [`predicates_referenced_by_stmt`] by excluding
+/// `Stmt::Assert`'s output predicate, which is *written* to the
+/// staged outcome and never read from pre-state.
+///
+/// This is the analysis the PG adapter's `propose_against_pg` and
+/// `propose_against_pg_with_trace` use to scope `load_state`: only
+/// the predicates this transformation will actually consult need to
+/// be fetched from `morpholog.claims`, instead of the full table.
+///
+/// Variant treatment:
+/// - `Require` / `BindOne` / `Let.value` / `For.collection` - read
+///   (their expressions evaluate against pre-state).
+/// - `Retract { predicate, args }` - **read**, despite being a
+///   mutation. The retract pattern is matched against pre-state to
+///   find which claims to retract; without loading the target
+///   predicate, the pattern match has nothing to find.
+/// - `Assert(claim)` - **not read**. The claim is staged as an
+///   output; the predicate's existing pre-state has no bearing on
+///   the assert.
+/// - `Emit` / `LetNewSubject` - contribute nothing.
+/// - `For` body - recurses (the body's own reads count).
+///
+/// Exhaustive match for the same reason as
+/// `predicates_referenced_by_stmt`: a future `Stmt` variant must
+/// declare its read behaviour explicitly.
+pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
+    match stmt {
+        Stmt::Require(e) | Stmt::BindOne(e) => predicates_referenced_by_expr(e, out),
+        Stmt::Let { value, .. } => predicates_referenced_by_expr(value, out),
+        Stmt::LetNewSubject { .. } => {}
+        Stmt::Assert(_) => {
+            // Write-only: the asserted claim is staged as output, not
+            // looked up against pre-state. Excluded from the read set.
+        }
+        Stmt::Retract { predicate, .. } => {
+            // Retract is a mutation, but its pattern is matched
+            // against pre-state to find candidates - so the target
+            // predicate must be loaded.
+            out.insert(predicate.clone());
+        }
+        Stmt::For {
+            collection, body, ..
+        } => {
+            predicates_referenced_by_expr(collection, out);
+            for inner in body {
+                predicates_read_by_stmt(inner, out);
             }
         }
         Stmt::Emit(_) => {}

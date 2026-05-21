@@ -584,3 +584,41 @@ The fix is a structured per-statement trace.
 - `morpholog-postgres` outbox extraction. Deferred; same kind of work.
 - `enumerate_derived_with_trace`. Out of scope.
 - Expression-internal tracing. Still PR E territory.
+
+### Predicate-scoped loading on the write path (`propose_against_pg`)
+
+**Forced by:** the natural completion of PR #53's `predicates_referenced_by_stmt` walker, plus the perf reality the bench has surfaced for a while: `propose_against_pg` was loading the full `morpholog.claims` table on every call, regardless of how few predicates the transformation actually consults. On a 100K-claim ledger the unconditional load dominated the commit cost; for transformations touching three predicates with low cardinality, fetching and decoding ~99K irrelevant rows was pure waste.
+
+The read path has had predicate-scoped loading since the trial-balance work (PR #25's `list_claims_for_predicates`). The write path lagged because statement-level analysis didn't yet exist; PR #53 landed it, this PR consumes it.
+
+**The shape:**
+
+- New analysis function `predicates_read_by_stmt` in `morpholog-core/src/analysis.rs`. Mirrors `predicates_referenced_by_stmt` (the broad walker) but excludes `Stmt::Assert`'s output predicate. The Assert is a *write* - the staged claim's predicate has no bearing on what pre-state must be loaded. `Stmt::Retract` stays in the read set: its pattern is matched against pre-state to find what to retract.
+- `morpholog-postgres::load_state` gains a `scope: &[String]` parameter. SQL becomes `SELECT ... WHERE predicate_name = ANY($1)`. Empty scope returns `State::default()` without issuing a query, matching the precedent set by `list_claims_for_predicates`.
+- A new internal helper `compute_load_scope(transformation, invariants) -> Vec<String>` does the union: every predicate read by every body statement, plus every predicate referenced by every invariant body. Both `propose_against_pg` and `propose_against_pg_with_trace` use it.
+
+**Why include invariants in the scope.** Invariants evaluate against the candidate state (`pre_state ⊕ asserts ⊖ retracts`); the asserts can introduce new predicates into the candidate without affecting what's in pre-state. But if an invariant references a predicate the transformation doesn't touch, that predicate's existing pre-state matters - the invariant may be checking a relationship between asserted claims and pre-existing ones. Failing to load invariant-referenced predicates would silently make invariants vacuously hold against an incomplete view.
+
+**Why split the walker (`predicates_read_by_stmt` vs `predicates_referenced_by_stmt`).** ChatGPT's review on PR #53 flagged this: a single walker that conflates reads and writes is fine for "what predicates does this statement mention?" but wrong for scoped loading. The split is now explicit. The broad walker stays available for callers that genuinely want every predicate (dependency tracing, future docs generation).
+
+**Considered and rejected:**
+
+- *Single-walker approach with a read-only flag.* Hides intent at call sites; the type system can express "this is the read-set" via a separate function more clearly.
+- *Auto-deriving the scope inside `propose_against_pg` without surfacing it.* Considered, but the explicit `compute_load_scope` helper is more testable and easier to instrument later (e.g., for a future tracing pass that records which predicates were loaded).
+- *Adding `predicates_written_by_stmt` in the same PR for symmetry.* Considered, deferred. No current consumer; the discipline is one walker per real consumer.
+
+**What landed:**
+
+- `predicates_read_by_stmt` in `analysis.rs` with exhaustive `Stmt` match (same compile-time gate as the other walkers).
+- `load_state(tx, scope)` with scoped SQL and `State::default()` short-circuit on empty scope.
+- `compute_load_scope` helper in `morpholog-postgres/src/lib.rs`.
+- Both PG-adapter `propose` entry points call `compute_load_scope` before loading.
+- Kernel test pinning the read-set contract (`Stmt::Assert` excluded; `Stmt::Retract` included; sanity-check that the broad walker still includes `Assert`).
+- PG integration test: noise claims of an unreferenced predicate must not affect the outcome - assertions extended (per Copilot's review on PR #54) to pin the full Committed outcome shape against the no-noise baseline, not just `matches!(Committed)`.
+- Parity: all 23 pre-existing PG integration tests pass unchanged under scoped loading.
+- `--noise-claims K` flag on `morpholog-bench` to make the perf win visible. The bench README's "Observations" section now carries a four-row comparison (scoped vs. unscoped, with and without noise) at `N = 100 000`: with 200 000 noise claims, unscoped `propose_one` grows by ~54% (1 667 -> 2 562 ms) while scoped `propose_one` stays flat at ~1 600 ms.
+
+**What deliberately did NOT land:**
+
+- `predicates_written_by_stmt`. No forcing consumer.
+- A `--noise-claims` axis on the `as-of` scenario. Its fixture bypasses `propose_against_pg` (audit rows are fabricated directly), so noise-tolerance is not a fair comparison there; this can come if `reconstruct_state_at_for_predicates` ever needs benchmarking under noise pressure.
