@@ -236,12 +236,7 @@ pub fn authorise_settlement() -> Transformation {
                         "paid",
                         claim(
                             "SettlementPaid",
-                            vec![
-                                var("policy_id"),
-                                wildcard(),
-                                wildcard(),
-                                var("paid"),
-                            ],
+                            vec![var("policy_id"), wildcard(), wildcard(), var("paid")],
                         ),
                     ),
                     term(var("amount")),
@@ -297,23 +292,13 @@ pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
                 "paid",
                 claim(
                     "SettlementPaid",
-                    vec![
-                        var("policy_id"),
-                        wildcard(),
-                        wildcard(),
-                        var("paid"),
-                    ],
+                    vec![var("policy_id"), wildcard(), wildcard(), var("paid")],
                 ),
             ),
         }],
         domain: claim(
             "SettlementPaid",
-            vec![
-                var("policy_id"),
-                wildcard(),
-                wildcard(),
-                wildcard(),
-            ],
+            vec![var("policy_id"), wildcard(), wildcard(), wildcard()],
         ),
     }
 }

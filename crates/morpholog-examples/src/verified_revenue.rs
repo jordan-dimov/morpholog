@@ -207,12 +207,7 @@ pub fn grant_standing() -> Transformation {
         body: vec![
             require(claim(
                 "IndependentlyVerifiedRevenue",
-                vec![
-                    wildcard(),
-                    wildcard(),
-                    wildcard(),
-                    var("verification_id"),
-                ],
+                vec![wildcard(), wildcard(), wildcard(), var("verification_id")],
             )),
             require(claim(
                 "CurrentVerification",

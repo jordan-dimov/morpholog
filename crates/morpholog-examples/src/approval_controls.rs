@@ -49,10 +49,7 @@ pub fn approve_document() -> Transformation {
         parameters: params(&["doc_id", "doc_type"]),
         body: vec![
             require(claim("MayApprove", vec![actor(), var("doc_type")])),
-            assert_(
-                "Approval",
-                vec![var("doc_id"), var("doc_type"), actor()],
-            ),
+            assert_("Approval", vec![var("doc_id"), var("doc_type"), actor()]),
             emit("DocumentApproved", vec![var("doc_id"), actor()]),
         ],
     }

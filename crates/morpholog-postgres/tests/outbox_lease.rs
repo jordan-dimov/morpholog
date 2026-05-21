@@ -43,8 +43,6 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-
-
 /// Commit one ledger entry with the supplied `entry_id` and return
 /// the resulting outbox row's `intent_id`. The row is in
 /// `status='pending'`, no lease held, no `next_attempt_at`.

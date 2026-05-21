@@ -17,10 +17,7 @@ pub fn net_settlement_has_lines() -> Invariant {
             ),
             exists(
                 "line",
-                claim(
-                    "SettlementLine",
-                    vec![var("line"), var("net"), wildcard()],
-                ),
+                claim("SettlementLine", vec![var("line"), var("net"), wildcard()]),
             ),
         ),
     }
@@ -52,10 +49,7 @@ pub fn no_double_netting() -> Invariant {
         name: "no_double_netting".to_string(),
         version: 1,
         body: implies(
-            claim(
-                "SettlementLine",
-                vec![var("line"), var("net"), wildcard()],
-            ),
+            claim("SettlementLine", vec![var("line"), var("net"), wildcard()]),
             not(exists(
                 "other",
                 and(vec![
@@ -104,10 +98,7 @@ pub fn create_net_settlement() -> Transformation {
                 "line",
                 term(var("lines")),
                 vec![
-                    let_(
-                        "amt",
-                        value_of("LineAmount", vec![var("line"), wildcard()]),
-                    ),
+                    let_("amt", value_of("LineAmount", vec![var("line"), wildcard()])),
                     assert_("SettlementLine", vec![var("line"), var("net"), var("amt")]),
                     assert_("Netted", vec![var("line")]),
                 ],

@@ -49,8 +49,6 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-
-
 /// Commit one ledger entry with the supplied `entry_id` and return
 /// the resulting outbox row's `intent_id`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {

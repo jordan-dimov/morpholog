@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use morpholog_core::Transition;
-use morpholog_test_support::{dec, subj};
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
@@ -23,6 +22,7 @@ use morpholog_postgres::{
     propose_against_pg,
     testing::{AlwaysDelivers, AlwaysTransient},
 };
+use morpholog_test_support::{dec, subj};
 use uuid::Uuid;
 
 // ============================================================
@@ -45,8 +45,6 @@ async fn reset_db(pool: &PgPool) {
         .await
         .expect("failed to truncate test DB");
 }
-
-
 
 async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
     let transformation = double_entry_ledger::post_simple_entry();

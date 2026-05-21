@@ -49,8 +49,6 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-
-
 fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,

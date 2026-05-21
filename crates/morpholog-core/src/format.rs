@@ -202,31 +202,15 @@ fn format_expr_inline(e: &Expr) -> String {
         Expr::Not(inner) => format!("not {}", format_expr_inline(inner)),
         Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::Term(t) => format_term(t),
-        Expr::Eq(l, r) => format!(
-            "{} == {}",
-            format_expr_inline(l),
-            format_expr_inline(r)
-        ),
-        Expr::Le(l, r) => format!(
-            "{} <= {}",
-            format_expr_inline(l),
-            format_expr_inline(r)
-        ),
+        Expr::Eq(l, r) => format!("{} == {}", format_expr_inline(l), format_expr_inline(r)),
+        Expr::Le(l, r) => format!("{} <= {}", format_expr_inline(l), format_expr_inline(r)),
         Expr::DateLe(l, r) => format!(
-            "{} <date= {}",
+            "date_le({}, {})",
             format_expr_inline(l),
             format_expr_inline(r)
         ),
-        Expr::Sub(l, r) => format!(
-            "({} - {})",
-            format_expr_inline(l),
-            format_expr_inline(r)
-        ),
-        Expr::Add(l, r) => format!(
-            "({} + {})",
-            format_expr_inline(l),
-            format_expr_inline(r)
-        ),
+        Expr::Sub(l, r) => format!("({} - {})", format_expr_inline(l), format_expr_inline(r)),
+        Expr::Add(l, r) => format!("({} + {})", format_expr_inline(l), format_expr_inline(r)),
         Expr::Sum {
             value,
             binding,
@@ -357,11 +341,7 @@ mod tests {
                 claim("S", vec![var("y"), actor()]),
             ),
             exists("z", claim("T", vec![var("z")])),
-            forall(
-                "w",
-                claim("U", vec![var("w")]),
-                claim("V", vec![var("w")]),
-            ),
+            forall("w", claim("U", vec![var("w")]), claim("V", vec![var("w")])),
             eq(term(var("a")), term(var("b"))),
             neq(var("a"), var("b")),
             le(term(var("a")), term(var("b"))),
@@ -383,7 +363,7 @@ mod tests {
         assert!(s.contains("a == b"));
         assert!(s.contains("a != b"));
         assert!(s.contains("a <= b"));
-        assert!(s.contains("d1 <date= d2"));
+        assert!(s.contains("date_le(d1, d2)"));
         assert!(s.contains("(p + q)"));
         assert!(s.contains("(p - q)"));
         assert!(s.contains("sum(v |"));

@@ -45,8 +45,6 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-
-
 /// Unwrap a `Committed` outcome and return its `transition_id`,
 /// panicking if the transformation rejected. Each step of the chain
 /// is required to commit; a rejection is a fixture or kernel bug,

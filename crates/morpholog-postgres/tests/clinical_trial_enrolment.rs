@@ -41,8 +41,6 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-
-
 /// Helper: run a setup transformation and assert it committed,
 /// returning the next test step's pre-state implicitly (PG holds
 /// state in tables; no value returned). Panics on rejection.

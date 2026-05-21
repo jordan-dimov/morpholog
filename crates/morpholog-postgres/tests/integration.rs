@@ -67,8 +67,6 @@ async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
     }
 }
 
-
-
 fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
     ClaimInstance {
         predicate: predicate.to_string(),

@@ -11,10 +11,10 @@
 use std::time::Duration;
 
 use morpholog_core::Transition;
-use morpholog_test_support::{dec, subj};
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::{StdoutDeliverer, process_available_outbox_rows};
 use morpholog_postgres::{PgPool, PgProposalOutcome, ProcessOutcome, propose_against_pg};
+use morpholog_test_support::{dec, subj};
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
@@ -32,8 +32,6 @@ async fn reset_db(pool: &PgPool) {
         .await
         .expect("failed to truncate test DB");
 }
-
-
 
 #[tokio::test]
 async fn stdout_deliverer_marks_row_delivered_via_drain() {

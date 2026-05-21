@@ -27,10 +27,7 @@ pub fn balanced_posted_entry() -> Invariant {
         name: "balanced_posted_entry".to_string(),
         version: 1,
         body: implies(
-            claim(
-                "JournalEntry",
-                vec![var("entry"), wildcard(), wildcard()],
-            ),
+            claim("JournalEntry", vec![var("entry"), wildcard(), wildcard()]),
             eq(
                 sum(
                     var("d"),
@@ -64,10 +61,7 @@ pub fn journal_entry_has_lines() -> Invariant {
         name: "journal_entry_has_lines".to_string(),
         version: 1,
         body: implies(
-            claim(
-                "JournalEntry",
-                vec![var("entry"), wildcard(), wildcard()],
-            ),
+            claim("JournalEntry", vec![var("entry"), wildcard(), wildcard()]),
             claim(
                 "JournalLine",
                 vec![var("entry"), wildcard(), wildcard(), wildcard()],
@@ -322,12 +316,7 @@ pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
         }],
         domain: claim(
             "JournalLine",
-            vec![
-                wildcard(),
-                var("account"),
-                wildcard(),
-                wildcard(),
-            ],
+            vec![wildcard(), var("account"), wildcard(), wildcard()],
         ),
     }
 }

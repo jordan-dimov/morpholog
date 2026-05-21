@@ -58,8 +58,6 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-
-
 async fn commit_post_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,

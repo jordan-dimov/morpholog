@@ -27,12 +27,9 @@
 mod common;
 
 use common::{
-    dec, dec_str, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor,
-    subj,
+    dec, dec_str, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
 };
-use morpholog_core::{
-    ClaimInstance, Invariant, Outcome, State, enumerate_derived, eval_invariant,
-};
+use morpholog_core::{ClaimInstance, Invariant, Outcome, State, enumerate_derived, eval_invariant};
 use morpholog_examples::insurance_claim_settlement;
 
 fn invariants() -> Vec<Invariant> {
