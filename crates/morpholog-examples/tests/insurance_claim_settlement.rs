@@ -189,22 +189,73 @@ fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
 
 #[test]
 fn authorise_settlement_without_authority_is_rejected_at_require() {
+    // Migrated to propose_with_trace as the canonical demonstration
+    // of the PR D DX win. The old assertion was `reason.contains
+    // ("require")`, which proved a require failed but not *which*
+    // one. The trace assertion below proves:
+    //
+    //   1. Both bind_ones succeeded (claim_001's policy_id was
+    //      bound, and policy_001's aggregate_limit was bound).
+    //   2. The subsequent require - the SettlementAuthority + Le
+    //      gate - is the one that rejected.
+    //
+    // That is the kind of precision a future test author should
+    // reach for instead of `reason.contains(...)`.
+    use morpholog_core::{
+        BindOneOutcome, RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+    };
     let pre = {
         let s = issue(State::default(), "policy_001", 100_000);
         report(s, "claim_001", "policy_001", 20_000)
     };
-    let outcome = propose_as(
-        &insurance_claim_settlement::authorise_settlement(),
-        vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
-        subj("alex"),
-        &pre,
-        &invariants(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
+    let t = insurance_claim_settlement::authorise_settlement();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
+        actor: subj("alex"),
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    let TracedProposal::Completed { outcome, trace } =
+        propose_with_trace(&t, &transition, &pre, &invariants())
+    else {
+        panic!("expected Completed");
+    };
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "expected Rejected, got {outcome:?}"
+    );
+
+    // Step 1: both bind_ones (ClaimReported, Policy) succeeded.
+    let bound_count = trace
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                TraceEntry::BindOne {
+                    outcome: BindOneOutcome::Bound { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        bound_count, 2,
+        "expected both bind_ones to succeed before the require fails; trace: {trace:#?}"
+    );
+
+    // Step 2: the require that rejected has SettlementAuthority in
+    // its rendered expression.
+    let failing = trace.iter().find_map(|e| match e {
+        TraceEntry::Require {
+            expression,
+            outcome: RequireOutcome::Rejected { .. },
+        } => Some(expression),
+        _ => None,
+    });
+    let expr = failing.expect("expected exactly one failing require entry");
+    assert!(
+        expr.contains("SettlementAuthority"),
+        "failing require should be the authority gate; got: {expr}"
+    );
 }
 
 #[test]

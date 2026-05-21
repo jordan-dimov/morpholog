@@ -1707,6 +1707,164 @@ enum StmtOutcome {
     Rejected(String),
 }
 
+// ===========================================================================
+// Trace: per-statement diagnostic record produced by `propose_with_trace`
+// ===========================================================================
+
+/// Structured outcome of `propose_with_trace`. Mirrors `propose`'s
+/// success/error split but carries a [`Vec<TraceEntry>`] on **both**
+/// paths so that the worst debugging cases (multi-match `BindOne`,
+/// type-mismatch `DateLe`, multi-match `ValueOf`, unbound actor) do
+/// not silently discard the run-up that led to the failure.
+///
+/// Scope (v0): trace is **statement-level**. Each transformation
+/// statement and invariant check produces one entry. Expression
+/// internals (which conjunct of an `And` failed, which branch of a
+/// `Forall` matched) are **not** traced - the failing statement
+/// records its expression as a rendered string but does not drill
+/// into its sub-tree. Conjunct-level diagnosis is a possible later
+/// PR and would require a separate evaluator refactor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TracedProposal {
+    /// The transformation ran to a normal outcome (Accepted or
+    /// Rejected). `trace` contains every statement that ran plus
+    /// every invariant that was checked.
+    Completed {
+        outcome: Outcome,
+        trace: Vec<TraceEntry>,
+    },
+    /// The transformation surfaced a kernel-level error (bad
+    /// arguments, evaluator failure, multi-match `BindOne`, etc.).
+    /// `trace` contains every statement that ran before the error
+    /// was raised - exactly the diagnostic surface that the
+    /// `Result<_, EvalError>` shape would drop.
+    Errored {
+        error: EvalError,
+        trace: Vec<TraceEntry>,
+    },
+}
+
+/// One step in the trace produced by `propose_with_trace`. There is
+/// one entry per statement and one per invariant check. `For` is
+/// nested: its `iterations` carry a sub-trace per loop iteration.
+///
+/// Every variant that records an expression renders it via
+/// [`crate::format::format_expr_inline`] for human-readable diagnostic
+/// output; the exact string format is intentionally not pinned by
+/// type so future formatter improvements (PR A's territory) propagate
+/// here automatically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceEntry {
+    Require {
+        expression: String,
+        outcome: RequireOutcome,
+    },
+    BindOne {
+        expression: String,
+        outcome: BindOneOutcome,
+    },
+    Let {
+        name: String,
+        value: EvalValue,
+    },
+    LetNewSubject {
+        name: String,
+        subject: EvalValue,
+    },
+    Assert {
+        claim: ClaimInstance,
+    },
+    /// Retraction trace carries the **actual retracted claims**, not
+    /// just a count. Retraction is exactly where debugging gets hard:
+    /// a wildcard retract that takes out three claims when you
+    /// expected one is invisible if only the count is recorded.
+    Retract {
+        predicate: String,
+        retracted: Vec<ClaimInstance>,
+    },
+    Emit {
+        intent: IntentInstance,
+    },
+    For {
+        binding: String,
+        iterations: Vec<ForIterationTrace>,
+    },
+    /// One invariant check. The expression string lets the trace
+    /// show which invariant body was evaluated; `held` records the
+    /// outcome. A failing invariant produces this entry plus an
+    /// `Outcome::Rejected` in the surrounding `TracedProposal`.
+    InvariantCheck {
+        name: String,
+        expression: String,
+        held: bool,
+    },
+}
+
+/// One iteration's worth of trace inside a `For` statement. The
+/// `item` value lets a caller identify which iteration produced
+/// which sub-trace - without it, a failing third iteration is hard
+/// to attribute to the right collection element.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForIterationTrace {
+    pub item: EvalValue,
+    pub trace: Vec<TraceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequireOutcome {
+    /// The require's expression admitted at least one matching
+    /// binding extension. `match_count` records the cardinality of
+    /// `find_matches`'s return; the require does not export these
+    /// bindings (that is `BindOne`'s job), but the count helps
+    /// explain downstream behaviour.
+    Held {
+        match_count: usize,
+    },
+    Rejected {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindOneOutcome {
+    /// The bind_one's expression matched exactly one binding set.
+    /// `bindings` records the **full** new binding context the
+    /// matcher returned (sorted by variable name for stable
+    /// serialisation). PR B's doctrine is that `BindOne` replaces
+    /// the current binding context with the returned set; the
+    /// trace records the full set for completeness.
+    Bound {
+        bindings: Vec<(String, EvalValue)>,
+    },
+    NoMatch,
+    MultipleMatches {
+        count: usize,
+    },
+}
+
+/// Internal sink used by the shared execution path. `Off` is a
+/// no-op; `On(&mut Vec<TraceEntry>)` appends. Keeps the trace path
+/// and the non-trace path on one executor without duplicating logic
+/// or introducing a separate "traced evaluator" that would drift.
+enum TraceSink<'a> {
+    Off,
+    On(&'a mut Vec<TraceEntry>),
+}
+
+impl<'a> TraceSink<'a> {
+    #[inline]
+    fn push(&mut self, entry: TraceEntry) {
+        if let TraceSink::On(v) = self {
+            v.push(entry);
+        }
+    }
+
+    #[inline]
+    fn is_on(&self) -> bool {
+        matches!(self, TraceSink::On(_))
+    }
+}
+
 /// Propose a transformation against a pre-state. Stages asserts/retracts/
 /// intents, builds the candidate state, evaluates every invariant against
 /// that candidate state, and returns Accepted iff all invariants hold.
@@ -1724,6 +1882,87 @@ pub fn propose(
     transition: &Transition,
     pre_state: &State,
     invariants: &[Invariant],
+) -> Result<Outcome, EvalError> {
+    if transformation.name != transition.transformation_name {
+        return Err(EvalError::TypeMismatch(format!(
+            "transition names transformation `{}` but Transformation passed is `{}`",
+            transition.transformation_name, transformation.name,
+        )));
+    }
+    if !matches!(transition.actor, EvalValue::Subject(_)) {
+        return Err(EvalError::TypeMismatch(
+            "transition actor must be a subject".to_string(),
+        ));
+    }
+    if transition.args.len() != transformation.parameters.len() {
+        return Err(EvalError::TypeMismatch(format!(
+            "transformation `{}` expects {} args, got {}",
+            transformation.name,
+            transformation.parameters.len(),
+            transition.args.len(),
+        )));
+    }
+
+    propose_inner(
+        transformation,
+        transition,
+        pre_state,
+        invariants,
+        &mut TraceSink::Off,
+    )
+}
+
+/// `propose` with structured per-statement and per-invariant trace
+/// recording. Returns a [`TracedProposal`] that carries the trace on
+/// **both** success and error paths - the worst debugging cases
+/// (multi-match `BindOne`, type-mismatch `DateLe`, multi-match
+/// `ValueOf`, unbound actor) raise `EvalError`, and dropping the
+/// trace at exactly that moment would defeat the purpose of having
+/// one.
+///
+/// Trace scope is statement-level. The trace shows which statement
+/// failed, what bindings each statement produced, and which
+/// invariant fired - it does **not** drill into expression
+/// internals (which conjunct of an `And` was false, which branch of
+/// a `Forall` matched). Expression-level tracing is a separate
+/// evaluator refactor.
+///
+/// Both `propose` and `propose_with_trace` share a single execution
+/// path internally; the only difference is the `TraceSink` passed
+/// to the executor. Performance impact on the non-trace path is
+/// zero (the sink is an `Off` no-op).
+pub fn propose_with_trace(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    invariants: &[Invariant],
+) -> TracedProposal {
+    let mut entries: Vec<TraceEntry> = vec![];
+    let result = {
+        let mut sink = TraceSink::On(&mut entries);
+        propose_inner(transformation, transition, pre_state, invariants, &mut sink)
+    };
+    match result {
+        Ok(outcome) => TracedProposal::Completed {
+            outcome,
+            trace: entries,
+        },
+        Err(error) => TracedProposal::Errored {
+            error,
+            trace: entries,
+        },
+    }
+}
+
+/// Shared executor for `propose` and `propose_with_trace`. The
+/// `trace` sink is `Off` for the former and `On(&mut Vec)` for the
+/// latter; every other line of execution is identical.
+fn propose_inner(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    invariants: &[Invariant],
+    trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
     if transformation.name != transition.transformation_name {
         return Err(EvalError::TypeMismatch(format!(
@@ -1768,6 +2007,7 @@ pub fn propose(
             &mut asserted,
             &mut retracted,
             &mut emitted,
+            trace,
         )? {
             StmtOutcome::Continue => {}
             StmtOutcome::Rejected(reason) => return Ok(Outcome::Rejected { reason }),
@@ -1777,7 +2017,13 @@ pub fn propose(
     let candidate = build_candidate_state(pre_state, &asserted, &retracted);
 
     for inv in invariants {
-        if !eval_invariant(inv, &candidate)? {
+        let held = eval_invariant(inv, &candidate)?;
+        trace.push(TraceEntry::InvariantCheck {
+            name: inv.name.clone(),
+            expression: format::format_expr_inline(&inv.body),
+            held,
+        });
+        if !held {
             return Ok(Outcome::Rejected {
                 reason: format!("invariant `{}` violated", inv.name),
             });
@@ -1801,16 +2047,30 @@ fn execute_stmt(
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
+    trace: &mut TraceSink<'_>,
 ) -> Result<StmtOutcome, EvalError> {
     match stmt {
         Stmt::Require(expr) => {
             let matches = find_matches(expr, pre_state, bindings, actor)?;
             if matches.is_empty() {
-                Ok(StmtOutcome::Rejected(format!(
+                let reason = format!(
                     "require failed: {} did not hold over pre-state",
                     format::format_expr_inline(expr)
-                )))
+                );
+                trace.push(TraceEntry::Require {
+                    expression: format::format_expr_inline(expr),
+                    outcome: RequireOutcome::Rejected {
+                        reason: reason.clone(),
+                    },
+                });
+                Ok(StmtOutcome::Rejected(reason))
             } else {
+                trace.push(TraceEntry::Require {
+                    expression: format::format_expr_inline(expr),
+                    outcome: RequireOutcome::Held {
+                        match_count: matches.len(),
+                    },
+                });
                 Ok(StmtOutcome::Continue)
             }
         }
@@ -1818,51 +2078,97 @@ fn execute_stmt(
             // Single-path deterministic unique lookup. See `Stmt::BindOne`
             // rustdoc for the multi-outcome contract. Crucially, on a
             // unique match we *replace* the binding context with the
-            // returned match rather than extending. `find_matches` already
-            // evaluates `expr` against the incoming `bindings`, so the
-            // single returned entry is the new authoritative context;
-            // extending would be redundant and risks subtle drift when
-            // an already-bound variable is also constrained by the
-            // expression.
+            // returned match rather than extending.
             let mut matches = find_matches(expr, pre_state, bindings, actor)?;
             match matches.len() {
-                0 => Ok(StmtOutcome::Rejected(format!(
-                    "bind_one failed: {} matched no candidates",
-                    format::format_expr_inline(expr)
-                ))),
+                0 => {
+                    trace.push(TraceEntry::BindOne {
+                        expression: format::format_expr_inline(expr),
+                        outcome: BindOneOutcome::NoMatch,
+                    });
+                    Ok(StmtOutcome::Rejected(format!(
+                        "bind_one failed: {} matched no candidates",
+                        format::format_expr_inline(expr)
+                    )))
+                }
                 1 => {
-                    *bindings = matches.swap_remove(0);
+                    let new_bindings = matches.swap_remove(0);
+                    if trace.is_on() {
+                        let mut sorted: Vec<(String, EvalValue)> = new_bindings
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                        trace.push(TraceEntry::BindOne {
+                            expression: format::format_expr_inline(expr),
+                            outcome: BindOneOutcome::Bound { bindings: sorted },
+                        });
+                    }
+                    *bindings = new_bindings;
                     Ok(StmtOutcome::Continue)
                 }
-                n => Err(EvalError::TypeMismatch(format!(
-                    "bind_one matched {n} candidates; expected exactly one: {}",
-                    format::format_expr_inline(expr)
-                ))),
+                n => {
+                    trace.push(TraceEntry::BindOne {
+                        expression: format::format_expr_inline(expr),
+                        outcome: BindOneOutcome::MultipleMatches { count: n },
+                    });
+                    Err(EvalError::TypeMismatch(format!(
+                        "bind_one matched {n} candidates; expected exactly one: {}",
+                        format::format_expr_inline(expr)
+                    )))
+                }
             }
         }
         Stmt::Let { name, value } => {
             let v = eval_value(value, pre_state, bindings, actor)?;
+            if trace.is_on() {
+                trace.push(TraceEntry::Let {
+                    name: name.clone(),
+                    value: v.clone(),
+                });
+            }
             bindings.insert(name.clone(), v);
             Ok(StmtOutcome::Continue)
         }
         Stmt::LetNewSubject { name } => {
             let id = uuid::Uuid::now_v7().to_string();
-            bindings.insert(name.clone(), EvalValue::Subject(id));
+            let subject = EvalValue::Subject(id);
+            if trace.is_on() {
+                trace.push(TraceEntry::LetNewSubject {
+                    name: name.clone(),
+                    subject: subject.clone(),
+                });
+            }
+            bindings.insert(name.clone(), subject);
             Ok(StmtOutcome::Continue)
         }
         Stmt::Assert(claim) => {
-            asserted.push(resolve_claim(claim, bindings, actor)?);
+            let instance = resolve_claim(claim, bindings, actor)?;
+            if trace.is_on() {
+                trace.push(TraceEntry::Assert {
+                    claim: instance.clone(),
+                });
+            }
+            asserted.push(instance);
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
+            let mut retracted_here: Vec<ClaimInstance> = vec![];
             for claim in pre_state.claims_for(predicate) {
                 if claim.args.len() != args.len() {
                     continue;
                 }
                 if unify_args(args, &claim.args, bindings, actor).is_some() {
-                    retracted.push(claim.clone());
+                    retracted_here.push(claim.clone());
                 }
             }
+            if trace.is_on() {
+                trace.push(TraceEntry::Retract {
+                    predicate: predicate.clone(),
+                    retracted: retracted_here.clone(),
+                });
+            }
+            retracted.extend(retracted_here);
             Ok(StmtOutcome::Continue)
         }
         Stmt::For {
@@ -1875,42 +2181,100 @@ fn execute_stmt(
                 EvalValue::Collection(v) => v,
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),
             };
-            // Iteration scope. Variables bound inside the body must not
-            // leak across iterations or escape the loop. With `Stmt::Let`
-            // alone this was harmless (each Let overwrote the same key
-            // every iteration), but `Stmt::BindOne` exposes the latent
-            // footgun: a residual binding from iteration N constrains
-            // the find_matches narrowing in iteration N+1 and turns a
-            // valid lookup into a zero-match rejection. We snapshot the
-            // surrounding bindings before the loop, reset to that
-            // snapshot plus the iteration variable at the start of each
-            // iteration, and restore the snapshot when the loop
-            // completes. The body sees only `outer ++ {binding ->
-            // item}`, never the residue of a prior iteration.
-            //
-            // `clone_from` is used on the per-iteration reset rather
-            // than `*bindings = outer.clone()` so the existing
-            // HashMap's allocation is reused across iterations. The
-            // final restore moves `outer` because it goes out of
-            // scope afterwards.
+            // Iteration scope (see PR B): snapshot outer bindings,
+            // reset per iteration, restore on exit. Trace builds a
+            // nested per-iteration sub-trace when tracing is on.
             let outer = bindings.clone();
+            let mut iterations: Vec<ForIterationTrace> = vec![];
             for item in items {
                 bindings.clone_from(&outer);
-                bindings.insert(binding.clone(), item);
-                for inner in body {
-                    match execute_stmt(
-                        inner, pre_state, bindings, actor, asserted, retracted, emitted,
-                    )? {
-                        StmtOutcome::Continue => {}
-                        StmtOutcome::Rejected(r) => return Ok(StmtOutcome::Rejected(r)),
+                bindings.insert(binding.clone(), item.clone());
+                let mut iter_entries: Vec<TraceEntry> = vec![];
+                // Labeled block scopes the iter_sink so its borrow on
+                // iter_entries ends before we move iter_entries into
+                // the ForIterationTrace below. The block returns the
+                // iteration outcome (Continue / Rejected / Errored)
+                // and the executor's borrow naturally goes out of
+                // scope with the block.
+                let iter_result: Result<Option<String>, EvalError> = 'inner: {
+                    let mut iter_sink = if trace.is_on() {
+                        TraceSink::On(&mut iter_entries)
+                    } else {
+                        TraceSink::Off
+                    };
+                    for inner in body {
+                        match execute_stmt(
+                            inner,
+                            pre_state,
+                            bindings,
+                            actor,
+                            asserted,
+                            retracted,
+                            emitted,
+                            &mut iter_sink,
+                        ) {
+                            Ok(StmtOutcome::Continue) => {}
+                            Ok(StmtOutcome::Rejected(r)) => break 'inner Ok(Some(r)),
+                            Err(e) => break 'inner Err(e),
+                        }
+                    }
+                    Ok(None)
+                };
+                match iter_result {
+                    Err(e) => {
+                        // Errored: record the partial iteration trace
+                        // plus the partial For trace so the outer
+                        // TracedProposal sees both before bubbling up.
+                        if trace.is_on() {
+                            iterations.push(ForIterationTrace {
+                                item: item.clone(),
+                                trace: iter_entries,
+                            });
+                            trace.push(TraceEntry::For {
+                                binding: binding.clone(),
+                                iterations,
+                            });
+                        }
+                        *bindings = outer;
+                        return Err(e);
+                    }
+                    Ok(maybe_rejected) => {
+                        if trace.is_on() {
+                            iterations.push(ForIterationTrace {
+                                item,
+                                trace: iter_entries,
+                            });
+                        }
+                        if let Some(r) = maybe_rejected {
+                            if trace.is_on() {
+                                trace.push(TraceEntry::For {
+                                    binding: binding.clone(),
+                                    iterations,
+                                });
+                            }
+                            *bindings = outer;
+                            return Ok(StmtOutcome::Rejected(r));
+                        }
                     }
                 }
             }
             *bindings = outer;
+            if trace.is_on() {
+                trace.push(TraceEntry::For {
+                    binding: binding.clone(),
+                    iterations,
+                });
+            }
             Ok(StmtOutcome::Continue)
         }
         Stmt::Emit(intent) => {
-            emitted.push(resolve_intent(intent, bindings, actor)?);
+            let instance = resolve_intent(intent, bindings, actor)?;
+            if trace.is_on() {
+                trace.push(TraceEntry::Emit {
+                    intent: instance.clone(),
+                });
+            }
+            emitted.push(instance);
             Ok(StmtOutcome::Continue)
         }
     }
@@ -3004,5 +3368,394 @@ mod tests {
             .collect();
         assert!(names.contains(&"MissingA"));
         assert!(names.contains(&"MissingB"));
+    }
+
+    // ============================================================
+    // propose_with_trace - structured per-statement diagnostic trace
+    //
+    // The tests below cover every TraceEntry variant on the happy
+    // path, the rejection path with trace, and the kernel-error
+    // path with partial trace. The contract these pin:
+    //
+    //   - Every statement that ran produces exactly one trace entry
+    //     (For wraps its iterations in one entry).
+    //   - Rejections (require/bind_one no-match, invariant failure)
+    //     produce a Completed { Rejected, trace } including the
+    //     failing entry.
+    //   - Kernel errors (multi-match bind_one, evaluator errors)
+    //     produce Errored { error, trace } - the trace is NOT
+    //     dropped on the error path.
+    //   - For traces nest with iteration items preserved.
+    // ============================================================
+
+    fn trace_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
+        Transition {
+            transformation_name: t.name.clone(),
+            args,
+            actor: EvalValue::Subject("trace_actor".to_string()),
+        }
+    }
+
+    /// Happy-path trace: every statement variant produces one entry,
+    /// invariant checks appear at the end, the overall outcome is
+    /// Accepted.
+    #[test]
+    fn propose_with_trace_records_every_statement_on_accept() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Policy".to_string(),
+            args: vec![
+                EvalValue::Subject("p1".to_string()),
+                EvalValue::Decimal(Decimal::new(100, 0)),
+            ],
+        }]);
+        let t = Transformation {
+            name: "happy".to_string(),
+            parameters: vec!["pid".to_string()],
+            body: vec![
+                require(claim("Policy", vec![var("pid"), wildcard()])),
+                bind_one(claim("Policy", vec![var("pid"), var("limit")])),
+                let_("doubled", add(term(var("limit")), term(var("limit")))),
+                let_new_subject("new_id"),
+                assert_("Echo", vec![var("new_id"), var("doubled")]),
+                emit("EchoEmitted", vec![var("new_id")]),
+            ],
+        };
+        let transition = trace_transition(&t, vec![EvalValue::Subject("p1".to_string())]);
+        let TracedProposal::Completed { outcome, trace } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert!(matches!(outcome, Outcome::Accepted { .. }));
+        assert_eq!(trace.len(), 6, "expected 6 entries, got: {trace:#?}");
+        assert!(matches!(
+            trace[0],
+            TraceEntry::Require {
+                outcome: RequireOutcome::Held { match_count: 1 },
+                ..
+            }
+        ));
+        assert!(matches!(trace[1], TraceEntry::BindOne { .. }));
+        assert!(matches!(trace[2], TraceEntry::Let { .. }));
+        assert!(matches!(trace[3], TraceEntry::LetNewSubject { .. }));
+        assert!(matches!(trace[4], TraceEntry::Assert { .. }));
+        assert!(matches!(trace[5], TraceEntry::Emit { .. }));
+    }
+
+    /// Require rejection: trace contains the failing entry, outcome
+    /// is Rejected. The rendered expression appears verbatim in the
+    /// trace, so callers can assert on the failing predicate name
+    /// instead of pattern-matching on reason strings.
+    #[test]
+    fn propose_with_trace_records_failing_require_with_rendered_expression() {
+        use dsl::*;
+        let state = State::default();
+        let t = Transformation {
+            name: "needs_policy".to_string(),
+            parameters: vec![],
+            body: vec![require(claim(
+                "Policy",
+                vec![Term::Literal(Value::Subject("p1".to_string())), wildcard()],
+            ))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { outcome, trace } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert!(matches!(outcome, Outcome::Rejected { .. }));
+        assert_eq!(trace.len(), 1);
+        let TraceEntry::Require {
+            expression,
+            outcome: RequireOutcome::Rejected { .. },
+        } = &trace[0]
+        else {
+            panic!("expected require Rejected, got {:?}", trace[0]);
+        };
+        assert!(expression.contains("Policy"));
+    }
+
+    /// BindOne zero-match: trace shows NoMatch outcome with the
+    /// expression.
+    #[test]
+    fn propose_with_trace_records_bind_one_no_match() {
+        use dsl::*;
+        let state = State::default();
+        let t = Transformation {
+            name: "lookup_missing".to_string(),
+            parameters: vec![],
+            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { outcome, trace } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert!(matches!(outcome, Outcome::Rejected { .. }));
+        assert_eq!(trace.len(), 1);
+        assert!(matches!(
+            trace[0],
+            TraceEntry::BindOne {
+                outcome: BindOneOutcome::NoMatch,
+                ..
+            }
+        ));
+    }
+
+    /// BindOne unique match: trace records the full bound binding
+    /// set, sorted by variable name. PR B's "replace, not extend"
+    /// doctrine means the trace shows the new authoritative context,
+    /// not the delta.
+    #[test]
+    fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Policy".to_string(),
+            args: vec![
+                EvalValue::Subject("p1".to_string()),
+                EvalValue::Decimal(Decimal::new(100, 0)),
+            ],
+        }]);
+        let t = Transformation {
+            name: "lookup".to_string(),
+            parameters: vec![],
+            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(trace.len(), 1);
+        let TraceEntry::BindOne {
+            outcome: BindOneOutcome::Bound { bindings },
+            ..
+        } = &trace[0]
+        else {
+            panic!("expected Bound, got {:?}", trace[0]);
+        };
+        // Sorted by variable name: limit, pid.
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].0, "limit");
+        assert_eq!(bindings[1].0, "pid");
+    }
+
+    /// BindOne multi-match is a kernel error. The trace MUST still
+    /// carry the entry showing why - dropping the trace on Err is
+    /// exactly the case this PR exists to prevent.
+    #[test]
+    fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
+        use dsl::*;
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "Policy".to_string(),
+                args: vec![
+                    EvalValue::Subject("p1".to_string()),
+                    EvalValue::Decimal(Decimal::new(100, 0)),
+                ],
+            },
+            ClaimInstance {
+                predicate: "Policy".to_string(),
+                args: vec![
+                    EvalValue::Subject("p2".to_string()),
+                    EvalValue::Decimal(Decimal::new(200, 0)),
+                ],
+            },
+        ]);
+        let t = Transformation {
+            name: "ambiguous".to_string(),
+            parameters: vec![],
+            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Errored { error, trace } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Errored");
+        };
+        assert!(matches!(error, EvalError::TypeMismatch(_)));
+        assert_eq!(trace.len(), 1);
+        assert!(matches!(
+            trace[0],
+            TraceEntry::BindOne {
+                outcome: BindOneOutcome::MultipleMatches { count: 2 },
+                ..
+            }
+        ));
+    }
+
+    /// Retract trace carries the **actual retracted claims**, not
+    /// just a count. Wildcard retractions that take out the wrong
+    /// thing are exactly where debugging gets hard; the trace must
+    /// show what was removed.
+    #[test]
+    fn propose_with_trace_records_retract_with_actual_claims() {
+        use dsl::*;
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "MayApprove".to_string(),
+                args: vec![EvalValue::Subject("alice".to_string())],
+            },
+            ClaimInstance {
+                predicate: "MayApprove".to_string(),
+                args: vec![EvalValue::Subject("bob".to_string())],
+            },
+        ]);
+        let t = Transformation {
+            name: "wildcard_retract".to_string(),
+            parameters: vec![],
+            body: vec![retract("MayApprove", vec![wildcard()])],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(trace.len(), 1);
+        let TraceEntry::Retract { retracted, .. } = &trace[0] else {
+            panic!("expected Retract, got {:?}", trace[0]);
+        };
+        assert_eq!(retracted.len(), 2);
+    }
+
+    /// For trace nests: outer trace gets one For entry, the inner
+    /// per-iteration traces carry the iteration items so a caller
+    /// can attribute a failing iteration to its element.
+    #[test]
+    fn propose_with_trace_records_for_with_per_iteration_items() {
+        use dsl::*;
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "LineAmount".to_string(),
+                args: vec![
+                    EvalValue::Subject("L1".to_string()),
+                    EvalValue::Decimal(Decimal::new(60, 0)),
+                ],
+            },
+            ClaimInstance {
+                predicate: "LineAmount".to_string(),
+                args: vec![
+                    EvalValue::Subject("L2".to_string()),
+                    EvalValue::Decimal(Decimal::new(40, 0)),
+                ],
+            },
+        ]);
+        let t = Transformation {
+            name: "iterate".to_string(),
+            parameters: vec!["lines".to_string()],
+            body: vec![for_(
+                "line",
+                term(var("lines")),
+                vec![bind_one(claim("LineAmount", vec![var("line"), var("amt")]))],
+            )],
+        };
+        let transition = trace_transition(
+            &t,
+            vec![EvalValue::Collection(vec![
+                EvalValue::Subject("L1".to_string()),
+                EvalValue::Subject("L2".to_string()),
+            ])],
+        );
+        let TracedProposal::Completed { trace, .. } =
+            propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(trace.len(), 1);
+        let TraceEntry::For { iterations, .. } = &trace[0] else {
+            panic!("expected For, got {:?}", trace[0]);
+        };
+        assert_eq!(iterations.len(), 2);
+        assert_eq!(iterations[0].item, EvalValue::Subject("L1".to_string()));
+        assert_eq!(iterations[1].item, EvalValue::Subject("L2".to_string()));
+        // Each iteration's inner trace has one bind_one entry.
+        assert_eq!(iterations[0].trace.len(), 1);
+        assert!(matches!(iterations[0].trace[0], TraceEntry::BindOne { .. }));
+    }
+
+    /// Invariant check: trace records one InvariantCheck per
+    /// invariant, with the rendered body expression. An invariant
+    /// rejection produces the entry plus an Outcome::Rejected.
+    #[test]
+    fn propose_with_trace_records_invariant_check_and_failure() {
+        use dsl::*;
+        let state = State::default();
+        let t = Transformation {
+            name: "fires_invariant".to_string(),
+            parameters: vec![],
+            body: vec![assert_(
+                "X",
+                vec![Term::Literal(Value::Subject("x1".to_string()))],
+            )],
+        };
+        // Invariant: claim X(x1) must imply Y(x1). The transformation
+        // asserts X but not Y, so the invariant fails on the
+        // candidate state.
+        let inv = Invariant {
+            name: "x_implies_y".to_string(),
+            version: 1,
+            body: implies(
+                claim("X", vec![Term::Literal(Value::Subject("x1".to_string()))]),
+                claim("Y", vec![Term::Literal(Value::Subject("x1".to_string()))]),
+            ),
+        };
+        let transition = trace_transition(&t, vec![]);
+        let TracedProposal::Completed { outcome, trace } =
+            propose_with_trace(&t, &transition, &state, &[inv])
+        else {
+            panic!("expected Completed");
+        };
+        assert!(matches!(outcome, Outcome::Rejected { .. }));
+        // 1 assert entry + 1 invariant check entry.
+        assert_eq!(trace.len(), 2);
+        assert!(matches!(trace[0], TraceEntry::Assert { .. }));
+        let TraceEntry::InvariantCheck {
+            name,
+            held,
+            expression,
+        } = &trace[1]
+        else {
+            panic!("expected InvariantCheck, got {:?}", trace[1]);
+        };
+        assert_eq!(name, "x_implies_y");
+        assert!(!held);
+        assert!(expression.contains("implies"));
+    }
+
+    /// Sanity: `propose` (without trace) produces the same outcome
+    /// as `propose_with_trace`. The two paths share an executor; if
+    /// they ever diverged, this would catch it.
+    #[test]
+    fn propose_and_propose_with_trace_produce_identical_outcomes() {
+        use dsl::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Policy".to_string(),
+            args: vec![
+                EvalValue::Subject("p1".to_string()),
+                EvalValue::Decimal(Decimal::new(100, 0)),
+            ],
+        }]);
+        let t = Transformation {
+            name: "lookup".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("Policy", vec![var("pid"), var("limit")])),
+                assert_("Echo", vec![var("pid"), var("limit")]),
+            ],
+        };
+        let transition = trace_transition(&t, vec![]);
+        let outcome_a = propose(&t, &transition, &state, &[]).unwrap();
+        let TracedProposal::Completed {
+            outcome: outcome_b, ..
+        } = propose_with_trace(&t, &transition, &state, &[])
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(outcome_a, outcome_b);
     }
 }
