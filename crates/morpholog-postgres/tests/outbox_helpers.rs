@@ -10,16 +10,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use morpholog_core::EvalValue;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, list_pending_outbox, mark_outbox_delivered,
     mark_outbox_failed, mark_outbox_transient_attempt, record_compensation,
 };
-use rust_decimal::Decimal;
 use uuid::Uuid;
 
 mod common;
+use common::{dec, subj};
 
 // ============================================================
 // Test infrastructure
@@ -42,13 +41,7 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
 
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
 
 /// Commit one ledger entry and return the resulting outbox row's
 /// `intent_id`. The row is in `status='pending'` with no lease

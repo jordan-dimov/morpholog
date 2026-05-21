@@ -1036,6 +1036,7 @@ name = "morpholog-core"
 version = "0.0.1"
 dependencies = [
  "jiff",
+ "morpholog-test-support",
  "proptest",
  "rust_decimal",
  "serde",
@@ -1049,6 +1050,7 @@ version = "0.0.1"
 dependencies = [
  "jiff",
  "morpholog-core",
+ "morpholog-test-support",
  "rust_decimal",
 ]
 
@@ -1060,6 +1062,7 @@ dependencies = [
  "morpholog-core",
  "morpholog-examples",
  "morpholog-postgres",
+ "morpholog-test-support",
  "rand 0.9.4",
  "rust_decimal",
  "serde_json",
@@ -1076,6 +1079,7 @@ dependencies = [
  "jiff",
  "morpholog-core",
  "morpholog-examples",
+ "morpholog-test-support",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -1084,6 +1088,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "morpholog-test-support"
+version = "0.0.1"
+dependencies = [
+ "jiff",
+ "morpholog-core",
+ "rust_decimal",
 ]
 
 [[package]]

@@ -9,16 +9,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance};
+use morpholog_test_support::{dec, subj};
 use rust_decimal::Decimal;
 use std::str::FromStr;
-
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
-
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
 
 #[test]
 fn eval_value_decimal_round_trips_as_tagged_json_string() {

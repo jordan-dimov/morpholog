@@ -2,9 +2,9 @@
 //! in one programme. See `examples/02_verified_revenue/README.md` for the
 //! business framing; this module is the IR.
 
-use morpholog_core::{Invariant, Term, Transformation};
+use morpholog_core::{Invariant, Transformation};
 
-use crate::helpers::*;
+use morpholog_core::dsl::*;
 
 /// The purpose subject identifying bank debt-service-coverage usage.
 pub const BANK_DEBT_SERVICE: &str = "bank_debt_service";
@@ -28,7 +28,7 @@ pub fn admissibility_has_provenance() -> Invariant {
             claim("AdmissibleFor", vec![var("v"), var("p")]),
             claim(
                 "StandingGrantedBy",
-                vec![var("v"), var("p"), Term::Wildcard, Term::Wildcard],
+                vec![var("v"), var("p"), wildcard(), wildcard()],
             ),
         ),
     }
@@ -103,7 +103,7 @@ pub fn admit_independent_verification() -> Transformation {
         body: vec![
             require(not(claim(
                 "CurrentVerification",
-                vec![var("asset"), var("period"), Term::Wildcard],
+                vec![var("asset"), var("period"), wildcard()],
             ))),
             assert_(
                 "IndependentlyVerifiedRevenue",
@@ -151,13 +151,13 @@ pub fn correct_independent_verification() -> Transformation {
                 vec![
                     var("asset"),
                     var("period"),
-                    Term::Wildcard,
+                    wildcard(),
                     var("prior_verification_id"),
                 ],
             )),
             require(not(claim(
                 "Supersedes",
-                vec![Term::Wildcard, var("prior_verification_id")],
+                vec![wildcard(), var("prior_verification_id")],
             ))),
             assert_(
                 "IndependentlyVerifiedRevenue",
@@ -181,7 +181,7 @@ pub fn correct_independent_verification() -> Transformation {
             // must re-issue standing if they accept the correction.
             retract(
                 "AdmissibleFor",
-                vec![var("prior_verification_id"), Term::Wildcard],
+                vec![var("prior_verification_id"), wildcard()],
             ),
             assert_(
                 "CurrentVerification",
@@ -208,15 +208,15 @@ pub fn grant_standing() -> Transformation {
             require(claim(
                 "IndependentlyVerifiedRevenue",
                 vec![
-                    Term::Wildcard,
-                    Term::Wildcard,
-                    Term::Wildcard,
+                    wildcard(),
+                    wildcard(),
+                    wildcard(),
                     var("verification_id"),
                 ],
             )),
             require(claim(
                 "CurrentVerification",
-                vec![Term::Wildcard, Term::Wildcard, var("verification_id")],
+                vec![wildcard(), wildcard(), var("verification_id")],
             )),
             require(not(exists(
                 "r",
@@ -297,7 +297,7 @@ pub fn admit_debt_service_revenue() -> Transformation {
             )),
             require(claim(
                 "AdmissibleFor",
-                vec![var("verification_id"), lit_subj(BANK_DEBT_SERVICE)],
+                vec![var("verification_id"), subj(BANK_DEBT_SERVICE)],
             )),
             assert_(
                 "DebtServiceRevenue",
@@ -333,7 +333,7 @@ pub fn admit_investor_reported_revenue() -> Transformation {
             )),
             require(claim(
                 "AdmissibleFor",
-                vec![var("verification_id"), lit_subj(INVESTOR_REPORTING)],
+                vec![var("verification_id"), subj(INVESTOR_REPORTING)],
             )),
             assert_(
                 "InvestorReportedRevenue",

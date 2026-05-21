@@ -1,5 +1,5 @@
 [package]
-name = "morpholog-examples"
+name = "morpholog-test-support"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,7 @@ repository.workspace = true
 
 [dependencies]
 morpholog-core = { path = "../morpholog-core" }
-
-[dev-dependencies]
 jiff = { workspace = true }
-morpholog-test-support = { path = "../morpholog-test-support" }
 rust_decimal = { workspace = true }
 
 [lints]

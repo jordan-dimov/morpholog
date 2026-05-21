@@ -23,10 +23,10 @@
 use morpholog_core::{EvalValue, IntentInstance, Invariant, Transformation};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{PgPool, PgProposalOutcome, list_audit_rows, list_pending_outbox};
-use rust_decimal::Decimal;
 use uuid::Uuid;
 
 mod common;
+use common::{dec, subj};
 
 // ============================================================
 // Test infrastructure
@@ -49,13 +49,7 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
 
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
 
 fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     match outcome {

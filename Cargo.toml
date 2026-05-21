@@ -7,6 +7,7 @@ members = [
     "crates/morpholog-examples",
     "crates/morpholog-outbox",
     "crates/morpholog-postgres",
+    "crates/morpholog-test-support",
 ]
 
 [workspace.package]

@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::{EvalValue, Transition};
+use morpholog_core::Transition;
+use morpholog_test_support::{dec, subj};
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::OutboxWorker;
 use morpholog_outbox::testing::{FixedJitter, MockClock};
@@ -21,7 +22,6 @@ use morpholog_postgres::{
     Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome, propose_against_pg,
     testing::AlwaysDelivers,
 };
-use rust_decimal::Decimal;
 use tokio::sync::watch;
 
 // ============================================================
@@ -45,13 +45,7 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
 
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
 
 async fn commit_simple_entry(pool: &PgPool, entry_id: &str) {
     let transformation = double_entry_ledger::post_simple_entry();

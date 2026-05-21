@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
+pub mod dsl;
+pub mod format;
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is

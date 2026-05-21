@@ -10,11 +10,11 @@
 
 use std::time::Duration;
 
-use morpholog_core::{EvalValue, Transition};
+use morpholog_core::Transition;
+use morpholog_test_support::{dec, subj};
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::{StdoutDeliverer, process_available_outbox_rows};
 use morpholog_postgres::{PgPool, PgProposalOutcome, ProcessOutcome, propose_against_pg};
-use rust_decimal::Decimal;
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
@@ -33,13 +33,7 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
 
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
 
 #[tokio::test]
 async fn stdout_deliverer_marks_row_delivered_via_drain() {

@@ -12,16 +12,15 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use morpholog_core::EvalValue;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row,
     release_outbox_claim,
 };
-use rust_decimal::Decimal;
 use uuid::Uuid;
 
 mod common;
+use common::{dec, subj};
 
 // ============================================================
 // Test infrastructure
@@ -44,13 +43,7 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
-}
 
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
 
 /// Commit one ledger entry with the supplied `entry_id` and return
 /// the resulting outbox row's `intent_id`. The row is in

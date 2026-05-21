@@ -14,8 +14,6 @@
 //! once a real parser and example-loading mechanism exist. Treat these
 //! as teaching fixtures, not a contract.
 
-mod helpers;
-
 pub mod approval_controls;
 pub mod clinical_trial_enrolment;
 pub mod double_entry_ledger;

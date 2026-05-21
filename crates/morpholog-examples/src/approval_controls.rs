@@ -1,12 +1,12 @@
 //! Approval controls IR: unconditional `MayApprove` + quantitative
-//! `ApprovalLimit`, both consulted via `Term::Actor` in admission-time
+//! `ApprovalLimit`, both consulted via `actor()` in admission-time
 //! `require` clauses. No invariants - revocation prevents future
 //! approvals but historical approvals stay admitted. See
 //! `examples/04_approval_controls/README.md` for the business framing.
 
-use morpholog_core::{Invariant, Term, Transformation};
+use morpholog_core::{Invariant, Transformation};
 
-use crate::helpers::*;
+use morpholog_core::dsl::*;
 
 // ============================================================
 // Unconditional authority - MayApprove + approve_document
@@ -42,18 +42,18 @@ pub fn revoke_approval_authority() -> Transformation {
 }
 
 /// Unconditional approval. Declares no `actor` parameter; the actor
-/// flows through transition context and is consulted via `Term::Actor`.
+/// flows through transition context and is consulted via `actor()`.
 pub fn approve_document() -> Transformation {
     Transformation {
         name: "approve_document".to_string(),
         parameters: params(&["doc_id", "doc_type"]),
         body: vec![
-            require(claim("MayApprove", vec![Term::Actor, var("doc_type")])),
+            require(claim("MayApprove", vec![actor(), var("doc_type")])),
             assert_(
                 "Approval",
-                vec![var("doc_id"), var("doc_type"), Term::Actor],
+                vec![var("doc_id"), var("doc_type"), actor()],
             ),
-            emit("DocumentApproved", vec![var("doc_id"), Term::Actor]),
+            emit("DocumentApproved", vec![var("doc_id"), actor()]),
         ],
     }
 }
@@ -111,17 +111,17 @@ pub fn approve_within_limit() -> Transformation {
             require(and(vec![
                 claim(
                     "ApprovalLimit",
-                    vec![Term::Actor, var("doc_type"), var("limit")],
+                    vec![actor(), var("doc_type"), var("limit")],
                 ),
                 le(term(var("amount")), term(var("limit"))),
             ])),
             assert_(
                 "LimitedApproval",
-                vec![var("doc_id"), var("doc_type"), var("amount"), Term::Actor],
+                vec![var("doc_id"), var("doc_type"), var("amount"), actor()],
             ),
             emit(
                 "DocumentApprovedWithinLimit",
-                vec![var("doc_id"), Term::Actor, var("amount")],
+                vec![var("doc_id"), actor(), var("amount")],
             ),
         ],
     }

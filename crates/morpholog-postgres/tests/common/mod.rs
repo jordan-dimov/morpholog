@@ -1,30 +1,30 @@
 //! Shared test helpers for the morpholog-postgres integration tests.
 //!
-//! Each per-test-file binary declares `mod common;` to bring these
-//! into scope. Helpers are marked `#[allow(dead_code)]` because not
-//! every integration test binary uses every helper.
+//! Sync helpers (constructors, default actor, in-memory propose
+//! wrappers) come from `morpholog-test-support` via the re-export
+//! below. This file owns the **async** PG-specific wrappers
+//! (`propose_pg_*`) because they depend on `morpholog-postgres`
+//! itself - putting them in test-support would create a dep cycle
+//! and would also force tokio/sqlx into every consumer of the
+//! support crate.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{EvalValue, Invariant, Transformation, Transition};
 use morpholog_postgres::{PgError, PgPool, PgProposalOutcome, propose_against_pg};
 
-/// Default actor for integration tests that don't model authority.
-/// Future authority-focused tests will supply their own actor.
-pub fn test_actor() -> EvalValue {
-    EvalValue::Subject("test_actor".to_string())
-}
-
-/// Build a `Transition` with the shared `test_actor()`. Used by tests
-/// that need to pass a `&Transition` directly to functions other than
-/// `propose_against_pg`.
-pub fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
-    Transition {
-        transformation_name: t.name.clone(),
-        args,
-        actor: test_actor(),
-    }
-}
+// Re-export the test-support surface so per-test files can `use
+// common::{subj, dec, ...};` rather than depending on
+// morpholog-test-support directly. The `allow(unused_imports)` is
+// necessary because each per-test file pulls a different subset:
+// without it, every binary that doesn't use the full set generates
+// noise pointing at the re-export rather than the file that's
+// actually missing the import.
+#[allow(unused_imports)]
+pub use morpholog_test_support::{
+    bool_, claim_instance, coll, date, dec, dec_str, has_claim, role, subj, test_actor,
+    test_transition,
+};
 
 /// Convenience for tests that previously called `propose_against_pg`
 /// with the old `(pool, transformation, args, invariants)` shape.

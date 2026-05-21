@@ -5,9 +5,9 @@
 //! `examples/05_insurance_claim_settlement/README.md` for the business
 //! framing.
 
-use morpholog_core::{Invariant, Term, Transformation};
+use morpholog_core::{Invariant, Transformation};
 
-use crate::helpers::*;
+use morpholog_core::dsl::*;
 
 // ============================================================
 // Invariants
@@ -27,11 +27,11 @@ pub fn paid_implies_authorised() -> Invariant {
         body: implies(
             claim(
                 "SettlementPaid",
-                vec![Term::Wildcard, var("c"), var("s"), var("a")],
+                vec![wildcard(), var("c"), var("s"), var("a")],
             ),
             claim(
                 "SettlementAuthorised",
-                vec![var("c"), var("s"), var("a"), Term::Wildcard],
+                vec![var("c"), var("s"), var("a"), wildcard()],
             ),
         ),
     }
@@ -149,7 +149,7 @@ pub fn report_claim() -> Transformation {
         name: "report_claim".to_string(),
         parameters: params(&["claim_id", "policy_id", "claimed_amount"]),
         body: vec![
-            require(claim("Policy", vec![var("policy_id"), Term::Wildcard])),
+            require(claim("Policy", vec![var("policy_id"), wildcard()])),
             assert_(
                 "ClaimReported",
                 vec![var("claim_id"), var("policy_id"), var("claimed_amount")],
@@ -194,7 +194,7 @@ pub fn grant_settlement_authority() -> Transformation {
 /// running total reads from) and emits a payment-request intent for
 /// the outbox.
 /// No actor parameter on the transformation; the actor flows through
-/// transition context as `Term::Actor`, persisted to the
+/// transition context as `actor()`, persisted to the
 /// authorisation record.
 ///
 /// A `require` gates on existence of the reported claim before
@@ -212,21 +212,21 @@ pub fn authorise_settlement() -> Transformation {
         body: vec![
             require(claim(
                 "ClaimReported",
-                vec![var("claim_id"), Term::Wildcard, Term::Wildcard],
+                vec![var("claim_id"), wildcard(), wildcard()],
             )),
             let_(
                 "policy_id",
                 value_of(
                     "ClaimReported",
-                    vec![var("claim_id"), Term::Wildcard, Term::Wildcard],
+                    vec![var("claim_id"), wildcard(), wildcard()],
                 ),
             ),
             let_(
                 "aggregate_limit",
-                value_of("Policy", vec![var("policy_id"), Term::Wildcard]),
+                value_of("Policy", vec![var("policy_id"), wildcard()]),
             ),
             require(and(vec![
-                claim("SettlementAuthority", vec![Term::Actor, var("actor_limit")]),
+                claim("SettlementAuthority", vec![actor(), var("actor_limit")]),
                 le(term(var("amount")), term(var("actor_limit"))),
             ])),
             require(le(
@@ -238,8 +238,8 @@ pub fn authorise_settlement() -> Transformation {
                             "SettlementPaid",
                             vec![
                                 var("policy_id"),
-                                Term::Wildcard,
-                                Term::Wildcard,
+                                wildcard(),
+                                wildcard(),
                                 var("paid"),
                             ],
                         ),
@@ -254,7 +254,7 @@ pub fn authorise_settlement() -> Transformation {
                     var("claim_id"),
                     var("settlement_id"),
                     var("amount"),
-                    Term::Actor,
+                    actor(),
                 ],
             ),
             assert_(
@@ -268,7 +268,7 @@ pub fn authorise_settlement() -> Transformation {
             ),
             emit(
                 "ClaimPaymentRequested",
-                vec![var("settlement_id"), var("amount"), Term::Actor],
+                vec![var("settlement_id"), var("amount"), actor()],
             ),
         ],
     }
@@ -299,8 +299,8 @@ pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
                     "SettlementPaid",
                     vec![
                         var("policy_id"),
-                        Term::Wildcard,
-                        Term::Wildcard,
+                        wildcard(),
+                        wildcard(),
                         var("paid"),
                     ],
                 ),
@@ -310,9 +310,9 @@ pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
             "SettlementPaid",
             vec![
                 var("policy_id"),
-                Term::Wildcard,
-                Term::Wildcard,
-                Term::Wildcard,
+                wildcard(),
+                wildcard(),
+                wildcard(),
             ],
         ),
     }
