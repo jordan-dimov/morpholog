@@ -200,7 +200,7 @@ One trace entry per transformation statement and per invariant check. `For` is n
 
 **Scope: statement-level only.** The trace shows which statement failed; it does not drill into expression internals. A failing `require And(...)` shows the outer `require` as rejected with the rendered `And(...)` expression; it does not identify which conjunct of the `And` was false. Conjunct-level diagnostics would require a separate evaluator refactor (an `find_matches_with_trace`-style pass) and are deliberately deferred.
 
-`propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum. The non-trace path pays zero overhead; the trace path opts in by passing `TraceSink::On(&mut Vec<TraceEntry>)`. There is no separate "traced evaluator" that could drift from `propose`.
+`propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum. The non-trace path allocates no trace storage and the `On`-vs-`Off` check at each statement is a single-variant enum match the optimiser collapses to nothing meaningful; the trace path opts in by passing `TraceSink::On(&mut Vec<TraceEntry>)`. There is no separate "traced evaluator" that could drift from `propose`.
 
 ## Atomicity boundary
 
