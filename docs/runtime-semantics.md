@@ -96,12 +96,13 @@ Term                             -- a node inside a claim's args, a comprehensio
                                     (authority checks live in `require`, not in invariants)
 
 Statement
-  require Expression
-  let name = Expression
+  require Expression             -- yes/no gate; does not export bindings
+  bind_one Expression            -- unique lookup; replaces bindings with match
+  let name = Expression          -- value-producing binding
   let name = new Subject()       -- generates a fresh UUIDv7
   assert Claim
   retract Pred(args...)          -- pattern-based; idempotent on zero matches
-  for binding in collection: list of Statements
+  for binding in collection: list of Statements  -- iteration; body is scoped
   emit Intent
 
 Intent
@@ -147,9 +148,9 @@ AuditRecord
 
 External side effects fire only after commit, delivered by workers reading the outbox.
 
-## Statements: the require / bind_one / let / for trinity
+## Statements: the require / bind_one / let / for quartet
 
-Four statement classes serve different purposes; conflating them is the most common modelling mistake when authoring a transformation.
+Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation.
 
 - **`require Expression`** is a **yes/no gate**. It evaluates `Expression` against the pre-state snapshot; if the expression admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
 

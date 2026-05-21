@@ -232,7 +232,7 @@ pub struct Intent {
 ///   once per element.
 ///
 /// See `docs/runtime-semantics.md` for the require/bind_one/let/for
-/// trinity in full.
+/// quartet in full.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Require(Expr),
@@ -1500,9 +1500,15 @@ fn execute_stmt(
             // iteration, and restore the snapshot when the loop
             // completes. The body sees only `outer ++ {binding ->
             // item}`, never the residue of a prior iteration.
+            //
+            // `clone_from` is used on the per-iteration reset rather
+            // than `*bindings = outer.clone()` so the existing
+            // HashMap's allocation is reused across iterations. The
+            // final restore moves `outer` because it goes out of
+            // scope afterwards.
             let outer = bindings.clone();
             for item in items {
-                *bindings = outer.clone();
+                bindings.clone_from(&outer);
                 bindings.insert(binding.clone(), item);
                 for inner in body {
                     match execute_stmt(
