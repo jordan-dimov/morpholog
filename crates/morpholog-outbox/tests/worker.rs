@@ -19,6 +19,7 @@ use morpholog_outbox::OutboxWorker;
 use morpholog_outbox::testing::{FixedJitter, MockClock};
 use morpholog_postgres::{
     Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome, propose_against_pg,
+    testing::AlwaysDelivers,
 };
 use rust_decimal::Decimal;
 use tokio::sync::watch;
@@ -106,12 +107,9 @@ impl Deliverer for ShutdownAfterFirstDelivery {
     }
 }
 
-struct AlwaysDelivers;
-impl Deliverer for AlwaysDelivers {
-    async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
-        DeliveryOutcome::Delivered
-    }
-}
+// AlwaysDelivers lives in `morpholog_postgres::testing` (imported
+// above). Test-file-local shapes that need worker-state access
+// (ShutdownAfterFirstDelivery) stay above.
 
 // ============================================================
 // Tests

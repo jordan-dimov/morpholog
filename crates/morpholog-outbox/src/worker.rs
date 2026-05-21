@@ -133,8 +133,8 @@ where
     /// after shutdown. Returns `Ok(())` on clean shutdown, or
     /// propagates the first [`PgError`] from a drain pass (the
     /// loop does NOT swallow database errors; a permanent DB
-    /// problem stops the worker so a supervisor - PR 4 - can
-    /// decide whether to restart it).
+    /// problem stops the worker so a future supervisor can decide
+    /// whether to restart it).
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), PgError> {
         loop {
             if *shutdown.borrow() {

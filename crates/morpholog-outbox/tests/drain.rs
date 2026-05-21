@@ -20,6 +20,7 @@ use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
     Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome, ProcessOutcome,
     propose_against_pg,
+    testing::{AlwaysDelivers, AlwaysTransient},
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -84,23 +85,9 @@ async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
 const INTENT_TYPE: &str = "JournalEntryPosted";
 const LEASE: Duration = Duration::from_secs(30);
 
-struct AlwaysDelivers;
-impl Deliverer for AlwaysDelivers {
-    async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
-        DeliveryOutcome::Delivered
-    }
-}
-
-struct AlwaysTransient {
-    next_attempt_at: chrono::DateTime<chrono::Utc>,
-}
-impl Deliverer for AlwaysTransient {
-    async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
-        DeliveryOutcome::Transient {
-            next_attempt_at: self.next_attempt_at,
-        }
-    }
-}
+// AlwaysDelivers / AlwaysTransient live in `morpholog_postgres::testing`
+// (imported above). Test-file-local shapes that need processor-state
+// access (SubsecondTransient, ExpireFirstThenDeliver) stay below.
 
 // ============================================================
 // Tests

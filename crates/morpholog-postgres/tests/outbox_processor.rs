@@ -31,6 +31,7 @@ use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
     ProcessOutcome, list_audit_rows, list_pending_outbox, process_one_outbox_row,
+    testing::{AlwaysDelivers, AlwaysNonRetryable, AlwaysTransient},
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -94,35 +95,12 @@ const LEASE: Duration = Duration::from_secs(30);
 // ============================================================
 // Deliverer stubs
 // ============================================================
-
-struct AlwaysDelivers;
-impl Deliverer for AlwaysDelivers {
-    async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
-        DeliveryOutcome::Delivered
-    }
-}
-
-struct AlwaysTransient {
-    next_attempt_at: chrono::DateTime<chrono::Utc>,
-}
-impl Deliverer for AlwaysTransient {
-    async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
-        DeliveryOutcome::Transient {
-            next_attempt_at: self.next_attempt_at,
-        }
-    }
-}
-
-struct AlwaysNonRetryable {
-    reason: &'static str,
-}
-impl Deliverer for AlwaysNonRetryable {
-    async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
-        DeliveryOutcome::NonRetryable {
-            reason: self.reason.to_string(),
-        }
-    }
-}
+//
+// AlwaysDelivers, AlwaysTransient, AlwaysNonRetryable live in
+// `morpholog_postgres::testing` so this crate's tests and
+// `morpholog-outbox`'s tests share the same stubs. Test-file-local
+// shapes that need processor-side state (e.g. forcing lease
+// expiry via direct SQL) stay here.
 
 /// Deliverer that forces its own lease to expire (via direct SQL)
 /// before returning the configured outcome. Used to exercise the
@@ -308,9 +286,7 @@ async fn process_one_outbox_row_marks_failed_when_no_compensation_spec() {
         "worker_a",
         INTENT_TYPE,
         LEASE,
-        &AlwaysNonRetryable {
-            reason: "no compensation wired",
-        },
+        &AlwaysNonRetryable::new("no compensation wired"),
         None,
         Utc::now(),
     )
@@ -351,9 +327,7 @@ async fn process_one_outbox_row_compensates_on_nonretryable_with_spec() {
         "worker_a",
         INTENT_TYPE,
         LEASE,
-        &AlwaysNonRetryable {
-            reason: "counterparty bank rejected wire: AML routing lock",
-        },
+        &AlwaysNonRetryable::new("counterparty bank rejected wire: AML routing lock"),
         Some(&spec),
         Utc::now(),
     )
@@ -405,9 +379,7 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
         "worker_a",
         INTENT_TYPE,
         LEASE,
-        &AlwaysNonRetryable {
-            reason: "delivery failed",
-        },
+        &AlwaysNonRetryable::new("delivery failed"),
         Some(&spec),
         Utc::now(),
     )

@@ -21,5 +21,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+sqlx = { workspace = true }
+
 [lints]
 workspace = true

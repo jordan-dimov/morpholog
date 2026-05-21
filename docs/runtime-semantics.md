@@ -147,6 +147,38 @@ AuditRecord
 
 External side effects fire only after commit, delivered by workers reading the outbox.
 
+## Statements: gating vs binding
+
+Two statement classes serve different purposes; conflating them is the most common modelling mistake when authoring a transformation.
+
+- **`require Expression` is a yes/no gate.** It evaluates `Expression` against the pre-state snapshot; if the expression admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
+
+- **`let name = Expression` is the binding primitive.** It evaluates `Expression` to a single value and binds `name` in the active scope for every subsequent statement (including later `require`s, `assert`s, `retract`s, intent `emit`s, and the body of a `for`). When `Expression` is `ValueOf(predicate, args)`, the let extracts a value position from a uniquely-matching claim.
+
+The idiomatic pattern for "this claim exists and I need a value from it" - lifted verbatim from `examples/05_insurance_claim_settlement/insurance_claim_settlement.morph`:
+
+```
+require ClaimReported(claim_id, _, _)                       -- gate: the claim has been reported
+let policy_id = value_of ClaimReported(claim_id, _, _)      -- extract: binds policy_id to the
+                                                            -- first wildcard's position
+... statements that reference policy_id ...
+```
+
+`value_of` finds a single claim matching the given pattern and returns the value at the first wildcard position (here, the second argument); zero matches surfaces as `EvalError::ValueOfZeroMatches`, more than one as `EvalError::ValueOfMultipleMatches`. The guard `require` rejects the proposal cleanly when the claim is absent; the subsequent `let` then extracts the value, with the structural guarantee that the lookup is single-valued (a property the programme must enforce via an invariant - e.g. `at_most_one_X_per_id`, the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use).
+
+Inside a `require` body, multiple sub-expressions composed with `And` *do* propagate bindings forward within that single require: the matcher's binding extensions are threaded through the conjuncts. So a require like
+
+```
+require And(
+    Claim(P, x, limit),                             -- binds limit
+    Le(amount, limit)                               -- consumes limit
+)
+```
+
+is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` comparison within the same require evaluation. What does *not* work is sequencing two separate `require` statements and expecting the second to see bindings from the first.
+
+`Term::Actor` is reachable from inside any transformation-body statement that evaluates a `Term` (`require`, `let`, `assert`, `retract`, `emit`, `for`). It is **not** reachable from inside an invariant body or a derived claim's domain - both raise `EvalError::UnboundActor` at evaluation, because invariants evaluate against admitted state without a proposing transition in scope. This is the require-vs-invariant distinction made enforceable: authority checks belong in `require`, not in invariants.
+
 ## Atomicity boundary
 
 Steps 1-7 are atomic. Post-commit, outbox intents deliver at-least-once via workers running outside the transaction. External effects are never rolled back - only retried or compensated.
