@@ -37,14 +37,95 @@ pub fn paid_implies_authorised() -> Invariant {
     }
 }
 
+/// At most one `Policy` per `policy_id`. The eternal structural rule
+/// that `authorise_settlement`'s `ValueOf(Policy(policy_id, _))`
+/// implicitly depends on - without it a duplicate-policy admission
+/// would turn a downstream settlement proposal into an
+/// `EvalError::ValueOfMultipleMatches` rather than rejecting cleanly.
+/// Reuses the singleton-shape from
+/// `verified_revenue::at_most_one_current_verification_per_asset_period`.
+pub fn at_most_one_policy_per_id() -> Invariant {
+    Invariant {
+        name: "at_most_one_policy_per_id".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim("Policy", vec![var("policy"), var("a")]),
+                claim("Policy", vec![var("policy"), var("b")]),
+            ]),
+            eq(term(var("a")), term(var("b"))),
+        ),
+    }
+}
+
+/// At most one `ClaimReported` per `claim_id`. Mirrors
+/// `at_most_one_policy_per_id`; pins the structural uniqueness that
+/// `authorise_settlement`'s `ValueOf(ClaimReported(claim_id, _, _))`
+/// depends on. Duplicate reports must agree on every field.
+pub fn at_most_one_claim_report_per_id() -> Invariant {
+    Invariant {
+        name: "at_most_one_claim_report_per_id".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim(
+                    "ClaimReported",
+                    vec![var("c"), var("policy_a"), var("amount_a")],
+                ),
+                claim(
+                    "ClaimReported",
+                    vec![var("c"), var("policy_b"), var("amount_b")],
+                ),
+            ]),
+            and(vec![
+                eq(term(var("policy_a")), term(var("policy_b"))),
+                eq(term(var("amount_a")), term(var("amount_b"))),
+            ]),
+        ),
+    }
+}
+
+/// `settlement_id` is globally unique across admitted payments. Two
+/// `SettlementPaid` claims sharing a `settlement_id` must agree on
+/// every other field. Without this, an audit log could carry two
+/// distinct payments under the same id - the money side stays
+/// conservative (cumulative cap counts both), but the identity side
+/// gets muddy. For an audit-grade settlement example, identity
+/// uniqueness pulls its weight.
+pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
+    Invariant {
+        name: "settlement_id_uniquely_identifies_payment".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim(
+                    "SettlementPaid",
+                    vec![var("policy_a"), var("claim_a"), var("s"), var("amount_a")],
+                ),
+                claim(
+                    "SettlementPaid",
+                    vec![var("policy_b"), var("claim_b"), var("s"), var("amount_b")],
+                ),
+            ]),
+            and(vec![
+                eq(term(var("policy_a")), term(var("policy_b"))),
+                eq(term(var("claim_a")), term(var("claim_b"))),
+                eq(term(var("amount_a")), term(var("amount_b"))),
+            ]),
+        ),
+    }
+}
+
 // ============================================================
 // Transformations
 // ============================================================
 
 /// Open a policy with an aggregate limit. The aggregate limit is the
-/// cumulative cap across every settlement on this policy. Unconditional
-/// in v0; policy administration (issuance authority, endorsements,
-/// cancellation) is out of scope for this example.
+/// cumulative cap across every settlement on this policy. A
+/// duplicate `policy_id` admission is caught by
+/// `at_most_one_policy_per_id` against the candidate state -
+/// `authorise_settlement` later relies on this uniqueness through
+/// `ValueOf(Policy(policy_id, _))`.
 pub fn issue_policy() -> Transformation {
     Transformation {
         name: "issue_policy".to_string(),
@@ -59,7 +140,10 @@ pub fn issue_policy() -> Transformation {
 /// Record a reported loss against a policy. Requires the policy to
 /// exist; the claimed amount is informational - the binding
 /// authorisations make against the policy aggregate limit, not the
-/// claimed amount.
+/// claimed amount. A duplicate `claim_id` admission is caught by
+/// `at_most_one_claim_report_per_id` against the candidate state -
+/// `authorise_settlement` later relies on this uniqueness through
+/// `ValueOf(ClaimReported(claim_id, _, _))`.
 pub fn report_claim() -> Transformation {
     Transformation {
         name: "report_claim".to_string(),
@@ -106,8 +190,9 @@ pub fn grant_settlement_authority() -> Transformation {
 ///    `Expr::Add` shape the example forces.
 ///
 /// On admission, asserts both `SettlementAuthorised` (who decided
-/// what) and `SettlementPaid` (the payment fact for the cumulative
-/// running total) and emits a payment-request intent for the outbox.
+/// what) and `SettlementPaid` (the payment record the cumulative
+/// running total reads from) and emits a payment-request intent for
+/// the outbox.
 /// No actor parameter on the transformation; the actor flows through
 /// transition context as `Term::Actor`, persisted to the
 /// authorisation record.
@@ -190,7 +275,12 @@ pub fn authorise_settlement() -> Transformation {
 }
 
 pub fn all_invariants() -> Vec<Invariant> {
-    vec![paid_implies_authorised()]
+    vec![
+        paid_implies_authorised(),
+        at_most_one_policy_per_id(),
+        at_most_one_claim_report_per_id(),
+        settlement_id_uniquely_identifies_payment(),
+    ]
 }
 
 /// Read-side projection: cumulative paid per policy. Enumerated on

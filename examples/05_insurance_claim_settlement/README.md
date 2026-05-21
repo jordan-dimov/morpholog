@@ -1,6 +1,6 @@
 # Insurance Claim Settlement
 
-A claim is reported against a policy. A loss adjuster authorises a payment. Three months later, a regulator asks: *who decided this £40,000 payment, under what authority on what day, and was the policy aggregate limit consumed before or after this settlement?* The answer should be one query against the audit log - not detective work across a claims platform, a finance ledger, and an authority matrix that no longer agrees with itself.
+A claim is reported against a policy. A claims handler, acting under delegated settlement authority, authorises a payment. Three months later, a regulator asks: *who decided this £40,000 payment, under what authority on what day, and was the policy aggregate limit consumed before or after this settlement?* The answer should be one query against the audit log - not detective work across a claims platform, a finance ledger, and an authority matrix that no longer agrees with itself.
 
 This is exactly the kind of question UK insurance is being asked to answer with growing precision. In December 2025 the FCA accelerated its work on home and travel claims handling - delayed settlements, weak management information, oversight of outsourced services, and cash settlements made without enough evidence that the outcome was suitable. At the same time, Lloyd's stepped back from a single-platform claims rebuild and pivoted toward incremental data standards. Neither pressure asks for a bigger system; both ask for *defensible evidence regimes* that can sit alongside the platforms a real insurer already has.
 
@@ -10,7 +10,7 @@ This example is the smallest evidence regime that makes the regulator's question
 
 A commercial property insurer issues `policy_001` with a **£100,000 aggregate limit** - the cumulative cap across every settlement on this policy for the period.
 
-A storm-damage claim is reported. A loss adjuster, **alex**, has been granted **£100,000 of settlement authority** for this claim class. Alex authorises a first payment of £60,000. Reality holds:
+A storm-damage claim is reported. A claims handler, **alex**, has been granted **£100,000 of settlement authority** for this claim class. Alex authorises a first payment of £60,000. Reality holds:
 
 - The audit log records that alex authorised £60,000 against `claim_001` on a specific date.
 - `PolicyLimitUsage(policy_001)` reads **£60,000** used; **£40,000** of aggregate remains.
@@ -35,16 +35,19 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | Predicate | Role |
 | --- | --- |
 | `Policy(policy_id, aggregate_limit)` | The policy and its cumulative cap across all settlements. Append-only. |
-| `SettlementAuthority(actor, limit)` | An actor's per-settlement authority ceiling. Retractable; v0 does not yet model retraction. |
+| `SettlementAuthority(actor, limit)` | An actor's per-settlement authority ceiling. The runtime supports `Stmt::Retract`, so revocation is expressible; this example deliberately does not include a revoke transformation - the approval-controls example already pins that pattern. |
 | `ClaimReported(claim_id, policy_id, claimed_amount)` | A reported loss against a policy. Append-only. The claimed amount is informational; the binding constraint is the aggregate limit. |
 | `SettlementAuthorised(claim_id, settlement_id, amount, actor)` | The audit-grade record of an authorising decision. Append-only. Fourth arg is the proposing actor; the audit row carries the same identity. |
-| `SettlementPaid(policy_id, claim_id, settlement_id, amount)` | The payment fact the cumulative-cap rule reads from. Append-only. |
+| `SettlementPaid(policy_id, claim_id, settlement_id, amount)` | The payment claim the cumulative-cap rule reads from. Append-only. |
 
 ### Invariants
 
 | Invariant | What it pins |
 | --- | --- |
 | `paid_implies_authorised` | Every `SettlementPaid` must be backed by a matching `SettlementAuthorised`. The transformation never asserts one without the other, but the runtime contract is "candidate state is admissible under invariants regardless of how it got there." A hand-constructed orphan payment is refused. |
+| `at_most_one_policy_per_id` | A `policy_id` admits at most one `Policy` claim. Pins the structural uniqueness `authorise_settlement`'s `ValueOf(Policy(policy_id, _))` depends on. |
+| `at_most_one_claim_report_per_id` | Same shape for `ClaimReported`: duplicate reports against one `claim_id` are refused. Pins the structural uniqueness `authorise_settlement`'s `ValueOf(ClaimReported(claim_id, _, _))` depends on. |
+| `settlement_id_uniquely_identifies_payment` | A `settlement_id` identifies at most one payment. Two `SettlementPaid` claims sharing a `settlement_id` must agree on every other field. Identity-side guarantee for audit-grade settlement evidence. |
 
 The absence of an invariant tying `SettlementAuthority` to historical `SettlementAuthorised` is deliberate. Future revocation of authority must not invalidate the historical record - same require-vs-invariant doctrine as the verified-revenue and approval-controls examples. Authority is checked at admission; the record stands.
 

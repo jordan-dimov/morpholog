@@ -85,6 +85,25 @@ fn issue_policy_admits_policy_claim_with_aggregate_limit() {
 }
 
 #[test]
+fn duplicate_policy_id_violates_uniqueness_invariant() {
+    let pre = issue(State::default(), "policy_001", 100_000);
+    let outcome = propose_with_test_actor(
+        &insurance_claim_settlement::issue_policy(),
+        vec![subj("policy_001"), dec(50_000)],
+        &pre,
+        &invariants(),
+    )
+    .expect("propose should not error");
+    let Outcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(
+        reason.contains("at_most_one_policy_per_id"),
+        "expected at_most_one_policy_per_id invariant violation, got: {reason}"
+    );
+}
+
+#[test]
 fn report_claim_without_policy_is_rejected_at_require() {
     let pre = State::default();
     let outcome = propose_with_test_actor(
@@ -109,6 +128,26 @@ fn report_claim_with_policy_admits_claim_reported() {
         "ClaimReported",
         &[subj("claim_001"), subj("policy_001"), dec(20_000)]
     ));
+}
+
+#[test]
+fn duplicate_claim_id_violates_uniqueness_invariant() {
+    let pre = issue(State::default(), "policy_001", 100_000);
+    let pre = report(pre, "claim_001", "policy_001", 20_000);
+    let outcome = propose_with_test_actor(
+        &insurance_claim_settlement::report_claim(),
+        vec![subj("claim_001"), subj("policy_001"), dec(30_000)],
+        &pre,
+        &invariants(),
+    )
+    .expect("propose should not error");
+    let Outcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(
+        reason.contains("at_most_one_claim_report_per_id"),
+        "expected at_most_one_claim_report_per_id invariant violation, got: {reason}"
+    );
 }
 
 // ============================================================
@@ -142,7 +181,7 @@ fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
             subj("alex"),
         ]
     ));
-    // The payment fact is what cumulative-cap reads from.
+    // The payment claim is what cumulative-cap reads from.
     assert!(has_claim(
         &post,
         "SettlementPaid",
@@ -340,8 +379,43 @@ fn aggregate_limit_scoped_per_policy() {
 }
 
 // ============================================================
-// Invariant: payment implies authorisation
+// Invariants
 // ============================================================
+
+#[test]
+fn settlement_id_must_be_unique_across_payments() {
+    // Two settlements with the same settlement_id but different
+    // claim_ids would violate identity uniqueness. The invariant
+    // catches this on the candidate state.
+    let s = issue(State::default(), "policy_001", 100_000);
+    let s = report(s, "claim_001", "policy_001", 10_000);
+    let s = report(s, "claim_002", "policy_001", 10_000);
+    let s = grant(s, "alex", 100_000);
+
+    let s = must_accept_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("claim_001"), subj("settlement_001"), dec(10_000)],
+        subj("alex"),
+        s,
+        &invariants(),
+    );
+    // Second settlement reusing settlement_001 against a different claim.
+    let outcome = propose_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("claim_002"), subj("settlement_001"), dec(10_000)],
+        subj("alex"),
+        &s,
+        &invariants(),
+    )
+    .expect("propose should not error");
+    let Outcome::Rejected { reason } = outcome else {
+        panic!("expected Rejected, got {outcome:?}");
+    };
+    assert!(
+        reason.contains("settlement_id_uniquely_identifies_payment"),
+        "expected settlement-id uniqueness invariant violation, got: {reason}"
+    );
+}
 
 #[test]
 fn paid_without_authorised_violates_invariant() {
