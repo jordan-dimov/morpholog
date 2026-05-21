@@ -271,6 +271,31 @@ pub fn restate_entry() -> Transformation {
     }
 }
 
+pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
+    vec![
+        predicate("JournalEntry")
+            .subject("entry_id")
+            .subject("posting_date")
+            .subject("period")
+            .build(),
+        predicate("JournalLine")
+            .subject("entry_id")
+            .subject("account")
+            .decimal("debit_amount")
+            .decimal("credit_amount")
+            .build(),
+        predicate("PeriodClosed").subject("period").build(),
+        predicate("Supersedes")
+            .subject("new_entry_id")
+            .subject("prior_entry_id")
+            .build(),
+        predicate("TrialBalanceRow")
+            .subject("account")
+            .decimal("balance")
+            .build(),
+    ]
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         balanced_posted_entry(),
@@ -328,6 +353,7 @@ pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "double_entry_ledger".to_string(),
+        predicates: all_predicates(),
         invariants: all_invariants(),
         transformations: vec![
             post_simple_entry(),

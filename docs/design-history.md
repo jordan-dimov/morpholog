@@ -409,3 +409,46 @@ Three statements with two redundant claim matches. The redundancy comes from `re
 - `propose_with_trace`. The structured-trace diagnostic API is PR D.
 
 **Pattern note:** BindOne is the first PR in the bigger-refactor arc that's not "forced by a worked example" in the original sense. The forcing function is the **authoring experience itself**: every example pays the require-vs-let workaround, and the doctrine had to be rediscovered by reviewers on PR after PR. Subtracting the workaround is its own kind of forcing pressure. The discipline that "no IR change lands without a worked example" was correct for v0 when primitives were the scarce thing; the next phase tunes the **shape** of those primitives so authoring against them stops accumulating ceremony. The same logic will land predicate declarations next (PR C) and `propose_with_trace` after (PR D).
+
+### `PredicateDecl` + `Program::predicates` + strict arity validation (forced by the refactor arc)
+
+**Forced by:** the third item in the accidental-complexity audit. Every claim/assert/retract/value_of/derived-claim site was a positional `vec![var(), var(), ...]` tuple with no kernel awareness of arity or argument names. A swapped argument order admitted a wrong claim silently; every example essentially re-declared its predicates by repetition; future predicate-pattern matching (higher-order authority, on the CLAUDE.md deferred list) needed predicate names as first-class IR values.
+
+**The pressure:** programmes had no central vocabulary. The kernel could not validate that `assert Policy(p)` referenced a real predicate with the right arity, because there was no notion of "real predicate" at all. The same shape kept showing up across examples (subject-subject-decimal for `Policy`; subject-decimal for `LineAmount`) but it lived in the reader's head, not in the IR.
+
+**The design choice:** add a fourth list to `Program`.
+
+- `Program.predicates: Vec<PredicateDecl>` declares the programme's claim vocabulary.
+- Each `PredicateDecl` carries a name and a positional list of `PredicateArgDecl`s (name + kind).
+- `PredicateArgKind` enumerates the kinds a position can take: `Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`.
+- `Program::validate() -> Result<(), Vec<ValidationError>>` runs strict arity validation: every `Expr::Claim`, `Stmt::Assert`, `Stmt::Retract`, `Expr::ValueOf`, and `DerivedClaim` output reference must target a declared predicate with matching arity. Strict mode - undeclared predicates are errors, not passthrough. The validator collects every error rather than failing fast, so a migration sees the full work list at once.
+
+**Considered and rejected:**
+
+- *Permissive mode (skip arity check for undeclared predicates).* Lets migrations be incremental, but a half-declared programme is half-self-documenting, and forgetting to declare a new predicate produces no warning. Strict is the only mode that makes declarations real.
+- *Calling the kind enum `ValueKind`.* Sounds like it classifies all runtime values, but what's actually being declared is the expected kind of a *predicate argument position* - a declaration-time concept distinct from `Value` / `EvalValue`. Renamed to `PredicateArgKind` (per the in-house review) to keep the type story clean.
+- *Auto-validating inside `propose`.* Considered, rejected because `propose` operates at the statement level (it sees a `Transformation` and a `[Invariant]` slice, not a `Program`), and adding programme-level validation to every proposal would muddle the kernel boundary and add overhead. Validation is explicit: tests and the CLI call `validate()` directly.
+- *Kind validation against the kinds of values flowing through the binding context.* Considered, deferred. Recording kinds now means migrations stay shallow when kind checking arrives, but enforcement requires tracking variable kinds through parameters, `bind_one`, `let`, `for`, and aggregates - a larger type pass. Arity-only is the simplest useful first step.
+- *Intent declarations (`IntentDecl`).* Considered, deferred. Intents are outbox vocabulary, not admitted-claim vocabulary; the distinction is important. An `IntentDecl` parallel concept is conceivable but should not crowd PR C; the asymmetry between checked `Assert(Claim)` and unchecked `Emit(Intent)` is documented rather than papered over.
+- *Builder vs constructor-with-helpers for the DSL.* Builder won on call-site readability: `predicate("Policy").subject("policy_id").decimal("aggregate_limit").build()` keeps the predicate name with its arg list and avoids polluting the DSL namespace with `subj_arg`, `dec_arg`, etc.
+
+**What landed:**
+
+- `PredicateDecl`, `PredicateArgDecl`, `PredicateArgKind` types (with `Serialize` + `Deserialize` so CLI inspection can emit JSON).
+- `Program.predicates` field. Every built-in example populates it via an `all_predicates()` function (40+ declarations across the workspace).
+- `Program::validate()`, `ValidationError` (`UndeclaredPredicate`, `ArityMismatch`, `DuplicatePredicateDecl`), `ValidationContext` (`Invariant`, `Transformation`, `DerivedClaim`).
+- `dsl::predicate(name)` builder with `subject`/`decimal`/`date`/`boolean`/`collection`/`any`/`build` methods. `boolean` (not `bool`) to avoid the visual overload with the Rust type.
+- `format_program` extension: predicate declarations render between the header and the invariants section, one per line as `predicate Name(arg: Kind, ...)`.
+- `morpholog inspect predicates <program>` CLI subcommand returning JSON.
+- Kernel tests pinning each `ValidationError` variant + the "collects all errors" behaviour.
+- `program.rs` workspace test asserting every registered programme passes strict arity validation. If a future example adds a new predicate without declaring it, this test fails with the full list of missing/mismatched sites.
+
+**What deliberately did NOT land:**
+
+- Kind validation. Metadata recorded, enforcement deferred.
+- `Expr::fold` / Visitor abstraction. The validator is one new walker; until a third one shows up, the manual exhaustive match stays the right choice (same compile-time gate as `predicates_referenced_by_expr`).
+- `IntentDecl`. Intents are not claim vocabulary; this distinction is captured explicitly rather than papered over.
+- Predicate-pattern matching / higher-order authority. Predicate declarations are the prerequisite; the feature itself is its own PR forced by a worked example.
+- Auto-validation inside `propose`. Kernel boundary stays at the statement level.
+
+**Pattern note:** PR C completes the three-PR refactor arc that started with PR A (public DSL + test-support + format_program) and PR B (`Stmt::BindOne`). The progression matters: PR A made the IR pleasant to author; PR B removed the biggest authoring footgun; PR C makes programmes structurally self-describing. After PR C, a Morpholog programme is no longer "some transformations and invariants" - it's a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary. That stronger conceptual object is what predicate-pattern matching, future kind checking, generated docs, and the eventual parser all build on.

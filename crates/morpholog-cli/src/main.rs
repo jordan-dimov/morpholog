@@ -95,6 +95,20 @@ enum Inspect {
     /// via `--as-of`. Read-only: no claims are written, no audit row
     /// is produced.
     Derived(InspectDerivedArgs),
+    /// List the declared predicate vocabulary for a built-in
+    /// program. Read-only: no database connection, no state. The
+    /// declarations are static programme metadata - the same data
+    /// `Program::validate` checks references against.
+    Predicates(InspectPredicatesArgs),
+}
+
+/// Arguments for `inspect predicates`. No `--as-of`; predicate
+/// declarations are programme metadata, not state.
+#[derive(clap::Args, Debug)]
+struct InspectPredicatesArgs {
+    /// Built-in program name (e.g. `double_entry_ledger`). The same
+    /// registry that `propose` uses.
+    program: String,
 }
 
 /// Arguments for `inspect claims`. Same shape as the shared
@@ -223,6 +237,9 @@ async fn main() -> anyhow::Result<()> {
             }
             Inspect::Derived(args) => {
                 inspect_derived(args).await?;
+            }
+            Inspect::Predicates(args) => {
+                inspect_predicates(args)?;
             }
         },
         Command::Propose(args) => {
@@ -412,6 +429,48 @@ fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Implement `inspect predicates <program>` end-to-end. Looks up the
+/// program by name in the built-in registry, then prints its declared
+/// predicates as JSON. Read-only and synchronous; no database
+/// connection.
+///
+/// JSON shape (array of objects):
+///
+/// ```text
+/// [
+///   {
+///     "name": "Policy",
+///     "args": [
+///       {"name": "policy_id", "kind": "Subject"},
+///       {"name": "aggregate_limit", "kind": "Decimal"}
+///     ]
+///   }
+/// ]
+/// ```
+///
+/// `PredicateDecl` and `PredicateArgDecl` derive `Serialize` via the
+/// kernel's existing serde derives; the order in the array matches
+/// the order in `Program::predicates`.
+fn inspect_predicates(args: InspectPredicatesArgs) -> anyhow::Result<()> {
+    let programs = morpholog_examples::all_programs();
+    let program = programs
+        .iter()
+        .find(|p| p.name == args.program)
+        .ok_or_else(|| {
+            let available = programs
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "program `{}` not found. Available built-in programs: {}",
+                args.program,
+                available
+            )
+        })?;
+    print_json(&program.predicates)
+}
+
 // ===========================================================================
 // Tests — CLI argument parsing only.
 //
@@ -445,6 +504,12 @@ mod tests {
                 // here means a test passed `inspect derived` argv into
                 // `parsed_url`, which is a test bug.
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
+            }
+            Inspect::Predicates(_) => {
+                // `inspect predicates` takes no database URL. Same
+                // reasoning as the Derived arm: this helper exists for
+                // the URL-bearing subcommands only.
+                panic!("inspect predicates does not take a database URL")
             }
         }
     }
@@ -738,6 +803,37 @@ mod tests {
             "postgres:///morpholog_dev",
         ])
         .expect_err("missing derived positional should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    /// `inspect predicates <program>` parses to `Inspect::Predicates`
+    /// with the program name on the args struct. No `--database-url`
+    /// flag: predicate declarations are programme metadata, not state.
+    #[test]
+    fn inspect_predicates_parses_with_program_argument() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "predicates",
+            "clinical_trial_enrolment",
+        ]);
+        let Command::Inspect { what } = cli.command else {
+            panic!("expected Inspect, got {:?}", cli.command);
+        };
+        let Inspect::Predicates(args) = what else {
+            panic!("expected Inspect::Predicates, got {what:?}");
+        };
+        assert_eq!(args.program, "clinical_trial_enrolment");
+    }
+
+    /// Omitting the program positional must produce a clap
+    /// MissingRequiredArgument error - the program name is required
+    /// for the subcommand to identify which programme's vocabulary
+    /// to render.
+    #[test]
+    fn inspect_predicates_missing_program_errors() {
+        let err = Cli::try_parse_from(["morpholog", "inspect", "predicates"])
+            .expect_err("missing program positional should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 

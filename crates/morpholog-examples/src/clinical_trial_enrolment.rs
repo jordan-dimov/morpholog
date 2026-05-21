@@ -553,6 +553,77 @@ pub fn randomise_participant() -> Transformation {
     }
 }
 
+pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
+    vec![
+        predicate("Trial").subject("trial_id").build(),
+        predicate("ProtocolVersion")
+            .subject("trial_id")
+            .subject("protocol_version")
+            .date("effective_from")
+            .date("effective_to")
+            .build(),
+        predicate("ProtocolApprovedBy")
+            .subject("protocol_version")
+            .subject("ethics_committee")
+            .subject("approval_id")
+            .build(),
+        predicate("ConsentFormVersion")
+            .subject("trial_id")
+            .subject("consent_form_version")
+            .date("effective_from")
+            .date("effective_to")
+            .build(),
+        predicate("ConsentFormApprovedBy")
+            .subject("consent_form_version")
+            .subject("ethics_committee")
+            .subject("approval_id")
+            .build(),
+        predicate("ParticipantScreened")
+            .subject("participant_id")
+            .subject("trial_id")
+            .date("screened_on")
+            .build(),
+        predicate("InformedConsentObtained")
+            .subject("participant_id")
+            .subject("trial_id")
+            .subject("consent_form_version")
+            .date("consented_on")
+            .subject("obtained_by")
+            .build(),
+        predicate("EligibilityCriterion")
+            .subject("protocol_version")
+            .subject("criterion_id")
+            .subject("required_result")
+            .build(),
+        predicate("EligibilityAssessment")
+            .subject("participant_id")
+            .subject("criterion_id")
+            .subject("result")
+            .date("assessed_on")
+            .date("expires_on")
+            .build(),
+        predicate("DelegatedInvestigator")
+            .subject("investigator")
+            .subject("trial_id")
+            .subject("role")
+            .date("effective_from")
+            .date("effective_to")
+            .build(),
+        predicate("ImportantProtocolDeviationOpen")
+            .subject("participant_id")
+            .subject("trial_id")
+            .subject("deviation_id")
+            .build(),
+        predicate("ParticipantRandomised")
+            .subject("participant_id")
+            .subject("trial_id")
+            .subject("protocol_version")
+            .date("randomised_on")
+            .subject("randomised_by")
+            .build(),
+    ]
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         at_most_one_protocol_window_per_version(),
@@ -567,6 +638,7 @@ pub fn all_invariants() -> Vec<Invariant> {
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "clinical_trial_enrolment".to_string(),
+        predicates: all_predicates(),
         invariants: all_invariants(),
         transformations: vec![
             open_trial(),

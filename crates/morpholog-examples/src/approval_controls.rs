@@ -124,6 +124,31 @@ pub fn approve_within_limit() -> Transformation {
     }
 }
 
+pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
+    vec![
+        predicate("MayApprove")
+            .subject("actor")
+            .subject("doc_type")
+            .build(),
+        predicate("Approval")
+            .subject("doc_id")
+            .subject("doc_type")
+            .subject("actor")
+            .build(),
+        predicate("ApprovalLimit")
+            .subject("actor")
+            .subject("doc_type")
+            .decimal("limit")
+            .build(),
+        predicate("LimitedApproval")
+            .subject("doc_id")
+            .subject("doc_type")
+            .decimal("amount")
+            .subject("actor")
+            .build(),
+    ]
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![]
 }
@@ -134,6 +159,7 @@ pub fn all_invariants() -> Vec<Invariant> {
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "approval_controls".to_string(),
+        predicates: all_predicates(),
         invariants: all_invariants(),
         transformations: vec![
             grant_approval_authority(),

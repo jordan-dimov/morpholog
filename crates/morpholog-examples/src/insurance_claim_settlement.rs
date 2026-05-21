@@ -268,6 +268,40 @@ pub fn authorise_settlement() -> Transformation {
     }
 }
 
+pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
+    vec![
+        predicate("Policy")
+            .subject("policy_id")
+            .decimal("aggregate_limit")
+            .build(),
+        predicate("ClaimReported")
+            .subject("claim_id")
+            .subject("policy_id")
+            .decimal("claimed_amount")
+            .build(),
+        predicate("SettlementAuthority")
+            .subject("actor")
+            .decimal("limit")
+            .build(),
+        predicate("SettlementAuthorised")
+            .subject("claim_id")
+            .subject("settlement_id")
+            .decimal("amount")
+            .subject("actor")
+            .build(),
+        predicate("SettlementPaid")
+            .subject("policy_id")
+            .subject("claim_id")
+            .subject("settlement_id")
+            .decimal("amount")
+            .build(),
+        predicate("PolicyLimitUsage")
+            .subject("policy_id")
+            .decimal("used")
+            .build(),
+    ]
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         paid_implies_authorised(),
@@ -308,6 +342,7 @@ pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "insurance_claim_settlement".to_string(),
+        predicates: all_predicates(),
         invariants: all_invariants(),
         transformations: vec![
             issue_policy(),

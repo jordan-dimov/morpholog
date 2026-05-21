@@ -226,3 +226,30 @@ fn all_programs_registry_has_unique_names() {
         "program names in all_programs() must be unique"
     );
 }
+
+#[test]
+fn every_registered_program_passes_strict_arity_validation() {
+    // PR C contract: every built-in programme must declare every
+    // predicate it uses, with matching arity at every call site
+    // (transformation bodies, invariant bodies, derived-claim
+    // domains/shapes). The validator runs in strict mode - undeclared
+    // predicates are errors, not passthrough.
+    //
+    // If this test fails for a new example, the validator's error
+    // list names every missing or mismatched call site; fix them
+    // by extending the example's `all_predicates()` rather than by
+    // weakening this assertion.
+    for p in morpholog_examples::all_programs() {
+        match p.validate() {
+            Ok(()) => {}
+            Err(errors) => {
+                let lines: Vec<String> = errors.iter().map(|e| format!("  - {e}")).collect();
+                panic!(
+                    "program `{}` failed strict arity validation:\n{}",
+                    p.name,
+                    lines.join("\n")
+                );
+            }
+        }
+    }
+}

@@ -39,7 +39,8 @@
 //! rendering.
 
 use crate::{
-    Claim, DerivedClaim, Expr, Intent, Invariant, Program, Stmt, Term, Transformation, Value,
+    Claim, DerivedClaim, Expr, Intent, Invariant, PredicateArgKind, PredicateDecl, Program, Stmt,
+    Term, Transformation, Value,
 };
 
 /// Top-level entry. Returns a multi-line string terminated by a
@@ -48,6 +49,19 @@ use crate::{
 pub fn format_program(p: &Program) -> String {
     let mut out = String::new();
     out.push_str(&format!("program {}\n", p.name));
+
+    // Predicates render between the header and the invariants - they
+    // are the programme's vocabulary contract, and seeing them first
+    // helps the reader interpret every subsequent claim reference.
+    // One blank line separates the section from the header; the
+    // declarations themselves stack consecutively (each
+    // format_predicate_decl call ends with its own `\n`).
+    if !p.predicates.is_empty() {
+        out.push('\n');
+        for decl in &p.predicates {
+            out.push_str(&format_predicate_decl(decl));
+        }
+    }
 
     for inv in &p.invariants {
         out.push('\n');
@@ -65,6 +79,28 @@ pub fn format_program(p: &Program) -> String {
     }
 
     out
+}
+
+/// Render a single [`PredicateDecl`] as one line:
+/// `predicate Name(arg1: Kind, arg2: Kind)`.
+pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
+    let args: Vec<String> = decl
+        .args
+        .iter()
+        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(a.kind)))
+        .collect();
+    format!("predicate {}({})\n", decl.name, args.join(", "))
+}
+
+fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
+    match k {
+        PredicateArgKind::Subject => "Subject",
+        PredicateArgKind::Decimal => "Decimal",
+        PredicateArgKind::Date => "Date",
+        PredicateArgKind::Bool => "Bool",
+        PredicateArgKind::Collection => "Collection",
+        PredicateArgKind::Any => "Any",
+    }
 }
 
 pub fn format_invariant(inv: &Invariant) -> String {
@@ -340,6 +376,7 @@ mod tests {
     #[test]
     fn format_program_starts_with_program_header() {
         let p = Program {
+            predicates: vec![],
             name: "demo".to_string(),
             invariants: vec![],
             transformations: vec![],
@@ -376,6 +413,66 @@ mod tests {
             1,
         );
         assert_eq!(s, "  bind_one Policy(policy_id, limit)");
+    }
+
+    /// Predicate declarations render between the header and the
+    /// invariants section, one per line, with no blank line between
+    /// consecutive declarations. Argument kinds render with their
+    /// PascalCase names (`Subject`, `Decimal`, `Date`, etc.).
+    #[test]
+    fn format_predicate_decl_renders_inline_with_typed_args() {
+        let decl = predicate("Policy")
+            .subject("policy_id")
+            .decimal("aggregate_limit")
+            .build();
+        let s = format_predicate_decl(&decl);
+        assert_eq!(
+            s,
+            "predicate Policy(policy_id: Subject, aggregate_limit: Decimal)\n"
+        );
+    }
+
+    /// Pins the predicate section layout in `format_program`: one
+    /// blank line separates the section from the header, then
+    /// declarations stack consecutively with no intervening blank
+    /// lines. Two consecutive predicates rendered with an extra blank
+    /// line between them was the Copilot review finding on PR #50.
+    #[test]
+    fn format_program_renders_predicates_section_consecutively() {
+        let p = Program {
+            name: "tiny".to_string(),
+            predicates: vec![
+                predicate("Foo").subject("a").build(),
+                predicate("Bar").decimal("n").build(),
+            ],
+            invariants: vec![],
+            transformations: vec![],
+            derived_claims: vec![],
+        };
+        let s = format_program(&p);
+        // Exact bytes: header, blank line, two predicate lines, nothing else.
+        assert_eq!(
+            s,
+            "program tiny\n\npredicate Foo(a: Subject)\npredicate Bar(n: Decimal)\n"
+        );
+    }
+
+    /// Every `PredicateArgKind` variant has a stable display name in
+    /// the formatter. Exhaustive match means a future variant
+    /// (e.g. an `Instant` kind when timezone-aware values land) must
+    /// extend `format_predicate_arg_kind`.
+    #[test]
+    fn format_predicate_arg_kind_renders_each_variant() {
+        for (kind, expected) in [
+            (PredicateArgKind::Subject, "Subject"),
+            (PredicateArgKind::Decimal, "Decimal"),
+            (PredicateArgKind::Date, "Date"),
+            (PredicateArgKind::Bool, "Bool"),
+            (PredicateArgKind::Collection, "Collection"),
+            (PredicateArgKind::Any, "Any"),
+        ] {
+            assert_eq!(format_predicate_arg_kind(kind), expected);
+        }
     }
 
     #[test]
@@ -471,6 +568,7 @@ mod tests {
     #[test]
     fn format_program_output_ends_with_newline() {
         let p = Program {
+            predicates: vec![],
             name: "demo".to_string(),
             invariants: vec![],
             transformations: vec![Transformation {

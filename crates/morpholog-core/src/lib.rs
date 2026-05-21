@@ -323,6 +323,15 @@ pub struct Transformation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
+    /// The vocabulary of admissible claim shapes for this programme.
+    /// Every `Expr::Claim`, `Stmt::Assert`, `Stmt::Retract`, and
+    /// `Expr::ValueOf` reference must target a declared predicate
+    /// (validated by [`Program::validate`]); every `DerivedClaim`'s
+    /// output predicate must also appear here. Intent declarations
+    /// are deliberately out of scope - intents are outbox effects,
+    /// not admitted-claim vocabulary; that distinction is captured
+    /// here rather than papered over.
+    pub predicates: Vec<PredicateDecl>,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,
     pub derived_claims: Vec<DerivedClaim>,
@@ -346,6 +355,384 @@ impl Program {
     /// [`Program::transformation`] and [`Program::invariant`].
     pub fn derived_claim(&self, name: &str) -> Option<&DerivedClaim> {
         self.derived_claims.iter().find(|d| d.predicate == name)
+    }
+
+    /// Look up a predicate declaration by name. Returns `None` if no
+    /// declaration in the program has that name. Symmetric with the
+    /// other lookup methods.
+    ///
+    /// If duplicate declarations exist this returns the first; the
+    /// validator's arity lookup uses the last. Either way, duplicate
+    /// declarations are invalid and are reported by
+    /// [`Program::validate`] as `ValidationError::DuplicatePredicateDecl`.
+    pub fn predicate(&self, name: &str) -> Option<&PredicateDecl> {
+        self.predicates.iter().find(|p| p.name == name)
+    }
+
+    /// Structural validation: every predicate referenced in any
+    /// transformation body, invariant body, or derived-claim shape
+    /// must be declared in [`Program::predicates`], and every
+    /// reference must match the declared arity.
+    ///
+    /// Strict mode: undeclared predicates are an error, not a
+    /// passthrough. The cost is that every example must enumerate
+    /// its predicates; the benefit is that a programme's vocabulary
+    /// becomes a real self-describing contract and typos surface at
+    /// validation time rather than at runtime.
+    ///
+    /// Returns `Ok(())` when no errors are found. Returns the
+    /// **full** error list on failure (not just the first); a
+    /// programme migration that adds predicate declarations should
+    /// see every missing or mismatched site at once.
+    ///
+    /// Out of scope for v0:
+    /// - Argument-kind checking against [`PredicateArgKind`]. The
+    ///   metadata is recorded for future use (docs, CLI inspection,
+    ///   future parser diagnostics, eventual kind validation that
+    ///   would require tracking variable kinds through binding
+    ///   contexts).
+    /// - Intent arity validation. Intents are outbox vocabulary,
+    ///   not claim vocabulary; an `IntentDecl` is conceivable but
+    ///   not pursued until a worked example needs it.
+    /// - Predicate references that name a derived-claim predicate
+    ///   recursively from inside the derived claim's own domain.
+    ///   Recursion through derived claims is on the deferred list.
+    ///
+    /// `validate` is **not** called automatically by `propose`. The
+    /// kernel boundary is statement-level, not programme-level;
+    /// adding a programme validation pass to every proposal would
+    /// muddle that distinction and add overhead. Tests on the
+    /// built-in registry call `validate` explicitly.
+    pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
+        validate_program(self)
+    }
+}
+
+/// A predicate declaration: the name of a predicate and the named-and-
+/// kinded shape of its argument list. Declarations appear in
+/// [`Program::predicates`]; references appear inside `Expr::Claim`,
+/// `Stmt::Assert`, `Stmt::Retract`, `Expr::ValueOf`, and `DerivedClaim`
+/// output positions.
+///
+/// Argument *names* in a declaration are documentation - they describe
+/// what each position means, surface in `morpholog inspect predicates`,
+/// and inform future parser diagnostics. They have no runtime effect on
+/// matching, which remains positional.
+///
+/// Argument *kinds* (see [`PredicateArgKind`]) are metadata recorded
+/// for future use. Kind validation against the kinds of values flowing
+/// through the binding context is not enforced in v0; recording the
+/// metadata now means migrations stay shallow when kind checking
+/// arrives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PredicateDecl {
+    pub name: String,
+    pub args: Vec<PredicateArgDecl>,
+}
+
+/// One argument-position declaration in a [`PredicateDecl`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PredicateArgDecl {
+    pub name: String,
+    pub kind: PredicateArgKind,
+}
+
+/// The expected kind of a predicate argument position.
+///
+/// Deliberately a separate type from [`Value`] and [`EvalValue`] - this
+/// names a *declaration-time* expectation about an argument position,
+/// not a runtime value or an IR literal. Conflating them in a single
+/// enum was considered and rejected (CLAUDE.md: the
+/// `Value`/`EvalValue` duality is already a delicate distinction; a
+/// declaration-kind annotation should not be tangled into it).
+///
+/// `Any` is the kind escape hatch for argument positions whose kind
+/// is genuinely polymorphic (e.g. a future audit-row payload that may
+/// hold any admitted value), or for declarations that are not yet
+/// ready to commit to a kind. Use it sparingly; the value of the
+/// declaration metadata is highest when kinds are specific.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PredicateArgKind {
+    Subject,
+    Decimal,
+    Date,
+    Bool,
+    Collection,
+    Any,
+}
+
+/// Where in a programme a validation error was found. Reported alongside
+/// every [`ValidationError`] so migrations can find the right call site
+/// without trawling the whole programme.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationContext {
+    Invariant { name: String },
+    Transformation { name: String },
+    DerivedClaim { predicate: String },
+}
+
+/// A single failure surfaced by [`Program::validate`]. The validator
+/// collects every error rather than failing fast, so a programme
+/// migration that adds declarations sees the full work list rather
+/// than fixing one site, re-running, and discovering the next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationError {
+    /// A predicate referenced somewhere in the programme is not
+    /// listed in `Program::predicates`. Strict mode: every reference
+    /// must have a declaration.
+    UndeclaredPredicate {
+        predicate: String,
+        context: ValidationContext,
+    },
+    /// A predicate reference passes a different number of arguments
+    /// than the declaration calls for.
+    ArityMismatch {
+        predicate: String,
+        expected: usize,
+        actual: usize,
+        context: ValidationContext,
+    },
+    /// Two `PredicateDecl`s in `Program::predicates` share the same
+    /// name. Even if both declarations agree on arity, the duplicate
+    /// is a modelling bug.
+    DuplicatePredicateDecl { predicate: String },
+}
+
+impl std::fmt::Display for ValidationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationContext::Invariant { name } => write!(f, "invariant `{name}`"),
+            ValidationContext::Transformation { name } => write!(f, "transformation `{name}`"),
+            ValidationContext::DerivedClaim { predicate } => {
+                write!(f, "derived claim `{predicate}`")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::UndeclaredPredicate { predicate, context } => write!(
+                f,
+                "undeclared predicate `{predicate}` referenced in {context}"
+            ),
+            ValidationError::ArityMismatch {
+                predicate,
+                expected,
+                actual,
+                context,
+            } => write!(
+                f,
+                "predicate `{predicate}` declared with arity {expected} \
+                 but referenced with {actual} args in {context}"
+            ),
+            ValidationError::DuplicatePredicateDecl { predicate } => {
+                write!(f, "duplicate predicate declaration for `{predicate}`")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+/// Strict arity validation for a [`Program`]. See [`Program::validate`].
+fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+
+    // 1. Duplicate predicate declarations. Counts must be collected
+    //    via HashMap for O(1) lookups, but the error emission order
+    //    must be deterministic (HashMap iteration is randomised, and
+    //    the workspace-wide validation test's panic output would
+    //    otherwise vary run-to-run). Collect duplicates into a Vec,
+    //    sort by name, then emit.
+    let mut seen = HashMap::<&str, usize>::new();
+    for decl in &p.predicates {
+        *seen.entry(decl.name.as_str()).or_insert(0) += 1;
+    }
+    let mut duplicates: Vec<&str> = seen
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(name, _)| *name)
+        .collect();
+    duplicates.sort();
+    for name in duplicates {
+        errors.push(ValidationError::DuplicatePredicateDecl {
+            predicate: name.to_string(),
+        });
+    }
+
+    // Build a name -> arity lookup once. If duplicates exist, the last
+    // declaration wins for arity-lookup purposes; the duplicate error
+    // above already surfaces the problem.
+    let arities: HashMap<&str, usize> = p
+        .predicates
+        .iter()
+        .map(|d| (d.name.as_str(), d.args.len()))
+        .collect();
+
+    // 2. Walk each invariant body.
+    for inv in &p.invariants {
+        let ctx = ValidationContext::Invariant {
+            name: inv.name.clone(),
+        };
+        validate_expr(&inv.body, &arities, &ctx, &mut errors);
+    }
+
+    // 3. Walk each transformation body.
+    for t in &p.transformations {
+        let ctx = ValidationContext::Transformation {
+            name: t.name.clone(),
+        };
+        for stmt in &t.body {
+            validate_stmt(stmt, &arities, &ctx, &mut errors);
+        }
+    }
+
+    // 4. Walk each derived claim: output predicate declared, output
+    //    arity matches keys + values count, domain references validated.
+    for d in &p.derived_claims {
+        let ctx = ValidationContext::DerivedClaim {
+            predicate: d.predicate.clone(),
+        };
+        match arities.get(d.predicate.as_str()) {
+            None => errors.push(ValidationError::UndeclaredPredicate {
+                predicate: d.predicate.clone(),
+                context: ctx.clone(),
+            }),
+            Some(&decl_arity) => {
+                let actual_arity = d.keys.len() + d.values.len();
+                if decl_arity != actual_arity {
+                    errors.push(ValidationError::ArityMismatch {
+                        predicate: d.predicate.clone(),
+                        expected: decl_arity,
+                        actual: actual_arity,
+                        context: ctx.clone(),
+                    });
+                }
+            }
+        }
+        validate_expr(&d.domain, &arities, &ctx, &mut errors);
+        for v in &d.values {
+            validate_expr(&v.expr, &arities, &ctx, &mut errors);
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Walk a statement and collect arity/declaration errors.
+fn validate_stmt(
+    stmt: &Stmt,
+    arities: &HashMap<&str, usize>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    match stmt {
+        Stmt::Require(e) | Stmt::BindOne(e) => validate_expr(e, arities, ctx, errors),
+        Stmt::Let { value, .. } => validate_expr(value, arities, ctx, errors),
+        Stmt::LetNewSubject { .. } => {}
+        Stmt::Assert(c) => {
+            check_predicate(&c.predicate, c.args.len(), arities, ctx, errors);
+        }
+        Stmt::Retract { predicate, args } => {
+            check_predicate(predicate, args.len(), arities, ctx, errors);
+        }
+        Stmt::For {
+            collection, body, ..
+        } => {
+            validate_expr(collection, arities, ctx, errors);
+            for inner in body {
+                validate_stmt(inner, arities, ctx, errors);
+            }
+        }
+        Stmt::Emit(_) => {
+            // Intents are not part of the claim vocabulary; an
+            // IntentDecl is a future, separate concept.
+        }
+    }
+}
+
+/// Walk an expression and collect arity/declaration errors.
+fn validate_expr(
+    expr: &Expr,
+    arities: &HashMap<&str, usize>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    match expr {
+        Expr::Claim { predicate, args } => {
+            check_predicate(predicate, args.len(), arities, ctx, errors);
+        }
+        Expr::ValueOf {
+            predicate,
+            args,
+            default,
+        } => {
+            check_predicate(predicate, args.len(), arities, ctx, errors);
+            if let Some(d) = default {
+                validate_expr(d, arities, ctx, errors);
+            }
+        }
+        Expr::Implies { left, right } => {
+            validate_expr(left, arities, ctx, errors);
+            validate_expr(right, arities, ctx, errors);
+        }
+        Expr::And(exprs) => {
+            for e in exprs {
+                validate_expr(e, arities, ctx, errors);
+            }
+        }
+        Expr::Not(e) | Expr::Exists { body: e, .. } => {
+            validate_expr(e, arities, ctx, errors);
+        }
+        Expr::Eq(l, r)
+        | Expr::Le(l, r)
+        | Expr::DateLe(l, r)
+        | Expr::Sub(l, r)
+        | Expr::Add(l, r) => {
+            validate_expr(l, arities, ctx, errors);
+            validate_expr(r, arities, ctx, errors);
+        }
+        Expr::Sum { body, .. } => {
+            validate_expr(body, arities, ctx, errors);
+        }
+        Expr::Forall { source, body, .. } => {
+            validate_expr(source, arities, ctx, errors);
+            validate_expr(body, arities, ctx, errors);
+        }
+        Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => {
+            // No predicate references; operate on Terms only.
+        }
+    }
+}
+
+/// Helper: emit the right error variant for a predicate call site.
+fn check_predicate(
+    predicate: &str,
+    actual: usize,
+    arities: &HashMap<&str, usize>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    match arities.get(predicate) {
+        None => errors.push(ValidationError::UndeclaredPredicate {
+            predicate: predicate.to_string(),
+            context: ctx.clone(),
+        }),
+        Some(&expected) if expected != actual => {
+            errors.push(ValidationError::ArityMismatch {
+                predicate: predicate.to_string(),
+                expected,
+                actual,
+                context: ctx.clone(),
+            });
+        }
+        Some(_) => {}
     }
 }
 
@@ -2412,5 +2799,210 @@ mod tests {
             matches!(err, EvalError::NotPredicate),
             "expected NotPredicate, got {err:?}"
         );
+    }
+
+    // ============================================================
+    // Program::validate() - strict arity validation
+    //
+    // The tests below pin each ValidationError variant and the
+    // happy path. The validator collects every error rather than
+    // failing on the first; a programme migration that adds
+    // predicate declarations should see the full work list at
+    // once, not one item per re-run.
+    // ============================================================
+
+    /// Build a tiny one-claim programme with a `predicate` declaration
+    /// that matches by default. Per-test mutations adjust the
+    /// predicates list or the transformation body to exercise each
+    /// validator branch.
+    fn one_claim_program() -> Program {
+        use dsl::*;
+        Program {
+            name: "tiny".to_string(),
+            predicates: vec![predicate("Echo").subject("id").decimal("amount").build()],
+            invariants: vec![],
+            transformations: vec![Transformation {
+                name: "echo".to_string(),
+                parameters: params(&["id", "amount"]),
+                body: vec![assert_("Echo", vec![var("id"), var("amount")])],
+            }],
+            derived_claims: vec![],
+        }
+    }
+
+    #[test]
+    fn validate_succeeds_when_every_predicate_use_matches_declared_arity() {
+        let p = one_claim_program();
+        assert_eq!(p.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_reports_undeclared_predicate_in_transformation_body() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        p.transformations[0]
+            .body
+            .push(assert_("MissingPredicate", vec![var("id")]));
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UndeclaredPredicate { predicate, .. }
+                    if predicate == "MissingPredicate"
+            )),
+            "expected UndeclaredPredicate(MissingPredicate); got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_arity_mismatch_in_transformation_body() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        // Echo is declared with arity 2; calling with 1 arg trips
+        // ArityMismatch.
+        p.transformations[0].body = vec![assert_("Echo", vec![var("id")])];
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::ArityMismatch {
+                    predicate,
+                    expected: 2,
+                    actual: 1,
+                    ..
+                } if predicate == "Echo"
+            )),
+            "expected ArityMismatch(Echo, 2, 1); got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_arity_mismatch_in_invariant_body() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        p.invariants.push(Invariant {
+            name: "bad_inv".to_string(),
+            version: 1,
+            // Echo has arity 2; invariant body uses arity 3.
+            body: claim("Echo", vec![var("x"), var("y"), var("z")]),
+        });
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::ArityMismatch {
+                    predicate,
+                    expected: 2,
+                    actual: 3,
+                    context: ValidationContext::Invariant { name },
+                    ..
+                } if predicate == "Echo" && name == "bad_inv"
+            )),
+            "expected ArityMismatch in invariant context; got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_duplicate_predicate_decl() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        p.predicates
+            .push(predicate("Echo").subject("a").subject("b").build());
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::DuplicatePredicateDecl { predicate }
+                    if predicate == "Echo"
+            )),
+            "expected DuplicatePredicateDecl(Echo); got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_undeclared_derived_predicate() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        p.derived_claims.push(DerivedClaim {
+            predicate: "Computed".to_string(),
+            keys: vec!["id".to_string()],
+            values: vec![DerivedValue {
+                name: "n".to_string(),
+                expr: term(var("id")),
+            }],
+            domain: claim("Echo", vec![var("id"), wildcard()]),
+        });
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UndeclaredPredicate { predicate, .. }
+                    if predicate == "Computed"
+            )),
+            "expected UndeclaredPredicate(Computed); got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_derived_claim_arity_mismatch_against_declared_predicate() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        // Declare Computed with arity 3 but build it with keys=1,
+        // values=1 (total arity 2 - one short).
+        p.predicates.push(
+            predicate("Computed")
+                .subject("id")
+                .subject("category")
+                .decimal("balance")
+                .build(),
+        );
+        p.derived_claims.push(DerivedClaim {
+            predicate: "Computed".to_string(),
+            keys: vec!["id".to_string()],
+            values: vec![DerivedValue {
+                name: "balance".to_string(),
+                expr: term(var("id")),
+            }],
+            domain: claim("Echo", vec![var("id"), wildcard()]),
+        });
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::ArityMismatch {
+                    predicate,
+                    expected: 3,
+                    actual: 2,
+                    context: ValidationContext::DerivedClaim { .. },
+                    ..
+                } if predicate == "Computed"
+            )),
+            "expected ArityMismatch on derived claim Computed; got: {errors:?}"
+        );
+    }
+
+    /// The validator collects every error and returns the full list.
+    /// A migration that adds declarations should see all undeclared
+    /// predicates at once, not one per re-run.
+    #[test]
+    fn validate_returns_all_errors_not_just_the_first() {
+        use dsl::*;
+        let mut p = one_claim_program();
+        p.transformations[0].body.push(assert_("MissingA", vec![]));
+        p.transformations[0].body.push(assert_("MissingB", vec![]));
+        let errors = p.validate().expect_err("expected validation errors");
+        assert!(
+            errors.len() >= 2,
+            "expected at least 2 errors; got: {errors:?}"
+        );
+        let names: Vec<&str> = errors
+            .iter()
+            .filter_map(|e| match e {
+                ValidationError::UndeclaredPredicate { predicate, .. } => Some(predicate.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"MissingA"));
+        assert!(names.contains(&"MissingB"));
     }
 }

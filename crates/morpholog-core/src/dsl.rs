@@ -58,7 +58,9 @@
 //!   subject-as-string-as-everything model is intentional, and
 //!   pseudo-types over it would not help.
 
-use crate::{Claim, Expr, Intent, Stmt, Term, Value};
+use crate::{
+    Claim, Expr, Intent, PredicateArgDecl, PredicateArgKind, PredicateDecl, Stmt, Term, Value,
+};
 
 // ============================================================
 // Term constructors
@@ -312,4 +314,88 @@ pub fn for_(binding: &str, collection: Expr, body: Vec<Stmt>) -> Stmt {
 /// reads as `params(&["claim_id", "amount"])` at the call site.
 pub fn params(names: &[&str]) -> Vec<String> {
     names.iter().map(|s| s.to_string()).collect()
+}
+
+// ============================================================
+// PredicateDecl builder
+// ============================================================
+
+/// Builder for a [`PredicateDecl`]. Construct with [`predicate`],
+/// chain one kind method per argument position
+/// (`subject`/`decimal`/`date`/`boolean`/`collection`/`any`), and
+/// terminate with [`PredicateDeclBuilder::build`].
+///
+/// Example:
+///
+/// ```ignore
+/// predicate("Policy")
+///     .subject("policy_id")
+///     .decimal("aggregate_limit")
+///     .build()
+/// ```
+///
+/// The order of `.<kind>(name)` calls is the predicate's positional
+/// argument order. Names are documentation and surface in
+/// `morpholog inspect predicates`; kinds are metadata for future
+/// kind-checking work and for the same CLI surface.
+#[must_use]
+pub struct PredicateDeclBuilder {
+    name: String,
+    args: Vec<PredicateArgDecl>,
+}
+
+impl PredicateDeclBuilder {
+    fn arg(mut self, name: &str, kind: PredicateArgKind) -> Self {
+        self.args.push(PredicateArgDecl {
+            name: name.to_string(),
+            kind,
+        });
+        self
+    }
+
+    pub fn subject(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Subject)
+    }
+
+    pub fn decimal(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Decimal)
+    }
+
+    pub fn date(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Date)
+    }
+
+    /// Boolean-kinded argument. Named `boolean` rather than `bool`
+    /// because `bool` is the Rust type and `.bool(name)` reads as a
+    /// cast at the call site.
+    pub fn boolean(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Bool)
+    }
+
+    pub fn collection(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Collection)
+    }
+
+    /// Kind escape hatch. Use when the argument position is
+    /// genuinely polymorphic or when committing to a specific kind
+    /// is deferred.
+    pub fn any(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Any)
+    }
+
+    pub fn build(self) -> PredicateDecl {
+        PredicateDecl {
+            name: self.name,
+            args: self.args,
+        }
+    }
+}
+
+/// Start a predicate declaration. Chain one kind method per argument
+/// position and finish with `.build()`.
+pub fn predicate(name: &str) -> PredicateDeclBuilder {
+    PredicateDeclBuilder {
+        name: name.to_string(),
+        args: Vec::new(),
+    }
 }
