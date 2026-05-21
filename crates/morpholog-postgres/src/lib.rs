@@ -6,6 +6,8 @@
 //! See `crates/morpholog-core/sql/schema.sql` for the canonical schema
 //! and `docs/scope-and-ambition.md` for the runtime's positioning.
 
+pub mod testing;
+
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
