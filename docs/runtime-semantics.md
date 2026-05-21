@@ -198,7 +198,16 @@ is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` co
 
 One trace entry per transformation statement and per invariant check. `For` is nested - its `iterations` carry a sub-trace plus the iteration item per element. `Retract` records the actual retracted claims, not just a count. `BindOne` on a unique match records the full new binding context (sorted by variable name). `Require` records `match_count` on success, `reason` on rejection. Every expression-bearing entry renders its expression via `format_expr_inline`, so callers can assert on the failing predicate name instead of pattern-matching on reason strings.
 
-**Scope: statement-level only.** The trace shows which statement failed; it does not drill into expression internals. A failing `require And(...)` shows the outer `require` as rejected with the rendered `And(...)` expression; it does not identify which conjunct of the `And` was false. Conjunct-level diagnostics would require a separate evaluator refactor (a `find_matches_with_trace`-style pass) and are deliberately deferred.
+**Scope: statement-level plus failure-walk on rejection paths.** Every statement that runs produces one trace entry. When a `require` or `bind_one` rejects, the trace's `failing_sub_expression` field (on `RequireOutcome::Rejected` and `BindOneOutcome::NoMatch`) carries the most specific sub-expression responsible:
+
+- `And(A, B, C)` failing at B: walker drills to B (recursively if B is itself compound).
+- `Implies(left, right)` failing with left held: walker drills to `right`.
+- `Forall { binding, source, body }` failing at some iteration: walker drills to `body`. Binding values are not substituted into the rendered string in v0; callers correlate iteration separately.
+- `Not`, `Exists`, leaf expressions (`Claim`, `Le`, arithmetic, `Sum`, `ValueOf`, etc.): `None`. Either structurally has no single sub-expression that's "the one responsible," or the leaf is already as specific as the kernel can be.
+
+The walker runs **only on rejection paths**. Success-path performance is unchanged. The field is omitted from JSON when `None` (`skip_serializing_if`), so existing trace consumers see no shape change.
+
+A fuller structural ExprTrace (mirroring `Expr` with success-path drill-downs, exists-witness extraction, forall-binding substitution, etc.) is a separate larger refactor and remains deferred until a worked example forces it.
 
 `propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum. The non-trace path allocates no trace storage and the `On`-vs-`Off` check at each statement is a single-variant enum match the optimiser collapses to nothing meaningful; the trace path opts in by passing `TraceSink::On(&mut Vec<TraceEntry>)`. There is no separate "traced evaluator" that could drift from `propose`.
 

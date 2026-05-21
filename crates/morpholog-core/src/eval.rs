@@ -475,3 +475,142 @@ pub(crate) fn resolve_term(
         Term::Actor => actor.cloned().ok_or(EvalError::UnboundActor),
     }
 }
+
+/// On a failing predicate-shaped expression, return the most specific
+/// sub-expression responsible, rendered via
+/// [`crate::format::format_expr_inline`]. Returns `None` when no
+/// drill-down meaningfully applies.
+///
+/// Called from [`crate::propose::execute_stmt`] on the rejection
+/// branches of `Require` and `BindOne`. Never called on the success
+/// path; the kernel's success-path cost is unchanged.
+///
+/// Drill-down rules (failure-walk, statement-level + one layer):
+///
+/// - `And(conjuncts)`: find the first conjunct whose `find_matches`
+///   is empty under the same bindings; recurse into it. If the
+///   recursion yields a more specific answer, use it; otherwise
+///   render the conjunct as-is.
+/// - `Implies { left, right }`: if `left` held (non-empty matches),
+///   the failure is in `right`. Recurse into `right` and fall back
+///   to rendering it. If `left` failed, the implies is vacuously
+///   true - caller should not have invoked us; return `None` as
+///   safety.
+/// - `Forall { binding, source, body }`: find the first source-match
+///   under which `body` fails, recurse into `body` under that
+///   binding context, fall back to rendering `body` as-is. Binding
+///   values are **not substituted** into the rendered string in v0
+///   (per the PR-G review constraint); the caller correlates the
+///   failing iteration separately if needed.
+/// - `Not`, `Exists`: return `None`. Structurally these have
+///   no single sub-expression that's "the one responsible": `Not`
+///   describes what *held* rather than what failed; `Exists` and
+///   `Exists` failures mean "no member of the set satisfied", which is
+///   the whole expression, not any sub-part.
+/// - Leaf expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
+///   `Term`, `Sub`, `Add`, `Sum`, `ValueOf`): return `None`. Already
+///   as specific as the kernel can be.
+///
+/// Distinct from a structural ExprTrace mirror of the evaluator
+/// (Option B in the PR-G design discussion). This is the smallest
+/// useful failure-walk that closes the "which conjunct failed?"
+/// diagnostic gap without growing the trace surface beyond
+/// statement-level.
+pub(crate) fn find_failing_subexpr(
+    expr: &Expr,
+    state: &State,
+    bindings: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Option<String> {
+    match expr {
+        Expr::And(conjuncts) => {
+            // Thread bindings through conjuncts the same way
+            // `find_conjunction` does in the evaluator: each conjunct
+            // runs against the contexts produced by the previous one.
+            // Evaluating each conjunct against the *original*
+            // `bindings` would miss failures that only show up after
+            // a prior conjunct narrowed the binding context (e.g.
+            // `And(A(x), B(x))` where some `A(a1)` holds and some
+            // `B(b2)` holds but no `x` exists where both hold).
+            let mut current: Vec<Bindings> = vec![bindings.clone()];
+            for c in conjuncts {
+                let mut next: Vec<Bindings> = Vec::new();
+                for ctx in &current {
+                    next.extend(find_matches(c, state, ctx, actor).ok()?);
+                }
+                if next.is_empty() {
+                    // This conjunct kills the chain. Diagnose under
+                    // one of the binding contexts that survived to
+                    // this point; the first is fine.
+                    let failing_ctx = current.first().unwrap_or(bindings);
+                    return Some(
+                        find_failing_subexpr(c, state, failing_ctx, actor)
+                            .unwrap_or_else(|| crate::format::format_expr_inline(c)),
+                    );
+                }
+                current = next;
+            }
+            None
+        }
+        Expr::Implies { left, right } => {
+            let left_matches = find_matches(left, state, bindings, actor).ok()?;
+            if left_matches.is_empty() {
+                // Implies is vacuously true when left fails; caller
+                // shouldn't have invoked us. Safety: return None.
+                return None;
+            }
+            // The right side rejected under at least one of left's
+            // satisfying bindings. Recurse with the first such
+            // extension so the drill-down sees the same context the
+            // evaluator did.
+            for ext in &left_matches {
+                let right_matches = find_matches(right, state, ext, actor).ok()?;
+                if right_matches.is_empty() {
+                    return Some(
+                        find_failing_subexpr(right, state, ext, actor)
+                            .unwrap_or_else(|| crate::format::format_expr_inline(right)),
+                    );
+                }
+            }
+            None
+        }
+        Expr::Forall {
+            binding: _,
+            source,
+            body,
+        } => {
+            // Mirror find_matches's Forall: iterate every source
+            // binding extension and test the body against it. No
+            // `contains_key` filter here - the evaluator does not
+            // filter source matches that way, and a walker that
+            // diverged from the evaluator's iteration order could
+            // identify a "failing" iteration the evaluator never
+            // tried.
+            let source_matches = find_matches(source, state, bindings, actor).ok()?;
+            for ext in &source_matches {
+                let body_matches = find_matches(body, state, ext, actor).ok()?;
+                if body_matches.is_empty() {
+                    return Some(
+                        find_failing_subexpr(body, state, ext, actor)
+                            .unwrap_or_else(|| crate::format::format_expr_inline(body)),
+                    );
+                }
+            }
+            None
+        }
+        // No useful drill-down for these:
+        Expr::Not(_)
+        | Expr::Exists { .. }
+        | Expr::Claim { .. }
+        | Expr::Le(..)
+        | Expr::DateLe(..)
+        | Expr::Eq(..)
+        | Expr::Neq(..)
+        | Expr::In(..)
+        | Expr::Term(..)
+        | Expr::Sub(..)
+        | Expr::Add(..)
+        | Expr::Sum { .. }
+        | Expr::ValueOf { .. } => None,
+    }
+}

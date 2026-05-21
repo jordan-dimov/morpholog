@@ -15,7 +15,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::derive::eval_invariant;
-use crate::eval::{EvalError, eval_value, find_matches, resolve_term, unify_args};
+use crate::eval::{
+    EvalError, eval_value, find_failing_subexpr, find_matches, resolve_term, unify_args,
+};
 use crate::format;
 use crate::ir::{Claim, Intent, Invariant, Stmt, Term, Transformation};
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
@@ -74,13 +76,16 @@ pub(crate) enum StmtOutcome {
 /// type-mismatch `DateLe`, multi-match `ValueOf`, unbound actor) do
 /// not silently discard the run-up that led to the failure.
 ///
-/// Scope (v0): trace is **statement-level**. Each transformation
-/// statement and invariant check produces one entry. Expression
-/// internals (which conjunct of an `And` failed, which branch of a
-/// `Forall` matched) are **not** traced - the failing statement
-/// records its expression as a rendered string but does not drill
-/// into its sub-tree. Conjunct-level diagnosis is a possible later
-/// PR and would require a separate evaluator refactor.
+/// Scope (v0): trace is **statement-level plus failure-walk on
+/// rejection paths**. Each transformation statement and invariant
+/// check produces one entry. When a `require` or `bind_one`
+/// rejects, the entry's outcome carries a
+/// `failing_sub_expression: Option<String>` field identifying the
+/// most specific sub-expression responsible (e.g. the failing
+/// conjunct of an `And`, or the body of a `Forall` that failed at
+/// some iteration). Success paths drill no further than statement
+/// level; a full structural ExprTrace mirroring the evaluator is
+/// deferred until a worked example forces it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TracedProposal {
     /// The transformation ran to a normal outcome (Accepted or
@@ -181,11 +186,37 @@ pub enum RequireOutcome {
     /// `find_matches`'s return; the require does not export these
     /// bindings (that is `BindOne`'s job), but the count helps
     /// explain downstream behaviour.
-    Held {
-        match_count: usize,
-    },
+    Held { match_count: usize },
     Rejected {
         reason: String,
+        /// The most specific sub-expression responsible for the
+        /// rejection, rendered via `format_expr_inline`, when the
+        /// kernel can identify one. Populated on failure paths only:
+        ///
+        /// - `And` failures point at the first failing conjunct (and
+        ///   recursively into it if compound).
+        /// - `Implies` failures (left held, right rejected) point at
+        ///   the right side.
+        /// - `Forall` failures point at the body where some binding
+        ///   from the source caused it to reject. Binding values are
+        ///   not substituted into the rendered string in v0; the
+        ///   caller correlates separately.
+        ///
+        /// `None` when no more specific sub-expression usefully
+        /// applies: `Exists` failures are structural (no single
+        /// sub-expression is "the one"); `Not` failures
+        /// describe what *held* rather than what failed; leaf
+        /// expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
+        /// `Term`, arithmetic, `Sum`, `ValueOf`) are already as
+        /// specific as the kernel can be.
+        ///
+        /// Distinct from `reason` (the human-readable rejection
+        /// string `propose` already produces); this field carries
+        /// only the rendered expression, never prose. A future
+        /// `failure_shape` field could carry structured "what kind
+        /// of failure" metadata if a worked example forces it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failing_sub_expression: Option<String>,
     },
 }
 
@@ -201,7 +232,13 @@ pub enum BindOneOutcome {
     Bound {
         bindings: Vec<(String, EvalValue)>,
     },
-    NoMatch,
+    NoMatch {
+        /// The most specific sub-expression responsible for the
+        /// failed match, when the kernel can identify one. Same
+        /// semantics as `RequireOutcome::Rejected.failing_sub_expression`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failing_sub_expression: Option<String>,
+    },
     MultipleMatches {
         count: usize,
     },
@@ -412,10 +449,12 @@ pub(crate) fn execute_stmt(
                 let rendered = format::format_expr_inline(expr);
                 let reason = format!("require failed: {rendered} did not hold over pre-state");
                 if trace.is_on() {
+                    let failing = find_failing_subexpr(expr, pre_state, bindings, actor);
                     trace.push(TraceEntry::Require {
                         expression: rendered,
                         outcome: RequireOutcome::Rejected {
                             reason: reason.clone(),
+                            failing_sub_expression: failing,
                         },
                     });
                 }
@@ -449,9 +488,12 @@ pub(crate) fn execute_stmt(
                     let rendered = format::format_expr_inline(expr);
                     let reason = format!("bind_one failed: {rendered} matched no candidates");
                     if trace.is_on() {
+                        let failing = find_failing_subexpr(expr, pre_state, bindings, actor);
                         trace.push(TraceEntry::BindOne {
                             expression: rendered,
-                            outcome: BindOneOutcome::NoMatch,
+                            outcome: BindOneOutcome::NoMatch {
+                                failing_sub_expression: failing,
+                            },
                         });
                     }
                     Ok(StmtOutcome::Rejected(reason))
