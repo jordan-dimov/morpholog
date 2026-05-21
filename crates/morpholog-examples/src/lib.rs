@@ -17,6 +17,7 @@
 mod helpers;
 
 pub mod approval_controls;
+pub mod clinical_trial_enrolment;
 pub mod double_entry_ledger;
 pub mod insurance_claim_settlement;
 pub mod settlement_netting;
@@ -38,5 +39,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         double_entry_ledger::program(),
         approval_controls::program(),
         insurance_claim_settlement::program(),
+        clinical_trial_enrolment::program(),
     ]
 }

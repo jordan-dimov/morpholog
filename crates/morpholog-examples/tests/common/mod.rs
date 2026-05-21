@@ -7,6 +7,7 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
+use jiff::civil::Date;
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Transformation, Transition,
     propose,
@@ -19,6 +20,10 @@ pub fn dec(n: i64) -> EvalValue {
 
 pub fn subj(s: &str) -> EvalValue {
     EvalValue::Subject(s.to_string())
+}
+
+pub fn date(s: &str) -> EvalValue {
+    EvalValue::Date(s.parse::<Date>().expect("valid ISO civil date"))
 }
 
 pub fn claim_instance(pred: &str, args: &[EvalValue]) -> ClaimInstance {

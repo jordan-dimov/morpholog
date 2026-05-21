@@ -48,6 +48,19 @@ fn eval_value_bool_round_trips_as_tagged_json() {
 }
 
 #[test]
+fn eval_value_date_round_trips_as_tagged_json_string() {
+    // Civil dates serialise as ISO-8601 strings under the
+    // adjacently-tagged shape. Pinning the exact wire shape so future
+    // changes to jiff's serde format cannot silently break the PG JSONB
+    // contract.
+    let v: EvalValue = EvalValue::Date("2026-03-12".parse().unwrap());
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, r#"{"type":"date","value":"2026-03-12"}"#);
+    let parsed: EvalValue = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, v);
+}
+
+#[test]
 fn eval_value_collection_round_trips_through_nested_json() {
     let v = EvalValue::Collection(vec![
         EvalValue::Subject("l1".to_string()),

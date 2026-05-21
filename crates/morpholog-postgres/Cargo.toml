@@ -19,6 +19,7 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 morpholog-examples = { path = "../morpholog-examples" }
+jiff = { workspace = true }
 rust_decimal = { workspace = true }
 
 [lints]

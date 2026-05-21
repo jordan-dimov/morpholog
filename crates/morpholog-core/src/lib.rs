@@ -11,6 +11,7 @@
 //! kernel as an async boundary. Worked-example IR lives in the
 //! `morpholog-examples` crate.
 
+use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -40,10 +41,11 @@ pub struct Invariant {
 /// The variants are deliberately narrow: predicate composition (`And`,
 /// `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
 /// (`Claim`, `Neq`, `Eq`), one decimal-comparison primitive (`Le`), one
-/// bounded aggregation (`Sum`), one decimal-arithmetic primitive (`Sub`),
-/// one collection primitive (`In`), one functional-lookup primitive
-/// (`ValueOf`), and `Term`-as-value lifting. Anything that cannot be
-/// expressed within this set is, by design, not yet a runtime concern.
+/// civil-date-comparison primitive (`DateLe`), one bounded aggregation
+/// (`Sum`), one decimal-arithmetic primitive (`Sub`), one collection
+/// primitive (`In`), one functional-lookup primitive (`ValueOf`), and
+/// `Term`-as-value lifting. Anything that cannot be expressed within this
+/// set is, by design, not yet a runtime concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Claim {
@@ -72,6 +74,25 @@ pub enum Expr {
     /// Deliberately the only decimal-comparison primitive in v0; `Lt`,
     /// `Gt`, `Ge` arrive when an example forces them.
     Le(Box<Expr>, Box<Expr>),
+    /// Civil-date less-than-or-equal. Both operands must evaluate to
+    /// [`EvalValue::Date`]. Predicate-shaped: returns the empty match
+    /// set when the comparison is false, the unchanged binding set when
+    /// true. Dates are ISO-8601 civil dates (`YYYY-MM-DD`) with no
+    /// time-of-day and no time zone. Validity windows modelled with
+    /// `DateLe(from, action_date)` and `DateLe(action_date, to)` are
+    /// **inclusive at both ends**: `effective_to == action_date` admits.
+    ///
+    /// Added with the clinical-trial-enrolment worked example so that
+    /// admission can require a protocol version, consent form,
+    /// eligibility evidence and investigator delegation that are all
+    /// valid on the action date. Deliberately separate from `Le` to
+    /// keep decimal and date ordering from sharing a generic-dispatch
+    /// shape before a third comparator forces one. Deliberately the
+    /// only date-comparison primitive in v0; `DateLt`, `DateGt`,
+    /// `DateGe`, date arithmetic, instants, time zones, durations and
+    /// business calendars arrive only when a worked example forces
+    /// them.
+    DateLe(Box<Expr>, Box<Expr>),
     /// Decimal subtraction. Both operands must evaluate to
     /// `EvalValue::Decimal`; the result is the left minus the right.
     /// Added with the trial-balance derived-claim example so that
@@ -144,6 +165,12 @@ pub enum Value {
     /// (purposes, statuses, named authorities, etc.) without forcing
     /// every transformation to take them as extra parameters.
     Subject(String),
+    /// ISO-8601 civil date (`YYYY-MM-DD`) stored as its exact source string.
+    /// Parsing into [`jiff::civil::Date`] is the evaluator's concern, not the
+    /// IR's; mirrors how [`Value::Decimal`] defers parsing to evaluation.
+    /// No time-of-day, no time zone: validity-window modelling on civil
+    /// dates is the only temporal primitive in v0.
+    Date(String),
 }
 
 /// A Claim is an admitted assertion candidate — a statement that may be
@@ -325,6 +352,10 @@ pub enum EvalValue {
     Subject(String),
     Bool(bool),
     Collection(Vec<EvalValue>),
+    /// Civil date (ISO-8601 `YYYY-MM-DD`) with no time-of-day and no
+    /// time zone. JSON shape: `{ "type": "date", "value": "YYYY-MM-DD" }`
+    /// (jiff's default serde format for [`jiff::civil::Date`]).
+    Date(Date),
 }
 
 /// A grounded claim: all args are values, no variables or wildcards.
@@ -659,7 +690,11 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
         Expr::Not(e) | Expr::Exists { body: e, .. } => {
             predicates_referenced_by_expr(e, out);
         }
-        Expr::Eq(l, r) | Expr::Le(l, r) | Expr::Sub(l, r) | Expr::Add(l, r) => {
+        Expr::Eq(l, r)
+        | Expr::Le(l, r)
+        | Expr::DateLe(l, r)
+        | Expr::Sub(l, r)
+        | Expr::Add(l, r) => {
             predicates_referenced_by_expr(l, out);
             predicates_referenced_by_expr(r, out);
         }
@@ -741,6 +776,7 @@ impl Ord for EvalValueOrd {
                 EvalValue::Subject(_) => 1,
                 EvalValue::Bool(_) => 2,
                 EvalValue::Collection(_) => 3,
+                EvalValue::Date(_) => 4,
             }
         }
 
@@ -748,6 +784,7 @@ impl Ord for EvalValueOrd {
             (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
             (EvalValue::Subject(a), EvalValue::Subject(b)) => a.cmp(b),
             (EvalValue::Bool(a), EvalValue::Bool(b)) => a.cmp(b),
+            (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
             (EvalValue::Collection(a), EvalValue::Collection(b)) => {
                 for (l, r) in a.iter().zip(b.iter()) {
                     let ord = EvalValueOrd(l.clone()).cmp(&EvalValueOrd(r.clone()));
@@ -830,6 +867,18 @@ fn find_matches(
                 )),
             }
         }
+        Expr::DateLe(lhs, rhs) => {
+            let l = eval_value(lhs, state, base, actor)?;
+            let r = eval_value(rhs, state, base, actor)?;
+            match (l, r) {
+                (EvalValue::Date(a), EvalValue::Date(b)) => {
+                    Ok(if a <= b { vec![base.clone()] } else { vec![] })
+                }
+                _ => Err(EvalError::TypeMismatch(
+                    "DateLe expects civil-date operands".into(),
+                )),
+            }
+        }
         Expr::Neq(t1, t2) => {
             let l = resolve_term(t1, base, actor)?;
             let r = resolve_term(t2, base, actor)?;
@@ -842,6 +891,17 @@ fn find_matches(
         | Expr::Sum { .. }
         | Expr::ValueOf { .. } => Err(EvalError::NotPredicate),
     }
+}
+
+/// Parse a `Value::Date(String)` literal into a `jiff::civil::Date`.
+/// Centralised so the IR-level literal and the runtime value cannot drift
+/// in how they interpret `YYYY-MM-DD`. Used by `resolve_term`, by
+/// `unify_args` for `Value::Date` literals in claim patterns, and by
+/// `find_claim_matches` when narrowing a predicate bucket by a ground
+/// date argument.
+fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
+    s.parse::<Date>()
+        .map_err(|e| EvalError::TypeMismatch(format!("invalid civil date `{s}`: {e}")))
 }
 
 fn find_claim_matches(
@@ -891,6 +951,7 @@ fn find_claim_matches(
             Term::Var(name) => base.get(name).cloned(),
             Term::Literal(Value::Subject(s)) => Some(EvalValue::Subject(s.clone())),
             Term::Literal(Value::Decimal(s)) => Decimal::from_str(s).ok().map(EvalValue::Decimal),
+            Term::Literal(Value::Date(s)) => parse_date_literal(s).ok().map(EvalValue::Date),
             Term::Actor => match actor {
                 Some(a) => Some(a.clone()),
                 None => return Err(EvalError::UnboundActor),
@@ -961,6 +1022,13 @@ fn unify_args(
                 EvalValue::Subject(id) if id == s => {}
                 _ => return None,
             },
+            Term::Literal(Value::Date(s)) => {
+                let parsed = parse_date_literal(s).ok()?;
+                match v {
+                    EvalValue::Date(d) if *d == parsed => {}
+                    _ => return None,
+                }
+            }
             Term::Actor => match actor {
                 Some(a) if a == v => {}
                 _ => return None,
@@ -1128,6 +1196,7 @@ fn resolve_term(
             Ok(EvalValue::Decimal(d))
         }
         Term::Literal(Value::Subject(s)) => Ok(EvalValue::Subject(s.clone())),
+        Term::Literal(Value::Date(s)) => Ok(EvalValue::Date(parse_date_literal(s)?)),
         Term::Actor => actor.cloned().ok_or(EvalError::UnboundActor),
     }
 }
@@ -1624,6 +1693,11 @@ mod tests {
             Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
             // Le operates on two sub-expressions.
             Expr::Le(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
+            // DateLe operates on two sub-expressions.
+            Expr::DateLe(
+                Box::new(claim("P_datele_left")),
+                Box::new(claim("P_datele_right")),
+            ),
             // Sub operates on two sub-expressions.
             Expr::Sub(
                 Box::new(claim("P_sub_left")),
@@ -1671,6 +1745,8 @@ mod tests {
             "P_eq_right",
             "P_le_left",
             "P_le_right",
+            "P_datele_left",
+            "P_datele_right",
             "P_sub_left",
             "P_sub_right",
             "P_add_left",
@@ -1723,6 +1799,143 @@ mod tests {
             EvalError::TypeMismatch(msg) => assert!(msg.contains("Add")),
             other => panic!("expected TypeMismatch, got {other:?}"),
         }
+    }
+
+    fn date_lit(s: &str) -> Expr {
+        Expr::Term(Term::Literal(Value::Date(s.to_string())))
+    }
+
+    /// `DateLe(a, b)` admits when `a < b`. The successful match
+    /// returns the unchanged binding set, mirroring decimal `Le`.
+    #[test]
+    fn date_le_admits_before() {
+        let expr = Expr::DateLe(
+            Box::new(date_lit("2026-03-11")),
+            Box::new(date_lit("2026-03-12")),
+        );
+        let matches =
+            find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        assert_eq!(matches.len(), 1, "earlier date must admit under DateLe");
+    }
+
+    /// Boundary case: equal dates admit. This pins the **inclusive**
+    /// semantics of validity windows in v0 - `effective_to ==
+    /// action_date` is admissible, not rejected. The clinical-trial
+    /// enrolment example relies on this for "the protocol expires
+    /// today" being a valid randomisation date.
+    #[test]
+    fn date_le_admits_equal() {
+        let expr = Expr::DateLe(
+            Box::new(date_lit("2026-03-12")),
+            Box::new(date_lit("2026-03-12")),
+        );
+        let matches =
+            find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        assert_eq!(
+            matches.len(),
+            1,
+            "equal dates must admit under DateLe (inclusive window semantics)"
+        );
+    }
+
+    /// `DateLe(a, b)` with `a > b` returns no matches - the lawful
+    /// rejection path, distinct from `TypeMismatch`.
+    #[test]
+    fn date_le_rejects_after() {
+        let expr = Expr::DateLe(
+            Box::new(date_lit("2026-03-13")),
+            Box::new(date_lit("2026-03-12")),
+        );
+        let matches =
+            find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        assert!(matches.is_empty(), "later date must reject under DateLe");
+    }
+
+    /// Mixed operand kinds raise `TypeMismatch`, not silent rejection.
+    /// The clinical-trial example must not be able to admit by mistake
+    /// because someone passed a decimal where a date was expected.
+    #[test]
+    fn date_le_type_mismatch_decimal_vs_date() {
+        let expr = Expr::DateLe(
+            Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
+            Box::new(date_lit("2026-03-12")),
+        );
+        let err = find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
+            .expect_err("decimal lhs must be a TypeMismatch");
+        match err {
+            EvalError::TypeMismatch(msg) => assert!(msg.contains("DateLe")),
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// Symmetric to the above: a date on the left and a non-date on
+    /// the right also raises `TypeMismatch`. Pins that the type guard
+    /// covers both positions.
+    #[test]
+    fn date_le_type_mismatch_date_vs_subject() {
+        let expr = Expr::DateLe(
+            Box::new(date_lit("2026-03-12")),
+            Box::new(Expr::Term(Term::Literal(Value::Subject(
+                "oops".to_string(),
+            )))),
+        );
+        let err = find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
+            .expect_err("subject rhs must be a TypeMismatch");
+        match err {
+            EvalError::TypeMismatch(msg) => assert!(msg.contains("DateLe")),
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// A malformed `Value::Date` source string surfaces as
+    /// `TypeMismatch` at evaluation time, mirroring how an invalid
+    /// `Value::Decimal` surfaces. There is no separate IR validation
+    /// pass; parsing is the evaluator's concern.
+    #[test]
+    fn date_le_invalid_iso_string_is_type_mismatch() {
+        let expr = Expr::DateLe(
+            Box::new(date_lit("not-a-date")),
+            Box::new(date_lit("2026-03-12")),
+        );
+        let err = find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
+            .expect_err("invalid ISO string must be a TypeMismatch");
+        match err {
+            EvalError::TypeMismatch(msg) => {
+                assert!(msg.contains("invalid civil date"), "msg was: {msg}")
+            }
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// A `Value::Date` literal in a `claim` argument matches a
+    /// claim admitted with the same date in that position. Pins the
+    /// unify-against-literal-date path, the parallel of the existing
+    /// decimal/subject literal unification.
+    #[test]
+    fn date_literal_unifies_with_matching_date_arg() {
+        let claim = ClaimInstance {
+            predicate: "OnDate".to_string(),
+            args: vec![EvalValue::Date(
+                "2026-03-12".parse::<Date>().expect("hand-built ISO date"),
+            )],
+        };
+        let state = State::from_claims(vec![claim]);
+        let expr = Expr::Claim {
+            predicate: "OnDate".to_string(),
+            args: vec![Term::Literal(Value::Date("2026-03-12".to_string()))],
+        };
+        let matches = find_matches(&expr, &state, &Bindings::new(), None).unwrap();
+        assert_eq!(matches.len(), 1, "literal date arg must unify");
+
+        let other = Expr::Claim {
+            predicate: "OnDate".to_string(),
+            args: vec![Term::Literal(Value::Date("2026-03-13".to_string()))],
+        };
+        let none = find_matches(&other, &state, &Bindings::new(), None).unwrap();
+        assert!(
+            none.is_empty(),
+            "literal date arg must not unify with a different date"
+        );
     }
 
     /// The cumulative-cap shape: `Le(Add(running, proposed), cap)`.

@@ -1,0 +1,198 @@
+-- Clinical trial enrolment (v0).
+--
+-- A regulator, an ethics committee or a future investigator asks:
+-- *was this participant legitimately randomised on this date, under
+-- the protocol, consent form, eligibility evidence and investigator
+-- delegation that were valid on that day?*
+--
+-- The load-bearing rule is a set of inclusive `[from, to]` civil-date
+-- validity windows checked at admission time:
+--
+--   protocol_from <= randomised_on <= protocol_to
+--   consent_from  <= randomised_on <= consent_to
+--   consented_on  <= randomised_on
+--   del_from      <= randomised_on <= del_to
+--   assessed_on   <= randomised_on <= expires_on
+--
+-- These are the IR shape Expr::DateLe was added for. Without civil-date
+-- comparison the rule would either degrade to lexicographic ordering on
+-- subject literals (wrong by construction the moment a year changes
+-- digits) or to ad-hoc string predicates outside the kernel.
+--
+-- Validity is an admission-time gate, not an eternal invariant.
+-- Closing a protocol window or amending the protocol must not
+-- retroactively invalidate an earlier randomisation - it must only
+-- govern future ones.
+
+-- ============================================================
+-- Invariant: protocol version has at most one effective window.
+-- ============================================================
+invariant at_most_one_protocol_window_per_version:
+    ProtocolVersion(trial, version, from_a, to_a)
+        and ProtocolVersion(trial, version, from_b, to_b) implies
+            from_a == from_b and to_a == to_b
+
+-- ============================================================
+-- Invariant: consent form version has at most one effective window.
+-- ============================================================
+invariant at_most_one_consent_window_per_version:
+    ConsentFormVersion(trial, version, from_a, to_a)
+        and ConsentFormVersion(trial, version, from_b, to_b) implies
+            from_a == from_b and to_a == to_b
+
+-- ============================================================
+-- Invariant: a participant is randomised at most once per trial.
+-- ============================================================
+invariant participant_randomised_once_per_trial:
+    ParticipantRandomised(p, trial, proto_a, date_a, actor_a)
+        and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies
+            proto_a == proto_b and date_a == date_b and actor_a == actor_b
+
+-- ============================================================
+-- Setup transformations - enough surface to make randomisation
+-- reachable. Ethics-approval and delegation arrive as their own
+-- claims rather than as side-effects of randomisation.
+-- ============================================================
+transformation open_trial(trial_id):
+    assert Trial(trial_id)
+    emit TrialOpened(trial_id)
+
+transformation approve_protocol_version(
+    trial_id,
+    protocol_version,
+    effective_from,
+    effective_to,
+    ethics_committee,
+    approval_id
+):
+    require Trial(trial_id)
+    assert ProtocolVersion(trial_id, protocol_version, effective_from, effective_to)
+    assert ProtocolApprovedBy(protocol_version, ethics_committee, approval_id)
+    emit ProtocolVersionApproved(trial_id, protocol_version)
+
+transformation approve_consent_form_version(
+    trial_id,
+    consent_form_version,
+    effective_from,
+    effective_to,
+    ethics_committee,
+    approval_id
+):
+    require Trial(trial_id)
+    assert ConsentFormVersion(trial_id, consent_form_version, effective_from, effective_to)
+    assert ConsentFormApprovedBy(consent_form_version, ethics_committee, approval_id)
+    emit ConsentFormVersionApproved(trial_id, consent_form_version)
+
+transformation delegate_investigator(
+    investigator,
+    trial_id,
+    role,
+    effective_from,
+    effective_to
+):
+    require Trial(trial_id)
+    assert DelegatedInvestigator(investigator, trial_id, role, effective_from, effective_to)
+    emit InvestigatorDelegated(investigator, trial_id, role)
+
+transformation screen_participant(participant_id, trial_id, screened_on):
+    require Trial(trial_id)
+    assert ParticipantScreened(participant_id, trial_id, screened_on)
+    emit ParticipantScreened(participant_id, trial_id)
+
+transformation record_consent(
+    participant_id,
+    trial_id,
+    consent_form_version,
+    consented_on,
+    obtained_by
+):
+    require Trial(trial_id)
+    assert InformedConsentObtained(
+        participant_id,
+        trial_id,
+        consent_form_version,
+        consented_on,
+        obtained_by
+    )
+    emit InformedConsentObtained(participant_id, consent_form_version)
+
+transformation record_eligibility_criterion(protocol_version, criterion_id, required_result):
+    assert EligibilityCriterion(protocol_version, criterion_id, required_result)
+
+transformation record_eligibility_assessment(
+    participant_id,
+    criterion_id,
+    result,
+    assessed_on,
+    expires_on
+):
+    assert EligibilityAssessment(participant_id, criterion_id, result, assessed_on, expires_on)
+
+transformation open_important_protocol_deviation(participant_id, trial_id, deviation_id):
+    require Trial(trial_id)
+    assert ImportantProtocolDeviationOpen(participant_id, trial_id, deviation_id)
+    emit ImportantProtocolDeviationOpened(participant_id, trial_id, deviation_id)
+
+-- ============================================================
+-- The load-bearing transformation. Admits randomisation only if
+-- every validity-window gate holds on the randomisation date and
+-- the eligibility evidence matches the criterion's required result.
+--
+-- `protocol_version` is an explicit parameter: the investigator
+-- knows which protocol version they are enrolling under, and a
+-- single require-And does not propagate its match's bindings out.
+-- Making it a parameter lets the bound value flow into the assert
+-- without a separate Let + ValueOf.
+-- ============================================================
+transformation randomise_participant(
+    participant_id,
+    trial_id,
+    protocol_version,
+    randomised_on
+):
+    require Trial(trial_id)
+        and ProtocolVersion(trial_id, protocol_version, protocol_from, protocol_to)
+        and protocol_from <= randomised_on
+        and randomised_on <= protocol_to
+        and ProtocolApprovedBy(protocol_version, _, _)
+        and ConsentFormVersion(trial_id, consent_form_version, consent_from, consent_to)
+        and consent_from <= randomised_on
+        and randomised_on <= consent_to
+        and ConsentFormApprovedBy(consent_form_version, _, _)
+        and InformedConsentObtained(
+                participant_id,
+                trial_id,
+                consent_form_version,
+                consented_on,
+                _
+            )
+        and consented_on <= randomised_on
+        and DelegatedInvestigator(
+                $actor,
+                trial_id,
+                "randomise_participant",
+                del_from,
+                del_to
+            )
+        and del_from <= randomised_on
+        and randomised_on <= del_to
+        and EligibilityCriterion(protocol_version, criterion_id, required_result)
+        and EligibilityAssessment(
+                participant_id,
+                criterion_id,
+                required_result,
+                assessed_on,
+                expires_on
+            )
+        and assessed_on <= randomised_on
+        and randomised_on <= expires_on
+        and not ImportantProtocolDeviationOpen(participant_id, trial_id, _)
+
+    assert ParticipantRandomised(
+        participant_id,
+        trial_id,
+        protocol_version,
+        randomised_on,
+        $actor
+    )
+    emit ParticipantRandomised(participant_id)
