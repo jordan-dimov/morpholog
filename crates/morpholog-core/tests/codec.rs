@@ -137,3 +137,194 @@ fn intent_args_serialise_as_a_json_array() {
         "intent.args must serialise as a JSON array"
     );
 }
+
+// ============================================================
+// Trace wire format
+//
+// The CLI's `morpholog propose --trace` flag emits a JSON object
+// whose `trace` field is a Vec<TraceEntry>. The tests below pin the
+// serde-derived wire shape so that an accidental serde-attribute
+// change (renaming a `kind` tag, switching from snake_case, etc.)
+// breaks the test rather than silently breaking downstream
+// consumers.
+//
+// `TracedProposal` is NOT covered here - it deliberately does not
+// derive serde at this stage (would transitively require Outcome /
+// EvalError / State to serialise). The CLI assembles its own
+// {result, trace} wrapper.
+// ============================================================
+
+use morpholog_core::{BindOneOutcome, ForIterationTrace, RequireOutcome, TraceEntry};
+
+#[test]
+fn trace_entry_require_held_round_trips_with_tagged_shape() {
+    let entry = TraceEntry::Require {
+        expression: "Foo(x)".to_string(),
+        outcome: RequireOutcome::Held { match_count: 1 },
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    // Internally tagged on `kind` with snake_case variants.
+    assert!(
+        json.contains(r#""kind":"require""#),
+        "expected `kind: require` discriminant, got: {json}"
+    );
+    assert!(
+        json.contains(r#""expression":"Foo(x)""#),
+        "expression must round-trip verbatim: {json}"
+    );
+    // Outer Require entry contains a nested RequireOutcome,
+    // internally tagged on `status` with snake_case.
+    assert!(
+        json.contains(r#""status":"held""#),
+        "nested outcome must carry status discriminant: {json}"
+    );
+    assert!(
+        json.contains(r#""match_count":1"#),
+        "match_count must be present: {json}"
+    );
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_require_rejected_round_trips() {
+    let entry = TraceEntry::Require {
+        expression: "Bar(y)".to_string(),
+        outcome: RequireOutcome::Rejected {
+            reason: "require failed: Bar(y) did not hold over pre-state".to_string(),
+        },
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""status":"rejected""#));
+    assert!(json.contains(r#""reason":"#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_bind_one_bound_round_trips_with_sorted_bindings() {
+    let entry = TraceEntry::BindOne {
+        expression: "Policy(pid, limit)".to_string(),
+        outcome: BindOneOutcome::Bound {
+            bindings: vec![
+                ("limit".to_string(), dec(100)),
+                ("pid".to_string(), subj("p1")),
+            ],
+        },
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""kind":"bind_one""#));
+    assert!(json.contains(r#""status":"bound""#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_bind_one_no_match_round_trips() {
+    let entry = TraceEntry::BindOne {
+        expression: "Policy(pid, limit)".to_string(),
+        outcome: BindOneOutcome::NoMatch,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""status":"no_match""#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_bind_one_multiple_matches_round_trips() {
+    let entry = TraceEntry::BindOne {
+        expression: "Policy(pid, limit)".to_string(),
+        outcome: BindOneOutcome::MultipleMatches { count: 3 },
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""status":"multiple_matches""#));
+    assert!(json.contains(r#""count":3"#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_for_with_per_iteration_items_round_trips() {
+    let entry = TraceEntry::For {
+        binding: "line".to_string(),
+        iterations: vec![
+            ForIterationTrace {
+                item: subj("L1"),
+                trace: vec![TraceEntry::Assert {
+                    claim: ClaimInstance {
+                        predicate: "Echo".to_string(),
+                        args: vec![subj("L1")],
+                    },
+                }],
+            },
+            ForIterationTrace {
+                item: subj("L2"),
+                trace: vec![],
+            },
+        ],
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""kind":"for""#));
+    assert!(json.contains(r#""binding":"line""#));
+    assert!(json.contains(r#""kind":"assert""#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_invariant_check_round_trips() {
+    let entry = TraceEntry::InvariantCheck {
+        name: "balanced_posted_entry".to_string(),
+        expression: "implies(JournalEntry(...), ...)".to_string(),
+        held: false,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""kind":"invariant_check""#));
+    assert!(json.contains(r#""held":false"#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
+fn trace_entry_let_let_new_subject_assert_retract_emit_round_trip() {
+    // Each remaining TraceEntry variant in one batch. The exact
+    // wire bytes are less important than the round-trip closure.
+    let entries = vec![
+        TraceEntry::Let {
+            name: "x".to_string(),
+            value: dec(42),
+        },
+        TraceEntry::LetNewSubject {
+            name: "y".to_string(),
+            subject: subj("generated-uuid"),
+        },
+        TraceEntry::Assert {
+            claim: ClaimInstance {
+                predicate: "Echo".to_string(),
+                args: vec![subj("a"), dec(1)],
+            },
+        },
+        TraceEntry::Retract {
+            predicate: "OldClaim".to_string(),
+            retracted: vec![ClaimInstance {
+                predicate: "OldClaim".to_string(),
+                args: vec![subj("z")],
+            }],
+        },
+        TraceEntry::Emit {
+            intent: IntentInstance {
+                name: "Notified".to_string(),
+                args: vec![subj("a")],
+            },
+        },
+    ];
+    for entry in entries {
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed, entry,
+            "round-trip mismatch on {entry:?}, wire was: {json}"
+        );
+    }
+}

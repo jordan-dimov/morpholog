@@ -371,20 +371,66 @@ fn second_settlement_at_aggregate_boundary_admits() {
 #[test]
 fn second_settlement_over_aggregate_is_rejected_at_require() {
     // 60 + 50 = 110 > 100.
+    //
+    // Asserts via the trace that the actor-authority require Held
+    // (alex's 100k limit covers a 50k settlement) but the aggregate
+    // require Rejected (cumulative paid + proposed exceeds the
+    // policy's aggregate). The old `reason.contains("require")`
+    // could only prove a require failed; the trace identifies the
+    // specific gate.
+    use morpholog_core::{
+        RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+    };
     let pre = after_first_settlement(60_000);
     let pre = report(pre, "claim_002", "policy_001", 50_000);
-    let outcome = propose_as(
-        &insurance_claim_settlement::authorise_settlement(),
-        vec![subj("claim_002"), subj("settlement_002"), dec(50_000)],
-        subj("alex"),
-        &pre,
-        &invariants(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
+    let t = insurance_claim_settlement::authorise_settlement();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![subj("claim_002"), subj("settlement_002"), dec(50_000)],
+        actor: subj("alex"),
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    let TracedProposal::Completed { outcome, trace } =
+        propose_with_trace(&t, &transition, &pre, &invariants())
+    else {
+        panic!("expected Completed");
+    };
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "expected Rejected, got {outcome:?}"
+    );
+
+    let require_outcomes: Vec<(&str, &RequireOutcome)> = trace
+        .iter()
+        .filter_map(|e| match e {
+            TraceEntry::Require {
+                expression,
+                outcome,
+            } => Some((expression.as_str(), outcome)),
+            _ => None,
+        })
+        .collect();
+    // The first require (actor authority + amount-vs-limit) holds;
+    // the second (cumulative cap) rejects.
+    let held_authority = require_outcomes
+        .iter()
+        .find(|(expr, out)| {
+            expr.contains("SettlementAuthority") && matches!(out, RequireOutcome::Held { .. })
+        })
+        .is_some();
+    let rejected_aggregate = require_outcomes
+        .iter()
+        .find(|(expr, out)| {
+            expr.contains("aggregate_limit") && matches!(out, RequireOutcome::Rejected { .. })
+        })
+        .is_some();
+    assert!(
+        held_authority,
+        "expected the SettlementAuthority gate to hold; trace: {trace:#?}"
+    );
+    assert!(
+        rejected_aggregate,
+        "expected the aggregate_limit gate to reject; trace: {trace:#?}"
+    );
 }
 
 #[test]

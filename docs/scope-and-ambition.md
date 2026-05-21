@@ -50,7 +50,7 @@ The corollary: feature proposals that introduce a new *subsystem* (a workflow en
 
 Four affordances unlock the categories above. Together they are far less than the surface area of the seven subsystems they replace.
 
-### 1. Typed predicate declarations
+### 1. Typed predicate declarations *(landed)*
 
 ```
 predicate BankRecognisedRevenue(
@@ -64,6 +64,8 @@ predicate BankRecognisedRevenue(
 Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predicates*: how many arguments, of what kinds, in what positions, with what names. The kernel continues to treat claims as opaque tuples; everything else (parser errors, indexing, derived-claim type-checking, read-side schemas, documentation generation) gets dramatically better.
 
 This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
+
+**Status:** landed via the refactor arc. Every `Program` now carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity: every claim/assert/retract/value_of/derived-claim reference must target a declared predicate. The CLI exposes the declarations via `morpholog inspect predicates <program>`. Kind validation against the kinds of values flowing through the binding context is not yet enforced (the metadata is recorded; enforcement is a future evaluator pass).
 
 ### 2. Derived claims
 
@@ -165,9 +167,17 @@ The richer worked examples. Each one combines several of the patterns the langua
 
 - **As-of evaluation.** `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`. The trial-balance example demonstrates this end-to-end.
 
-The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; higher-order authority via predicate-pattern matching for regulated workflows; effective time as a separate axis; intraday delivery periods that require an instant primitive distinct from civil dates) is the next forced territory. See [`docs/design-history.md`](design-history.md) for the design-archaeology record of what each forcing event added to the IR.
+**The authoring-surface refactor arc (PRs A through D2).** After the the worked examples crystallised the kernel's primitive set, a refactor arc made the IR pleasant to author against:
+- *PR A* - promoted the IR-construction helpers to a public `morpholog_core::dsl` module; added `morpholog-test-support` to eliminate per-crate test-helper duplication; added `format_program` for human-readable IR rendering.
+- *PR B* - introduced `Stmt::BindOne` as a deterministic unique-lookup binding statement. Collapses the `require + let + value_of` workaround that every non-trivial example was paying. Demoted `ValueOf` to value-position contexts.
+- *PR C* - added `Program::predicates: Vec<PredicateDecl>` with strict arity validation. Every reference to every predicate is now structurally checked; CLI exposes the declarations via `morpholog inspect predicates`.
+- *PR D / D2* - added `propose_with_trace` returning structured per-statement diagnostic trace on both success and kernel-error paths. CLI `--trace` flag and `propose_against_pg_with_trace` complete the surface.
 
-The candidate language affordances driven by Level 2: typed predicate declarations remain on the candidate list. The next forced step in the authority arc is higher-order authority (one authority claim governing a family of transformations - forcing predicate names as first-class IR values), or cumulative / time-bounded limits via richer requires. Both await the worked example that demands them.
+After this arc a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with execution that's structurally inspectable. The kernel discipline stayed the same; the authoring layer above it became materially more usable.
+
+The remaining ETRM-shaped pressure (position / exposure as derived claims over a real trading book; higher-order authority via predicate-pattern matching for regulated workflows; effective time as a separate axis; intraday delivery periods that require an instant primitive distinct from civil dates; expression-internal tracing for conjunct-level diagnostics) is the next forced territory. See [`docs/design-history.md`](design-history.md) for the design-archaeology record of what each forcing event added to the IR.
+
+The candidate language affordances driven by Level 2: predicate declarations are now landed. The next forced step in the authority arc is higher-order authority (one authority claim governing a family of transformations - forcing predicate names as first-class IR values, with the declared-predicate vocabulary now providing a metadata home), or cumulative / time-bounded limits via richer requires. Both await the worked example that demands them.
 
 ### Level 3 - Governed external and integration provenance
 

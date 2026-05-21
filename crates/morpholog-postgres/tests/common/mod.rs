@@ -10,8 +10,11 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
+use morpholog_core::TraceEntry;
 use morpholog_core::{EvalValue, Invariant, Transformation, Transition};
-use morpholog_postgres::{PgError, PgPool, PgProposalOutcome, propose_against_pg};
+use morpholog_postgres::{
+    PgError, PgPool, PgProposalOutcome, propose_against_pg, propose_against_pg_with_trace,
+};
 
 // Re-export the test-support surface so per-test files can `use
 // common::{subj, dec, ...};` rather than depending on
@@ -37,6 +40,19 @@ pub async fn propose_pg_with_test_actor(
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = test_transition(transformation, args);
     propose_against_pg(pool, transformation, &transition, invariants).await
+}
+
+/// `propose_pg_with_test_actor` plus structured trace. Wraps the
+/// new `propose_against_pg_with_trace` and uses the shared
+/// `test_actor()` for tests that don't model authority.
+pub async fn propose_pg_with_trace_using_test_actor(
+    pool: &PgPool,
+    transformation: &Transformation,
+    args: Vec<EvalValue>,
+    invariants: &[Invariant],
+) -> Result<(PgProposalOutcome, Vec<TraceEntry>), PgError> {
+    let transition = test_transition(transformation, args);
+    propose_against_pg_with_trace(pool, transformation, &transition, invariants).await
 }
 
 /// Variant that lets the caller supply an explicit actor. Used by

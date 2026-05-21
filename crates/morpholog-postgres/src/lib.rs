@@ -11,7 +11,8 @@ pub mod testing;
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
-    Transformation, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
+    TraceEntry, TracedProposal, Transformation, Transition, enumerate_derived,
+    predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -133,7 +134,77 @@ pub async fn propose_against_pg(
 
     let state = load_state(&mut tx).await?;
     let outcome = propose(transformation, transition, &state, invariants)?;
+    finalise_outcome(tx, transformation, transition, invariants, outcome).await
+}
 
+/// `propose_against_pg` plus structured per-statement diagnostic
+/// trace. Returns the same `PgProposalOutcome` plus the
+/// `Vec<TraceEntry>` produced by the kernel's `propose_with_trace`.
+///
+/// Trace preservation contract:
+///
+/// - **Committed** / **Rejected** outcomes carry the full trace
+///   (every statement that ran plus every invariant check).
+/// - **`PgError`** is returned via `Result::Err` and **drops the
+///   trace**. This is a known v0 limitation: PG-layer errors
+///   (Database, SerializationFailure, Encoding, InvalidState,
+///   TransitionNotFound) happen outside the kernel call and have
+///   no kernel trace to preserve, but `PgError::Kernel(EvalError)`
+///   also lands here and discards what would otherwise be a
+///   useful partial trace. Callers needing the kernel-error trace
+///   should call `morpholog_core::propose_with_trace` directly
+///   against an in-memory state and reserve the PG wrapper for the
+///   ordinary commit/reject paths.
+///
+/// The CLI's `--trace` flag uses this function and emits the
+/// outcome + trace as a JSON object on stdout for committed and
+/// rejected outcomes. Kernel-error paths surface via anyhow's
+/// stderr error chain as the non-trace `propose` subcommand does.
+pub async fn propose_against_pg_with_trace(
+    pool: &PgPool,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+) -> Result<(PgProposalOutcome, Vec<TraceEntry>), PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+
+    let state = load_state(&mut tx).await?;
+    let traced = propose_with_trace(transformation, transition, &state, invariants);
+    let (outcome, trace) = match traced {
+        TracedProposal::Completed { outcome, trace } => (outcome, trace),
+        TracedProposal::Errored { error, trace: _ } => {
+            // PR D2 limitation: trace dropped on kernel error at the
+            // PG boundary. Documented on the function rustdoc.
+            //
+            // Explicitly roll back the open SERIALIZABLE transaction
+            // before returning. The connection would eventually drop
+            // the transaction anyway, but doing it explicitly keeps
+            // the connection available sooner and surfaces any
+            // rollback-time DB failure as a `PgError::Database`
+            // rather than masking it behind the kernel error.
+            tx.rollback().await.map_err(classify)?;
+            return Err(error.into());
+        }
+    };
+    let outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+    Ok((outcome, trace))
+}
+
+/// Shared post-kernel persistence path used by both
+/// `propose_against_pg` and `propose_against_pg_with_trace`. Takes
+/// the kernel's [`Outcome`], commits or rolls back, and returns
+/// the [`PgProposalOutcome`] the public API exposes.
+async fn finalise_outcome(
+    mut tx: Transaction<'_, Postgres>,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+    outcome: Outcome,
+) -> Result<PgProposalOutcome, PgError> {
     match outcome {
         Outcome::Rejected { reason } => {
             tx.rollback().await.map_err(classify)?;
