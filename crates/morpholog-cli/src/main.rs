@@ -806,6 +806,37 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
+    /// `inspect predicates <program>` parses to `Inspect::Predicates`
+    /// with the program name on the args struct. No `--database-url`
+    /// flag: predicate declarations are programme metadata, not state.
+    #[test]
+    fn inspect_predicates_parses_with_program_argument() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "predicates",
+            "clinical_trial_enrolment",
+        ]);
+        let Command::Inspect { what } = cli.command else {
+            panic!("expected Inspect, got {:?}", cli.command);
+        };
+        let Inspect::Predicates(args) = what else {
+            panic!("expected Inspect::Predicates, got {what:?}");
+        };
+        assert_eq!(args.program, "clinical_trial_enrolment");
+    }
+
+    /// Omitting the program positional must produce a clap
+    /// MissingRequiredArgument error - the program name is required
+    /// for the subcommand to identify which programme's vocabulary
+    /// to render.
+    #[test]
+    fn inspect_predicates_missing_program_errors() {
+        let err = Cli::try_parse_from(["morpholog", "inspect", "predicates"])
+            .expect_err("missing program positional should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
     #[test]
     fn propose_outcome_serialises_with_status_tag() {
         // Pin the JSON wire shape that the CLI emits for outcomes.

@@ -540,17 +540,26 @@ impl std::error::Error for ValidationError {}
 fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
-    // 1. Duplicate predicate declarations.
+    // 1. Duplicate predicate declarations. Counts must be collected
+    //    via HashMap for O(1) lookups, but the error emission order
+    //    must be deterministic (HashMap iteration is randomised, and
+    //    the workspace-wide validation test's panic output would
+    //    otherwise vary run-to-run). Collect duplicates into a Vec,
+    //    sort by name, then emit.
     let mut seen = HashMap::<&str, usize>::new();
     for decl in &p.predicates {
         *seen.entry(decl.name.as_str()).or_insert(0) += 1;
     }
-    for (name, count) in &seen {
-        if *count > 1 {
-            errors.push(ValidationError::DuplicatePredicateDecl {
-                predicate: (*name).to_string(),
-            });
-        }
+    let mut duplicates: Vec<&str> = seen
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(name, _)| *name)
+        .collect();
+    duplicates.sort();
+    for name in duplicates {
+        errors.push(ValidationError::DuplicatePredicateDecl {
+            predicate: name.to_string(),
+        });
     }
 
     // Build a name -> arity lookup once. If duplicates exist, the last
