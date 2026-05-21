@@ -527,7 +527,7 @@ The fix is a structured per-statement trace.
 
 **What landed:**
 
-- Serde derives on `TraceEntry` (internally tagged on `"kind"`), `ForIterationTrace`, `RequireOutcome` and `BindOneOutcome` (both internally tagged on `"status"`). The wire format the CLI emits is now part of the kernel's stable surface.
+- Serde derives on `TraceEntry` (internally tagged on `"kind"`), `ForIterationTrace`, `RequireOutcome` and `BindOneOutcome` (both internally tagged on `"status"`). The wire format the CLI emits is now an explicit public surface — documented and tested; not yet promised stable across versions while Morpholog is pre-parser and actively evolving.
 - `propose_against_pg_with_trace` in `morpholog-postgres`. Threaded through `finalise_outcome` so both `propose_against_pg` and the trace variant share the post-kernel persistence path.
 - `--trace` flag on `morpholog propose`. JSON output shape: `{"result": <PgProposalOutcome>, "trace": [<TraceEntry>...]}`.
 - Two PG integration tests (committed + rejected paths exercising the new function end-to-end against PostgreSQL).
