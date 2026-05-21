@@ -360,6 +360,11 @@ impl Program {
     /// Look up a predicate declaration by name. Returns `None` if no
     /// declaration in the program has that name. Symmetric with the
     /// other lookup methods.
+    ///
+    /// If duplicate declarations exist this returns the first; the
+    /// validator's arity lookup uses the last. Either way, duplicate
+    /// declarations are invalid and are reported by
+    /// [`Program::validate`] as `ValidationError::DuplicatePredicateDecl`.
     pub fn predicate(&self, name: &str) -> Option<&PredicateDecl> {
         self.predicates.iter().find(|p| p.name == name)
     }
