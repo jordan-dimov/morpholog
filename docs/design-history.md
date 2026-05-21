@@ -485,7 +485,7 @@ The fix is a structured per-statement trace.
 - `ForIterationTrace { item, trace }` - nested sub-trace per iteration with the iteration item preserved. A failing third iteration is attributable to its collection element.
 - `RequireOutcome::Held { match_count }` records the find-matches cardinality; `Rejected { reason }` on failure.
 - `BindOneOutcome::{ Bound, NoMatch, MultipleMatches { count } }` matches the three branches of `Stmt::BindOne`'s contract.
-- Shared executor via `TraceSink::{Off, On(&mut Vec<TraceEntry>)}`. `propose` calls with `Off`, `propose_with_trace` with `On`. Zero overhead on the non-trace path.
+- Shared executor via `TraceSink::{Off, On(&mut Vec<TraceEntry>)}`. `propose` calls with `Off`, `propose_with_trace` with `On`. The non-trace path allocates no trace storage; per-statement work is a single-variant enum match the optimiser collapses.
 - 9 kernel tests pinning each branch, including the multi-match-error-with-partial-trace contract.
 - One migrated example test (`insurance::authorise_settlement_without_authority_is_rejected_at_require`) demonstrates the DX win: instead of `reason.contains("require")`, the test asserts that both bind_ones succeeded and the specific `SettlementAuthority`-bearing require is the failing one.
 
