@@ -10,10 +10,10 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::TraceEntry;
 use morpholog_core::{EvalValue, Invariant, Transformation, Transition};
 use morpholog_postgres::{
-    PgError, PgPool, PgProposalOutcome, propose_against_pg, propose_against_pg_with_trace,
+    PgError, PgPool, PgProposalOutcome, PgTracedOutcome, propose_against_pg,
+    propose_against_pg_with_trace,
 };
 
 // Re-export the test-support surface so per-test files can `use
@@ -50,7 +50,7 @@ pub async fn propose_pg_with_trace_using_test_actor(
     transformation: &Transformation,
     args: Vec<EvalValue>,
     invariants: &[Invariant],
-) -> Result<(PgProposalOutcome, Vec<TraceEntry>), PgError> {
+) -> Result<PgTracedOutcome, PgError> {
     let transition = test_transition(transformation, args);
     propose_against_pg_with_trace(pool, transformation, &transition, invariants).await
 }

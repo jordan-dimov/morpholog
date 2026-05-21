@@ -17,8 +17,8 @@ use morpholog_examples::{
     verified_revenue,
 };
 use morpholog_postgres::{
-    PgProposalOutcome, compute_idempotency_key, list_audit_rows, list_claims, list_derived,
-    list_pending_outbox,
+    PgProposalOutcome, PgTracedOutcome, compute_idempotency_key, list_audit_rows, list_claims,
+    list_derived, list_pending_outbox,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -231,7 +231,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
     reset_db(&pool).await;
     insert_pre_state(&pool, netting_pre_state_claims()).await;
 
-    let (outcome, trace) = common::propose_pg_with_trace_using_test_actor(
+    let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
         &settlement_netting::create_net_settlement(),
         netting_args(),
@@ -239,6 +239,9 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
     )
     .await
     .expect("propose_against_pg_with_trace should not error");
+    let PgTracedOutcome::Outcome { outcome, trace } = traced else {
+        panic!("expected PgTracedOutcome::Outcome, got {traced:?}");
+    };
 
     assert!(
         matches!(outcome, PgProposalOutcome::Committed { .. }),
@@ -273,6 +276,85 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
     );
 }
 
+/// Kernel-errored path: when the kernel raises an `EvalError` mid-run
+/// (here, a multi-match `BindOne`), the trace must be preserved on
+/// the `PgTracedOutcome::KernelErrored` variant rather than dropped
+/// at the PG boundary. The SERIALIZABLE transaction is rolled back
+/// so the connection is released and no state is admitted.
+#[tokio::test]
+async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
+    use morpholog_core::{EvalError, TraceEntry};
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Same baseline pre-state as the happy path, plus a second
+    // LineAmount for l1. The For-body's `bind_one(LineAmount(line,
+    // amt))` will multi-match for line=l1 and raise an EvalError.
+    let mut claims = netting_pre_state_claims();
+    claims.push(claim("LineAmount", vec![subj("l1"), dec(99)]));
+    insert_pre_state(&pool, claims).await;
+
+    let traced = common::propose_pg_with_trace_using_test_actor(
+        &pool,
+        &settlement_netting::create_net_settlement(),
+        netting_args(),
+        &settlement_netting::all_invariants(),
+    )
+    .await
+    .expect("PG-layer call should not error; kernel error is in KernelErrored variant");
+
+    let PgTracedOutcome::KernelErrored { error, trace } = traced else {
+        panic!("expected PgTracedOutcome::KernelErrored, got {traced:?}");
+    };
+    assert!(
+        matches!(error, EvalError::TypeMismatch(_)),
+        "expected TypeMismatch (bind_one multi-match), got {error:?}"
+    );
+    // Trace MUST be non-empty: the require (forall ApprovedSettlementLine...)
+    // held, let_new_subject ran, let ran, assert ran, then the For body's
+    // bind_one tripped on iteration 0.
+    assert!(!trace.is_empty(), "trace must not be empty on kernel error");
+    // The MultipleMatches BindOne entry must appear inside one of the
+    // For iteration's nested traces. Walking explicitly into the For
+    // pins the actual failure shape rather than just verifying that
+    // a For entry exists.
+    use morpholog_core::{BindOneOutcome, ForIterationTrace};
+    let saw_multi_match = trace.iter().any(|e| match e {
+        TraceEntry::For { iterations, .. } => iterations.iter().any(|iter: &ForIterationTrace| {
+            iter.trace.iter().any(|inner| {
+                matches!(
+                    inner,
+                    TraceEntry::BindOne {
+                        outcome: BindOneOutcome::MultipleMatches { .. },
+                        ..
+                    }
+                )
+            })
+        }),
+        _ => false,
+    });
+    assert!(
+        saw_multi_match,
+        "trace should contain a BindOne::MultipleMatches entry inside a For iteration; got: {trace:#?}"
+    );
+
+    // No commit happened.
+    let claim_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM morpholog.claims")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        claim_count,
+        netting_pre_state_claims().len() as i64 + 1,
+        "no claims should be admitted on kernel error; pre-state preserved"
+    );
+    let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM morpholog.audit")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(audit_count, 0, "no audit row on kernel error");
+}
+
 /// On the Rejected path, the trace must include the failing
 /// require so callers can identify which gate fired. Mirrors the
 /// kernel-level test from PR D but against the PG adapter.
@@ -288,7 +370,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
     claims.push(claim("Netted", vec![subj("l1")]));
     insert_pre_state(&pool, claims).await;
 
-    let (outcome, trace) = common::propose_pg_with_trace_using_test_actor(
+    let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
         &settlement_netting::create_net_settlement(),
         netting_args(),
@@ -296,6 +378,9 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
     )
     .await
     .expect("propose_against_pg_with_trace should not error");
+    let PgTracedOutcome::Outcome { outcome, trace } = traced else {
+        panic!("expected PgTracedOutcome::Outcome, got {traced:?}");
+    };
 
     assert!(
         matches!(outcome, PgProposalOutcome::Rejected { .. }),
