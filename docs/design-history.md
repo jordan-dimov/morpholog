@@ -498,3 +498,49 @@ The fix is a structured per-statement trace.
 - Persisting trace to the audit log.
 
 **Pattern note:** PR D closes the four-PR refactor arc. PR A made the IR pleasant to author; PR B removed the biggest authoring footgun; PR C made programmes structurally self-describing; PR D makes execution diagnostically transparent. The arc's spine is the same: each PR identifies one source of *authoring friction* and removes it without weakening the kernel's discipline. Trace is the smallest possible diagnostic primitive - one entry per statement, full values, partial trace on error - that genuinely changes the loop from "add println, recompile, infer" to "read the trace."
+
+### `propose_against_pg_with_trace`, CLI `--trace`, and the refactor-arc consolidation pass (PR D2)
+
+**Forced by:** the natural completion of PR D. The kernel `propose_with_trace` was useful for unit tests but not yet reachable through the CLI or against a real PostgreSQL database. PR D2 closes that loop and bundles a documentation pass to align the headline surfaces (README, scope-and-ambition) with the four-PR refactor arc that's just landed.
+
+**The pressure:** after PR D, the trace API existed only as a kernel primitive. Every realistic debugging session uses the CLI against a real database. Without a CLI flag and a PG adapter wrapper, the trace was a kernel-test-only capability. Meanwhile the headline docs still described Morpholog as it existed before PR A — anyone landing on the repo got the wrong mental model.
+
+**The design choice:** two changes bundled into one PR.
+
+**CLI `--trace`:**
+
+- `propose_against_pg_with_trace` in the PG adapter, returning `Result<(PgProposalOutcome, Vec<TraceEntry>), PgError>`.
+- `morpholog propose --trace` flag emitting `{"result": <PgProposalOutcome>, "trace": [<TraceEntry>...]}` on stdout for committed and rejected outcomes.
+- Serde derives added to `TraceEntry`, `RequireOutcome`, `BindOneOutcome`, `ForIterationTrace` — but NOT `TracedProposal` (would transitively require `Outcome`, `EvalError`, `State` to serialize; those carry larger payloads and the CLI doesn't need the kernel-level wrapper type anyway).
+
+**Considered and rejected:**
+
+- *Preserving trace on `PgError`.* The kernel's `TracedProposal::Errored` variant preserves trace on `EvalError`. At the PG boundary, the wrapping `PgError::Kernel(EvalError)` flows through the same `Result::Err` path as `Database` / `SerializationFailure` / `Encoding`, and the simpler `Result<(_, trace), PgError>` shape drops the trace. Documented as a known v0 limitation. Callers needing kernel-error trace can use `propose_with_trace` directly. A richer return type (a `PgTracedOutcome` enum carrying trace on kernel-errored paths) was considered but rejected on smallest-increment grounds — the rare "kernel succeeded but DB op failed and I want the trace" case is the harder design problem and should land when forced.
+- *Always emit the `{result, trace}` shape from the CLI, even without `--trace`.* Would change the existing wire format for the non-trace `propose` path. Rejected: existing scripts parse stdout as bare `PgProposalOutcome`; breaking that contract for a debugging flag is the wrong trade-off.
+- *Adding `--trace` to `morpholog inspect derived` and the other inspect subcommands.* The inspect subcommands are read-only over admitted state; there's no transformation body to trace. Out of scope.
+
+**Consolidation pass:**
+
+- Root `README.md` — "Worked examples" descriptions updated where the IR shape changed (insurance, settlement-netting); "Project status" paragraph now describes programmes as declared-vocabulary objects with structured trace; "Where this is heading" reflects that the refactor arc moved several items off the deferred list.
+- `docs/scope-and-ambition.md` — "What the language actually needs" section now marks Typed predicate declarations as *(landed)*. Roadmap Level 2 lists the four-PR refactor arc and the strengthened conceptual shape of `Program` after it.
+- `docs/runtime-semantics.md` — already updated by the PRs themselves (programme vocabulary contract, four-way binding doctrine, trace section).
+
+**What landed:**
+
+- Serde derives on `TraceEntry` (internally tagged on `"kind"`), `ForIterationTrace`, `RequireOutcome` and `BindOneOutcome` (both internally tagged on `"status"`). The wire format the CLI emits is now part of the kernel's stable surface.
+- `propose_against_pg_with_trace` in `morpholog-postgres`. Threaded through `finalise_outcome` so both `propose_against_pg` and the trace variant share the post-kernel persistence path.
+- `--trace` flag on `morpholog propose`. JSON output shape: `{"result": <PgProposalOutcome>, "trace": [<TraceEntry>...]}`.
+- Two PG integration tests (committed + rejected paths exercising the new function end-to-end against PostgreSQL).
+- Two CLI parse tests (flag parses; absence defaults to false).
+- One shared common test helper (`propose_pg_with_trace_using_test_actor`).
+- Consolidation pass across the headline docs.
+
+**What deliberately did NOT land:**
+
+- Trace preservation on `PgError`. Documented limitation.
+- Serde on `TracedProposal` / `Outcome` / `EvalError` / `State`. The CLI uses `PgProposalOutcome` (already serialisable) + `Vec<TraceEntry>` (now serialisable); the kernel-level `TracedProposal` enum stays Rust-only.
+- Expression-internal tracing. Still PR E territory.
+- `enumerate_derived_with_trace`. Out of scope.
+- Persisting trace to the audit log. Out of scope.
+
+**Pattern note:** PR D2 is the closing piece of the four-PR refactor arc. The arc removed authoring friction without weakening the kernel discipline; the next substantive PR should either force a new IR primitive via a worked example, or address expression-internal tracing if a real debugging scenario demands the conjunct-level capability.

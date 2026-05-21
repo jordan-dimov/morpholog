@@ -39,7 +39,7 @@ use clap::{Parser, Subcommand};
 use morpholog_core::{EvalValue, Transition};
 use morpholog_postgres::{
     PgPool, PgProposalOutcome, list_audit_rows, list_claims, list_claims_at, list_derived,
-    list_derived_at, list_pending_outbox, propose_against_pg,
+    list_derived_at, list_pending_outbox, propose_against_pg, propose_against_pg_with_trace,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -204,6 +204,17 @@ struct ProposeArgs {
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
+
+    /// When set, emit a structured per-statement trace alongside the
+    /// outcome. Output shape becomes `{"result": <PgProposalOutcome>,
+    /// "trace": [<TraceEntry>...]}` on commit or rejection. Useful
+    /// for diagnosing why a transformation rejected: the trace shows
+    /// which require/bind_one fired, what bindings each statement
+    /// produced, and which invariant (if any) failed. Kernel errors
+    /// at the PG boundary still surface via the normal anyhow error
+    /// chain on stderr - PR D2's known limitation.
+    #[arg(long)]
+    trace: bool,
 }
 
 #[tokio::main]
@@ -331,12 +342,27 @@ async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
         args: eval_args,
         actor: EvalValue::Subject(args.actor.clone()),
     };
-    let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
-        .await
-        .context("propose_against_pg failed")?;
-
-    // 5. Print the outcome and translate Rejected into exit 1.
-    print_json(&outcome)?;
+    // 5. Propose, with or without trace, and emit JSON accordingly.
+    //    Trace branch emits `{"result": ..., "trace": [...]}`; the
+    //    non-trace branch emits the bare outcome (its existing wire
+    //    shape) so scripts that parse stdout don't break.
+    let outcome = if args.trace {
+        let (outcome, trace) =
+            propose_against_pg_with_trace(&pool, transformation, &transition, &program.invariants)
+                .await
+                .context("propose_against_pg_with_trace failed")?;
+        print_json(&serde_json::json!({
+            "result": &outcome,
+            "trace": &trace,
+        }))?;
+        outcome
+    } else {
+        let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
+            .await
+            .context("propose_against_pg failed")?;
+        print_json(&outcome)?;
+        outcome
+    };
     if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
         std::process::exit(1);
     }
@@ -835,6 +861,55 @@ mod tests {
         let err = Cli::try_parse_from(["morpholog", "inspect", "predicates"])
             .expect_err("missing program positional should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    /// `propose --trace` parses to a `ProposeArgs` with `trace: true`.
+    /// All other propose-subcommand fields keep their existing
+    /// behaviour.
+    #[test]
+    fn propose_with_trace_flag_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "propose",
+            "settlement_netting",
+            "create_net_settlement",
+            "--actor",
+            "jordan",
+            "--args",
+            "[]",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--trace",
+        ]);
+        let Command::Propose(args) = cli.command else {
+            panic!("expected Propose, got {:?}", cli.command);
+        };
+        assert!(args.trace, "expected trace flag to be set");
+        assert_eq!(args.program, "settlement_netting");
+        assert_eq!(args.transformation, "create_net_settlement");
+        assert_eq!(args.actor, "jordan");
+    }
+
+    /// Without `--trace`, `ProposeArgs.trace` defaults to false. The
+    /// non-trace propose path must not be affected by the new flag.
+    #[test]
+    fn propose_without_trace_flag_defaults_to_false() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "propose",
+            "settlement_netting",
+            "create_net_settlement",
+            "--actor",
+            "jordan",
+            "--args",
+            "[]",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Propose(args) = cli.command else {
+            panic!("expected Propose, got {:?}", cli.command);
+        };
+        assert!(!args.trace, "expected trace flag to default to false");
     }
 
     #[test]

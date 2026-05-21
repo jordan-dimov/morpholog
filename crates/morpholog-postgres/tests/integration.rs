@@ -221,6 +221,99 @@ async fn require_failure_writes_nothing() {
     assert_eq!(outbox_count, 0);
 }
 
+/// `propose_against_pg_with_trace` returns the trace alongside the
+/// outcome on both Committed and Rejected paths. Pinned end-to-end
+/// against the PG adapter rather than just the kernel.
+#[tokio::test]
+async fn propose_against_pg_with_trace_returns_trace_on_committed() {
+    use morpholog_core::TraceEntry;
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    insert_pre_state(&pool, netting_pre_state_claims()).await;
+
+    let (outcome, trace) = common::propose_pg_with_trace_using_test_actor(
+        &pool,
+        &settlement_netting::create_net_settlement(),
+        netting_args(),
+        &settlement_netting::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg_with_trace should not error");
+
+    assert!(
+        matches!(outcome, PgProposalOutcome::Committed { .. }),
+        "expected Committed, got {outcome:?}"
+    );
+    // Trace must contain at least one entry per statement in
+    // create_net_settlement's body (require, let_new_subject, let,
+    // assert, for, emit - 6 statements at the top level). For
+    // tracing nests, so the outer trace count is 6 plus any
+    // invariant checks.
+    assert!(
+        trace
+            .iter()
+            .any(|e| matches!(e, TraceEntry::Require { .. })),
+        "trace should contain a Require entry: {trace:#?}"
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| matches!(e, TraceEntry::LetNewSubject { .. })),
+        "trace should contain a LetNewSubject entry"
+    );
+    assert!(
+        trace.iter().any(|e| matches!(e, TraceEntry::For { .. })),
+        "trace should contain a For entry"
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| matches!(e, TraceEntry::InvariantCheck { .. })),
+        "trace should contain InvariantCheck entries on the Committed path"
+    );
+}
+
+/// On the Rejected path, the trace must include the failing
+/// require so callers can identify which gate fired. Mirrors the
+/// kernel-level test from PR D but against the PG adapter.
+#[tokio::test]
+async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
+    use morpholog_core::{RequireOutcome, TraceEntry};
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // Same shape as require_failure_writes_nothing: add an extra
+    // Netted(l1) so the forall require's `not Netted` fails.
+    let mut claims = netting_pre_state_claims();
+    claims.push(claim("Netted", vec![subj("l1")]));
+    insert_pre_state(&pool, claims).await;
+
+    let (outcome, trace) = common::propose_pg_with_trace_using_test_actor(
+        &pool,
+        &settlement_netting::create_net_settlement(),
+        netting_args(),
+        &settlement_netting::all_invariants(),
+    )
+    .await
+    .expect("propose_against_pg_with_trace should not error");
+
+    assert!(
+        matches!(outcome, PgProposalOutcome::Rejected { .. }),
+        "expected Rejected, got {outcome:?}"
+    );
+    let failing_require = trace.iter().find_map(|e| match e {
+        TraceEntry::Require {
+            expression,
+            outcome: RequireOutcome::Rejected { .. },
+        } => Some(expression),
+        _ => None,
+    });
+    assert!(
+        failing_require.is_some(),
+        "trace should record the failing require; got: {trace:#?}"
+    );
+}
+
 #[tokio::test]
 async fn invariant_violation_on_candidate_state_writes_nothing() {
     let pool = test_pool().await;

@@ -142,7 +142,9 @@ Morpholog isn't the whole stack - UIs, dashboards, dataloaders, ML pipelines sta
 
 Active. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples all work and are tested. Every committed transition records its actor. Writes scale linearly (~1.6s per commit against a 100,000-entry ledger); as-of replay also linear (~1.5s for 100,000 transitions). See [`crates/morpholog-bench/README.md`](crates/morpholog-bench/README.md) for the performance story.
 
-Not in the box yet: a parser; a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching / higher-order authority (quantitative authority works today via `Expr::Le`); user-supplied program loading; materialised derived claims. Each lands when a worked example forces the shape.
+Programmes are **declared-vocabulary objects**: every claim shape is enumerated in a predicate-declaration block, every transformation body is structurally arity-validated, and the kernel's `propose_with_trace` returns a per-statement diagnostic trace alongside the outcome. The trace surfaces through the CLI's `morpholog propose --trace` flag for committed and rejected outcomes.
+
+Not in the box yet: a parser; a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching / higher-order authority (quantitative authority works today via `Expr::Le`); user-supplied program loading; materialised derived claims; expression-internal tracing (the trace today is statement-level, not conjunct-level). Each lands when a worked example forces the shape.
 
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
@@ -163,9 +165,10 @@ The workspace: `morpholog-core` (sync kernel, no I/O), `morpholog-examples` (wor
 The runtime today is operationally complete enough to defend a number; the next arc is making it operationally complete enough to defend an *organisation*. Framed in business shapes, not feature names:
 
 - **A worker supervisor with circuit breakers and an HTTP-aware deliverer.** The polling worker exists and ships a `StdoutDeliverer`; what's missing is a supervisor running multiple workers under restart-with-intensity, per-target circuit breakers, and an `HttpDeliverer`.
-- **Predicate-pattern matching and higher-order authority.** Quantitative authority works today (see [Approval Controls](examples/04_approval_controls/)). The next shape is *one* authority claim governing a *family* of transformations, instead of one claim per kind. Forces predicate names as first-class IR values.
+- **Predicate-pattern matching and higher-order authority.** Quantitative authority works today (see [Approval Controls](examples/04_approval_controls/)). With programmes now carrying a declared predicate vocabulary, the next shape - *one* authority claim governing a *family* of transformations - has a metadata home. Forces predicate names as first-class IR values.
 - **Effective time as a first-class temporal axis.** As-of already gives *knowledge* time. Effective time - the day a contract becomes binding, the period a posting reflects - is expressible as ordinary claims; combining the two gives full bitemporal addressability without any `valid_from`/`valid_to` columns.
-- **A surface syntax and parser.** Programs are Rust IR today. A parser commits to a dozen choices (file layout, module system, error spans, literal syntax) that should be ratified by a real outside user, not pre-decided.
+- **A surface syntax and parser.** Programs are Rust IR today, but the kernel exposes a public `dsl` module that reads like a builder for the surface that will eventually exist. A parser commits to a dozen choices (file layout, module system, error spans, literal syntax) that should be ratified by a real outside user, not pre-decided.
+- **Expression-internal tracing.** Today's `propose_with_trace` is statement-level - it identifies which `require` or `bind_one` failed, but not which conjunct of an `And` was false. Conjunct-level diagnosis is a separate evaluator refactor and the natural next step after a worked example forces it.
 - **Materialised derived claims.** Reports are recomputed on demand. For long audit logs and frequent queries, materialised snapshots will become forced.
 
 None of these are speculative; each has a concrete forcing scenario in [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) or [`docs/design-history.md`](docs/design-history.md). Each lands when an example actually demands it.

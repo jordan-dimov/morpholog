@@ -1753,7 +1753,13 @@ pub enum TracedProposal {
 /// output; the exact string format is intentionally not pinned by
 /// type so future formatter improvements (PR A's territory) propagate
 /// here automatically.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serde derives carry the wire format the CLI's `--trace` flag
+/// emits. The enum uses an internally-tagged shape
+/// (`{ "kind": "...", ... }`) so each entry is distinguishable in a
+/// flat JSON array.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEntry {
     Require {
         expression: String,
@@ -1804,13 +1810,14 @@ pub enum TraceEntry {
 /// `item` value lets a caller identify which iteration produced
 /// which sub-trace - without it, a failing third iteration is hard
 /// to attribute to the right collection element.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForIterationTrace {
     pub item: EvalValue,
     pub trace: Vec<TraceEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum RequireOutcome {
     /// The require's expression admitted at least one matching
     /// binding extension. `match_count` records the cardinality of
@@ -1825,7 +1832,8 @@ pub enum RequireOutcome {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum BindOneOutcome {
     /// The bind_one's expression matched exactly one binding set.
     /// `bindings` records the **full** new binding context the
