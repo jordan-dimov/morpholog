@@ -153,17 +153,18 @@ Two statement classes serve different purposes; conflating them is the most comm
 
 - **`require Expression` is a yes/no gate.** It evaluates `Expression` against the pre-state snapshot; if the expression admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
 
-- **`let name = Expression` is the binding primitive.** It evaluates `Expression` to a single value and binds `name` in the active scope for every subsequent statement (including later `require`s, `assert`s, `retract`s, intent `emit`s, and the body of a `for`). When `Expression` is `ValueOf(predicate, args)`, the let extracts a value position from a uniquely-matching claim. Zero matches surfaces as `EvalError::ValueOfZeroMatches`; more than one match surfaces as `EvalError::ValueOfMultipleMatches`.
+- **`let name = Expression` is the binding primitive.** It evaluates `Expression` to a single value and binds `name` in the active scope for every subsequent statement (including later `require`s, `assert`s, `retract`s, intent `emit`s, and the body of a `for`). When `Expression` is `ValueOf(predicate, args)`, the let extracts a value position from a uniquely-matching claim.
 
-The idiomatic pattern for "this claim exists and I need a value from it":
+The idiomatic pattern for "this claim exists and I need a value from it" - lifted verbatim from `examples/05_insurance_claim_settlement/insurance_claim_settlement.morph`:
 
 ```
-require Claim(x, _, _)                              -- gate: x's claim is admitted
-let v = value_of Claim(x, _)                        -- extract: bind v to the value position
-... statements that reference v ...
+require ClaimReported(claim_id, _, _)                       -- gate: the claim has been reported
+let policy_id = value_of ClaimReported(claim_id, _, _)      -- extract: binds policy_id to the
+                                                            -- first wildcard's position
+... statements that reference policy_id ...
 ```
 
-The guard `require` rejects the proposal cleanly when the claim is absent; the subsequent `let` then extracts the value, with the structural guarantee that the lookup is single-valued (a property the programme must enforce via an invariant - e.g. `at_most_one_X_per_id`, the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use).
+`value_of` finds a single claim matching the given pattern and returns the value at the first wildcard position (here, the second argument); zero matches surfaces as `EvalError::ValueOfZeroMatches`, more than one as `EvalError::ValueOfMultipleMatches`. The guard `require` rejects the proposal cleanly when the claim is absent; the subsequent `let` then extracts the value, with the structural guarantee that the lookup is single-valued (a property the programme must enforce via an invariant - e.g. `at_most_one_X_per_id`, the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use).
 
 Inside a `require` body, multiple sub-expressions composed with `And` *do* propagate bindings forward within that single require: the matcher's binding extensions are threaded through the conjuncts. So a require like
 
