@@ -452,3 +452,49 @@ Three statements with two redundant claim matches. The redundancy comes from `re
 - Auto-validation inside `propose`. Kernel boundary stays at the statement level.
 
 **Pattern note:** PR C completes the three-PR refactor arc that started with PR A (public DSL + test-support + format_program) and PR B (`Stmt::BindOne`). The progression matters: PR A made the IR pleasant to author; PR B removed the biggest authoring footgun; PR C makes programmes structurally self-describing. After PR C, a Morpholog programme is no longer "some transformations and invariants" - it's a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary. That stronger conceptual object is what predicate-pattern matching, future kind checking, generated docs, and the eventual parser all build on.
+
+### `propose_with_trace` (forced by the refactor arc)
+
+**Forced by:** the fourth and final item in the accidental-complexity audit. After PR A (public DSL), PR B (`Stmt::BindOne`), and PR C (predicate declarations), the remaining friction in authoring against Morpholog was *understanding why a proposal rejected*. Today's `Outcome::Rejected { reason }` carries one line; for any non-trivial transformation body, that's not enough to attribute the failure to the right statement, and for kernel errors the `Result<_, EvalError>` shape drops everything that came before.
+
+**The pressure:** debugging a failing example took 5 minutes of `println!` archaeology because:
+
+- A failing `require` told you *that* a require failed, not *which* of several requires in the body.
+- A failing `bind_one` zero-match told you nothing about the bindings that led up to it.
+- A multi-match `bind_one` raised `EvalError::TypeMismatch` and discarded the trace; the worst debugging case dropped the most diagnostic surface.
+- An invariant rejection said `"invariant X violated"` with no record of what the transformation body had staged.
+- Nested `for` loops surfaced as opaque "require failed" with no iteration context.
+
+The fix is a structured per-statement trace.
+
+**The design choice:** a parallel `propose_with_trace` function returning a `TracedProposal` enum, plus a shared internal execution path via a `TraceSink` enum.
+
+**Considered and rejected:**
+
+- *`propose` grows an `&mut Option<Vec<TraceEntry>>` parameter.* Single function, fewer call-site changes. Rejected: every existing `propose` caller would need to pass `None`, the `&mut` param is a small papercut at every non-tracing site, and a separate function reads more honestly at the call site (`propose_with_trace` is opt-in, `propose` stays untouched).
+- *`propose_with_trace -> Result<(Outcome, Vec<TraceEntry>), EvalError>`.* Rust-idiomatic but **drops the trace on `Err`**, exactly when the trace is most valuable (multi-match `bind_one`, type-mismatch in arithmetic, unbound actor). Rejected for the same reason ChatGPT flagged in review: it's a quiet footgun.
+- *Two separate evaluators (one traced, one not).* Rejected as the path to drift. The shared `TraceSink` keeps both modes on one executor; the `Off` sink is a no-op, the `On` sink appends.
+- *Trace expression internals (which conjunct of an `And` failed).* Considered, deferred. Would require a parallel `find_matches_with_trace` and visitor-style threading through every Expr variant. The simpler statement-level trace is the smallest forcing-pressure-driven primitive; expression-level can land as a follow-up if a worked example demands it.
+- *Persist the trace to the audit log.* No. Trace is debugging metadata, not durable record. The audit log already pins what happened; the trace explains why.
+- *Trace `enumerate_derived`.* Different concern; failures there are kernel errors over read-only state. Deferred.
+
+**What landed:**
+
+- `TracedProposal::{Completed { outcome, trace }, Errored { error, trace }}` - trace carried on both paths.
+- `TraceEntry` enum with one variant per statement kind plus `InvariantCheck`. `Retract` records the actual retracted claims (not just a count). `InvariantCheck` records the rendered body expression. `Let`, `LetNewSubject`, `Assert`, `Emit` record the resolved value / claim / intent. `BindOne::Bound` records the full new binding context sorted by variable name.
+- `ForIterationTrace { item, trace }` - nested sub-trace per iteration with the iteration item preserved. A failing third iteration is attributable to its collection element.
+- `RequireOutcome::Held { match_count }` records the find-matches cardinality; `Rejected { reason }` on failure.
+- `BindOneOutcome::{ Bound, NoMatch, MultipleMatches { count } }` matches the three branches of `Stmt::BindOne`'s contract.
+- Shared executor via `TraceSink::{Off, On(&mut Vec<TraceEntry>)}`. `propose` calls with `Off`, `propose_with_trace` with `On`. The non-trace path allocates no trace storage; per-statement work is a single-variant enum match the optimiser collapses.
+- 9 kernel tests pinning each branch, including the multi-match-error-with-partial-trace contract.
+- One migrated example test (`insurance::authorise_settlement_without_authority_is_rejected_at_require`) demonstrates the DX win: instead of `reason.contains("require")`, the test asserts that both bind_ones succeeded and the specific `SettlementAuthority`-bearing require is the failing one.
+
+**What deliberately did NOT land:**
+
+- Expression-internal tracing. `Require` and `BindOne` trace entries carry the top-level expression as a rendered string but do not drill into its sub-tree. Documented as a possible later PR.
+- CLI `--trace` flag and `propose_against_pg_with_trace`. Split to PR D2. PR D pins the kernel trace shape; PR D2 will settle the JSON wire format and the PG adapter wrapper (which has its own questions: trace covers kernel admission only, not SQL/audit/outbox stages).
+- Serde derives on `TracedProposal` / `TraceEntry`. Transitively requires `Outcome` and `EvalError` to serialize, which transitively requires `State` - all out of scope for PR D. PR D2 will introduce serializable wrapper types.
+- `enumerate_derived_with_trace`.
+- Persisting trace to the audit log.
+
+**Pattern note:** PR D closes the four-PR refactor arc. PR A made the IR pleasant to author; PR B removed the biggest authoring footgun; PR C made programmes structurally self-describing; PR D makes execution diagnostically transparent. The arc's spine is the same: each PR identifies one source of *authoring friction* and removes it without weakening the kernel's discipline. Trace is the smallest possible diagnostic primitive - one entry per statement, full values, partial trace on error - that genuinely changes the loop from "add println, recompile, infer" to "read the trace."
