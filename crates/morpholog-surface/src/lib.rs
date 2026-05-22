@@ -23,11 +23,11 @@
 //!
 //! Module layout:
 //!
-//! - [`diagnostics`] (private): the `Diagnostic` type, exported
+//! - `diagnostics` (private): the [`Diagnostic`] type, exported
 //!   via `pub use`.
 //! - [`lexer`]: tokens + character-level lexing. Public so
 //!   integration tests can drive lexing directly; the public
-//!   surface here is `Token` and `lex`.
+//!   surface here is [`lexer::Token`] and [`lexer::lex`].
 //! - [`layout`]: the indentation-aware normalisation pass that
 //!   sits between lexer and parser. Public for the same reason
 //!   as `lexer` and because future tooling (formatter, source-
