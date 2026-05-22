@@ -131,7 +131,6 @@ Each was considered during a specific example and deferred. They live here so th
 
 Entries from the parser arc onwards are kept at fuller detail because the arc is still active.
 
-EOF_PRE_PARSER
 ### Parser P1: predicate declarations only
 
 **Forced by:** the parser arc starting. Programmes are Rust IR today via the public `dsl` module; the natural reader of a Morpholog programme is a domain expert, not a Rust developer. PR P1 commits the surface foundation - new crate, lexer, ariadne diagnostics pipeline, CLI entry point - by recognising the smallest meaningful production: the `program` header plus zero or more `predicate` declarations. Every subsequent parser PR builds on the decisions this one bakes in; nothing else lands until those are stable.
