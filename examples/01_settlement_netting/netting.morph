@@ -1,52 +1,59 @@
--- Bilateral settlement netting — canonical v0 example.
+-- Bilateral settlement netting - canonical v0 example.
 --
 -- Domain: two parties have multiple settlement lines between them.
 -- Each line has a signed amount (positive = receivable, negative =
 -- payable). A net settlement is admissible only if its amount equals
 -- the signed sum of its approved underlying lines, and no line is
 -- netted into more than one settlement.
---
--- Prior state assumed (asserted by other transformations not shown):
---   ApprovedSettlementLine(line)
---   Between(line, party_a, party_b)   -- ordered: party_a is payer side
---   LineAmount(line, amount)
---   not Netted(line)
 
+program settlement_netting
+
+predicate NetSettlement(net_id: Subject, party_a: Subject, party_b: Subject, amount: Decimal)
+predicate SettlementLine(line_id: Subject, net_id: Subject, amount: Decimal)
+predicate ApprovedSettlementLine(line_id: Subject)
+predicate Between(line_id: Subject, party_a: Subject, party_b: Subject)
+predicate LineAmount(line_id: Subject, amount: Decimal)
+predicate Netted(line_id: Subject)
+
+-- Nested quantifiers (inside `implies`, `not`, `and`) need parens.
+-- At the top of an expression, `exists`/`forall` consume everything
+-- after the colon greedily; parens are how you embed them inside
+-- compound booleans.
 
 invariant net_settlement_has_lines:
     NetSettlement(net, _, _, _) implies
-        exists { line | SettlementLine(line, net, _) }
-
+        (exists line: SettlementLine(line, net, _))
 
 invariant net_amount_equals_lines:
     NetSettlement(net, _, _, amount) implies
-        amount == sum { x | SettlementLine(_, net, x) }
-
+        amount = sum(x | SettlementLine(_, net, x))
 
 invariant no_double_netting:
     SettlementLine(line, net, _) implies
-        not exists { other |
-            SettlementLine(line, other, _) and other != net
-        }
+        not (exists other:
+            SettlementLine(line, other, _) and other != net)
 
+-- Transformation: illustrative transformation-body surface (not yet parser-supported).
+-- The locked verb-flavour decisions are in use (admit, bind, actor,
+-- =, sum(...), forall x in xs: body); the indented block structure
+-- matches the doctrine in docs/scope-and-ambition.md. Statement
+-- parsing is the next parser increment.
 
 transformation create_net_settlement(party_a, party_b, lines):
-    require forall { line | line in lines }:
+    require forall line in lines:
         ApprovedSettlementLine(line)
-        and Between(line, party_a, party_b)
-        and not Netted(line)
+            and Between(line, party_a, party_b)
+            and not Netted(line)
 
     let net = new Subject()
 
-    let amount = sum {
-        x | line in lines, LineAmount(line, x)
-    }
+    let amount = sum(x | line in lines and LineAmount(line, x))
 
-    assert NetSettlement(net, party_a, party_b, amount)
+    admit NetSettlement(net, party_a, party_b, amount)
 
     for line in lines:
-        bind_one LineAmount(line, amt)
-        assert SettlementLine(line, net, amt)
-        assert Netted(line)
+        bind LineAmount(line, amt)
+        admit SettlementLine(line, net, amt)
+        admit Netted(line)
 
     emit NetSettlementCreated(net)
