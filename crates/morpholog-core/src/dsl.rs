@@ -41,10 +41,12 @@
 //!
 //! The parser arc is mid-stream: predicates, expressions, and
 //! invariants parse from `.morph` source today; transformations
-//! and derived claims still use this constructor surface. When
-//! the parser arc completes, this module stays as the lower-level
-//! programmatic API the parser is built on (the parser emits IR
-//! via the same constructors).
+//! and derived claims still use this constructor surface. The
+//! `morpholog-surface` parser currently builds IR directly
+//! (`Program`, `PredicateDecl`, `Invariant`) without going through
+//! these helpers - they have different ergonomic audiences (the
+//! parser builds from token streams; this DSL serves hand-authored
+//! Rust IR). Both target the same `morpholog_core::Program` shape.
 //!
 //! Naming conventions:
 //! - Term literals are short: `subj`, `dec`, `date`. They return `Term`,
