@@ -293,16 +293,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the `parse` subcommand. Reads the `.morph` file at the given
-/// path, parses it, and either prints the resulting `Program` as
-/// pretty JSON (on success) or renders each diagnostic to stderr via
-/// ariadne (on failure, exiting non-zero).
-///
-/// `Program` does not derive `Serialize` directly today, so the CLI
-/// emits a small projection (`{"name": ..., "predicates": [...]}`)
-/// rather than the full IR. When the rest of the surface lands and
-/// the IR types pick up `Serialize`, this can collapse to a direct
-/// `print_json(&program)` call.
 /// Run the `check` subcommand. Parse + validate the source file,
 /// surface diagnostics with a uniform shape from either layer.
 ///
@@ -338,6 +328,15 @@ fn check_subcommand(args: SourceFileArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run the `parse` subcommand. Reads the `.morph` file at the given
+/// path, parses it, and either prints the resulting `Program` as
+/// pretty JSON (on success) or renders each diagnostic to stderr via
+/// ariadne (on failure, exiting non-zero).
+///
+/// `Program` does not derive `Serialize` directly today, so the CLI
+/// emits a small projection rather than the full IR. When the IR
+/// types pick up `Serialize`, this can collapse to a direct
+/// `print_json(&program)` call.
 fn parse_subcommand(args: SourceFileArgs) -> anyhow::Result<()> {
     let source = std::fs::read_to_string(&args.file)
         .with_context(|| format!("read source file {}", args.file.display()))?;

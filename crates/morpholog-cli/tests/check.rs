@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use tempfile::NamedTempFile;
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_morpholog")
@@ -14,6 +15,17 @@ fn repo_root() -> PathBuf {
     p.pop();
     p.pop();
     p
+}
+
+/// Write `source` to a uniquely-named temp file and return the
+/// handle. The file is auto-deleted when the handle drops; tests
+/// keep it alive for the duration of the `morpholog` subprocess.
+/// Tempfile-per-test avoids cross-test collisions under parallel
+/// or repeated local runs.
+fn temp_morph(source: &str) -> NamedTempFile {
+    let f = NamedTempFile::new().expect("create temp .morph file");
+    std::fs::write(f.path(), source).expect("write temp .morph file");
+    f
 }
 
 #[test]
@@ -37,18 +49,15 @@ fn check_clean_program_exits_zero_with_no_output() {
 
 #[test]
 fn check_undeclared_predicate_reports_validation_error() {
-    let tmp = std::env::temp_dir().join("morpholog_check_test_undeclared.morph");
-    std::fs::write(
-        &tmp,
+    let tmp = temp_morph(
         "program demo\n\
          predicate Foo(x: Subject)\n\
          invariant test: UndeclaredPred(x)\n",
-    )
-    .unwrap();
+    );
 
     let out = Command::new(bin())
         .arg("check")
-        .arg(&tmp)
+        .arg(tmp.path())
         .output()
         .expect("morpholog check should run");
     assert!(!out.status.success(), "expected non-zero exit");
@@ -57,46 +66,44 @@ fn check_undeclared_predicate_reports_validation_error() {
         stderr.contains("undeclared predicate") && stderr.contains("UndeclaredPred"),
         "expected validation diagnostic; got:\n{stderr}"
     );
-
-    std::fs::remove_file(&tmp).ok();
 }
 
 #[test]
 fn check_arity_mismatch_reports_validation_error() {
-    let tmp = std::env::temp_dir().join("morpholog_check_test_arity.morph");
-    std::fs::write(
-        &tmp,
+    let tmp = temp_morph(
         "program demo\n\
          predicate Foo(x: Subject, y: Subject)\n\
          invariant test: Foo(x)\n",
-    )
-    .unwrap();
+    );
 
-    let out = Command::new(bin()).arg("check").arg(&tmp).output().unwrap();
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("declared with arity 2") && stderr.contains("Foo"),
         "expected arity-mismatch diagnostic; got:\n{stderr}"
     );
-
-    std::fs::remove_file(&tmp).ok();
 }
 
 #[test]
 fn check_parse_failure_renders_ariadne_diagnostic() {
-    let tmp = std::env::temp_dir().join("morpholog_check_test_parse.morph");
-    std::fs::write(&tmp, "predicate Foo(x: Subject)\n").unwrap();
+    let tmp = temp_morph("predicate Foo(x: Subject)\n");
 
-    let out = Command::new(bin()).arg("check").arg(&tmp).output().unwrap();
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("program") || stderr.contains("Error"),
         "expected parse-error rendering; got:\n{stderr}"
     );
-
-    std::fs::remove_file(&tmp).ok();
 }
 
 #[test]
