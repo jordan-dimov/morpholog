@@ -75,4 +75,33 @@ else
         --all-targets --locked -- --test-threads=1
 fi
 
+# ----------------------------------------------------------------
+# `morpholog check` on every .morph file in the tree.
+#
+# The integration test `check_all_worked_examples_are_well_formed`
+# already runs `check` against examples/*/*.morph as part of the
+# morpholog-cli test suite, so this is belt-and-braces - but it
+# catches a stale .morph file even when DATABASE_URL is unset (and
+# the cli test suite is therefore skipped). The `find` picks up
+# any .morph elsewhere in the tree (test fixtures, scratch files)
+# as a side benefit; today that's still just the examples.
+#
+# Uses `cargo run` to avoid depending on `cargo install` having
+# happened; the build is incremental and a no-op once the binary
+# is up to date.
+# ----------------------------------------------------------------
+step 'morpholog check on every .morph file'
+MORPH_FILES=$(find . -name '*.morph' -not -path './target/*')
+if [ -z "$MORPH_FILES" ]; then
+    echo '  No .morph files found; skipping.'
+else
+    # Build once so the inner loop calls the binary directly
+    # (cheaper than re-invoking `cargo run` per file).
+    cargo build --quiet --locked -p morpholog-cli
+    for f in $MORPH_FILES; do
+        echo "  $f"
+        ./target/debug/morpholog check "$f"
+    done
+fi
+
 printf '\n=== All checks passed. ===\n'
