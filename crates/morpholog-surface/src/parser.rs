@@ -368,11 +368,13 @@ where
 
         // sum aggregator: `sum ( <var-name> | <body-expr> )`
         //
-        // Target is restricted to a Var in v0 (per the surface
-        // doctrine in scope-and-ambition.md). Literals, wildcards,
-        // and `actor` in sum-target position are rejected with a
-        // clean diagnostic. Generalised target lands when a worked
-        // example forces it.
+        // Target is restricted to a non-reserved variable in v0.
+        // Literals, wildcards, and `actor` in target position are
+        // rejected with a clean diagnostic. The literal/wildcard
+        // case fails earlier because `ident` only matches
+        // Token::Ident; the `actor` case must be caught here
+        // because the lexer treats it as a plain identifier.
+        // Generalised target lands when a worked example forces it.
         let sum_expr = just(Token::KwSum)
             .ignore_then(
                 ident
@@ -380,10 +382,19 @@ where
                     .then(expression.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .map(|(name, body): (String, Expr)| Expr::Sum {
-                value: Term::Var(name.clone()),
-                binding: name,
-                body: Box::new(body),
+            .validate(|(name, body): (String, Expr), e, emitter| {
+                if name == "actor" {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`actor` cannot be a sum target: `actor` is reserved as the special term that resolves to the proposing transition's actor, not a regular variable",
+                    ));
+                }
+                Expr::Sum {
+                    value: Term::Var(name.clone()),
+                    binding: name,
+                    body: Box::new(body),
+                }
             });
 
         // value lookup: `value <Ident> ( <term-list> )` with
@@ -590,22 +601,86 @@ where
             .ignore_then(ident)
             .then_ignore(just(Token::Colon))
             .then(expression.clone())
-            .map(|(binding, body)| Expr::Exists {
-                binding,
-                body: Box::new(body),
+            .validate(|(binding, body): (String, Expr), e, emitter| {
+                if binding == "actor" {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`actor` cannot be a quantifier binder: `actor` is reserved as the special term that resolves to the proposing transition's actor; references inside the body would resolve to that term, not the bound variable",
+                    ));
+                }
+                Expr::Exists {
+                    binding,
+                    body: Box::new(body),
+                }
             });
+
+        // Restricted source parser for `forall x in <source>:`.
+        //
+        // The kernel's `Expr::Forall { source, .. }` requires the
+        // source to be predicate-shaped so `find_matches` can
+        // produce binding extensions. The general `primary` parser
+        // accepts value-shaped forms (sum, value, decimal/date/
+        // subject literals, wildcards) that would let surface
+        // expressions like `forall x in 5: P(x)` parse and then
+        // produce ill-shaped IR. Per the surface doctrine, the
+        // parser must refuse what the kernel cannot evaluate.
+        //
+        // Accepted unparenthesised sources:
+        //   - bare variable (Ident with no `(`)       -> auto-lift to In
+        //   - claim call (Ident "(" terms ")")         -> use as-is
+        //   - parenthesised expression                 -> use as-is (user took responsibility)
+        //
+        // Value-shaped primaries (decimal/date/subject literals,
+        // wildcards, `sum(...)`, `value Foo(...)`) are NOT in the
+        // unparenthesised source grammar; they surface as parse
+        // errors. The user can still write `(sum(...))` with parens
+        // and the parser will pass it through - that's a choice
+        // they explicitly signalled.
+        let bare_ident_or_call = ident
+            .then(
+                term_list
+                    .clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .or_not(),
+            )
+            .map(|(name, args)| match args {
+                Some(args) => Expr::Claim {
+                    predicate: name,
+                    args,
+                },
+                None => {
+                    if name == "actor" {
+                        Expr::Term(Term::Actor)
+                    } else {
+                        Expr::Term(Term::Var(name))
+                    }
+                }
+            });
+        let parenthesised_source = expression
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+        let forall_source = choice((parenthesised_source, bare_ident_or_call));
 
         let forall_expr = just(Token::KwForall)
             .ignore_then(ident)
             .then_ignore(just(Token::KwIn))
-            .then(primary.clone())
+            .then(forall_source)
             .then_ignore(just(Token::Colon))
             .then(expression.clone())
-            .map(|((binding, source), body)| {
-                // If the source is a bare Term wrapper, lift it to
-                // an In-expression that binds the variable. If it's
-                // already predicate-shaped (Claim, ValueOf, etc.),
-                // use it as-is.
+            .validate(|((binding, source), body): ((String, Expr), Expr), e, emitter| {
+                if binding == "actor" {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`actor` cannot be a quantifier binder: `actor` is reserved as the special term that resolves to the proposing transition's actor; references inside the body would resolve to that term, not the bound variable",
+                    ));
+                }
+                // If the source is a bare Term wrapper (a variable
+                // or `actor`), lift it to an In-expression that
+                // binds the variable. If it's already predicate-
+                // shaped (Claim from a call, or anything the user
+                // wrapped in parens), use it as-is.
                 let source_expr = match source {
                     Expr::Term(t) => Expr::In(Term::Var(binding.clone()), t),
                     other => other,

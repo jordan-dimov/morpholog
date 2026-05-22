@@ -741,3 +741,139 @@ fn in_as_comparator_inside_forall_body() {
     };
     assert!(matches!(*body, Expr::In(_, _)));
 }
+
+// ============================================================
+// PR #58 review tightenings: forall source restriction +
+// strict date literal lexing
+// ============================================================
+
+/// The parser must refuse value-shaped primaries in
+/// unparenthesised `forall` source position, even though they
+/// would parse as `primary` elsewhere. Per the surface doctrine,
+/// the kernel's `Forall.source` is predicate-shaped (calls
+/// `find_matches`), so the parser cannot let surface syntax
+/// produce ill-shaped IR.
+#[test]
+fn forall_source_rejects_decimal_literal() {
+    let errs = parse_expression("forall x in 5: P(x)").expect_err("decimal source should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn forall_source_rejects_date_literal() {
+    let errs = parse_expression("forall x in @2026-05-22: P(x)")
+        .expect_err("date-literal source should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn forall_source_rejects_subject_literal() {
+    let errs = parse_expression("forall x in #BANK_DEBT_SERVICE: P(x)")
+        .expect_err("subject-literal source should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn forall_source_rejects_wildcard() {
+    let errs = parse_expression("forall x in _: P(x)").expect_err("wildcard source should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn forall_source_rejects_value_expression() {
+    let errs = parse_expression("forall x in value Foo(_): P(x)")
+        .expect_err("value-shaped source should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn forall_source_rejects_sum_expression() {
+    let errs = parse_expression("forall x in sum(v | Foo(v)): P(x)")
+        .expect_err("sum-shaped source should fail");
+    assert!(!errs.is_empty());
+}
+
+/// Parenthesised sources pass through as-is. The user signalled
+/// explicit intent by parenthesising. If they put a value-shaped
+/// expression inside parens, the kernel will reject it at runtime;
+/// the parser does not second-guess.
+#[test]
+fn forall_source_accepts_parenthesised_predicate_form() {
+    let got = parse_expression("forall x in (x in lines): P(x)").unwrap();
+    let Expr::Forall {
+        binding, source, ..
+    } = got
+    else {
+        panic!("expected Forall");
+    };
+    assert_eq!(binding, "x");
+    // Source was an explicit `In(_, _)` inside parens; passes
+    // through without auto-lift.
+    assert!(matches!(*source, Expr::In(_, _)));
+}
+
+/// Date-literal lexer is strict about 4-2-2 digit shape. Wrong
+/// digit counts surface as lex errors at parse time, not at
+/// runtime when the date is interpreted.
+#[test]
+fn date_literal_requires_exactly_yyyy_mm_dd() {
+    // Each of these has the wrong digit count somewhere.
+    for source in [
+        "@2026-5-22",   // month = 1 digit
+        "@2026-05-2",   // day = 1 digit
+        "@26-05-22",    // year = 2 digits
+        "@20260-05-22", // year = 5 digits
+        "@2026-005-22", // month = 3 digits
+    ] {
+        let errs = parse_expression(source)
+            .expect_err(&format!("expected `{source}` to fail strict date lexing"));
+        assert!(!errs.is_empty(), "expected diagnostics for `{source}`");
+    }
+}
+
+#[test]
+fn date_literal_strict_shape_accepts_valid() {
+    // Sanity: the strict shape still accepts well-formed dates.
+    for source in ["@2026-05-22", "@1999-01-01", "@9999-12-31"] {
+        let got =
+            parse_expression(source).unwrap_or_else(|_| panic!("expected `{source}` to parse"));
+        assert!(matches!(got, Expr::Term(Term::Literal(Value::Date(_)))));
+    }
+}
+
+/// `actor` is reserved as the special term that resolves to the
+/// proposing transition's actor (`Term::Actor`). Using it as a
+/// binder name in `exists`, `forall`, or as a `sum` target would
+/// silently change its meaning - references inside the body would
+/// either always resolve to `Term::Actor` or to a regular
+/// `Term::Var("actor")` depending on parse path. The parser
+/// refuses these cases with clear diagnostics.
+#[test]
+fn exists_rejects_actor_as_binder() {
+    let errs = parse_expression("exists actor: Foo(actor)")
+        .expect_err("actor as exists binder should fail");
+    assert!(
+        errs.iter().any(|d| d.message.contains("`actor`")),
+        "expected actor-binder diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn forall_rejects_actor_as_binder() {
+    let errs = parse_expression("forall actor in actors: Foo(actor)")
+        .expect_err("actor as forall binder should fail");
+    assert!(
+        errs.iter().any(|d| d.message.contains("`actor`")),
+        "expected actor-binder diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn sum_rejects_actor_as_target() {
+    let errs = parse_expression("sum(actor | MayApprove(actor, _))")
+        .expect_err("actor as sum target should fail");
+    assert!(
+        errs.iter().any(|d| d.message.contains("`actor`")),
+        "expected actor-as-sum-target diagnostic; got: {errs:?}"
+    );
+}

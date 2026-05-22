@@ -263,17 +263,26 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
 
     // ---- Date literal: @YYYY-MM-DD ----
     //
-    // Lex shape: `@` followed by exactly digits-dash-digits-dash-
-    // digits. Semantic validation (real calendar dates) happens
-    // at runtime via `jiff::civil::Date`. The body of the literal
-    // is captured without the leading `@`.
+    // Lex shape: `@` followed by exactly 4 digits, dash, exactly
+    // 2 digits, dash, exactly 2 digits. Authors get immediate
+    // lexer feedback for `@2026-5-22` (wrong digit count) rather
+    // than discovering it at runtime. Semantic validation (real
+    // calendar dates - e.g. `@2026-13-40` is not a valid date)
+    // happens at runtime via `jiff::civil::Date`. The body of
+    // the literal is captured without the leading `@`.
+    let digit_run = |n: usize| {
+        any()
+            .filter(|c: &char| c.is_ascii_digit())
+            .repeated()
+            .exactly(n)
+    };
     let date_lit = just('@')
         .ignore_then(
-            text::digits(10)
+            digit_run(4)
                 .then(just('-'))
-                .then(text::digits(10))
+                .then(digit_run(2))
                 .then(just('-'))
-                .then(text::digits(10))
+                .then(digit_run(2))
                 .to_slice(),
         )
         .map(|s: &str| Token::DateLit(s.to_string()));
