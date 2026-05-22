@@ -146,10 +146,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         for k in &d.keys {
             if seen_keys.contains_key(k.as_str()) {
                 diagnostics.push(Diagnostic::error(
-                    format!(
-                        "duplicate key `{}` in derived-claim `{}`",
-                        k, d.predicate
-                    ),
+                    format!("duplicate key `{}` in derived-claim `{}`", k, d.predicate),
                     span.clone(),
                 ));
             } else {

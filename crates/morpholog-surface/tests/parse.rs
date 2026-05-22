@@ -934,7 +934,8 @@ fn duplicate_value_names_in_derived_are_rejected() {
                   \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n";
     let errs = parse_program(source).expect_err("duplicate values should fail");
     assert!(
-        errs.iter().any(|d| d.message.contains("duplicate value name")),
+        errs.iter()
+            .any(|d| d.message.contains("duplicate value name")),
         "expected duplicate-value-name diagnostic; got: {errs:?}"
     );
 }
