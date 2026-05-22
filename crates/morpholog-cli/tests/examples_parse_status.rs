@@ -3,11 +3,13 @@
 //!
 //! For each file in `examples/*/*.morph`, this test runs the
 //! `morpholog` binary and pins the current parse outcome. After
-//! P3b2 (state-mutating statements + iteration), the situation is:
+//! P3b2 (state-mutating statements + iteration):
 //!
-//! - Four examples parse fully end-to-end.
-//! - Two examples stop at `derived` (the only remaining P3c
-//!   keyword that hasn't landed).
+//! - The settlement-netting, verified-revenue, approval-controls,
+//!   and clinical-trial-enrolment examples parse fully end-to-end.
+//! - The double-entry-ledger and insurance-claim-settlement
+//!   examples stop at `derived` (the only remaining P3c keyword
+//!   that hasn't landed); both declare derived claims.
 //!
 //! When P3c lands, the `derived`-stopping tests get updated to
 //! expect full success and this file becomes a steady-state

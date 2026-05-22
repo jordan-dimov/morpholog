@@ -114,11 +114,33 @@ where
             .map(|(predicate, args)| Stmt::BindOne(Expr::Claim { predicate, args }));
 
         // admit <claim_pattern>
+        //
+        // Wildcards are rejected at parse time. The kernel emits
+        // "wildcard not allowed in assert" at runtime for any
+        // wildcard arg; the surface refuses to produce IR the
+        // kernel will refuse to evaluate, per the doctrine of
+        // "no surface form without a meaningful IR mapping". The
+        // `validate` here surfaces the diagnostic with the
+        // statement's span.
         let admit_stmt = just(Token::KwAdmit)
             .ignore_then(claim_pattern.clone())
-            .map(|(predicate, args)| Stmt::Assert(Claim { predicate, args }));
+            .validate(|(predicate, args), e, emitter| {
+                let span: SimpleSpan = e.span();
+                if args.iter().any(|t| matches!(t, Term::Wildcard)) {
+                    emitter.emit(Rich::custom(
+                        span,
+                        "wildcard `_` is not allowed in `admit`: admitting a claim requires every argument to be concrete; the kernel rejects wildcard-admits as `wildcard not allowed in assert`",
+                    ));
+                }
+                Stmt::Assert(Claim { predicate, args })
+            });
 
         // retract <claim_pattern>
+        //
+        // Wildcards ARE meaningful in retract: they widen the
+        // pattern (e.g. `retract Foo(x, _)` retracts every Foo
+        // claim whose first arg matches x, regardless of the
+        // second). No surface-level wildcard restriction.
         let retract_stmt = just(Token::KwRetract)
             .ignore_then(claim_pattern.clone())
             .map(|(predicate, args)| Stmt::Retract { predicate, args });
@@ -129,9 +151,22 @@ where
         // shape with `Claim`; the field is named `name` rather
         // than `predicate` in the IR (intents are not claims even
         // though they look syntactically alike).
+        //
+        // Wildcards are rejected at parse time, same reasoning
+        // as `admit`: the kernel emits "wildcard not allowed in
+        // emit" for any wildcard arg in an intent.
         let emit_stmt = just(Token::KwEmit)
             .ignore_then(claim_pattern.clone())
-            .map(|(name, args)| Stmt::Emit(Intent { name, args }));
+            .validate(|(name, args), e, emitter| {
+                let span: SimpleSpan = e.span();
+                if args.iter().any(|t| matches!(t, Term::Wildcard)) {
+                    emitter.emit(Rich::custom(
+                        span,
+                        "wildcard `_` is not allowed in `emit`: an intent's arguments must all be concrete values; the kernel rejects wildcard-emits as `wildcard not allowed in emit`",
+                    ));
+                }
+                Stmt::Emit(Intent { name, args })
+            });
 
         // let <name> = <rhs>
         //

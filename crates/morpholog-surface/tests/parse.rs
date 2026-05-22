@@ -750,3 +750,63 @@ fn top_level_for_is_rejected() {
     let errs = parse_program(source).expect_err("top-level for should fail");
     assert!(!errs.is_empty());
 }
+
+// PR #63 review tightening: admit/emit reject wildcards at parse
+// time because the kernel rejects them at runtime; the parser
+// refuses to produce IR the kernel will refuse to evaluate.
+
+#[test]
+fn admit_rejects_wildcard_arg() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20admit Foo(x, _)\n";
+    let errs = parse_program(source).expect_err("admit with wildcard should fail");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("wildcard") && d.message.contains("`admit`")),
+        "expected wildcard-in-admit diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn emit_rejects_wildcard_arg() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20emit Notify(_)\n";
+    let errs = parse_program(source).expect_err("emit with wildcard should fail");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("wildcard") && d.message.contains("`emit`")),
+        "expected wildcard-in-emit diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn retract_still_accepts_wildcard_arg() {
+    // Wildcards are MEANINGFUL in retract (pattern-based
+    // retraction). The surface preserves that.
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20retract Foo(x, _)\n";
+    let program = parse_program(source).expect("retract with wildcard should parse");
+    use morpholog_core::{Stmt, Term};
+    let Stmt::Retract { args, .. } = &program.transformations[0].body[0] else {
+        panic!("expected Stmt::Retract");
+    };
+    assert!(matches!(args[1], Term::Wildcard));
+}
+
+#[test]
+fn bind_still_accepts_wildcard_arg() {
+    // Wildcards are meaningful in bind (matching any value at
+    // that position while extracting other positions). Preserved.
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20bind Foo(x, _, y)\n";
+    let program = parse_program(source).expect("bind with wildcard should parse");
+    use morpholog_core::Stmt;
+    assert!(matches!(
+        program.transformations[0].body[0],
+        Stmt::BindOne(_)
+    ));
+}
