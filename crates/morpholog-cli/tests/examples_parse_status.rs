@@ -1,25 +1,7 @@
 //! Status-locking integration tests for the worked-example
-//! `.morph` files.
-//!
-//! For each file in `examples/*/*.morph`, this test runs the
-//! `morpholog` binary and pins the current parse outcome. After
-//! the state-mutating-statement increment:
-//!
-//! - The settlement-netting, verified-revenue, approval-controls,
-//!   and clinical-trial-enrolment examples parse fully end-to-end.
-//! - The double-entry-ledger and insurance-claim-settlement
-//!   examples stop at `derived` (the only remaining the derived-claims increment keyword
-//!   that hasn't landed); both declare derived claims.
-//!
-//! When the derived-claims increment lands, the `derived`-stopping tests get updated to
-//! expect full success and this file becomes a steady-state
-//! "all examples parse" smoke harness.
-//!
-//! The point of the test is not to assert specific stop tokens
-//! forever; it is to make sure the parser doesn't *regress* a
-//! formerly-passing portion of an example silently. If a future
-//! change made one of these examples fail earlier than recorded
-//! here, this test would fail loudly.
+//! `.morph` files. Every example parses end-to-end via
+//! `morpholog parse`; this file is the steady-state smoke
+//! harness that fails loudly if any example regresses.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -37,67 +19,46 @@ fn repo_root() -> PathBuf {
     p
 }
 
-fn parse_file(rel: &str) -> (bool, String) {
+fn assert_parses(rel: &str) {
     let path = repo_root().join(rel);
     let out = Command::new(bin())
         .arg("parse")
         .arg(&path)
         .output()
         .unwrap_or_else(|e| panic!("failed to run morpholog parse {}: {e}", path.display()));
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    (out.status.success(), stderr)
+    assert!(
+        out.status.success(),
+        "expected full parse for {rel}; got stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+    );
 }
-
-// ============================================================
-// Examples that parse end-to-end once the state-mutating increment lands.
-// ============================================================
 
 #[test]
 fn settlement_netting_parses_fully() {
-    let (ok, stderr) = parse_file("examples/01_settlement_netting/netting.morph");
-    assert!(ok, "expected full parse; stderr:\n{stderr}");
+    assert_parses("examples/01_settlement_netting/netting.morph");
 }
 
 #[test]
 fn verified_revenue_parses_fully() {
-    let (ok, stderr) = parse_file("examples/02_verified_revenue/verified_revenue.morph");
-    assert!(ok, "expected full parse; stderr:\n{stderr}");
+    assert_parses("examples/02_verified_revenue/verified_revenue.morph");
+}
+
+#[test]
+fn double_entry_ledger_parses_fully() {
+    assert_parses("examples/03_double_entry_ledger/ledger.morph");
 }
 
 #[test]
 fn approval_controls_parses_fully() {
-    let (ok, stderr) = parse_file("examples/04_approval_controls/approval_controls.morph");
-    assert!(ok, "expected full parse; stderr:\n{stderr}");
+    assert_parses("examples/04_approval_controls/approval_controls.morph");
+}
+
+#[test]
+fn insurance_claim_settlement_parses_fully() {
+    assert_parses("examples/05_insurance_claim_settlement/insurance_claim_settlement.morph");
 }
 
 #[test]
 fn clinical_trial_enrolment_parses_fully() {
-    let (ok, stderr) =
-        parse_file("examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph");
-    assert!(ok, "expected full parse; stderr:\n{stderr}");
-}
-
-// ============================================================
-// Examples that still stop at `derived` (the derived-claims increment territory).
-// ============================================================
-
-#[test]
-fn double_entry_ledger_stops_at_derived() {
-    let (ok, stderr) = parse_file("examples/03_double_entry_ledger/ledger.morph");
-    assert!(!ok, "expected partial-parse failure; got success");
-    assert!(
-        stderr.contains("`derived`"),
-        "expected `derived` keyword to be the stopping point; got stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn insurance_claim_settlement_stops_at_derived() {
-    let (ok, stderr) =
-        parse_file("examples/05_insurance_claim_settlement/insurance_claim_settlement.morph");
-    assert!(!ok, "expected partial-parse failure; got success");
-    assert!(
-        stderr.contains("`derived`"),
-        "expected `derived` keyword to be the stopping point; got stderr:\n{stderr}"
-    );
+    assert_parses("examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph");
 }

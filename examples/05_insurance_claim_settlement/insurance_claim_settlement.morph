@@ -106,10 +106,9 @@ transformation authorise_settlement(claim_id, settlement_id, amount):
     emit ClaimPaymentRequested(settlement_id, amount, actor)
 
 
--- Derived claim (illustrative derived-claim surface; not yet parser-supported).
--- Enumerated on demand via `morpholog inspect derived
--- insurance_claim_settlement PolicyLimitUsage`. As-of replay
--- reconstructs the usage as it stood at any prior transition.
+-- Derived claim. Enumerated on demand via
+-- `morpholog inspect derived insurance_claim_settlement PolicyLimitUsage`.
+-- As-of replay reconstructs usage as it stood at any prior transition.
 derived PolicyLimitUsage(policy_id):
-    used = sum(paid | SettlementPaid(policy_id, _, _, paid))
     over SettlementPaid(policy_id, _, _, _)
+    value used = sum(paid | SettlementPaid(policy_id, _, _, paid))

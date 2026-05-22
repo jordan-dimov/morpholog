@@ -3,7 +3,9 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Invariant, PredicateArgDecl, PredicateDecl, Program, Transformation};
+use morpholog_core::{
+    DerivedClaim, DerivedValue, Invariant, PredicateArgDecl, PredicateDecl, Program, Transformation,
+};
 use std::collections::HashMap;
 
 use crate::diagnostics::{Diagnostic, Span};
@@ -122,6 +124,57 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
             txn_by_name.insert(txn.name.as_str(), span);
         }
     }
+    let mut derived_by_name: HashMap<&str, &Span> = HashMap::new();
+    for (d, span) in &raw.derived_claims {
+        if let Some(first_span) = derived_by_name.get(d.predicate.as_str()) {
+            diagnostics.push(
+                Diagnostic::error(
+                    format!("duplicate derived-claim declaration `{}`", d.predicate),
+                    span.clone(),
+                )
+                .with_secondary((*first_span).clone(), "previously declared here"),
+            );
+        } else {
+            derived_by_name.insert(d.predicate.as_str(), span);
+        }
+
+        // Duplicate key names inside a single derived declaration.
+        // The IR's `keys: Vec<String>` is positional; two same-named
+        // keys would shadow each other in the binding context and
+        // produce silently wrong enumeration.
+        let mut seen_keys: HashMap<&str, ()> = HashMap::new();
+        for k in &d.keys {
+            if seen_keys.contains_key(k.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!("duplicate key `{}` in derived-claim `{}`", k, d.predicate),
+                    span.clone(),
+                ));
+            } else {
+                seen_keys.insert(k.as_str(), ());
+            }
+        }
+
+        // Duplicate value names inside a single derived declaration.
+        // The IR's `values: Vec<DerivedValue>` is positional; two
+        // same-named values would emit two output fields with the
+        // same documentary name (the kernel doesn't enforce
+        // uniqueness internally, but a derived claim with two `v`
+        // outputs is a programmer error).
+        let mut seen_values: HashMap<&str, ()> = HashMap::new();
+        for v in &d.values {
+            if seen_values.contains_key(v.name.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "duplicate value name `{}` in derived-claim `{}`",
+                        v.name, d.predicate
+                    ),
+                    span.clone(),
+                ));
+            } else {
+                seen_values.insert(v.name.as_str(), ());
+            }
+        }
+    }
 
     if !diagnostics.is_empty() {
         return Err(diagnostics);
@@ -132,7 +185,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
         invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
         transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
-        derived_claims: Vec::new(),
+        derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
     })
 }
 
@@ -146,6 +199,7 @@ struct RawProgram {
     predicates: Vec<(PredicateDecl, Span)>,
     invariants: Vec<(Invariant, Span)>,
     transformations: Vec<(Transformation, Span)>,
+    derived_claims: Vec<(DerivedClaim, Span)>,
 }
 
 /// One top-level declaration in a programme body. Predicates,
@@ -158,6 +212,7 @@ enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
     Invariant(Invariant, Span),
     Transformation(Transformation, Span),
+    Derived(DerivedClaim, Span),
 }
 
 fn program_parser<'a, I>() -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
@@ -259,13 +314,59 @@ where
             )
         });
 
-    // top_level_decl ::= predicate_decl | invariant_decl | transformation_decl
+    // derived_decl ::= "derived" Ident "(" key_list ")" ":" Indent over_clause value_clause+ Dedent
+    //   over_clause  ::= "over" expression
+    //   value_clause ::= "value" Ident "=" expression
+    //   key_list     ::= Ident ("," Ident)* ","?
     //
-    // Free interleaving: a programme may mix any of the three in
+    // Each `value` clause becomes a `DerivedValue { name, expr }`.
+    // The IR evaluates each value expression against the per-key
+    // bindings only; values do not see one another. Surface
+    // mirrors that (no `let` for intermediates).
+    let key_list = ident
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<String>>();
+    let over_clause = just(Token::KwOver).ignore_then(expression_parser());
+    let value_clause = just(Token::KwValue)
+        .ignore_then(ident)
+        .then_ignore(just(Token::Eq))
+        .then(expression_parser())
+        .map(|(name, expr)| DerivedValue { name, expr });
+    let derived_body = just(Token::Indent)
+        .ignore_then(over_clause)
+        .then(value_clause.repeated().at_least(1).collect::<Vec<_>>())
+        .then_ignore(just(Token::Dedent));
+    let derived_decl = just(Token::KwDerived)
+        .ignore_then(ident)
+        .then(key_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then_ignore(just(Token::Colon))
+        .then(derived_body)
+        .map_with(|((predicate, keys), (domain, values)), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Derived(
+                DerivedClaim {
+                    predicate,
+                    keys,
+                    values,
+                    domain,
+                },
+                span.start()..span.end(),
+            )
+        });
+
+    // top_level_decl ::= predicate_decl | invariant_decl | transformation_decl | derived_decl
+    //
+    // Free interleaving: a programme may mix any of the four in
     // any order. The parser collects them into a single sequence
     // and partitions on the post-pass (source order preserved
     // within each category).
-    let top_level_decl = choice((predicate_decl, invariant_decl, transformation_decl));
+    let top_level_decl = choice((
+        predicate_decl,
+        invariant_decl,
+        transformation_decl,
+        derived_decl,
+    ));
 
     // Sync at the next top-level keyword on failure; skip the rest
     // of the malformed declaration but keep the declarations on
@@ -276,6 +377,7 @@ where
             .ignored()
             .or(just(Token::KwInvariant).ignored())
             .or(just(Token::KwTransformation).ignored())
+            .or(just(Token::KwDerived).ignored())
             .or(end()),
     ));
 
@@ -289,11 +391,13 @@ where
             let mut predicates = Vec::new();
             let mut invariants = Vec::new();
             let mut transformations = Vec::new();
+            let mut derived_claims = Vec::new();
             for d in decls {
                 match d {
                     TopLevelDecl::Predicate(p, s) => predicates.push((p, s)),
                     TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
                     TopLevelDecl::Transformation(t, s) => transformations.push((t, s)),
+                    TopLevelDecl::Derived(d, s) => derived_claims.push((d, s)),
                 }
             }
             RawProgram {
@@ -301,6 +405,7 @@ where
                 predicates,
                 invariants,
                 transformations,
+                derived_claims,
             }
         })
 }

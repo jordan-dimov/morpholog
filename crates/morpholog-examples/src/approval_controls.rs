@@ -15,12 +15,12 @@ use morpholog_core::dsl::*;
 pub fn grant_approval_authority() -> Transformation {
     Transformation {
         name: "grant_approval_authority".to_string(),
-        parameters: params(&["actor", "doc_type"]),
+        parameters: params(&["principal", "doc_type"]),
         body: vec![
-            assert_("MayApprove", vec![var("actor"), var("doc_type")]),
+            assert_("MayApprove", vec![var("principal"), var("doc_type")]),
             emit(
                 "ApprovalAuthorityGranted",
-                vec![var("actor"), var("doc_type")],
+                vec![var("principal"), var("doc_type")],
             ),
         ],
     }
@@ -29,13 +29,13 @@ pub fn grant_approval_authority() -> Transformation {
 pub fn revoke_approval_authority() -> Transformation {
     Transformation {
         name: "revoke_approval_authority".to_string(),
-        parameters: params(&["actor", "doc_type"]),
+        parameters: params(&["principal", "doc_type"]),
         body: vec![
-            require(claim("MayApprove", vec![var("actor"), var("doc_type")])),
-            retract("MayApprove", vec![var("actor"), var("doc_type")]),
+            require(claim("MayApprove", vec![var("principal"), var("doc_type")])),
+            retract("MayApprove", vec![var("principal"), var("doc_type")]),
             emit(
                 "ApprovalAuthorityRevoked",
-                vec![var("actor"), var("doc_type")],
+                vec![var("principal"), var("doc_type")],
             ),
         ],
     }
@@ -62,15 +62,15 @@ pub fn approve_document() -> Transformation {
 pub fn grant_approval_limit() -> Transformation {
     Transformation {
         name: "grant_approval_limit".to_string(),
-        parameters: params(&["actor", "doc_type", "limit"]),
+        parameters: params(&["principal", "doc_type", "limit"]),
         body: vec![
             assert_(
                 "ApprovalLimit",
-                vec![var("actor"), var("doc_type"), var("limit")],
+                vec![var("principal"), var("doc_type"), var("limit")],
             ),
             emit(
                 "ApprovalLimitGranted",
-                vec![var("actor"), var("doc_type"), var("limit")],
+                vec![var("principal"), var("doc_type"), var("limit")],
             ),
         ],
     }
@@ -79,19 +79,19 @@ pub fn grant_approval_limit() -> Transformation {
 pub fn revoke_approval_limit() -> Transformation {
     Transformation {
         name: "revoke_approval_limit".to_string(),
-        parameters: params(&["actor", "doc_type", "limit"]),
+        parameters: params(&["principal", "doc_type", "limit"]),
         body: vec![
             require(claim(
                 "ApprovalLimit",
-                vec![var("actor"), var("doc_type"), var("limit")],
+                vec![var("principal"), var("doc_type"), var("limit")],
             )),
             retract(
                 "ApprovalLimit",
-                vec![var("actor"), var("doc_type"), var("limit")],
+                vec![var("principal"), var("doc_type"), var("limit")],
             ),
             emit(
                 "ApprovalLimitRevoked",
-                vec![var("actor"), var("doc_type"), var("limit")],
+                vec![var("principal"), var("doc_type"), var("limit")],
             ),
         ],
     }
