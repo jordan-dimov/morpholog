@@ -658,3 +658,47 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 - A `failure_shape` enum field for structured failure metadata.
 
 **Pattern note:** PR-G is the last kernel-diagnostic work before the parser. The parser arc that follows commits to surface-syntax decisions; the kernel's diagnostic surface is now what `.morph` users will see when their programmes reject.
+
+### Parser P1: predicate declarations only
+
+**Forced by:** the parser arc starting. Programmes are Rust IR today via the public `dsl` module; the natural reader of a Morpholog programme is a domain expert, not a Rust developer. PR P1 commits the surface foundation - new crate, lexer, ariadne diagnostics pipeline, CLI entry point - by recognising the smallest meaningful production: the `program` header plus zero or more `predicate` declarations. Every subsequent parser PR builds on the decisions this one bakes in; nothing else lands until those are stable.
+
+**The shape:**
+
+- New crate `morpholog-surface`. Name chosen broader than "parser" because the same crate will eventually host any canonical formatter, source-mapping helpers, and LSP-shaped tooling - a crate split per kind of source-aware concern is the proliferation we'd rather avoid.
+- `chumsky` 0.10 for lex + parse. `ariadne` 0.5 for diagnostic rendering. Both pulled into the workspace `Cargo.toml` so subsequent parser PRs use the same versions.
+- Two-phase: `lex` produces `Vec<(Token, Span)>`; `parse_program` runs the token stream through a chumsky parser and produces `morpholog_core::Program` (with `predicates` populated, every other vector empty).
+- `Diagnostic { severity, message, primary: Span, secondary: Vec<(Span, String)> }` is the surface-side error type. Carries byte-offset spans; renders via ariadne when a caller wants line/column/caret output. CLI uses the rendered output; tests use the structured fields.
+- Parser-side duplicate detection: each `predicate` declaration carries its span through the intermediate `RawProgram`; a post-pass produces a diagnostic with both source spans when the same name reoccurs. `Program::validate` also detects duplicates but loses span context; this PR's parser surfaces them with both line numbers.
+- Error recovery: humble. The parser uses `recover_with(skip_then_retry_until(any, predicate_kw_or_end))` to skip past a malformed predicate declaration and continue. A file with two broken declarations yields two diagnostics in one run.
+- CLI: new `morpholog parse <file.morph>` subcommand. Success prints a JSON projection of `Program` (just `name` and `predicates` - the rest of `Program` doesn't derive `Serialize` and would be empty regardless). Failure renders each diagnostic to stderr via ariadne and exits 1.
+
+**Surface decisions this PR commits.** These will be load-bearing for every subsequent parser PR; documenting them here so the rationale survives even if individual sources move:
+
+- File extension: `.morph`. Locked decision per `docs/scope-and-ambition.md`.
+- First statement: `program <name>` header is mandatory. A file without one fails parse.
+- Identifier syntax: `[a-zA-Z_][a-zA-Z0-9_]*`. Standard.
+- Kind keywords: PascalCase exact match (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). Recognised at lexer level so the parser can match against `Token::Kind(_)` directly; unknown kinds (e.g. `Money`) fall through to `Token::Ident` and surface as parse errors where a kind is expected.
+- Comments: `//` line only, no `/* */`. Block comments can land when forced.
+- Trailing commas in argument lists: allowed.
+- Newlines: insignificant within declarations. Declarations are bounded by their own syntax (parens around arg lists, the `predicate` keyword starting each one).
+- One file = one programme. No module system; no `use` statements. Composition is by Rust-level registry today; whether a multi-file `.morph` story is needed is a question for a later PR.
+
+**What deliberately did NOT land:**
+
+- Invariants, transformations, derived claims. Everything beyond predicate declarations is out of scope.
+- Expression syntax (`And`, `Le`, `Exists`, `Forall`, arithmetic, etc.). Per ChatGPT's PR-P1 review, expressions are big enough to deserve their own PR (P2: expressions parsed in isolation, behind tests, before they're attached to invariant or transformation bodies).
+- Statement syntax (`require`, `bind_one`, `let`, `for`, `assert`, etc.).
+- A `morpholog run <file.morph>` command. The parser produces IR; running it would require parser coverage of the full surface, which isn't here yet.
+- Block comments.
+- `format_program` round-trip test as a regression anchor. `format_program` emits invariants and transformations too; round-tripping its output through the P1 parser would either fail (those productions aren't parsed) or force a `format_predicate_decls`-only helper that isn't otherwise needed. Tests use hand-crafted `.morph` text instead.
+- Source-position propagation into kernel errors. Kernel errors are runtime-shaped; spans live entirely inside `morpholog-surface`.
+
+**Considered and rejected:**
+
+- *`morpholog-parser` as the crate name.* `morpholog-surface` accommodates the formatter, source-mapping helpers, and LSP support that will eventually arrive without a crate split. The parser is one inhabitant of the surface concept.
+- *`morpholog inspect parse` as the CLI shape.* `inspect` is about durable state; parse is source-to-IR compilation, fundamentally different. Top-level `morpholog parse` is the correct verb.
+- *Kernel-side duplicate detection only.* `Program::validate` already catches duplicates but loses span context. Parser-side detection produces span-rich diagnostics; the kernel validator remains a structural backstop.
+- *Fail-fast error reporting.* Collecting multiple diagnostics in one parse run is materially more useful when an author is migrating Rust IR to `.morph` syntax for the first time. `chumsky`'s `recover_with` makes the recovery cheap.
+
+**Next:** **PR P2** parses expressions in isolation - the full operator set the kernel supports (`And`, `Not`, `Implies`, `Exists`, `Forall`, `Eq`, `Le`, `DateLe`, `Neq`, `Sub`, `Add`, `Sum`, `In`, `ValueOf`, `Term`), with precedence and span handling pinned by tests, before they're embedded in invariant or transformation bodies. The expression parser is the hardest single piece of the surface arc; isolating it lets the precedence/span/diagnostic decisions land without programme-level parsing hiding them.
