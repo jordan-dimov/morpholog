@@ -72,7 +72,8 @@ pub fn parse_expression(source: &str) -> Result<Expr, Vec<Diagnostic>> {
 ///
 /// `recursive` lets `primary` reference `expression` so parenthesised
 /// sub-expressions can nest arbitrarily.
-pub(super) fn expression_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>>
+pub(super) fn expression_parser<'a, I>()
+-> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {

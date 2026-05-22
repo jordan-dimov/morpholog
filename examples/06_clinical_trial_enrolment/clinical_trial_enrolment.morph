@@ -173,7 +173,12 @@ transformation randomise_participant(
     protocol_version,
     randomised_on
 ):
-    require Trial(trial_id)
+    -- Long multi-line require body wrapped in parens: parens
+    -- disable the layout pass within them, so the continuation
+    -- lines can be indented freely without emitting virtual Indent
+    -- tokens that would interrupt expression parsing.
+    require (
+        Trial(trial_id)
         and ProtocolVersion(trial_id, protocol_version, protocol_from, protocol_to)
         and protocol_from <= randomised_on
         and randomised_on <= protocol_to
@@ -182,40 +187,17 @@ transformation randomise_participant(
         and consent_from <= randomised_on
         and randomised_on <= consent_to
         and ConsentFormApprovedBy(consent_form_version, _, _)
-        and InformedConsentObtained(
-                participant_id,
-                trial_id,
-                consent_form_version,
-                consented_on,
-                _
-            )
+        and InformedConsentObtained(participant_id, trial_id, consent_form_version, consented_on, _)
         and consented_on <= randomised_on
-        and DelegatedInvestigator(
-                actor,
-                trial_id,
-                #randomise_participant,
-                del_from,
-                del_to
-            )
+        and DelegatedInvestigator(actor, trial_id, #randomise_participant, del_from, del_to)
         and del_from <= randomised_on
         and randomised_on <= del_to
         and EligibilityCriterion(protocol_version, criterion_id, required_result)
-        and EligibilityAssessment(
-                participant_id,
-                criterion_id,
-                required_result,
-                assessed_on,
-                expires_on
-            )
+        and EligibilityAssessment(participant_id, criterion_id, required_result, assessed_on, expires_on)
         and assessed_on <= randomised_on
         and randomised_on <= expires_on
         and not ImportantProtocolDeviationOpen(participant_id, trial_id, _)
-
-    admit ParticipantRandomised(
-        participant_id,
-        trial_id,
-        protocol_version,
-        randomised_on,
-        actor
     )
+
+    admit ParticipantRandomised(participant_id, trial_id, protocol_version, randomised_on, actor)
     emit ParticipantRandomised(participant_id)

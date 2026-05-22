@@ -912,3 +912,47 @@ Parameters are identifiers only; no kinds. The IR's `Transformation { parameters
 **Pattern note:** P3b1 is the first parser PR where the surface introduces a *layout* concept the kernel doesn't model. The kernel's IR has flat `Vec<Stmt>` for transformation bodies - no nesting, no blocks. The surface adds indentation to make multi-statement bodies readable; the layout pass + statement parser collapse it back to a flat IR. This is the doctrine in action - the surface adds *organisation* (visual structure) that the kernel doesn't need; the IR stays minimal.
 
 **Next:** **PR P3b2** adds the four state-mutating + iteration statements (`admit`, `retract`, `emit`, `for x in coll: <indented body>`). With those, `.morph` becomes operationally complete for v0 transformations - the existing worked examples can parse end-to-end. **PR P3c** then completes the parser arc with derived claims and the `format_program -> parse_program` round-trip property test.
+
+### Parser P3b2: state-mutating statements + iteration
+
+**Forced by:** the parser arc finishing the transformation surface. P3b1 committed the layout pipeline and the gate statements (`require`, `bind`, `let`); P3b2 completes transformation bodies with the four reserved-but-not-yet-parseable keywords from P3b1: `admit`, `retract`, `emit`, `for`. After P3b2, the worked examples either parse end-to-end or stop only at `derived` (P3c territory).
+
+**Surface verb / IR mapping (the shared shape).** All four new verbs operate on a claim-pattern shape: `Verb Name(args)`. The existing `claim_pattern` helper from `parser/stmt.rs` (returning a `(String, Vec<Term>)` tuple after a small refactor) is reused for all four; each verb wraps the tuple in its own IR shape:
+
+| Surface | IR wrapper |
+|---|---|
+| `admit Foo(args)` | `Stmt::Assert(Claim { predicate, args })` |
+| `retract Foo(args)` | `Stmt::Retract { predicate, args }` |
+| `emit Foo(args)` | `Stmt::Emit(Intent { name, args })` |
+| `bind Foo(args)` | `Stmt::BindOne(Expr::Claim { predicate, args })` (unchanged from P3b1) |
+
+Note `Intent`'s field is `name`, not `predicate`; intents are not claims even though they share the parsed shape. The parser maps the same tuple to the right field name.
+
+**Recursive statement parser.** `for x in coll: body` introduces nested layout: a new Indent inside the transformation's outer Indent. The statement parser is therefore restructured with chumsky's `recursive` combinator so `for_stmt` can reference the full statement parser for its body. The `for` collection is parsed as a full expression (matches the IR's `Stmt::For.collection: Expr`); whatever it evaluates to must be an `EvalValue::Collection` at runtime, but the surface accepts any expression - same flexibility as `forall`'s source.
+
+**The `expression_parser() + Clone` change.** Making the statement parser recursive required `expression_parser()` to return a `Clone`-able parser (so the closure could capture a single instance and clone it for each statement form that uses expressions). Added `+ Clone` to the function's return-type bounds; this is a no-op at runtime (chumsky parsers are clonable when their sub-parts are) but the bound has to be declared so the compiler can verify it.
+
+**Considered and rejected:**
+
+- *Including date-comparison surface (`<=` on dates) in P3b2.* The clinical-trial example uses civil-date `<=` extensively, and P3b2 is the natural place to land it - but it is *not* statement syntax; it's expression-level surface design. Putting it in P3b2 would mix two unrelated decisions (statements vs comparator dispatch). Kept it deferred; the date-`<=` in clinical-trial parses today as `Expr::Le` (decimal) and would TypeMismatch at runtime, which is acceptable for v0 until a separate small PR settles the surface. Two viable shapes for that future PR: a new keyword (`on_or_before`, `before`) or letting `<=` lower to `Expr::DateLe` when operands are date-shaped. The design-history's `DateLe` entry already rejected dispatch-on-operand-type; the cleanest future answer is probably a separate keyword.
+- *Statement-level error recovery.* Sync at next statement keyword would let one bad statement not skip the rest of the body. Adds design surface; deferred until a worked example forces it.
+- *Restricting `for` collection to a bare variable.* The IR accepts any `Expr`; the surface accepts any expression for symmetry with `forall`'s source. If a real example produces ill-shaped collections, restrict at parse later.
+
+**What landed:**
+
+- `claim_pattern` helper refactored to return `(String, Vec<Term>)` instead of `Expr::Claim`; the four verbs (`bind`, `admit`, `retract`, `emit`) share it.
+- Statement parser restructured as `recursive(|statement| ...)`; `for_stmt` references the recursive parser for its body.
+- `expression_parser()` return type gains `+ Clone` bound.
+- 10 new transformation parsing tests covering each new statement form, statement-order preservation, nested `for`, mixed body with `for` plus before/after statements, empty for body, top-level admit/for rejection.
+- `examples_parse_status.rs` rewritten: four examples now assert full parse; two assert "stops at `derived`".
+- Long multi-line require body in `examples/06_clinical_trial_enrolment/` wrapped in parens (parens disable layout, the natural escape hatch for multi-line expressions that don't fit the same-column rule).
+
+**What deliberately stayed out (P3c):**
+
+- `derived` claim declarations. The keyword is lexer-reserved; the parser surfaces an unexpected-token diagnostic. Two of six worked examples stop here.
+- The `format_program → parse_program` round-trip property test. Lands in P3c when the full surface is parseable.
+- Date-comparison surface form. Its own small PR after P3c, when an example actually needs it in a `.morph`-runnable transformation.
+
+**Pattern note:** the recursive statement parser is the first place in the parser arc where the grammar is genuinely self-referential. P2a/P2b-lite's `expression_parser` is also recursive (for nested parens, quantifiers inside quantifiers, etc.) but that was within a single closure. P3b2 has cross-statement recursion: `for` body contains statements which might contain another `for`. The layout pass's matched `Indent`/`Dedent` pairs bound the recursion; without that, the parser would have no way to know where a `for` body ends.
+
+**Next:** **PR P3c** completes the parser arc: derived-claim declarations (`derived Pred(keys) over <body>` with optional `where <name> = <expr>` value bindings), the format-program round-trip property test, and possibly a doctrine note on date-comparison surface for a future P-PR to pick up. After P3c, the `.morph` surface is operationally complete for v0.

@@ -1,52 +1,58 @@
-//! Statement parsing (P3b1).
+//! Statement parsing (P3b1 + P3b2).
 //!
-//! Recognises the gate / binding statements that can appear inside
-//! a transformation body:
+//! Recognises every statement form a transformation body can hold:
 //!
 //! ```text
 //! statement ::= require_stmt | bind_stmt | let_stmt
-//! require_stmt ::= "require" expression
-//! bind_stmt    ::= "bind" claim_pattern    -- restricted; see below
-//! let_stmt     ::= "let" Ident "=" let_rhs
-//! let_rhs      ::= "new" "Subject" "(" ")" | expression
+//!             | admit_stmt | retract_stmt | emit_stmt
+//!             | for_stmt
+//! require_stmt  ::= "require" expression
+//! bind_stmt     ::= "bind" claim_pattern    -- restricted; see below
+//! let_stmt      ::= "let" Ident "=" let_rhs
+//! let_rhs       ::= "new" "Subject" "(" ")" | expression
+//! admit_stmt    ::= "admit" claim_pattern
+//! retract_stmt  ::= "retract" claim_pattern
+//! emit_stmt     ::= "emit" claim_pattern    -- Intent shares the shape
+//! for_stmt      ::= "for" Ident "in" expression ":" Indent statement+ Dedent
 //! claim_pattern ::= Ident "(" term_list ")"
 //! ```
 //!
-//! The `bind` statement accepts only a claim pattern, not an
-//! arbitrary expression. The IR's `Stmt::BindOne` carries an
-//! `Expr` for kernel evaluation flexibility, but the meaningful
-//! surface form is a single claim - the verb says "match this
-//! claim and extend the binding context with the unique result".
-//! `bind not Foo(x)` or `bind amount <= limit` would parse to
-//! ill-shaped IR (the kernel would error at evaluation); the
-//! parser rejects them at the surface, mirroring the same
-//! "surface less permissive than IR" pattern used for `Neq` and
-//! claim-call arg term restrictions earlier in the parser arc.
+//! Surface verb / IR mapping (the predicate + args pair is the
+//! same shape across four verbs; the verb decides the wrapper):
 //!
-//! Deferred to P3b2: `admit`, `retract`, `emit`, `for`. These add
-//! state-mutating semantics and nested layout (the `for` block
-//! introduces a deeper Indent). Keeping them separate lets P3b1
-//! prove the layout foundation and statement sequencing first.
-//! The claim-pattern helper introduced here is reused by P3b2 for
-//! `admit Foo(args)` and `retract Foo(args)`.
+//! - `bind Foo(args)`    -> `Stmt::BindOne(Expr::Claim { .. })`
+//! - `admit Foo(args)`   -> `Stmt::Assert(Claim { predicate, args })`
+//! - `retract Foo(args)` -> `Stmt::Retract { predicate, args }`
+//! - `emit Foo(args)`    -> `Stmt::Emit(Intent { name, args })`
+//!
+//! The `claim_pattern` helper produces the raw `(String, Vec<Term>)`
+//! tuple; each statement form wraps it in its own IR shape.
+//!
+//! Why `bind`/`admit`/`retract`/`emit` share the claim-pattern
+//! restriction: each verb operates on a single claim shape; the
+//! meaningful authoring form is `Verb Name(args)`. The IR's
+//! `Stmt::BindOne` could carry any `Expr`, but the surface stays
+//! narrower per Position A doctrine - surface less permissive
+//! than IR when the meaningful authoring form is narrower.
+//!
+//! `let x = new Subject()` is a binding-context extension (fresh
+//! subject identifier), distinct from `admit`/`retract`/`emit`
+//! which actually mutate admitted state.
+//!
+//! `for x in coll: body` is the only statement that introduces
+//! nested layout (an Indent inside the transformation's outer
+//! Indent). The statement parser is therefore recursive: the
+//! `for_stmt` production references the statement parser for the
+//! body's `stmt+` repetition.
 //!
 //! Statement separators are not needed: each statement begins with
 //! its own keyword, so the boundary between adjacent statements is
-//! "the next statement keyword". This means the body of a
-//! transformation parses as `stmt+` with no explicit punctuation.
-//!
-//! P3b1 includes `let x = new Subject()`. It belongs here, not
-//! with P3b2's state-mutating statements, because it is a
-//! binding-context extension that produces a fresh subject
-//! identifier - the kernel models it as `Stmt::LetNewSubject {
-//! name }`, distinct from `Stmt::Assert` / `Stmt::Retract` /
-//! `Stmt::Emit` which actually change admitted state. Grouping
-//! it with the `let name = expr` form makes the value-binding
-//! story complete in one PR.
+//! "the next statement keyword". The body of a transformation
+//! parses as `stmt+` with no explicit punctuation.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Expr, PredicateArgKind, Stmt, Term, Value};
+use morpholog_core::{Claim, Expr, Intent, PredicateArgKind, Stmt, Term, Value};
 
 use crate::lexer::Token;
 
@@ -54,90 +60,150 @@ use super::expr::expression_parser;
 
 /// Build a parser for a single statement.
 ///
-/// Returns a parser that consumes one `Stmt` and stops at the
-/// boundary token (typically `Dedent` or another statement
-/// keyword). Used inside transformation bodies; not exposed to
-/// crate consumers directly.
+/// Recursive: `for_stmt`'s body references the statement parser
+/// itself (so `for` blocks can nest other statements, including
+/// other `for` blocks). The recursion is bounded by the layout
+/// pass's matched `Indent` / `Dedent` token pairs.
 pub(super) fn statement_parser<'a, I>() -> impl Parser<'a, I, Stmt, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    let ident = select! { Token::Ident(s) => s };
-    let decimal_lit = select! { Token::DecimalLit(s) => s };
-    let date_lit = select! { Token::DateLit(s) => s };
-    let subject_lit = select! { Token::SubjectLit(s) => s };
+    let expression = expression_parser();
 
-    // term ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
-    let term = choice((
-        just(Token::Wildcard).to(Term::Wildcard),
-        decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
-        date_lit.map(|s| Term::Literal(Value::Date(s))),
-        subject_lit.map(|s| Term::Literal(Value::Subject(s))),
-        ident.map(|name| {
-            if name == "actor" {
-                Term::Actor
-            } else {
-                Term::Var(name)
-            }
-        }),
-    ));
-    let term_list = term
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<Term>>();
+    recursive(|statement| {
+        let ident = select! { Token::Ident(s) => s };
+        let decimal_lit = select! { Token::DecimalLit(s) => s };
+        let date_lit = select! { Token::DateLit(s) => s };
+        let subject_lit = select! { Token::SubjectLit(s) => s };
 
-    // claim_pattern ::= Ident "(" term_list ")"
-    //
-    // Reused by P3b2 for admit / retract / emit. Parser-only:
-    // does NOT consume any leading verb keyword.
-    let claim_pattern = ident
-        .then(term_list.delimited_by(just(Token::LParen), just(Token::RParen)))
-        .map(|(predicate, args)| Expr::Claim { predicate, args });
+        // term ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
+        let term = choice((
+            just(Token::Wildcard).to(Term::Wildcard),
+            decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            date_lit.map(|s| Term::Literal(Value::Date(s))),
+            subject_lit.map(|s| Term::Literal(Value::Subject(s))),
+            ident.map(|name| {
+                if name == "actor" {
+                    Term::Actor
+                } else {
+                    Term::Var(name)
+                }
+            }),
+        ));
+        let term_list = term
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<Term>>();
 
-    // require <expression>
-    let require_stmt = just(Token::KwRequire)
-        .ignore_then(expression_parser())
-        .map(Stmt::Require);
+        // claim_pattern ::= Ident "(" term_list ")"
+        //
+        // Returns a (predicate, args) tuple. Each statement verb
+        // wraps the tuple in its own IR shape - see the module
+        // doc for the mapping.
+        let claim_pattern =
+            ident.then(term_list.delimited_by(just(Token::LParen), just(Token::RParen)));
 
-    // bind <claim_pattern>
-    //
-    // Surface is restricted to a claim pattern, not an arbitrary
-    // expression. See the module-level doc for rationale.
-    let bind_stmt = just(Token::KwBind)
-        .ignore_then(claim_pattern)
-        .map(Stmt::BindOne);
+        // require <expression>
+        let require_stmt = just(Token::KwRequire)
+            .ignore_then(expression.clone())
+            .map(Stmt::Require);
 
-    // let <name> = <rhs>
-    //
-    // rhs has two forms:
-    //   1. `new Subject ( )`  -> Stmt::LetNewSubject { name }
-    //   2. <expression>        -> Stmt::Let { name, value }
-    //
-    // The `new Subject()` form is recognised by the specific token
-    // sequence `KwNew Kind(Subject) LParen RParen`. `Kind(Subject)`
-    // is what the lexer produces for the bare identifier `Subject`
-    // (kind keywords are lexer-reserved). The parser checks the
-    // discriminant via `select!`.
-    let new_subject_rhs = just(Token::KwNew)
-        .ignore_then(select! { Token::Kind(PredicateArgKind::Subject) => () })
-        .then_ignore(just(Token::LParen))
-        .then_ignore(just(Token::RParen));
+        // bind <claim_pattern>
+        let bind_stmt = just(Token::KwBind)
+            .ignore_then(claim_pattern.clone())
+            .map(|(predicate, args)| Stmt::BindOne(Expr::Claim { predicate, args }));
 
-    let let_rhs = choice((
-        new_subject_rhs.map(|()| LetRhs::NewSubject),
-        expression_parser().map(LetRhs::Expr),
-    ));
+        // admit <claim_pattern>
+        let admit_stmt = just(Token::KwAdmit)
+            .ignore_then(claim_pattern.clone())
+            .map(|(predicate, args)| Stmt::Assert(Claim { predicate, args }));
 
-    let let_stmt = just(Token::KwLet)
-        .ignore_then(ident)
-        .then_ignore(just(Token::Eq))
-        .then(let_rhs)
-        .map(|(name, rhs)| match rhs {
-            LetRhs::NewSubject => Stmt::LetNewSubject { name },
-            LetRhs::Expr(value) => Stmt::Let { name, value },
-        });
+        // retract <claim_pattern>
+        let retract_stmt = just(Token::KwRetract)
+            .ignore_then(claim_pattern.clone())
+            .map(|(predicate, args)| Stmt::Retract { predicate, args });
 
-    choice((require_stmt, bind_stmt, let_stmt))
+        // emit <claim_pattern>
+        //
+        // `Intent { name, args }` shares the predicate-and-args
+        // shape with `Claim`; the field is named `name` rather
+        // than `predicate` in the IR (intents are not claims even
+        // though they look syntactically alike).
+        let emit_stmt = just(Token::KwEmit)
+            .ignore_then(claim_pattern.clone())
+            .map(|(name, args)| Stmt::Emit(Intent { name, args }));
+
+        // let <name> = <rhs>
+        //
+        // rhs has two forms:
+        //   1. `new Subject ( )`  -> Stmt::LetNewSubject { name }
+        //   2. <expression>        -> Stmt::Let { name, value }
+        //
+        // The `new Subject()` form is recognised by the specific token
+        // sequence `KwNew Kind(Subject) LParen RParen`. `Kind(Subject)`
+        // is what the lexer produces for the bare identifier `Subject`
+        // (kind keywords are lexer-reserved). The parser checks the
+        // discriminant via `select!`.
+        let new_subject_rhs = just(Token::KwNew)
+            .ignore_then(select! { Token::Kind(PredicateArgKind::Subject) => () })
+            .then_ignore(just(Token::LParen))
+            .then_ignore(just(Token::RParen));
+
+        let let_rhs = choice((
+            new_subject_rhs.map(|()| LetRhs::NewSubject),
+            expression.clone().map(LetRhs::Expr),
+        ));
+
+        let let_stmt = just(Token::KwLet)
+            .ignore_then(ident)
+            .then_ignore(just(Token::Eq))
+            .then(let_rhs)
+            .map(|(name, rhs)| match rhs {
+                LetRhs::NewSubject => Stmt::LetNewSubject { name },
+                LetRhs::Expr(value) => Stmt::Let { name, value },
+            });
+
+        // for <name> in <expression> : Indent statement+ Dedent
+        //
+        // The collection is parsed as a full expression. The kernel's
+        // `Stmt::For.collection` is an `Expr`; whatever it evaluates
+        // to must be an `EvalValue::Collection` at runtime, but the
+        // surface accepts any expression - matches how `forall`'s
+        // source is parsed.
+        //
+        // The body is `Indent statement+ Dedent`, identical in shape
+        // to the transformation body itself. `statement` is the
+        // recursive reference; chumsky resolves the cycle.
+        let for_stmt = just(Token::KwFor)
+            .ignore_then(ident)
+            .then_ignore(just(Token::KwIn))
+            .then(expression.clone())
+            .then_ignore(just(Token::Colon))
+            .then_ignore(just(Token::Indent))
+            .then(
+                statement
+                    .clone()
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<Stmt>>(),
+            )
+            .then_ignore(just(Token::Dedent))
+            .map(|((binding, collection), body)| Stmt::For {
+                binding,
+                collection,
+                body,
+            });
+
+        choice((
+            require_stmt,
+            bind_stmt,
+            admit_stmt,
+            retract_stmt,
+            emit_stmt,
+            let_stmt,
+            for_stmt,
+        ))
+    })
 }
 
 /// Discriminator for the two `let` RHS forms. Internal to the
