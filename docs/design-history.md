@@ -513,3 +513,28 @@ derived TrialBalanceRow(account):
 - A `morpholog run <file.morph>` command. Now reachable because the surface is complete; a separate small PR.
 - `derived` claim materialisation, recursion, as-of, and visibility to invariants - each deferred deliberately. The first of those an example forces is the next move.
 - Date-arithmetic, strict-ordering date comparators, and time-of-day - listed in [`runtime-semantics.md`](runtime-semantics.md) as awaiting examples.
+
+
+### `Expr::Or` predicate-shaped disjunction
+
+**Forced ahead of an example.** The honest second ahead-of-example deviation in the codebase, after [`Transition.actor`](#transition-value-object-and-auditactor). The next worked example - per-account delta conservation on the double-entry ledger - will use `Or` to express the creation-or-update split that pre-state lookups force ("either this account already had a balance and the delta equals the posting sum, or this is the first balance and the postings net to the opening value"). Landing `Or` first keeps that example's PR focused on the load-bearing primitive (`Expr::Pre`); bundling both would conflate two design moves that warrant separate scrutiny.
+
+Standing rationale for the kernel addition independent of the example: every other predicate-shaped composer (`And`, `Not`, `Implies`, `Exists`, `Forall`) is first-class. Desugaring disjunction via De Morgan (`not (not A and not B)`) is technically equivalent but aesthetically wrong - it punishes the natural surface form to preserve a minimalism that was never the point. Minimalism is the absence of accidental ceremony, not the absence of primitives.
+
+**Landed:**
+
+- `Expr::Or(Vec<Expr>)` mirroring `Expr::And`'s flattened shape. A parser-level `a or b or c` lowers to a single `Or` node, not nested binary `Or`s.
+- `find_disjunction` evaluator: concatenation of each branch's binding extensions against the same base context. No deduplication - multiplicity is preserved, matching `find_conjunction`'s convention. Downstream uses that care only about non-emptiness (`require`, invariants) are unaffected; `Forall` over an `Or` source iterates duplicates, which is the documented behaviour.
+- `find_failing_subexpr` returns `None` for `Or`. When a disjunction fails, every branch failed - picking one to blame would mislead. Same rationale as `Not` and `Exists`.
+- Surface keyword `or`, precedence layer between `and` and `implies`. Standard logical precedence: `a and b or c` parses as `(a and b) or c`; `a or b implies c` parses as `(a or b) implies c`; `not a or b` parses as `(not a) or b`.
+- `or_()` DSL constructor for Rust-authored programmes, alongside `and`, `not`, `implies`.
+- Walkers extended: `predicates_referenced_by_expr`, `validate_expr`, `format_expr_inline` all gain `Or` arms parallel to `And`.
+
+**Considered and rejected:**
+
+- *Deduplicating binding extensions across branches.* Adds cost on every `Or` evaluation; the existing `And` does not deduplicate either; downstream consumers that need it can apply dedup themselves. Documented in the `Or` IR variant's doc comment.
+- *A two-branch `Or { left, right }` shape.* Symmetry with `Implies` was considered; the flattened `Vec<Expr>` won because `or` chains are common and the flattening already exists for `And`.
+
+**What stays out:**
+
+- Short-circuit evaluation. The current `find_disjunction` walks every branch and accumulates. A worked example with a measurable hot path would force a short-circuit optimisation; until then the simple shape is correct and clear.

@@ -302,6 +302,10 @@ pub fn format_expr_inline(e: &Expr) -> String {
             let inner: Vec<String> = exprs.iter().map(primary).collect();
             inner.join(" and ")
         }
+        Expr::Or(exprs) => {
+            let inner: Vec<String> = exprs.iter().map(primary).collect();
+            inner.join(" or ")
+        }
         Expr::Implies { left, right } => {
             format!("{} implies {}", primary(left), primary(right))
         }

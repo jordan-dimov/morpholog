@@ -232,7 +232,7 @@ pub(crate) fn validate_expr(
             validate_expr(left, arities, ctx, errors);
             validate_expr(right, arities, ctx, errors);
         }
-        Expr::And(exprs) => {
+        Expr::And(exprs) | Expr::Or(exprs) => {
             for e in exprs {
                 validate_expr(e, arities, ctx, errors);
             }

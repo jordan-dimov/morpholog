@@ -147,6 +147,10 @@ pub fn and(exprs: Vec<Expr>) -> Expr {
     Expr::And(exprs)
 }
 
+pub fn or(exprs: Vec<Expr>) -> Expr {
+    Expr::Or(exprs)
+}
+
 pub fn not(inner: Expr) -> Expr {
     Expr::Not(Box::new(inner))
 }

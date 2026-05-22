@@ -33,7 +33,7 @@ pub struct Invariant {
 /// as a predicate) or a value (when used in value position).
 ///
 /// The variants are deliberately narrow: predicate composition (`And`,
-/// `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
+/// `Or`, `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
 /// (`Claim`, `Neq`, `Eq`), one decimal-comparison primitive (`Le`), one
 /// civil-date-comparison primitive (`DateLe`), one bounded aggregation
 /// (`Sum`), one decimal-arithmetic primitive (`Sub`), one collection
@@ -55,6 +55,24 @@ pub enum Expr {
         body: Box<Expr>,
     },
     And(Vec<Expr>),
+    /// Predicate-shaped disjunction. Evaluates each branch against the
+    /// same base bindings and returns the concatenation of all
+    /// satisfying binding sets. Empty when every branch is empty.
+    ///
+    /// Mirrors `And`'s flattened `Vec<Expr>` shape rather than a
+    /// binary `Box<Expr>, Box<Expr>` so that `a or b or c` is a
+    /// single `Or` node, matching how the parser already lowers `a
+    /// and b and c` to a single `And`.
+    ///
+    /// Duplicates are not deduplicated. If two branches admit the
+    /// same binding extension, both copies appear in the result -
+    /// the same convention `And` follows when a conjunct produces
+    /// the same extension under multiple prior contexts. Downstream
+    /// uses (`require`, invariants) that only care whether the
+    /// result is non-empty are unaffected; `Forall` over an `Or`
+    /// source would iterate duplicates, which is the documented
+    /// behaviour.
+    Or(Vec<Expr>),
     Not(Box<Expr>),
     Neq(Term, Term),
     Term(Term),

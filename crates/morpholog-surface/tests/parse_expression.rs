@@ -292,6 +292,71 @@ fn and_binds_tighter_than_implies() {
 }
 
 #[test]
+fn parses_or_two_operands() {
+    let got = parse_expression("A(x) or B(x)").unwrap();
+    let expected = Expr::Or(vec![
+        Expr::Claim {
+            predicate: "A".to_string(),
+            args: vec![var("x")],
+        },
+        Expr::Claim {
+            predicate: "B".to_string(),
+            args: vec![var("x")],
+        },
+    ]);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn or_flattens_three_operands_into_single_vec() {
+    // `A or B or C` should be a single `Or([A, B, C])`, not
+    // `Or([Or([A, B]), C])`. Mirrors `and_flattens_three_operands_...`
+    // for the And flattening.
+    let got = parse_expression("A() or B() or C()").unwrap();
+    let Expr::Or(operands) = got else {
+        panic!("expected Or, got {got:?}");
+    };
+    assert_eq!(operands.len(), 3, "expected flat 3-operand Or");
+}
+
+#[test]
+fn and_binds_tighter_than_or() {
+    // `A and B or C` parses as `(A and B) or C` (standard logical
+    // precedence). The disjunction's first branch is an And, the
+    // second is a leaf Claim.
+    let got = parse_expression("A() and B() or C()").unwrap();
+    let Expr::Or(ops) = got else {
+        panic!("expected Or, got {got:?}");
+    };
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(ops[0], Expr::And(_)));
+    assert!(matches!(ops[1], Expr::Claim { .. }));
+}
+
+#[test]
+fn or_binds_tighter_than_implies() {
+    // `A or B implies C` parses as `(A or B) implies C`.
+    let got = parse_expression("A() or B() implies C()").unwrap();
+    let Expr::Implies { left, right } = got else {
+        panic!("expected Implies");
+    };
+    assert!(matches!(*left, Expr::Or(_)));
+    assert!(matches!(*right, Expr::Claim { .. }));
+}
+
+#[test]
+fn not_binds_tighter_than_or() {
+    // `not A() or B()` parses as `(not A()) or B()`.
+    let got = parse_expression("not A() or B()").unwrap();
+    let Expr::Or(ops) = &got else {
+        panic!("expected Or, got {got:?}");
+    };
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(ops[0], Expr::Not(_)));
+    assert!(matches!(ops[1], Expr::Claim { .. }));
+}
+
+#[test]
 fn implies_is_right_associative() {
     // `A implies B implies C` parses as `A implies (B implies C)`.
     let got = parse_expression("A() implies B() implies C()").unwrap();
