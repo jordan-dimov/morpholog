@@ -527,3 +527,74 @@ fn reserved_keyword_cannot_be_transformation_name() {
     let errs = parse_program(source).expect_err("reserved keyword as name should fail");
     assert!(!errs.is_empty());
 }
+
+// ============================================================
+// PR #62 review tightenings
+// ============================================================
+
+/// `bind` accepts only a claim pattern. Arbitrary expressions
+/// (booleans, arithmetic, value lookups, etc.) are rejected at
+/// the surface even though `Stmt::BindOne` can technically hold
+/// any `Expr` in the kernel. See `parser/stmt.rs` module-level
+/// doc for the doctrine rationale.
+#[test]
+fn bind_rejects_boolean_expression() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20bind not Foo(x)\n";
+    let errs = parse_program(source).expect_err("bind not Foo(x) should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn bind_rejects_comparison() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20bind amount <= limit\n";
+    let errs = parse_program(source).expect_err("bind amount <= limit should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn bind_rejects_value_lookup() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20bind value Policy(x, _)\n";
+    let errs = parse_program(source).expect_err("bind value Policy(...) should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn bind_accepts_claim_pattern() {
+    // The valid surface form is a claim pattern: predicate name
+    // followed by parenthesised term list.
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20bind Foo(x, y, _)\n";
+    let program = parse_program(source).expect("claim-pattern bind should parse");
+    use morpholog_core::{Expr, Stmt};
+    let body = &program.transformations[0].body;
+    assert_eq!(body.len(), 1);
+    let Stmt::BindOne(Expr::Claim { predicate, args }) = &body[0] else {
+        panic!(
+            "expected Stmt::BindOne(Expr::Claim {{ .. }}); got {:?}",
+            body[0]
+        );
+    };
+    assert_eq!(predicate, "Foo");
+    assert_eq!(args.len(), 3);
+}
+
+/// Top-level indentation (a top-level decl line that is not at
+/// column 0) currently surfaces as a parse error because the
+/// resulting `Indent` token isn't a valid top-level construct.
+/// The diagnostic is generic but the behaviour is pinned so any
+/// future improvement (e.g. a dedicated "unexpected top-level
+/// indentation" diagnostic) lands as a deliberate change.
+#[test]
+fn unexpected_top_level_indentation_is_rejected() {
+    let source = "program demo\n\
+                  \x20\x20\x20\x20predicate Foo(x: Subject)\n";
+    let errs = parse_program(source).expect_err("top-level indent should fail");
+    assert!(!errs.is_empty());
+}

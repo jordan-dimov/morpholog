@@ -6,9 +6,12 @@
 //! pass's input/output: `(source, lex output) -> token stream
 //! enriched with Indent/Dedent` (or diagnostics).
 //!
-//! `apply_layout` is `pub(crate)` so these tests live alongside
-//! the rest of the surface crate's tests; the layout pass is
-//! never exposed to crate consumers directly.
+//! `apply_layout` is `pub` (so integration tests can call it
+//! directly); the crate's `parse_program` entry point applies
+//! layout transparently. The public surface is small - just
+//! `apply_layout` and the `Token` enum it reads from - and is
+//! kept that way to make future tooling work (formatter,
+//! source-mapper) easier to slot in.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
