@@ -200,10 +200,10 @@ struct RawProgram {
 
 /// One top-level declaration in a programme body. Predicates and
 /// invariants can be freely interleaved (e.g. `predicate Foo / invariant cap
-/// over Foo / predicate Bar`); the parser sorts them into the
-/// `RawProgram` vectors after collection. This shape avoids
-/// committing the language to an "all predicates first" file
-/// convention.
+/// over Foo / predicate Bar`); the parser partitions them into
+/// the `RawProgram` vectors after collection, preserving source
+/// order within each category. This shape avoids committing the
+/// language to an "all predicates first" file convention.
 enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
     Invariant(Invariant, Span),
@@ -264,7 +264,8 @@ where
     //
     // Free interleaving: a programme may mix predicate and
     // invariant declarations in any order. The parser collects
-    // them into a single sequence and sorts on the post-pass.
+    // them into a single sequence and partitions on the post-pass
+    // (source order preserved within each category).
     let top_level_decl = choice((predicate_decl, invariant_decl));
 
     // Sync at the next `predicate` or `invariant` keyword on

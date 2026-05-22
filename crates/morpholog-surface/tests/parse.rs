@@ -277,7 +277,7 @@ invariant c: R()
 #[test]
 fn predicates_and_invariants_can_interleave() {
     // No order is imposed: the parser collects in source order
-    // and sorts the post-pass.
+    // and partitions on the post-pass.
     let source = r#"
 program demo
 predicate Foo(x: Subject)
