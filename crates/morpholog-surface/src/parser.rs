@@ -20,9 +20,9 @@
 //! primary        ::= "(" expression ")"
 //!                  | DecimalLit
 //!                  | "_"
-//!                  | Ident "(" term_list ")"           -- claim call
+//!                  | Ident "(" term_list ")"           -- claim call (args optional)
 //!                  | Ident                             -- variable | actor
-//! term_list      ::= term ("," term)* ","?
+//! term_list      ::= (term ("," term)* ","?)?         -- zero or more terms
 //! term           ::= Ident | "_" | DecimalLit         -- arg in claim call
 //! ```
 //!

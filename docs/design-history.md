@@ -701,7 +701,7 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 - *Kernel-side duplicate detection only.* `Program::validate` already catches duplicates but loses span context. Parser-side detection produces span-rich diagnostics; the kernel validator remains a structural backstop.
 - *Fail-fast error reporting.* Collecting multiple diagnostics in one parse run is materially more useful when an author is migrating Rust IR to `.morph` syntax for the first time. `chumsky`'s `recover_with` makes the recovery cheap.
 
-**Next:** **PR P2** parses expressions in isolation - the full operator set the kernel supports (`And`, `Not`, `Implies`, `Exists`, `Forall`, `Eq`, `Le`, `DateLe`, `Neq`, `Sub`, `Add`, `Sum`, `In`, `ValueOf`, `Term`), with precedence and span handling pinned by tests, before they're embedded in invariant or transformation bodies. The expression parser is the hardest single piece of the surface arc; isolating it lets the precedence/span/diagnostic decisions land without programme-level parsing hiding them.
+**Next:** **PR P2a** lands the non-bounded expression surface (atoms, arithmetic, comparators, `not` / `and` / `implies`). **PR P2b** then adds the bounded forms (`exists`, `forall`, `sum`, `value`), the `in` operator, and the date/subject literal story. The expression parser is the hardest single piece of the surface arc; splitting it across P2a/P2b lets the precedence/span/diagnostic decisions land without programme-level parsing hiding them. See `docs/roadmap.md` for the per-PR scope.
 
 ### Parser P2a: expression syntax
 

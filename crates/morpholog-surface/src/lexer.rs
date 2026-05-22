@@ -70,6 +70,16 @@ pub enum Token {
     /// `implies` infix operator.
     KwImplies,
 
+    /// `true` or `false`: lexer-reserved but not parseable in
+    /// v0. Reserved at the lexer level (rather than left as a
+    /// plain identifier) so that users who write `require true`
+    /// expecting bool-literal semantics get an "unexpected token
+    /// `true`" parse error rather than a confusing
+    /// `UnboundVariable("true")` at runtime. Lifts to a proper
+    /// bool-literal token when a worked example forces
+    /// `Value::Bool` into the IR.
+    ReservedBoolLit(bool),
+
     // ---- Atoms ----
     /// Identifier: any reserved-keyword-free word matching
     /// `[a-zA-Z_][a-zA-Z0-9_]*`. The parser decides whether it's
@@ -113,6 +123,7 @@ impl fmt::Display for Token {
             Token::KwNot => write!(f, "`not`"),
             Token::KwAnd => write!(f, "`and`"),
             Token::KwImplies => write!(f, "`implies`"),
+            Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
             Token::Ident(s) => write!(f, "identifier `{s}`"),
             Token::Wildcard => write!(f, "`_`"),
             Token::DecimalLit(s) => write!(f, "decimal literal `{s}`"),
@@ -168,10 +179,16 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "not" => Token::KwNot,
         "and" => Token::KwAnd,
         "implies" => Token::KwImplies,
-        // `true` / `false` are deliberately NOT recognised - see
-        // module-level comment. If a user writes `true`, it lexes
-        // as Token::Ident("true") and surfaces as an unknown
-        // identifier at parse time, which is the right diagnostic.
+        // `true` / `false` are reserved at the lexer level but
+        // NOT parseable in v0 (no `Value::Bool` in the IR). The
+        // parser rejects the token with an "unexpected" diagnostic;
+        // this is honest and stable, where treating them as plain
+        // identifiers would silently lower to `Term::Var("true")`
+        // and explode at runtime as `UnboundVariable`. Lifts to a
+        // bool-literal token when a worked example forces
+        // `Value::Bool` into the IR.
+        "true" => Token::ReservedBoolLit(true),
+        "false" => Token::ReservedBoolLit(false),
         // Bare `_` is the wildcard, not an ident.
         "_" => Token::Wildcard,
         other => Token::Ident(other.to_string()),

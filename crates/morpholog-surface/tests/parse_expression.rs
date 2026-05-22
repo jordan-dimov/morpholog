@@ -362,3 +362,17 @@ fn claim_call_with_arithmetic_arg_is_error() {
         parse_expression("Foo(x + 1, y)").expect_err("claim-call arithmetic arg should fail");
     assert!(!errs.is_empty());
 }
+
+/// `true` and `false` are reserved at the lexer level but not
+/// parseable in v0 (no `Value::Bool` in the IR). They must fail
+/// to parse with a clear "unexpected" diagnostic rather than
+/// silently lower to `Term::Var("true")` and explode at runtime
+/// as `UnboundVariable`. Lifts to bool-literal parsing when a
+/// worked example forces `Value::Bool`.
+#[test]
+fn true_and_false_are_reserved_not_parseable() {
+    for source in ["true", "false", "require true", "Le(true, false)"] {
+        let errs = parse_expression(source).expect_err("bool literals not parseable in v0");
+        assert!(!errs.is_empty());
+    }
+}
