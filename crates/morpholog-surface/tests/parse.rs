@@ -200,3 +200,170 @@ fn empty_and_whitespace_only_sources_produce_friendly_error() {
         );
     }
 }
+
+// ============================================================
+// P3a: invariant declarations
+// ============================================================
+
+#[test]
+fn parses_invariant_with_simple_body() {
+    let source = r#"
+program demo
+invariant something: Foo(x)
+"#;
+    let program = parse_program(source).expect("parse should succeed");
+    assert_eq!(program.invariants.len(), 1);
+    let inv = &program.invariants[0];
+    assert_eq!(inv.name, "something");
+    assert_eq!(inv.version, 1);
+    // Body is the claim Foo(x).
+    use morpholog_core::Expr;
+    assert!(matches!(inv.body, Expr::Claim { .. }));
+}
+
+#[test]
+fn parses_invariant_with_forall_body() {
+    let source = r#"
+program demo
+predicate Line(line_id: Subject)
+predicate Netted(line_id: Subject)
+
+invariant all_lines_unnetted:
+    forall line in lines: not Netted(line)
+"#;
+    let program = parse_program(source).expect("parse should succeed");
+    assert_eq!(program.invariants.len(), 1);
+    use morpholog_core::Expr;
+    let inv = &program.invariants[0];
+    assert!(matches!(inv.body, Expr::Forall { .. }));
+}
+
+#[test]
+fn parses_invariant_with_sum_le_body() {
+    // The insurance aggregate-cap rule: sum + proposed <= limit.
+    let source = r#"
+program demo
+invariant within_limit:
+    sum(amount | SettlementPaid(claim, amount)) + proposed <= limit
+"#;
+    let program = parse_program(source).expect("parse should succeed");
+    use morpholog_core::Expr;
+    let inv = &program.invariants[0];
+    assert!(matches!(inv.body, Expr::Le(_, _)));
+}
+
+#[test]
+fn invariants_default_to_version_one() {
+    let source = "program demo\ninvariant x: Foo(y)\n";
+    let program = parse_program(source).expect("parse should succeed");
+    assert_eq!(program.invariants[0].version, 1);
+}
+
+#[test]
+fn parses_multiple_invariants() {
+    let source = r#"
+program demo
+invariant a: P()
+invariant b: Q()
+invariant c: R()
+"#;
+    let program = parse_program(source).expect("parse should succeed");
+    assert_eq!(program.invariants.len(), 3);
+    assert_eq!(program.invariants[0].name, "a");
+    assert_eq!(program.invariants[1].name, "b");
+    assert_eq!(program.invariants[2].name, "c");
+}
+
+#[test]
+fn predicates_and_invariants_can_interleave() {
+    // No order is imposed: the parser collects in source order
+    // and sorts the post-pass.
+    let source = r#"
+program demo
+predicate Foo(x: Subject)
+invariant cap_a: Foo(x)
+predicate Bar(y: Subject)
+invariant cap_b: Bar(y)
+"#;
+    let program = parse_program(source).expect("interleaved decls should parse");
+    assert_eq!(program.predicates.len(), 2);
+    assert_eq!(program.invariants.len(), 2);
+    assert_eq!(program.predicates[0].name, "Foo");
+    assert_eq!(program.predicates[1].name, "Bar");
+    assert_eq!(program.invariants[0].name, "cap_a");
+    assert_eq!(program.invariants[1].name, "cap_b");
+}
+
+#[test]
+fn invariant_after_predicate_in_natural_order_also_works() {
+    // Pin the canonical "predicates first" order too, since
+    // format_program emits it that way.
+    let source = r#"
+program demo
+predicate Foo(x: Subject)
+predicate Bar(y: Subject)
+invariant a: Foo(x)
+invariant b: Bar(y)
+"#;
+    let program = parse_program(source).expect("predicates-first order should parse");
+    assert_eq!(program.predicates.len(), 2);
+    assert_eq!(program.invariants.len(), 2);
+}
+
+#[test]
+fn missing_colon_after_invariant_name_is_error() {
+    let source = "program demo\ninvariant cap Foo(x)\n";
+    let errs = parse_program(source).expect_err("missing colon should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn invariant_without_body_is_error() {
+    let source = "program demo\ninvariant cap:\n";
+    let errs = parse_program(source).expect_err("missing body should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn duplicate_invariant_carries_both_spans() {
+    let source = r#"
+program demo
+invariant cap: Foo(x)
+invariant cap: Bar(y)
+"#;
+    let errs = parse_program(source).expect_err("duplicate should fail");
+    let dup = errs
+        .iter()
+        .find(|e| e.message.contains("duplicate invariant"))
+        .expect("expected duplicate-invariant diagnostic");
+    assert!(
+        dup.message.contains("cap"),
+        "diagnostic should name the duplicated invariant"
+    );
+    assert!(
+        !dup.secondary.is_empty(),
+        "duplicate diagnostic should carry a secondary span"
+    );
+    assert_ne!(dup.primary, dup.secondary[0].0);
+}
+
+#[test]
+fn version_syntax_is_rejected() {
+    // P3a deliberately does not have version syntax. `(v1)` after
+    // the invariant name fails with an unexpected-token error on
+    // the `(`. When versioning gains real meaning, both formatter
+    // and parser grow the clause together.
+    let source = "program demo\ninvariant cap(v1): Foo(x)\n";
+    let errs = parse_program(source).expect_err("version syntax should fail in v0");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn invariant_cannot_use_reserved_keyword_as_name() {
+    // `program`, `predicate`, `invariant`, and the others are
+    // lexer-reserved. Using one as an invariant name fails because
+    // the lexer never produces an Ident for it.
+    let source = "program demo\ninvariant invariant: Foo(x)\n";
+    let errs = parse_program(source).expect_err("reserved keyword as name should fail");
+    assert!(!errs.is_empty());
+}

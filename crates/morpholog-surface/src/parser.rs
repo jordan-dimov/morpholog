@@ -77,7 +77,7 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Expr, PredicateArgDecl, PredicateDecl, Program, Term, Value};
+use morpholog_core::{Expr, Invariant, PredicateArgDecl, PredicateDecl, Program, Term, Value};
 use std::collections::HashMap;
 
 use crate::diagnostics::{Diagnostic, Span};
@@ -137,13 +137,17 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         return Err(diagnostics);
     };
 
-    // Build the final Program and run the duplicate-predicate check
-    // here on the parser side so the diagnostic carries source spans
-    // for BOTH declarations. `Program::validate` also detects this
-    // but loses the span context.
-    let mut by_name: HashMap<&str, &Span> = HashMap::new();
+    // Build the final Program and run the duplicate-name checks
+    // here on the parser side so the diagnostics carry source
+    // spans for BOTH declarations. `Program::validate` also
+    // detects duplicate predicate declarations but loses span
+    // context; invariant-name duplication is not validated
+    // kernel-side at all (no current example forces name-based
+    // invariant lookup), so the parser is the only place it gets
+    // caught.
+    let mut pred_by_name: HashMap<&str, &Span> = HashMap::new();
     for (decl, span) in &raw.predicates {
-        if let Some(first_span) = by_name.get(decl.name.as_str()) {
+        if let Some(first_span) = pred_by_name.get(decl.name.as_str()) {
             diagnostics.push(
                 Diagnostic::error(
                     format!("duplicate predicate declaration `{}`", decl.name),
@@ -152,7 +156,21 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
                 .with_secondary((*first_span).clone(), "previously declared here"),
             );
         } else {
-            by_name.insert(decl.name.as_str(), span);
+            pred_by_name.insert(decl.name.as_str(), span);
+        }
+    }
+    let mut inv_by_name: HashMap<&str, &Span> = HashMap::new();
+    for (inv, span) in &raw.invariants {
+        if let Some(first_span) = inv_by_name.get(inv.name.as_str()) {
+            diagnostics.push(
+                Diagnostic::error(
+                    format!("duplicate invariant declaration `{}`", inv.name),
+                    span.clone(),
+                )
+                .with_secondary((*first_span).clone(), "previously declared here"),
+            );
+        } else {
+            inv_by_name.insert(inv.name.as_str(), span);
         }
     }
 
@@ -163,7 +181,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     Ok(Program {
         name: raw.name,
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
-        invariants: Vec::new(),
+        invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
         transformations: Vec::new(),
         derived_claims: Vec::new(),
     })
@@ -177,6 +195,18 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
 struct RawProgram {
     name: String,
     predicates: Vec<(PredicateDecl, Span)>,
+    invariants: Vec<(Invariant, Span)>,
+}
+
+/// One top-level declaration in a programme body. Predicates and
+/// invariants can be freely interleaved (e.g. `predicate Foo / invariant cap
+/// over Foo / predicate Bar`); the parser sorts them into the
+/// `RawProgram` vectors after collection. This shape avoids
+/// committing the language to an "all predicates first" file
+/// convention.
+enum TopLevelDecl {
+    Predicate(PredicateDecl, Span),
+    Invariant(Invariant, Span),
 }
 
 fn program_parser<'a, I>() -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
@@ -204,24 +234,71 @@ where
         .then(arg_list.delimited_by(just(Token::LParen), just(Token::RParen)))
         .map_with(|(name, args), e| {
             let span: SimpleSpan = e.span();
-            (PredicateDecl { name, args }, span.start()..span.end())
+            TopLevelDecl::Predicate(PredicateDecl { name, args }, span.start()..span.end())
         });
 
-    // Sync at the next `predicate` or `program` keyword on failure;
-    // skip the rest of the malformed declaration but keep the
-    // declarations on either side of it.
-    let predicate_decl_recovering = predicate_decl.recover_with(skip_then_retry_until(
+    // invariant_decl ::= "invariant" Ident ":" expression
+    //
+    // No version syntax in v0: the version field defaults to 1.
+    // When versioning grows a second meaningful value, the surface
+    // adds a clause (e.g. `version <N>`) and the parser starts
+    // accepting it. Today, an attempted `invariant Name (v1):`
+    // surfaces as an unexpected-token diagnostic on the `(`.
+    let invariant_decl = just(Token::KwInvariant)
+        .ignore_then(ident)
+        .then_ignore(just(Token::Colon))
+        .then(expression_parser())
+        .map_with(|(name, body), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Invariant(
+                Invariant {
+                    name,
+                    version: 1,
+                    body,
+                },
+                span.start()..span.end(),
+            )
+        });
+
+    // top_level_decl ::= predicate_decl | invariant_decl
+    //
+    // Free interleaving: a programme may mix predicate and
+    // invariant declarations in any order. The parser collects
+    // them into a single sequence and sorts on the post-pass.
+    let top_level_decl = choice((predicate_decl, invariant_decl));
+
+    // Sync at the next `predicate` or `invariant` keyword on
+    // failure; skip the rest of the malformed declaration but
+    // keep the declarations on either side of it.
+    let top_level_recovering = top_level_decl.recover_with(skip_then_retry_until(
         any().ignored(),
-        just(Token::KwPredicate).ignored().or(end()),
+        just(Token::KwPredicate)
+            .ignored()
+            .or(just(Token::KwInvariant).ignored())
+            .or(end()),
     ));
 
     // program_header ::= "program" Ident
     let header = just(Token::KwProgram).ignore_then(ident);
 
     header
-        .then(predicate_decl_recovering.repeated().collect::<Vec<_>>())
+        .then(top_level_recovering.repeated().collect::<Vec<_>>())
         .then_ignore(end())
-        .map(|(name, predicates)| RawProgram { name, predicates })
+        .map(|(name, decls)| {
+            let mut predicates = Vec::new();
+            let mut invariants = Vec::new();
+            for d in decls {
+                match d {
+                    TopLevelDecl::Predicate(p, s) => predicates.push((p, s)),
+                    TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
+                }
+            }
+            RawProgram {
+                name,
+                predicates,
+                invariants,
+            }
+        })
 }
 
 // ============================================================
