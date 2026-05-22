@@ -50,7 +50,7 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
                 predicates_referenced_by_expr(e, out);
             }
         }
-        Expr::Not(e) | Expr::Exists { body: e, .. } => {
+        Expr::Not(e) | Expr::Exists { body: e, .. } | Expr::Pre(e) => {
             predicates_referenced_by_expr(e, out);
         }
         Expr::Eq(l, r)

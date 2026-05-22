@@ -155,6 +155,13 @@ pub fn not(inner: Expr) -> Expr {
     Expr::Not(Box::new(inner))
 }
 
+/// Opt the wrapped subtree into pre-transition state lookup.
+/// Legal only inside invariant bodies during a proposal; surfaces
+/// [`crate::EvalError::PreStateUnavailable`] anywhere else.
+pub fn pre(inner: Expr) -> Expr {
+    Expr::Pre(Box::new(inner))
+}
+
 pub fn implies(left: Expr, right: Expr) -> Expr {
     Expr::Implies {
         left: Box::new(left),

@@ -5,7 +5,7 @@
 //! - Top-level keywords: `program`, `predicate`.
 //! - Kind keywords (lexer-level): `Subject`, `Decimal`, `Date`,
 //!   `Bool`, `Collection`, `Any`.
-//! - Boolean keywords: `not`, `and`, `or`, `implies`.
+//! - Boolean keywords: `not`, `and`, `or`, `implies`, `pre`.
 //! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
 //!   `_-prefixed` names. The bare `_` is the wildcard token, not
 //!   an identifier.
@@ -41,7 +41,7 @@
 //! Reserved words include the structural keywords
 //! (`program`, `predicate`), the kind names (`Subject`,
 //! `Decimal`, `Date`, `Bool`, `Collection`, `Any`), the boolean
-//! operators (`not`, `and`, `or`, `implies`), and the placeholder bool
+//! operators (`not`, `and`, `or`, `implies`, `pre`), and the placeholder bool
 //! literals (`true`, `false`, lexed but not parseable per the
 //! note above). The lexer maps each to a specific `Token::*`
 //! variant so the parser can match against them directly. An
@@ -158,6 +158,11 @@ pub enum Token {
     KwOr,
     /// `implies` infix operator.
     KwImplies,
+    /// `pre` function-call-shape primary. Lowers to `Expr::Pre`.
+    /// Always followed by `(`; the parens are mandatory. Reserved
+    /// at the lexer everywhere so a variable named `pre` cannot
+    /// shadow the keyword.
+    KwPre,
 
     /// `true` or `false`: lexer-reserved but not parseable in
     /// v0. Reserved at the lexer level (rather than left as a
@@ -264,6 +269,7 @@ impl fmt::Display for Token {
             Token::KwAnd => write!(f, "`and`"),
             Token::KwOr => write!(f, "`or`"),
             Token::KwImplies => write!(f, "`implies`"),
+            Token::KwPre => write!(f, "`pre`"),
             Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
             Token::KwExists => write!(f, "`exists`"),
             Token::KwForall => write!(f, "`forall`"),
@@ -347,6 +353,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "and" => Token::KwAnd,
         "or" => Token::KwOr,
         "implies" => Token::KwImplies,
+        "pre" => Token::KwPre,
         // Bounded forms and membership keywords
         "exists" => Token::KwExists,
         "forall" => Token::KwForall,

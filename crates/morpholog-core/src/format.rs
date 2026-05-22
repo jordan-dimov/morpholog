@@ -262,6 +262,9 @@ pub fn format_expr_inline(e: &Expr) -> String {
                     None => base,
                 }
             }
+            // `pre(...)` is function-call-shape; no outer parens
+            // needed even at primary position.
+            Expr::Pre(inner) => format!("pre({})", format_expr_inline(inner)),
             // Any composite gets parens.
             _ => format!("({})", format_expr_inline(e)),
         }
@@ -296,7 +299,10 @@ pub fn format_expr_inline(e: &Expr) -> String {
         Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
-        // Boolean composition: prefix `not`, infix `and`, `or`, and `implies`.
+        // Boolean composition: prefix `not`, infix `and`, `or`, and
+        // `implies`; `pre(...)` is a function-call-shape primary that
+        // flips state lookup to pre-transition for its inner subtree.
+        Expr::Pre(inner) => format!("pre({})", format_expr_inline(inner)),
         Expr::Not(inner) => format!("not {}", primary(inner)),
         Expr::And(exprs) => {
             let inner: Vec<String> = exprs.iter().map(primary).collect();

@@ -302,6 +302,9 @@ mod tests {
             value_of("P_valueof_self", Some(claim("P_valueof_default"))),
             // Or flattens its branches; each branch must contribute.
             Expr::Or(vec![claim("P_or_left"), claim("P_or_right")]),
+            // Pre wraps a single inner expression; the inner's
+            // predicate refs flow through unchanged.
+            Expr::Pre(Box::new(claim("P_pre_inner"))),
             // Variants that carry no predicate references: must
             // contribute nothing. If any of these incorrectly added
             // entries the test below would still pass, but the
@@ -337,6 +340,7 @@ mod tests {
             "P_valueof_default",
             "P_or_left",
             "P_or_right",
+            "P_pre_inner",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -409,7 +413,14 @@ mod tests {
                 "32.5".to_string(),
             )))),
         );
-        let v = eval_value(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        let v = eval_value(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .unwrap();
         assert_eq!(v, EvalValue::Decimal(Decimal::new(425, 1)));
     }
 
@@ -425,8 +436,14 @@ mod tests {
                 "oops".to_string(),
             )))),
         );
-        let err = eval_value(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
-            .expect_err("expected TypeMismatch");
+        let err = eval_value(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .expect_err("expected TypeMismatch");
         match err {
             EvalError::TypeMismatch(msg) => assert!(msg.contains("Add")),
             other => panic!("expected TypeMismatch, got {other:?}"),
@@ -445,8 +462,14 @@ mod tests {
             Box::new(date_lit("2026-03-11")),
             Box::new(date_lit("2026-03-12")),
         );
-        let matches =
-            find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        let matches = find_matches(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .unwrap();
         assert_eq!(matches.len(), 1, "earlier date must admit under DateLe");
     }
 
@@ -461,8 +484,14 @@ mod tests {
             Box::new(date_lit("2026-03-12")),
             Box::new(date_lit("2026-03-12")),
         );
-        let matches =
-            find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        let matches = find_matches(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             matches.len(),
             1,
@@ -478,8 +507,14 @@ mod tests {
             Box::new(date_lit("2026-03-13")),
             Box::new(date_lit("2026-03-12")),
         );
-        let matches =
-            find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None).unwrap();
+        let matches = find_matches(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .unwrap();
         assert!(matches.is_empty(), "later date must reject under DateLe");
     }
 
@@ -492,8 +527,14 @@ mod tests {
             Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
             Box::new(date_lit("2026-03-12")),
         );
-        let err = find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
-            .expect_err("decimal lhs must be a TypeMismatch");
+        let err = find_matches(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .expect_err("decimal lhs must be a TypeMismatch");
         match err {
             EvalError::TypeMismatch(msg) => assert!(msg.contains("DateLe")),
             other => panic!("expected TypeMismatch, got {other:?}"),
@@ -511,8 +552,14 @@ mod tests {
                 "oops".to_string(),
             )))),
         );
-        let err = find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
-            .expect_err("subject rhs must be a TypeMismatch");
+        let err = find_matches(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .expect_err("subject rhs must be a TypeMismatch");
         match err {
             EvalError::TypeMismatch(msg) => assert!(msg.contains("DateLe")),
             other => panic!("expected TypeMismatch, got {other:?}"),
@@ -529,8 +576,14 @@ mod tests {
             Box::new(date_lit("not-a-date")),
             Box::new(date_lit("2026-03-12")),
         );
-        let err = find_matches(&expr, &State::from_claims(vec![]), &Bindings::new(), None)
-            .expect_err("invalid ISO string must be a TypeMismatch");
+        let err = find_matches(
+            &expr,
+            &State::from_claims(vec![]),
+            None,
+            &Bindings::new(),
+            None,
+        )
+        .expect_err("invalid ISO string must be a TypeMismatch");
         match err {
             EvalError::TypeMismatch(msg) => {
                 assert!(msg.contains("invalid civil date"), "msg was: {msg}")
@@ -556,14 +609,14 @@ mod tests {
             predicate: "OnDate".to_string(),
             args: vec![Term::Literal(Value::Date("2026-03-12".to_string()))],
         };
-        let matches = find_matches(&expr, &state, &Bindings::new(), None).unwrap();
+        let matches = find_matches(&expr, &state, None, &Bindings::new(), None).unwrap();
         assert_eq!(matches.len(), 1, "literal date arg must unify");
 
         let other = Expr::Claim {
             predicate: "OnDate".to_string(),
             args: vec![Term::Literal(Value::Date("2026-03-13".to_string()))],
         };
-        let none = find_matches(&other, &state, &Bindings::new(), None).unwrap();
+        let none = find_matches(&other, &state, None, &Bindings::new(), None).unwrap();
         assert!(
             none.is_empty(),
             "literal date arg must not unify with a different date"
@@ -588,6 +641,7 @@ mod tests {
         let matches = find_matches(
             &under_cap,
             &State::from_claims(vec![]),
+            None,
             &Bindings::new(),
             None,
         )
@@ -605,6 +659,7 @@ mod tests {
         let matches = find_matches(
             &over_cap,
             &State::from_claims(vec![]),
+            None,
             &Bindings::new(),
             None,
         )
@@ -652,7 +707,7 @@ mod tests {
 
         // Both branches match: two A extensions + one B extension = 3.
         let both = Expr::Or(vec![a_x.clone(), b_x.clone()]);
-        let matches = find_matches(&both, &state, &Bindings::new(), None).unwrap();
+        let matches = find_matches(&both, &state, None, &Bindings::new(), None).unwrap();
         assert_eq!(
             matches.len(),
             3,
@@ -672,7 +727,7 @@ mod tests {
         // One branch matches, one doesn't: only the matching branch's
         // extensions are returned.
         let one_matches = Expr::Or(vec![a_x.clone(), c_x.clone()]);
-        let matches = find_matches(&one_matches, &state, &Bindings::new(), None).unwrap();
+        let matches = find_matches(&one_matches, &state, None, &Bindings::new(), None).unwrap();
         assert_eq!(
             matches.len(),
             2,
@@ -681,7 +736,7 @@ mod tests {
 
         // Neither branch matches: empty.
         let none = Expr::Or(vec![c_x.clone(), c_x]);
-        let matches = find_matches(&none, &state, &Bindings::new(), None).unwrap();
+        let matches = find_matches(&none, &state, None, &Bindings::new(), None).unwrap();
         assert!(
             matches.is_empty(),
             "Or with every branch empty produces an empty result"
@@ -690,11 +745,171 @@ mod tests {
         // No deduplication: two branches admitting the same extension
         // appear twice, matching find_conjunction's convention.
         let dup = Expr::Or(vec![a_x.clone(), a_x]);
-        let matches = find_matches(&dup, &state, &Bindings::new(), None).unwrap();
+        let matches = find_matches(&dup, &state, None, &Bindings::new(), None).unwrap();
         assert_eq!(
             matches.len(),
             4,
             "Or preserves multiplicity; identical branches double-count"
+        );
+    }
+
+    // ============================================================
+    // Expr::Pre - pre-state opt-in
+    //
+    // The transition-invariant primitive. `pre(inner)` flips the
+    // wrapped subtree to evaluate against pre-state instead of the
+    // default (post / candidate) state. Legal only when a pre-state
+    // is in scope (invariant evaluation during propose); surfaces
+    // PreStateUnavailable otherwise. Nested `pre` is unavailable by
+    // construction - the inner subtree's pre slot is cleared so
+    // `pre(pre(...))` errors.
+    // ============================================================
+
+    /// `pre(inner)` flips state lookup: the inner expression sees
+    /// pre-state, the outer sees post (candidate). Pins the basic
+    /// flip semantic with a single decimal-counter scenario.
+    #[test]
+    fn pre_flips_predicate_lookup_to_pre_state() {
+        // pre_state has Counter(1); post (candidate) has Counter(2).
+        let pre = State::from_claims(vec![ClaimInstance {
+            predicate: "Counter".to_string(),
+            args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(1))],
+        }]);
+        let post = State::from_claims(vec![ClaimInstance {
+            predicate: "Counter".to_string(),
+            args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(2))],
+        }]);
+
+        // Counter(n) and pre(Counter(m)) implies n = m + 1
+        let body = Expr::Implies {
+            left: Box::new(Expr::And(vec![
+                Expr::Claim {
+                    predicate: "Counter".to_string(),
+                    args: vec![Term::Var("n".to_string())],
+                },
+                Expr::Pre(Box::new(Expr::Claim {
+                    predicate: "Counter".to_string(),
+                    args: vec![Term::Var("m".to_string())],
+                })),
+            ])),
+            right: Box::new(Expr::Eq(
+                Box::new(Expr::Term(Term::Var("n".to_string()))),
+                Box::new(Expr::Add(
+                    Box::new(Expr::Term(Term::Var("m".to_string()))),
+                    Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
+                )),
+            )),
+        };
+
+        let matches = find_matches(&body, &post, Some(&pre), &Bindings::new(), None).unwrap();
+        assert_eq!(
+            matches.len(),
+            1,
+            "Counter(2) and pre(Counter(1)) implies 2 = 1 + 1 should hold"
+        );
+
+        // Now post has Counter(3): the rule should fail (2 + 1 = 3 holds; let me pick mismatched)
+        let bad_post = State::from_claims(vec![ClaimInstance {
+            predicate: "Counter".to_string(),
+            args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(5))],
+        }]);
+        let matches = find_matches(&body, &bad_post, Some(&pre), &Bindings::new(), None).unwrap();
+        assert!(
+            matches.is_empty(),
+            "Counter(5) and pre(Counter(1)) implies 5 = 1 + 1 should reject"
+        );
+    }
+
+    /// `Expr::Pre` in a context with no pre_state in scope errors
+    /// `PreStateUnavailable`. This is what enforces the doctrine:
+    /// derived-claim bodies, transformation `require` bodies, and
+    /// standalone evaluator callers cannot reach for `pre()`.
+    #[test]
+    fn pre_without_pre_state_errors_pre_state_unavailable() {
+        let post = State::from_claims(vec![]);
+        let body = Expr::Pre(Box::new(Expr::Claim {
+            predicate: "Anything".to_string(),
+            args: vec![],
+        }));
+        let err = find_matches(&body, &post, None, &Bindings::new(), None).expect_err("must error");
+        assert!(matches!(err, EvalError::PreStateUnavailable), "got {err:?}");
+    }
+
+    /// Nested `pre(pre(x))` is also unavailable - the inner subtree
+    /// inherits a cleared pre slot, so a second `Pre` finds nothing
+    /// to swap into.
+    #[test]
+    fn nested_pre_errors_pre_state_unavailable() {
+        let pre = State::from_claims(vec![]);
+        let post = State::from_claims(vec![]);
+        let body = Expr::Pre(Box::new(Expr::Pre(Box::new(Expr::Claim {
+            predicate: "Anything".to_string(),
+            args: vec![],
+        }))));
+        let err = find_matches(&body, &post, Some(&pre), &Bindings::new(), None)
+            .expect_err("nested pre must error");
+        assert!(matches!(err, EvalError::PreStateUnavailable), "got {err:?}");
+    }
+
+    /// `pre(forall x in S: body)` and `forall x in S: pre(body)`
+    /// differ when the iteration domain itself shifts between pre
+    /// and post. Pins that distinction: with `S` admitted only in
+    /// post (say, an account that did not yet exist), the first
+    /// form quantifies over nothing (vacuously true), the second
+    /// quantifies over the post-state members.
+    #[test]
+    fn pre_outside_forall_vs_inside_distinguish_iteration_domain() {
+        let pre = State::from_claims(vec![]);
+        let post = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "Account".to_string(),
+                args: vec![EvalValue::Subject("a1".to_string())],
+            },
+            ClaimInstance {
+                predicate: "Balance".to_string(),
+                args: vec![EvalValue::Subject("a1".to_string())],
+            },
+        ]);
+
+        // `pre(forall a in Account: Balance(a))`: in pre-state there
+        // are no Account claims, so the source is empty and the
+        // body is vacuously satisfied.
+        let outside = Expr::Pre(Box::new(Expr::Forall {
+            binding: "a".to_string(),
+            source: Box::new(Expr::Claim {
+                predicate: "Account".to_string(),
+                args: vec![Term::Var("a".to_string())],
+            }),
+            body: Box::new(Expr::Claim {
+                predicate: "Balance".to_string(),
+                args: vec![Term::Var("a".to_string())],
+            }),
+        }));
+        let matches = find_matches(&outside, &post, Some(&pre), &Bindings::new(), None).unwrap();
+        assert!(
+            !matches.is_empty(),
+            "pre(forall over empty pre-state Account) is vacuously true"
+        );
+
+        // `forall a in Account: pre(Balance(a))`: iterates the
+        // single post-state Account, and asks whether Balance(a)
+        // held in pre. Pre has no Balance, so the body fails for
+        // the iterated a.
+        let inside = Expr::Forall {
+            binding: "a".to_string(),
+            source: Box::new(Expr::Claim {
+                predicate: "Account".to_string(),
+                args: vec![Term::Var("a".to_string())],
+            }),
+            body: Box::new(Expr::Pre(Box::new(Expr::Claim {
+                predicate: "Balance".to_string(),
+                args: vec![Term::Var("a".to_string())],
+            }))),
+        };
+        let matches = find_matches(&inside, &post, Some(&pre), &Bindings::new(), None).unwrap();
+        assert!(
+            matches.is_empty(),
+            "forall over post Account where body asks pre(Balance) must fail when pre has no Balance"
         );
     }
 

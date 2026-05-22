@@ -140,7 +140,7 @@ fn netting_state(amount: i64) -> State {
 fn net_amount_equals_lines_holds_when_amount_matches() {
     let state = netting_state(100);
     let inv = settlement_netting::net_amount_equals_lines();
-    let result = eval_invariant(&inv, &state).expect("evaluation should not error");
+    let result = eval_invariant(&inv, &state, None).expect("evaluation should not error");
     assert!(result, "invariant should hold for amount = 60 + 40 = 100");
 }
 
@@ -148,7 +148,7 @@ fn net_amount_equals_lines_holds_when_amount_matches() {
 fn net_amount_equals_lines_fails_when_amount_mismatches() {
     let state = netting_state(101);
     let inv = settlement_netting::net_amount_equals_lines();
-    let result = eval_invariant(&inv, &state).expect("evaluation should not error");
+    let result = eval_invariant(&inv, &state, None).expect("evaluation should not error");
     assert!(
         !result,
         "invariant should fail for amount = 101 vs lines = 100"

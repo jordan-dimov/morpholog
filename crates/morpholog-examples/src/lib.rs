@@ -15,6 +15,7 @@
 //! as teaching fixtures, not a contract.
 
 pub mod approval_controls;
+pub mod chess_transition_invariants;
 pub mod clinical_trial_enrolment;
 pub mod double_entry_ledger;
 pub mod insurance_claim_settlement;
@@ -38,5 +39,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         approval_controls::program(),
         insurance_claim_settlement::program(),
         clinical_trial_enrolment::program(),
+        chess_transition_invariants::program(),
     ]
 }

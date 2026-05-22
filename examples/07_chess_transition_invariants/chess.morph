@@ -1,0 +1,120 @@
+-- Chess transition invariants - the forcing example for `pre(...)`.
+--
+-- The chess paper at
+-- https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html
+-- frames a system's safety rules as two families: state invariants
+-- (predicates over a single state) and transition invariants
+-- (predicates over a <state, next-state> pair). Morpholog evaluates
+-- invariants against a candidate state by default; this programme
+-- adds `pre(...)` for the second family.
+--
+-- The chess domain is deliberate. It makes the conservation rules
+-- textbook-clean (`move_count_strictly_increases`,
+-- `turn_alternates`, `single_capture_per_move`) without the cross-
+-- cutting concerns of a business example. The same `pre(...)`
+-- primitive is what a future per-account-delta ledger invariant
+-- (`pre(AccountBalance) and AccountBalance implies after = before
+-- + posted_delta`) will reach for - identical kernel mechanism,
+-- different domain narrative.
+--
+-- This file mirrors the IR in `crates/morpholog-examples/src/
+-- chess_transition_invariants.rs`; the `every_worked_example_round_trips`
+-- property test ties them together.
+
+program chess_transition_invariants
+
+predicate PieceAt(square: Subject, piece_type: Subject, color: Subject)
+predicate MoveCount(n: Decimal)
+predicate PieceCount(n: Decimal)
+predicate CurrentTurn(color: Subject)
+
+invariant at_most_one_piece_per_square:
+  (PieceAt(sq, t_a, c_a) and PieceAt(sq, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
+
+invariant one_king_per_color:
+  (PieceAt(sq_a, #king, c) and PieceAt(sq_b, #king, c)) implies (sq_a = sq_b)
+
+invariant move_count_strictly_increases:
+  (MoveCount(n) and pre(MoveCount(m))) implies (n = (m + 1))
+
+invariant turn_alternates:
+  (CurrentTurn(t_now) and pre(CurrentTurn(t_prev))) implies (t_now != t_prev)
+
+invariant single_capture_per_move:
+  (PieceCount(after) and pre(PieceCount(before))) implies ((after = before) or (after = (before - 1)))
+
+transformation start_game():
+  admit PieceAt(#a1, #rook, #white)
+  admit PieceAt(#b1, #knight, #white)
+  admit PieceAt(#c1, #bishop, #white)
+  admit PieceAt(#d1, #queen, #white)
+  admit PieceAt(#e1, #king, #white)
+  admit PieceAt(#f1, #bishop, #white)
+  admit PieceAt(#g1, #knight, #white)
+  admit PieceAt(#h1, #rook, #white)
+  admit PieceAt(#a2, #pawn, #white)
+  admit PieceAt(#b2, #pawn, #white)
+  admit PieceAt(#c2, #pawn, #white)
+  admit PieceAt(#d2, #pawn, #white)
+  admit PieceAt(#e2, #pawn, #white)
+  admit PieceAt(#f2, #pawn, #white)
+  admit PieceAt(#g2, #pawn, #white)
+  admit PieceAt(#h2, #pawn, #white)
+  admit PieceAt(#a7, #pawn, #black)
+  admit PieceAt(#b7, #pawn, #black)
+  admit PieceAt(#c7, #pawn, #black)
+  admit PieceAt(#d7, #pawn, #black)
+  admit PieceAt(#e7, #pawn, #black)
+  admit PieceAt(#f7, #pawn, #black)
+  admit PieceAt(#g7, #pawn, #black)
+  admit PieceAt(#h7, #pawn, #black)
+  admit PieceAt(#a8, #rook, #black)
+  admit PieceAt(#b8, #knight, #black)
+  admit PieceAt(#c8, #bishop, #black)
+  admit PieceAt(#d8, #queen, #black)
+  admit PieceAt(#e8, #king, #black)
+  admit PieceAt(#f8, #bishop, #black)
+  admit PieceAt(#g8, #knight, #black)
+  admit PieceAt(#h8, #rook, #black)
+  admit MoveCount(0)
+  admit PieceCount(32)
+  admit CurrentTurn(#white)
+  emit GameStarted()
+
+transformation quiet_move(src, dst, new_turn):
+  bind PieceAt(src, piece_type, piece_color)
+  bind CurrentTurn(current_turn)
+  bind MoveCount(m)
+  require piece_color = current_turn
+  require new_turn != current_turn
+  require not (exists anything: PieceAt(dst, any_type, any_color))
+  let next_m = m + 1
+  retract PieceAt(src, piece_type, piece_color)
+  retract CurrentTurn(current_turn)
+  retract MoveCount(m)
+  admit PieceAt(dst, piece_type, piece_color)
+  admit CurrentTurn(new_turn)
+  admit MoveCount(next_m)
+  emit PieceMoved(src, dst)
+
+transformation capturing_move(src, dst, new_turn):
+  bind PieceAt(src, piece_type, piece_color)
+  bind PieceAt(dst, captured_type, captured_color)
+  bind CurrentTurn(current_turn)
+  bind MoveCount(m)
+  bind PieceCount(p)
+  require piece_color = current_turn
+  require new_turn != current_turn
+  require captured_color != current_turn
+  let next_m = m + 1
+  let next_p = p - 1
+  retract PieceAt(src, piece_type, piece_color)
+  retract PieceAt(dst, captured_type, captured_color)
+  retract CurrentTurn(current_turn)
+  retract MoveCount(m)
+  retract PieceCount(p)
+  admit PieceAt(dst, piece_type, piece_color)
+  admit CurrentTurn(new_turn)
+  admit MoveCount(next_m)
+  admit PieceCount(next_p)
+  emit PieceCaptured(src, dst, captured_type)

@@ -197,9 +197,25 @@ where
                 default: default.map(Box::new),
             });
 
+        // pre wrapper: `pre ( <expr> )`. Function-call-shape primary
+        // that flips the wrapped subtree's state lookup from the
+        // default (post / candidate) to pre-transition. Parens are
+        // mandatory - the lexer reserves `pre` everywhere so a bare
+        // `pre` outside this form would surface as an unexpected-
+        // token diagnostic rather than a silent Var("pre")
+        // interpretation. Lowers to `Expr::Pre(Box::new(inner))`.
+        let pre_expr = just(Token::KwPre)
+            .ignore_then(
+                expression
+                    .clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|inner: Expr| Expr::Pre(Box::new(inner)));
+
         let primary = choice((
             sum_expr,
             value_expr,
+            pre_expr,
             parenthesised,
             decimal_as_expr,
             date_as_expr,

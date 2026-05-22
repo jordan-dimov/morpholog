@@ -363,7 +363,7 @@ fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
             args: vec![Term::Actor],
         },
     };
-    let err = eval_invariant(&inv, &State::default()).expect_err("must error");
+    let err = eval_invariant(&inv, &State::default(), None).expect_err("must error");
     assert!(matches!(err, EvalError::UnboundActor));
 }
 
@@ -384,7 +384,7 @@ fn term_actor_unbound_error_is_position_independent() {
             ],
         },
     };
-    let err = eval_invariant(&inv, &State::default())
+    let err = eval_invariant(&inv, &State::default(), None)
         .expect_err("Term::Actor outside transition scope must error regardless of arg order");
     assert!(matches!(err, EvalError::UnboundActor));
 }

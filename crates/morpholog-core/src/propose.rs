@@ -403,7 +403,10 @@ pub(crate) fn propose_inner(
     let candidate = build_candidate_state(pre_state, &asserted, &retracted);
 
     for inv in invariants {
-        let held = eval_invariant(inv, &candidate)?;
+        // Pass both pre_state and candidate. Invariants that contain
+        // `Expr::Pre` flip into pre-state lookup for the wrapped
+        // subtree; invariants that don't are unaffected.
+        let held = eval_invariant(inv, &candidate, Some(pre_state))?;
         if trace.is_on() {
             trace.push(TraceEntry::InvariantCheck {
                 name: inv.name.clone(),
@@ -439,7 +442,12 @@ pub(crate) fn execute_stmt(
 ) -> Result<StmtOutcome, EvalError> {
     match stmt {
         Stmt::Require(expr) => {
-            let matches = find_matches(expr, pre_state, bindings, actor)?;
+            // Transformation bodies read pre-state as the only state in
+            // scope - there is no post to flip back from. `Expr::Pre`
+            // inside a `require` therefore surfaces as
+            // `EvalError::PreStateUnavailable`. The `None` here is what
+            // enforces that doctrine.
+            let matches = find_matches(expr, pre_state, None, bindings, actor)?;
             if matches.is_empty() {
                 // The rejection path renders the expression for the
                 // reason string regardless of tracing (existing
@@ -449,7 +457,7 @@ pub(crate) fn execute_stmt(
                 let rendered = format::format_expr_inline(expr);
                 let reason = format!("require failed: {rendered} did not hold over pre-state");
                 if trace.is_on() {
-                    let failing = find_failing_subexpr(expr, pre_state, bindings, actor);
+                    let failing = find_failing_subexpr(expr, pre_state, None, bindings, actor);
                     trace.push(TraceEntry::Require {
                         expression: rendered,
                         outcome: RequireOutcome::Rejected {
@@ -482,13 +490,13 @@ pub(crate) fn execute_stmt(
             // (existing behaviour from PR B); the trace entry reuses
             // that single rendering rather than calling
             // format_expr_inline a second time.
-            let mut matches = find_matches(expr, pre_state, bindings, actor)?;
+            let mut matches = find_matches(expr, pre_state, None, bindings, actor)?;
             match matches.len() {
                 0 => {
                     let rendered = format::format_expr_inline(expr);
                     let reason = format!("bind_one failed: {rendered} matched no candidates");
                     if trace.is_on() {
-                        let failing = find_failing_subexpr(expr, pre_state, bindings, actor);
+                        let failing = find_failing_subexpr(expr, pre_state, None, bindings, actor);
                         trace.push(TraceEntry::BindOne {
                             expression: rendered,
                             outcome: BindOneOutcome::NoMatch {
@@ -530,7 +538,7 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Let { name, value } => {
-            let v = eval_value(value, pre_state, bindings, actor)?;
+            let v = eval_value(value, pre_state, None, bindings, actor)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Let {
                     name: name.clone(),
@@ -600,7 +608,7 @@ pub(crate) fn execute_stmt(
             collection,
             body,
         } => {
-            let coll_val = eval_value(collection, pre_state, bindings, actor)?;
+            let coll_val = eval_value(collection, pre_state, None, bindings, actor)?;
             let items = match coll_val {
                 EvalValue::Collection(v) => v,
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),

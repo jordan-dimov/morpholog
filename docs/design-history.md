@@ -538,3 +538,51 @@ Standing rationale for the kernel addition independent of the example: every oth
 **What stays out:**
 
 - Short-circuit evaluation. The current `find_disjunction` walks every branch and accumulates. A worked example with a measurable hot path would force a short-circuit optimisation; until then the simple shape is correct and clear.
+
+
+### `Expr::Pre` transition-invariant primitive
+
+**Forced by:** the chess transition-invariants worked example. Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) blog post splits a system's safety rules into state invariants (predicates over a single state) and transition invariants (predicates over a `<state, next-state>` pair). The kernel before this PR could express only the first kind; an invariant that wants to say "the move count advanced by exactly one" or "the trial's piece count decreased by zero or one" cannot be a predicate over one state.
+
+**The forcing example is chess on purpose, and the canonical case is not.** The original framing - which ChatGPT pushed hard for and is right about as documentary doctrine - is that Morpholog's soul is the ledger; the canonical transition-invariant case is per-account-delta conservation ("`pre(AccountBalance(a, before)) and AccountBalance(a, after) implies after = before + posted_delta`"). When I went to retrofit that onto example 03, however, the existing ledger has no admitted `AccountBalance` predicate - balances live only as a derived claim (`TrialBalanceRow`), and derived claims are not visible to invariants per the v0 locked decision. The honest options were (α) a per-journal conservation invariant that nearly duplicates `balanced_posted_entry`, (β) reshaping example 03 with new admitted-balance state plus retract+assert in every posting transformation, or (γ) a new minimal example specifically for transition invariants. Jordan's call: chess as the forcing example, with the doctrinal case still framed in terms of ledger conservation in the README and runtime-semantics doc. That keeps the kernel-change PR scoped and the next retrofit (whichever case earns it) honestly evaluated on its own.
+
+**The wrapper shape, not TLA+-style `x'`.** `Expr::Pre(Box<Expr>)` opts a subtree into pre-state evaluation; the default outside the wrapper remains the candidate state. The TLA+ style of priming the variable (`moveCount' = moveCount + 1`) assumes the body has two free state variables. Morpholog has one, by design, and the wrapper inverts that: post is default, pre is opt-in. Three knock-on benefits:
+
+- Zero migration. Every existing invariant typechecks and evaluates unchanged. `eval_invariant`'s signature grew `pre_state: Option<&State>` and call sites pass `None` everywhere except the propose-path invariant check; state-only callers (tests, derived-claim evaluation, the PostgreSQL adapter's standalone checks) keep working without touching their invariants.
+- Composes with what was already there. `pre(PieceCount(after))`, `pre(IsEmpty(sq))`, `pre(sum(amount | Posting(j, _, amount)))` all work without IR surgery on `Sum`, `ValueOf`, or quantifiers - the wrapper changes which state the leaves resolve against; the structural machinery is identical.
+- Preserves the binding-statement quartet semantics for quantifiers. `pre(forall x in S: ...)` and `forall x in S: pre(...)` differ exactly where they should: when the iteration domain itself shifts between pre and post. That distinction matters for business cases (accounts created, claims retired) and is documented in [`runtime-semantics.md`](runtime-semantics.md).
+
+**No new invariant kind.** The classification of an invariant as "state" or "transition" is descriptive, derivable by walking the body for `Expr::Pre`. The IR carries only `Invariant`; the kernel treats both kinds uniformly through the evaluator.
+
+**Semantic, not syntactic, restriction.** `Pre` raises `EvalError::PreStateUnavailable` when reached in a context without a pre-state in scope, rather than being syntactically restricted to invariant bodies. The error is phrased about evaluation context, so future contexts that legitimately carry both states (transformation postconditions, trace assertions) can share the primitive with no IR change. Nested `pre(pre(...))` is also unavailable by construction: the inner subtree's pre slot is cleared on entry, so a second `Pre` finds nothing to swap into.
+
+**Considered and rejected:**
+
+- *An `EvalContext` struct refactor before adding `Pre`.* ChatGPT's strongest design point in the planning phase. The argument was that threading a fifth parameter onto `find_matches` is "boltage" and the cleaner path is to make state view a first-class evaluator concern. Rejected on subtraction grounds: one new context value is three away from the abstraction earning itself. The current `find_matches(expr, state, pre_state, bindings, actor)` is one more parameter than before; it is not a design smell. When a second feature wants to thread something through the evaluator, that is the point at which to refactor.
+- *A new top-level invariant kind (`StateInvariant` vs `TransitionInvariant`).* Tempting because the distinction is real, but a flag-set or wrapper-walk over the body classifies cleanly without IR surgery. Authors do not need a separate construct to write a transition invariant; they just use `pre(...)`.
+- *A per-Term lookup primitive (`Term::PreValue(predicate, args)`).* More constrained but does not compose with `Sum` or quantifiers as cleanly. The wrapper makes "old value of an aggregation" trivially expressible.
+- *Aggregated delta primitives (`was_admitted(predicate, args)`, `delta_count(predicate)`).* Useful only inside transition invariants and a strict subset of what `pre(...)` covers (`P(x) and not pre(P(x))` already expresses "newly admitted"). Not added until a worked example forces a measurable hot path.
+
+**Locked-decision adjacent:**
+
+- `EvalError::PreStateUnavailable` is a distinct variant. `UnboundActor` and `PreStateUnavailable` describe two different capabilities the evaluator might lack, and the diagnostic stays honest about which is missing.
+- Derived-claim bodies cannot reach for `pre(...)`: they evaluate against admitted state as a function of one state, no transition in scope. Same status as `Term::Actor` inside derived-claim bodies.
+
+**What landed:**
+
+- `Expr::Pre(Box<Expr>)` in the IR.
+- `EvalError::PreStateUnavailable` plus its `Display` impl.
+- `find_matches`, `eval_value`, `find_conjunction`, `find_disjunction`, and `find_failing_subexpr` all grew `pre_state: Option<&State>` parameters; the `Expr::Pre` arm in `find_matches` swaps `state` <- `pre_state` and clears the pre slot for the recursive call.
+- `eval_invariant` signature change to `(inv, state, pre_state: Option<&State>)`; the propose-path call passes `Some(pre_state)`, every other call passes `None`.
+- DSL constructor `pre(inner)`.
+- Surface keyword `pre`, parsed as a function-call-shape primary alongside `sum_expr` and `value_expr` (mandatory parens).
+- Walkers (validate, analysis, format, find_failing_subexpr) extended.
+- `examples/07_chess_transition_invariants/` worked example with three transition invariants (`move_count_strictly_increases`, `turn_alternates`, `single_capture_per_move`) and a load-bearing integration test that constructs a hand-built broken transformation and verifies the transition invariant catches it.
+- `runtime-semantics.md` updated with the state-vs-transition section and the quantifier-composition note.
+
+**What stays out:**
+
+- Aggregated delta primitives (`was_admitted`, `was_retracted`, `delta_count`). Waiting on a worked example that forces them.
+- Short-circuit evaluation of nested `Pre` (none today - the recursive call clears pre).
+- Transformation postconditions and trace assertions as additional `Pre`-bearing contexts. The error variant is named for the evaluator's missing capability, so adding those contexts later requires no IR change.
+- A retrofit of `pre(...)` onto an existing example (ledger or insurance). The next move is to choose which case earns its place and land it in a follow-up that adds no new IR.

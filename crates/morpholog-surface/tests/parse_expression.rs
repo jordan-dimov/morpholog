@@ -357,6 +357,66 @@ fn not_binds_tighter_than_or() {
     assert!(matches!(ops[1], Expr::Claim { .. }));
 }
 
+#[test]
+fn parses_pre_over_claim() {
+    let got = parse_expression("pre(Balance(a, b))").unwrap();
+    let expected = Expr::Pre(Box::new(Expr::Claim {
+        predicate: "Balance".to_string(),
+        args: vec![var("a"), var("b")],
+    }));
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn pre_composes_with_and_inside() {
+    // `pre(A(x) and B(x))` parses as Pre wrapping the And.
+    let got = parse_expression("pre(A(x) and B(x))").unwrap();
+    let Expr::Pre(inner) = got else {
+        panic!("expected Pre, got {got:?}");
+    };
+    assert!(matches!(*inner, Expr::And(_)));
+}
+
+#[test]
+fn pre_at_primary_level_composes_with_outer_and() {
+    // `pre(A(x)) and B(x)` parses as And([Pre(A(x)), B(x)])
+    // because `pre(...)` is a function-call-shape primary, no
+    // outer parens needed.
+    let got = parse_expression("pre(A(x)) and B(x)").unwrap();
+    let Expr::And(ops) = got else {
+        panic!("expected And, got {got:?}");
+    };
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(ops[0], Expr::Pre(_)));
+    assert!(matches!(ops[1], Expr::Claim { .. }));
+}
+
+#[test]
+fn pre_inside_implies_with_disjunction() {
+    // The textbook chess SingleCapturePerMove shape:
+    // `PieceCount(after) and pre(PieceCount(before))
+    //  implies (after = before) or (after = before - 1)`
+    let source = "PieceCount(after) and pre(PieceCount(before)) \
+                  implies after = before or after = before - 1";
+    let got = parse_expression(source).unwrap();
+    let Expr::Implies { left, right } = got else {
+        panic!("expected Implies, got {got:?}");
+    };
+    assert!(matches!(*left, Expr::And(_)));
+    assert!(matches!(*right, Expr::Or(_)));
+}
+
+#[test]
+fn pre_value_position_inside_sum() {
+    // pre composes with Sum's body: `sum(amount | pre(Posting(_, amount)))`
+    // counts amounts that were in pre-state.
+    let got = parse_expression("sum(amount | pre(Posting(_, amount)))").unwrap();
+    let Expr::Sum { body, .. } = got else {
+        panic!("expected Sum, got {got:?}");
+    };
+    assert!(matches!(*body, Expr::Pre(_)));
+}
+
 /// Round-trip property over a mixed-precedence boolean expression:
 /// parse, format, parse again, and the IR must be unchanged. Pins the
 /// formatter's behaviour for `Or` operands that are themselves
