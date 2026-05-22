@@ -376,3 +376,368 @@ fn true_and_false_are_reserved_not_parseable() {
         assert!(!errs.is_empty());
     }
 }
+
+// ============================================================
+// P2b-lite: bounded forms + literals + membership
+// ============================================================
+
+// ---- Date and subject literals ----
+
+#[test]
+fn parses_date_literal_as_term() {
+    let got = parse_expression("@2026-05-22").unwrap();
+    assert_eq!(
+        got,
+        Expr::Term(Term::Literal(Value::Date("2026-05-22".to_string())))
+    );
+}
+
+#[test]
+fn parses_subject_literal_as_term() {
+    let got = parse_expression("#BANK_DEBT_SERVICE").unwrap();
+    assert_eq!(
+        got,
+        Expr::Term(Term::Literal(Value::Subject(
+            "BANK_DEBT_SERVICE".to_string()
+        )))
+    );
+}
+
+#[test]
+fn date_literal_in_claim_args() {
+    let got = parse_expression("EffectiveFrom(verification, @2026-05-22)").unwrap();
+    let Expr::Claim { predicate, args } = got else {
+        panic!("expected Claim");
+    };
+    assert_eq!(predicate, "EffectiveFrom");
+    assert_eq!(args[0], Term::Var("verification".to_string()));
+    assert_eq!(
+        args[1],
+        Term::Literal(Value::Date("2026-05-22".to_string()))
+    );
+}
+
+#[test]
+fn subject_literal_in_claim_args() {
+    let got = parse_expression("Purpose(asset, #BANK_DEBT_SERVICE)").unwrap();
+    let Expr::Claim { predicate, args } = got else {
+        panic!("expected Claim");
+    };
+    assert_eq!(predicate, "Purpose");
+    assert_eq!(args[0], Term::Var("asset".to_string()));
+    assert_eq!(
+        args[1],
+        Term::Literal(Value::Subject("BANK_DEBT_SERVICE".to_string()))
+    );
+}
+
+// ---- Membership comparator (x in xs) ----
+
+#[test]
+fn parses_membership_between_variables() {
+    let got = parse_expression("line in lines").unwrap();
+    assert_eq!(
+        got,
+        Expr::In(
+            Term::Var("line".to_string()),
+            Term::Var("lines".to_string()),
+        )
+    );
+}
+
+#[test]
+fn in_rejects_arithmetic_operand() {
+    // `In(Term, Term)` cannot represent `a + 1 in xs`.
+    let errs = parse_expression("a + 1 in xs").expect_err("term-only restriction should fire");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("`in`") && d.message.contains("terms")),
+        "expected diagnostic about in-membership term-only restriction; got: {errs:?}"
+    );
+}
+
+// ---- exists (no source clause) ----
+
+#[test]
+fn parses_exists_with_simple_body() {
+    let got = parse_expression("exists x: Foo(x)").unwrap();
+    assert_eq!(
+        got,
+        Expr::Exists {
+            binding: "x".to_string(),
+            body: Box::new(Expr::Claim {
+                predicate: "Foo".to_string(),
+                args: vec![Term::Var("x".to_string())],
+            }),
+        }
+    );
+}
+
+#[test]
+fn exists_body_extends_greedily() {
+    // `exists x: A(x) and B(x)` -> body is the whole conjunction.
+    let got = parse_expression("exists x: A(x) and B(x)").unwrap();
+    let Expr::Exists { binding, body } = got else {
+        panic!("expected Exists");
+    };
+    assert_eq!(binding, "x");
+    assert!(matches!(*body, Expr::And(_)));
+}
+
+// ---- forall with bare-variable source (auto-wrapped as In) ----
+
+#[test]
+fn forall_with_variable_source_wraps_as_in() {
+    let got = parse_expression("forall line in lines: ApprovedSettlementLine(line)").unwrap();
+    let Expr::Forall {
+        binding,
+        source,
+        body,
+    } = got
+    else {
+        panic!("expected Forall");
+    };
+    assert_eq!(binding, "line");
+    // Source must be lifted from `lines` (a Term::Var) to
+    // `In(Var("line"), Var("lines"))` so the kernel can iterate.
+    assert_eq!(
+        *source,
+        Expr::In(
+            Term::Var("line".to_string()),
+            Term::Var("lines".to_string()),
+        )
+    );
+    assert!(matches!(*body, Expr::Claim { .. }));
+}
+
+#[test]
+fn forall_with_claim_source_used_as_is() {
+    let got = parse_expression(
+        "forall claim_id in ClaimReported(claim_id, _, amount): AmountPaid(claim_id, amount)",
+    )
+    .unwrap();
+    let Expr::Forall {
+        binding,
+        source,
+        body,
+    } = got
+    else {
+        panic!("expected Forall");
+    };
+    assert_eq!(binding, "claim_id");
+    // Source is a claim, used as-is (not wrapped in In).
+    assert!(matches!(*source, Expr::Claim { .. }));
+    if let Expr::Claim { predicate, .. } = *source {
+        assert_eq!(predicate, "ClaimReported");
+    }
+    assert!(matches!(*body, Expr::Claim { .. }));
+}
+
+#[test]
+fn forall_body_extends_greedily() {
+    // body is `A and not B`, not just `A`.
+    let got =
+        parse_expression("forall line in lines: ApprovedSettlementLine(line) and not Netted(line)")
+            .unwrap();
+    let Expr::Forall { body, .. } = got else {
+        panic!("expected Forall");
+    };
+    assert!(matches!(*body, Expr::And(_)));
+}
+
+#[test]
+fn nested_forall() {
+    // forall x in xs: forall y in ys: P(x, y)
+    let got = parse_expression("forall x in xs: forall y in ys: P(x, y)").unwrap();
+    let Expr::Forall {
+        binding: outer_b,
+        body: outer_body,
+        ..
+    } = got
+    else {
+        panic!("expected outer Forall");
+    };
+    assert_eq!(outer_b, "x");
+    let Expr::Forall {
+        binding: inner_b, ..
+    } = *outer_body
+    else {
+        panic!("expected inner Forall");
+    };
+    assert_eq!(inner_b, "y");
+}
+
+// ---- sum aggregator ----
+
+#[test]
+fn parses_sum() {
+    let got = parse_expression("sum(amount | SettlementPaid(claim, amount))").unwrap();
+    let Expr::Sum {
+        value,
+        binding,
+        body,
+    } = got
+    else {
+        panic!("expected Sum");
+    };
+    assert_eq!(value, Term::Var("amount".to_string()));
+    assert_eq!(binding, "amount");
+    assert!(matches!(*body, Expr::Claim { .. }));
+}
+
+#[test]
+fn sum_body_can_be_compound() {
+    // sum(amount | Paid(claim, amount) and not Refunded(claim))
+    let got =
+        parse_expression("sum(amount | SettlementPaid(claim, amount) and not Refunded(claim))")
+            .unwrap();
+    let Expr::Sum { body, .. } = got else {
+        panic!("expected Sum");
+    };
+    assert!(matches!(*body, Expr::And(_)));
+}
+
+#[test]
+fn sum_target_must_be_variable_not_literal() {
+    // `sum(5 | ...)` is not valid: parser requires an Ident for
+    // the target. The parser fails with an unexpected-token diagnostic.
+    let errs = parse_expression("sum(5 | Foo())").expect_err("literal target should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn sum_target_must_be_variable_not_wildcard() {
+    let errs = parse_expression("sum(_ | Foo())").expect_err("wildcard target should fail");
+    assert!(!errs.is_empty());
+}
+
+// ---- value lookup ----
+
+#[test]
+fn parses_value_without_default() {
+    let got = parse_expression("value Policy(policy_id, _)").unwrap();
+    let Expr::ValueOf {
+        predicate,
+        args,
+        default,
+    } = got
+    else {
+        panic!("expected ValueOf");
+    };
+    assert_eq!(predicate, "Policy");
+    assert_eq!(args.len(), 2);
+    assert_eq!(args[0], Term::Var("policy_id".to_string()));
+    assert_eq!(args[1], Term::Wildcard);
+    assert!(default.is_none());
+}
+
+#[test]
+fn parses_value_with_default() {
+    let got = parse_expression("value Policy(policy_id, _) default 0").unwrap();
+    let Expr::ValueOf {
+        predicate, default, ..
+    } = got
+    else {
+        panic!("expected ValueOf");
+    };
+    assert_eq!(predicate, "Policy");
+    let default = default.expect("expected default expr");
+    assert_eq!(*default, dec_expr("0"));
+}
+
+// ---- Combinations / realistic fragments ----
+
+#[test]
+fn realistic_insurance_aggregate_cap() {
+    // The insurance cap rule using sum:
+    // sum(paid | SettlementPaid(claim, paid)) + proposed <= limit
+    let got =
+        parse_expression("sum(paid | SettlementPaid(claim, paid)) + proposed <= limit").unwrap();
+    let Expr::Le(lhs, rhs) = got else {
+        panic!("expected Le");
+    };
+    let Expr::Add(a, b) = *lhs else {
+        panic!("expected Add on LHS of Le");
+    };
+    assert!(matches!(*a, Expr::Sum { .. }));
+    assert_eq!(*b, var_expr("proposed"));
+    assert_eq!(*rhs, var_expr("limit"));
+}
+
+#[test]
+fn realistic_netting_forall() {
+    // The forall fragment from settlement_netting:
+    // forall line in lines: ApprovedSettlementLine(line) and not Netted(line)
+    let got =
+        parse_expression("forall line in lines: ApprovedSettlementLine(line) and not Netted(line)")
+            .unwrap();
+    assert!(matches!(got, Expr::Forall { .. }));
+}
+
+#[test]
+fn realistic_verified_revenue_admissibility() {
+    // From verified_revenue: at least one StandingGrantedBy must
+    // exist for an admissible verification.
+    // exists g: StandingGrantedBy(verification, purpose, _, g)
+    let got = parse_expression("exists g: StandingGrantedBy(verification, purpose, _, g)").unwrap();
+    let Expr::Exists { binding, body } = got else {
+        panic!("expected Exists");
+    };
+    assert_eq!(binding, "g");
+    assert!(matches!(*body, Expr::Claim { .. }));
+}
+
+#[test]
+fn realistic_clinical_trial_window_via_claims() {
+    // Without DateLe in P2b-lite, the date-window check is
+    // represented purely as claim queries. This pins that the
+    // claim-args date-literal flow works.
+    let got = parse_expression(
+        "Protocol(version, @2026-05-22) and InvestigatorDelegation(investigator, @2026-05-22)",
+    )
+    .unwrap();
+    let Expr::And(ops) = got else {
+        panic!("expected And");
+    };
+    assert_eq!(ops.len(), 2);
+    // Both operands are claims with date literals in arg position.
+    for op in &ops {
+        let Expr::Claim { args, .. } = op else {
+            panic!("expected Claim");
+        };
+        assert!(
+            args.iter()
+                .any(|t| matches!(t, Term::Literal(Value::Date(_)))),
+            "expected a date-literal arg"
+        );
+    }
+}
+
+// ---- Quantifier-body greediness boundary ----
+
+#[test]
+fn forall_inside_parens_composes_with_outer() {
+    // (forall x in xs: P(x)) and Q(z)
+    // Without parens, body would greedily consume `and Q(z)`.
+    let got = parse_expression("(forall x in xs: P(x)) and Q(z)").unwrap();
+    let Expr::And(ops) = got else {
+        panic!("expected And, got {got:?}");
+    };
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(ops[0], Expr::Forall { .. }));
+    assert!(matches!(ops[1], Expr::Claim { .. }));
+}
+
+// ---- in (membership) vs forall-in (structural) disambiguation ----
+
+#[test]
+fn in_as_comparator_inside_forall_body() {
+    // forall x in xs: y in zs
+    // Outer `in` is structural (binds source); inner `in` is
+    // the membership comparator.
+    let got = parse_expression("forall x in xs: y in zs").unwrap();
+    let Expr::Forall { body, .. } = got else {
+        panic!("expected Forall");
+    };
+    assert!(matches!(*body, Expr::In(_, _)));
+}

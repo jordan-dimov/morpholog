@@ -1,6 +1,6 @@
 //! Parser for the v0 surface fragment.
 //!
-//! Grammar (BNF, P1 + P2a):
+//! Grammar (BNF, P1 + P2a + P2b-lite):
 //!
 //! ```text
 //! program        ::= program_header predicate_decl*
@@ -10,20 +10,25 @@
 //! arg            ::= Ident ":" Kind
 //! Kind           ::= "Subject" | "Decimal" | "Date" | "Bool" | "Collection" | "Any"
 //!
-//! expression     ::= implies
+//! expression     ::= quantifier | implies
+//! quantifier     ::= "exists" Ident ":" expression
+//!                  | "forall" Ident "in" primary ":" expression
 //! implies        ::= and ("implies" implies)?
 //! and            ::= not_expr ("and" not_expr)*
 //! not_expr       ::= "not" not_expr | comparison
 //! comparison     ::= arith (cmp_op arith)?
-//! cmp_op         ::= "=" | "!=" | "<="
+//! cmp_op         ::= "=" | "!=" | "<=" | "in"
 //! arith          ::= primary (("+" | "-") primary)*
 //! primary        ::= "(" expression ")"
-//!                  | DecimalLit
+//!                  | sum_expr | value_expr
+//!                  | DecimalLit | DateLit | SubjectLit
 //!                  | "_"
 //!                  | Ident "(" term_list ")"           -- claim call (args optional)
 //!                  | Ident                             -- variable | actor
+//! sum_expr       ::= "sum" "(" Ident "|" expression ")"
+//! value_expr     ::= "value" Ident "(" term_list ")" ("default" expression)?
 //! term_list      ::= (term ("," term)* ","?)?         -- zero or more terms
-//! term           ::= Ident | "_" | DecimalLit         -- arg in claim call
+//! term           ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
 //! ```
 //!
 //! Newlines are insignificant. Trailing commas in argument lists
@@ -34,10 +39,29 @@
 //! Term)` operate on *terms*, not expressions. `Eq`, `Le`, `Sub`,
 //! `Add` operate on full expressions. The parser must therefore
 //! reject `Foo + 1 != Bar` because both `!=` operands must be
-//! terms, not arithmetic expressions. Similarly, claim-call
+//! terms, not arithmetic expressions, and the same holds for
+//! membership: `a + 1 in xs` is rejected. Similarly, claim-call
 //! arguments are terms only - `Foo(x + 1, y)` is rejected. These
 //! constraints follow directly from the IR shape under the
 //! `docs/scope-and-ambition.md` surface doctrine.
+//!
+//! P2b-lite added bounded forms (`exists`, `forall`, `sum`,
+//! `value`), the membership comparator (`in`), and the date /
+//! subject literal sigils (`@YYYY-MM-DD`, `#NAME`). Two
+//! disambiguation rules govern them:
+//!
+//! - The `in` keyword is structural inside `forall <ident> in
+//!   <source>:` (consumed by the forall production before
+//!   reaching comparator-level grammar) and a membership
+//!   comparator everywhere else. Positional disambiguation; no
+//!   context-sensitive parsing.
+//! - `forall x in source: body` accepts the source at `primary`
+//!   precedence (variables, claim calls, parenthesised
+//!   expressions, primary-shaped literals). When the source is
+//!   a bare Term-wrapper (`Expr::Term(_)`), the parser auto-lifts
+//!   it to `Expr::In(Var(binding), source_term)` so the kernel
+//!   can iterate; when it's already predicate-shaped (a claim
+//!   call), it passes through unchanged.
 //!
 //! Error recovery: humble. On a parse failure inside a predicate
 //! declaration, the parser skips forward to the next `predicate`
@@ -278,12 +302,18 @@ where
         let ident = select! { Token::Ident(s) => s };
         let decimal_lit = select! { Token::DecimalLit(s) => s };
 
+        let date_lit = select! { Token::DateLit(s) => s };
+        let subject_lit = select! { Token::SubjectLit(s) => s };
+
         // A `Term` is the limited atom that claim-call args and
         // `Neq` / `In` operands accept. Variables (including the
-        // special `actor`), wildcards, decimal literals.
+        // special `actor`), wildcards, decimal / date / subject
+        // literals.
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            date_lit.map(|s| Term::Literal(Value::Date(s))),
+            subject_lit.map(|s| Term::Literal(Value::Subject(s))),
             ident.map(|name| {
                 if name == "actor" {
                     Term::Actor
@@ -311,6 +341,8 @@ where
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
         let decimal_as_expr = decimal_lit.map(|s| Expr::Term(Term::Literal(Value::Decimal(s))));
+        let date_as_expr = date_lit.map(|s| Expr::Term(Term::Literal(Value::Date(s))));
+        let subject_as_expr = subject_lit.map(|s| Expr::Term(Term::Literal(Value::Subject(s))));
         let wildcard_as_expr = just(Token::Wildcard).to(Expr::Term(Term::Wildcard));
 
         let ident_or_call = ident
@@ -334,9 +366,54 @@ where
                 }
             });
 
+        // sum aggregator: `sum ( <var-name> | <body-expr> )`
+        //
+        // Target is restricted to a Var in v0 (per the surface
+        // doctrine in scope-and-ambition.md). Literals, wildcards,
+        // and `actor` in sum-target position are rejected with a
+        // clean diagnostic. Generalised target lands when a worked
+        // example forces it.
+        let sum_expr = just(Token::KwSum)
+            .ignore_then(
+                ident
+                    .then_ignore(just(Token::Pipe))
+                    .then(expression.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|(name, body): (String, Expr)| Expr::Sum {
+                value: Term::Var(name.clone()),
+                binding: name,
+                body: Box::new(body),
+            });
+
+        // value lookup: `value <Ident> ( <term-list> )` with
+        // optional `default <expr>` suffix. The wildcard in the
+        // args marks the value position the IR extracts.
+        let value_expr = just(Token::KwValue)
+            .ignore_then(ident)
+            .then(
+                term_list
+                    .clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .then(
+                just(Token::KwDefault)
+                    .ignore_then(expression.clone())
+                    .or_not(),
+            )
+            .map(|((predicate, args), default)| Expr::ValueOf {
+                predicate,
+                args,
+                default: default.map(Box::new),
+            });
+
         let primary = choice((
+            sum_expr,
+            value_expr,
             parenthesised,
             decimal_as_expr,
+            date_as_expr,
+            subject_as_expr,
             wildcard_as_expr,
             ident_or_call,
         ));
@@ -359,19 +436,24 @@ where
 
         // comparison ::= arith (cmp_op arith)?  (non-assoc)
         //
-        // Three forms:
+        // Four forms (P2a + P2b-lite):
         //   - `=` -> Expr::Eq(Expr, Expr)
         //   - `<=` -> Expr::Le(Expr, Expr)
         //   - `!=` -> Expr::Neq(Term, Term)  - requires both sides to be Terms
+        //   - `in` (P2b) -> Expr::In(Term, Term)  - requires both sides to be Terms
         //
-        // For `!=`, we accept any Expr on either side and then
-        // require it to be a bare `Expr::Term(t)`; otherwise emit
-        // a clean diagnostic about the term-only restriction.
+        // For `!=` and `in`, we accept any Expr on either side and
+        // then require it to be a bare `Expr::Term(t)`; otherwise
+        // emit a clean diagnostic about the term-only restriction.
+        // The `in` here is the membership comparator; the
+        // structural `in` of `forall x in source:` is consumed by
+        // the forall production before reaching this level.
         let comparison = arith.clone().then(
             choice((
                 just(Token::Eq).to(CmpOp::Eq),
                 just(Token::Neq).to(CmpOp::Neq),
                 just(Token::Le).to(CmpOp::Le),
+                just(Token::KwIn).to(CmpOp::In),
             ))
             .then(arith.clone())
             .or_not(),
@@ -381,8 +463,6 @@ where
                 Some((CmpOp::Eq, rhs)) => Expr::Eq(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::Le, rhs)) => Expr::Le(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::Neq, rhs)) => {
-                    // Pull the Term out of each side, or emit a
-                    // diagnostic if either side is not Term-shaped.
                     let span: SimpleSpan = e.span();
                     let lhs_term = expr_as_term(&lhs);
                     let rhs_term = expr_as_term(&rhs);
@@ -393,9 +473,21 @@ where
                                 span,
                                 "`!=` requires both sides to be terms (variable, wildcard, literal, or `actor`); arithmetic and other expressions are not allowed because the IR's Neq operates on terms only",
                             ));
-                            // Return something to keep parsing
-                            // going; the diagnostic above marks
-                            // this as failed.
+                            Expr::Eq(Box::new(lhs), Box::new(rhs))
+                        }
+                    }
+                }
+                Some((CmpOp::In, rhs)) => {
+                    let span: SimpleSpan = e.span();
+                    let lhs_term = expr_as_term(&lhs);
+                    let rhs_term = expr_as_term(&rhs);
+                    match (lhs_term, rhs_term) {
+                        (Some(l), Some(r)) => Expr::In(l, r),
+                        _ => {
+                            emitter.emit(Rich::custom(
+                                span,
+                                "`in` (membership) requires both sides to be terms (variable, wildcard, literal, or `actor`); arithmetic and other expressions are not allowed because the IR's In operates on terms only",
+                            ));
                             Expr::Eq(Box::new(lhs), Box::new(rhs))
                         }
                     }
@@ -435,7 +527,7 @@ where
             });
 
         // implies ::= and ("implies" implies)?  (right-assoc)
-        and_expr
+        let implies_expr = and_expr
             .clone()
             .then(
                 just(Token::KwImplies)
@@ -455,14 +547,9 @@ where
                     None => first,
                     Some((second, more)) => {
                         // Right-associate: build chain from the right.
-                        // `chain` always has at least two elements
-                        // (first + second), so the reverse iterator
-                        // is non-empty and the fold below cannot
-                        // start from `None`.
                         let mut chain = vec![first, second];
                         chain.extend(more);
                         let mut iter = chain.into_iter().rev();
-                        // SAFETY: chain.len() >= 2 by construction.
                         let init = match iter.next() {
                             Some(e) => e,
                             None => unreachable!("chain has at least two elements"),
@@ -473,7 +560,64 @@ where
                         })
                     }
                 }
-            })
+            });
+
+        // expression ::= quantifier | implies
+        //
+        // Quantifiers sit at the very top of the expression
+        // grammar - higher than `implies` - so their bodies
+        // greedily consume the rest of the expression after the
+        // colon. This matches mathematical convention: in
+        // `forall x in xs: A and B`, the body is `A and B` (the
+        // whole conjunction), not just `A`. Composition with
+        // outer expressions is achieved by parenthesising the
+        // quantifier: `(forall x in xs: body) and outer`.
+        //
+        // The source clause of `forall x in source: body` parses
+        // the source at the `primary` level. This is restrictive
+        // (a bare ident, claim call, parenthesised expression, or
+        // primary-shaped literal works; arithmetic does not) but
+        // matches every existing worked-example usage and avoids
+        // ambiguity with the comparator-level `in`.
+        //
+        // When the source is a Term-shaped primary (a bare
+        // variable, a literal), the parser auto-wraps it in
+        // `Expr::In(Var(binding), source_term)` because the
+        // kernel's Forall requires its source to be predicate-
+        // shaped. A claim-call source is already predicate-shaped
+        // and used as-is.
+        let exists_expr = just(Token::KwExists)
+            .ignore_then(ident)
+            .then_ignore(just(Token::Colon))
+            .then(expression.clone())
+            .map(|(binding, body)| Expr::Exists {
+                binding,
+                body: Box::new(body),
+            });
+
+        let forall_expr = just(Token::KwForall)
+            .ignore_then(ident)
+            .then_ignore(just(Token::KwIn))
+            .then(primary.clone())
+            .then_ignore(just(Token::Colon))
+            .then(expression.clone())
+            .map(|((binding, source), body)| {
+                // If the source is a bare Term wrapper, lift it to
+                // an In-expression that binds the variable. If it's
+                // already predicate-shaped (Claim, ValueOf, etc.),
+                // use it as-is.
+                let source_expr = match source {
+                    Expr::Term(t) => Expr::In(Term::Var(binding.clone()), t),
+                    other => other,
+                };
+                Expr::Forall {
+                    binding,
+                    source: Box::new(source_expr),
+                    body: Box::new(body),
+                }
+            });
+
+        choice((exists_expr, forall_expr, implies_expr))
     })
 }
 
@@ -484,6 +628,11 @@ enum CmpOp {
     Eq,
     Neq,
     Le,
+    /// Membership comparator (`x in xs`). Lowered to
+    /// `Expr::In(Term, Term)` with the same term-only restriction
+    /// as `Neq`. Distinct from the structural `in` in
+    /// `forall x in source: body`.
+    In,
 }
 
 /// Convert an `Expr` to a `Term` if it's term-shaped (a bare

@@ -740,3 +740,48 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 - The actual embedding of expressions into invariant or transformation bodies. P3 territory.
 
 **Pattern note:** P2a is the first parser PR where the surface diverges visibly from the IR shape. Position A says the surface is more readable than the IR but never more powerful; this PR is the first to exercise both halves of that constraint - making `amount + already_paid <= limit` readable, and refusing `Foo(x + 1)` because the kernel cannot represent it.
+
+### Parser P2b-lite: bounded forms, literals, and the `value` shape correction
+
+**Forced by:** the parser arc continuing. P2a committed the non-bounded expression surface (atoms, arithmetic, comparators, boolean composition). P2b-lite completes the expression layer with the bounded forms (`exists`, `forall`, `sum`, `value`), the membership comparator (`in`), date and subject literals, and the dual-role disambiguation that the `in` keyword forces. After P2b-lite, the `parse_expression` API can recognise every `Expr` variant the kernel supports, including the full operator set the worked examples use.
+
+**The `value` shape correction.** A doctrine-preparatory commit (the first commit on the P2b-lite branch) fixed a wrong row in `scope-and-ambition.md`. The earlier draft mapped `value(target | body) -> Expr::ValueOf`, treating `value` as parallel to `sum`. That was incorrect: `Expr::ValueOf { predicate, args, default }` is claim-pattern-shaped, with a wildcard in `args` marking the value position to extract. A `value(target | body)` form would imply a general query expression, which is *more expressive than the IR can represent* unless the lowering imposes restrictions invisible from the surface. Under Position A, surface forms must have unambiguous IR mappings. The corrected shape is `value Pred(args)` with optional `default expr` suffix - a direct claim-pattern that maps to the IR one-to-one. ChatGPT's review of P2a's doctrine table flagged this; the fix landed before any parser code that would have committed the wrong shape.
+
+**Quantifier body greediness.** `forall x in xs: A and B` parses as `forall x in xs: (A and B)`. Quantifier bodies extend to the end of the enclosing expression (the body is itself a top-level expression). This matches mathematical convention - in `∀x∈S, P(x) ∧ Q(x)`, the conjunction is inside the quantifier's scope. Composition with outer expressions requires parenthesisation: `(forall x in xs: P(x)) and Q(z)`.
+
+**Forall source shapes (the auto-lift).** The kernel's `Expr::Forall { binding, source, body }` requires `source` to be predicate-shaped so `find_matches` can produce binding extensions. Two surface idioms are common:
+- `forall line in lines: body` - source is a bare variable. The parser auto-lifts it to `Expr::In(Var("line"), Var("lines"))` so the kernel can iterate.
+- `forall claim_id in ClaimReported(claim_id, ...): body` - source is a claim query, already predicate-shaped. Used as-is.
+
+The auto-lift only fires when the parsed source is `Expr::Term(t)`; anything else (Claim, ValueOf, Sum, etc.) passes through. This keeps the surface natural for both idioms without forcing the user to think about which case they're in.
+
+**The `in` dual-role disambiguation.** `in` is structural in `forall <ident> in <source>:` and a membership comparator (`Expr::In(Term, Term)`) everywhere else. Positional disambiguation: the parser consumes the structural `in` inside the `forall` production before the comparator-level grammar can see it. A tree-sitter grammar can express this with the same positional precedence pattern; no context-sensitive parsing is needed.
+
+**Sum target restriction.** `sum(target | body)` requires `target` to be a variable name (lowered to `Term::Var(name)`). Literals, wildcards, and `actor` in target position are rejected with a parse-time diagnostic. This matches every existing worked-example use of `Sum`; the IR's `value: Term` field can hold any Term but no example needs the generality. Relaxable when a worked example forces it.
+
+**Considered and rejected:**
+
+- *Date comparison (`before`, `on_or_before`, `<:=`, `date_le()`) in P2b-lite.* The IR's `DateLe` exists; the surface comparator is what's missing. Three options were on the table: a new keyword like `on_or_before`, a function-call form `date_le(a, b)`, or operator overloading on `<=`. All three need a forcing pressure: a concrete invariant body that uses dates with `<=`-style ordering. P2b-lite parses date literals (usable as `Term::Literal(Value::Date(_))` in claim arg position) but defers the comparator surface to P3 alongside the worked example that drives it. The doctrine table in `scope-and-ambition.md` notes this explicitly.
+- *Generic `value(target | body)` shape.* See the doctrine fix above. More expressive than IR; rejected.
+- *Generalised `sum` target.* Restricted to variables in v0; the existing worked examples never need the generality. Can relax later.
+- *Unicode set-builder syntax (`{ x | P(x) }` instead of `sum(target | body)`).* Considered briefly. Adds Unicode handling to the lexer and conflicts with the curly-brace usage that might want to appear in invariant/transformation bodies later. ASCII `sum(...)` form is already mathematical enough.
+- *Bare-token date literals (`2026-05-22` without `@`).* Ambiguous with arithmetic (`2026 - 05 - 22`). `@` sigil resolves this with no lexer complexity. Same reasoning for `#` on subject literals.
+
+**What landed:**
+
+- Lexer tokens: `KwExists`, `KwForall`, `KwSum`, `KwValue`, `KwDefault`, `KwIn`, `Pipe`, `DateLit(String)`, `SubjectLit(String)`.
+- Parser productions: `exists x: body`, `forall x in source: body`, `sum(target | body)`, `value Pred(args) [default expr]`, `x in xs`, `@YYYY-MM-DD`, `#NAME`.
+- Auto-lift for `forall` source when given as a bare Term.
+- Sum-target restriction to `Term::Var` with parse-time diagnostic on violation.
+- Doctrine row corrections in `scope-and-ambition.md` for the `value` shape, the `forall`/`exists` pair, the `sum` target restriction, and new rows for `in` membership, date literals, and subject literals.
+- 24 new integration tests covering each new form, the `in` dual-role disambiguation, the `value` with-and-without-default cases, sum-target restriction, quantifier body greediness, the parenthesised-composition boundary, the forall-source auto-lift for both bare-variable and claim-call sources, and four realistic fragments from existing worked examples (insurance aggregate cap with `sum`; netting forall; verified-revenue exists; clinical-trial-style date literals in claim args).
+
+**What deliberately stays out (deferred to P3+):**
+
+- Statement syntax (`require`, `bind`, `let`, `admit`, `retract`, `emit`, `for`).
+- Programme-level integration (the expression parser is not yet embedded into invariant/transformation bodies).
+- Date comparison surface form.
+- General `value(target | body)` (rejected; not deferred - it's not coming back).
+- General sum target (deferable but no forcing case yet).
+- Source maps into kernel error reports.
+- Formatter / LSP / tree-sitter grammar.
