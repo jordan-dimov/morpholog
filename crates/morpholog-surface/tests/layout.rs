@@ -83,9 +83,9 @@ fn invariant_body_indented_emits_one_indent_one_dedent() {
 }
 
 #[test]
-fn nested_blocks_emit_matching_indent_dedent() {
-    // Two levels of indentation; expect 2 Indents and 2 Dedents
-    // (at EOF, all remaining blocks close).
+fn single_indented_block_emits_one_indent_one_dedent() {
+    // One indented transformation body; one Indent at the body
+    // start, one Dedent at EOF.
     let toks = tokens(
         "program demo\n\
          transformation foo(x):\n\
@@ -99,6 +99,23 @@ fn nested_blocks_emit_matching_indent_dedent() {
         "one Indent for the transformation body; got {toks:?}"
     );
     assert_eq!(dedents, 1, "one Dedent at EOF; got {toks:?}");
+}
+
+#[test]
+fn genuinely_nested_indentation_emits_two_indents_two_dedents() {
+    // An indented quantifier body inside an indented invariant.
+    // Two indent levels (col 4 for invariant body, col 8 for the
+    // quantifier body), so two Indents and (at EOF) two Dedents.
+    let toks = tokens(
+        "program demo\n\
+         invariant cap:\n\
+         \x20\x20\x20\x20forall x in xs:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20Foo(x)\n",
+    );
+    let indents = toks.iter().filter(|t| **t == Token::Indent).count();
+    let dedents = toks.iter().filter(|t| **t == Token::Dedent).count();
+    assert_eq!(indents, 2, "two Indents for nested layout; got {toks:?}");
+    assert_eq!(dedents, 2, "two matching Dedents at EOF; got {toks:?}");
 }
 
 #[test]
@@ -269,5 +286,59 @@ fn whitespace_only_input_returns_empty_stream() {
     assert!(
         toks.is_empty(),
         "whitespace-only input should produce no tokens; got {toks:?}"
+    );
+}
+
+// ---- Leading indentation diagnostics ----
+
+#[test]
+fn leading_spaces_before_first_token_diagnosed() {
+    // Top-level declarations must start at column 0. Source that
+    // begins with leading spaces should produce a diagnostic, not
+    // silently parse as if there were no indentation.
+    let errs = tokens_or_err("    program demo\n").expect_err("leading spaces should fail");
+    assert!(
+        errs.iter().any(|m| m.contains("leading indentation")),
+        "expected leading-indent diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn leading_tab_before_first_token_diagnosed() {
+    let errs = tokens_or_err("\tprogram demo\n").expect_err("leading tab should fail");
+    assert!(
+        errs.iter().any(|m| m.contains("tab")),
+        "expected tab diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn tab_on_comment_only_line_is_diagnosed() {
+    // The lexer strips comments, so a `\t` in a comment-only line's
+    // indentation would be invisible to the per-token indent check.
+    // The whole-gap tab scan catches it.
+    let source = "program demo\n\
+                  transformation foo():\n\
+                  \trequire A()\n";
+    // Note: the `\t` here is on the line that becomes the first
+    // statement of the body - already caught by the indent_text
+    // check. Use a separate case to specifically exercise the
+    // comment-line tab scan:
+    let with_comment_tab = "program demo\n\
+                            -- ok comment\n\
+                            \t-- tab-indented comment\n\
+                            predicate Foo(x: Subject)\n";
+    // The lexer strips both comment lines. The gap between the
+    // `\n` after `demo` and the first token of `predicate` contains
+    // a tab in indentation of a comment-only line. The full-gap
+    // scan should diagnose it.
+    let errs = tokens_or_err(with_comment_tab);
+    // We expect a tab diagnostic; if the scan misses, this test
+    // would silently pass with `Ok(...)`. Be explicit.
+    let _ = source; // keep referenced
+    let errs = errs.expect_err("tab in comment-line indent should fail");
+    assert!(
+        errs.iter().any(|m| m.contains("tab")),
+        "expected tab diagnostic; got: {errs:?}"
     );
 }

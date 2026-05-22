@@ -28,20 +28,15 @@ predicate TrialBalanceRow(account: Subject, balance: Decimal)
 
 
 invariant balanced_posted_entry:
-    JournalEntry(entry, _, _) implies
-        sum(d | JournalLine(entry, _, d, _))
-        = sum(c | JournalLine(entry, _, _, c))
+    JournalEntry(entry, _, _) implies sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c))
 
 
 invariant journal_entry_has_lines:
-    JournalEntry(entry, _, _) implies
-        (exists line: JournalLine(entry, line, _, _))
+    JournalEntry(entry, _, _) implies (exists line: JournalLine(entry, line, _, _))
 
 
 invariant at_most_one_direct_successor:
-    Supersedes(new_a, old)
-    and Supersedes(new_b, old)
-        implies new_a = new_b
+    Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
 -- Transformations: illustrative transformation-body surface (not yet parser-supported).
@@ -109,7 +104,5 @@ transformation restate_entry(
 -- but the wrapping `derived ... where ... over` shape is illustrative.
 
 derived TrialBalanceRow(account, balance)
-    where balance =
-        sum(d | JournalLine(_, account, d, _))
-      - sum(c | JournalLine(_, account, _, c))
+    where balance = sum(d | JournalLine(_, account, d, _)) - sum(c | JournalLine(_, account, _, c))
     over JournalLine(_, account, _, _)

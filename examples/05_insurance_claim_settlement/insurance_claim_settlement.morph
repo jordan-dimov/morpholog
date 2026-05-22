@@ -40,8 +40,7 @@ predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
 -- scenario surfaces immediately rather than persisting silently.
 -- ============================================================
 invariant paid_implies_authorised:
-    SettlementPaid(_, claim, settlement, amount) implies
-        SettlementAuthorised(claim, settlement, amount, _)
+    SettlementPaid(_, claim, settlement, amount) implies SettlementAuthorised(claim, settlement, amount, _)
 
 
 -- Transformations: illustrative transformation-body surface (not yet parser-supported).
@@ -97,13 +96,10 @@ transformation authorise_settlement(claim_id, settlement_id, amount):
     bind Policy(policy_id, aggregate_limit)
 
     -- actor authority gate
-    require SettlementAuthority(actor, actor_limit)
-        and amount <= actor_limit
+    require SettlementAuthority(actor, actor_limit) and amount <= actor_limit
 
     -- cumulative-cap gate (the Expr::Add shape)
-    require sum(paid | SettlementPaid(policy_id, _, _, paid))
-                + amount
-            <= aggregate_limit
+    require sum(paid | SettlementPaid(policy_id, _, _, paid)) + amount <= aggregate_limit
 
     admit SettlementAuthorised(claim_id, settlement_id, amount, actor)
     admit SettlementPaid(policy_id, claim_id, settlement_id, amount)

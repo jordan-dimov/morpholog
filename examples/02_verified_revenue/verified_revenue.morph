@@ -44,15 +44,11 @@ invariant admissibility_excludes_revocation:
 
 
 invariant at_most_one_current_verification_per_asset_period:
-    CurrentVerification(asset, period, a)
-    and CurrentVerification(asset, period, b)
-        implies a = b
+    CurrentVerification(asset, period, a) and CurrentVerification(asset, period, b) implies a = b
 
 
 invariant at_most_one_direct_successor:
-    Supersedes(new_a, old)
-    and Supersedes(new_b, old)
-        implies new_a = new_b
+    Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
 -- Transformations: illustrative transformation-body surface (not yet parser-supported).

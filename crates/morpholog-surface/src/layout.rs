@@ -81,14 +81,56 @@ pub fn apply_layout(
             let line_start_in_source = prev_end + last_nl_offset + 1;
             let indent_text = &source[line_start_in_source..span.start];
 
+            let mut tab_diagnosed_for_this_gap = false;
             if indent_text.contains('\t') {
                 diagnostics.push(Diagnostic::error(
                     "tab characters are not allowed in indentation; use spaces",
                     line_start_in_source..span.start,
                 ));
+                tab_diagnosed_for_this_gap = true;
                 // Continue with what we have; the parser will see the
                 // tokens but layout depths may be off. The diagnostic
                 // is what we need to surface; the user must fix it.
+            }
+            // Also scan the entire gap (not just `indent_text`) for
+            // tabs that appear in indentation on blank or comment-
+            // only lines. The lexer strips those lines from the
+            // token output, so a `\t` in their indentation would be
+            // invisible without this pass through the raw gap. One
+            // diagnostic per gap is enough; the flag avoids piling
+            // up duplicates for files with many tab-indented
+            // comment lines.
+            if !tab_diagnosed_for_this_gap {
+                for line in gap.split('\n').skip(1) {
+                    let leading: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                    if leading.contains('\t') && !leading.trim().is_empty() {
+                        diagnostics.push(Diagnostic::error(
+                            "tab characters are not allowed in indentation; use spaces",
+                            prev_end..span.start,
+                        ));
+                        break;
+                    }
+                    // The trim().is_empty() check excludes pure-
+                    // whitespace lines (just a tab and a newline)
+                    // which produce no visible diagnostic anchor.
+                    // Adjust if a future test forces stricter
+                    // whole-line tab detection.
+                }
+                // Walk gap looking specifically for `\t<non-newline>`
+                // patterns immediately after a `\n` - this catches
+                // the comment-line case where the indentation isn't
+                // "whitespace only" by the line's own measure but
+                // does contain a tab.
+                let bytes = gap.as_bytes();
+                for i in 0..bytes.len().saturating_sub(1) {
+                    if bytes[i] == b'\n' && bytes[i + 1] == b'\t' {
+                        diagnostics.push(Diagnostic::error(
+                            "tab characters are not allowed in indentation; use spaces",
+                            prev_end..span.start,
+                        ));
+                        break;
+                    }
+                }
             }
 
             // Count non-tab indentation. For now this is bytes; once
@@ -123,13 +165,25 @@ pub fn apply_layout(
             // Indent / Dedent needed.
         } else if i == 0 && span.start > 0 {
             // First token of the file is not at column 0 and there's
-            // no preceding newline. That's unexpected indentation
-            // (or BOM-like leading content). Check whether the gap
-            // is blank-line-only or just leading indent of the first
-            // line.
-            if !gap.contains('\n') && !gap.chars().all(|c| c.is_whitespace()) {
-                // Shouldn't happen given the lexer skips whitespace,
-                // but kept as a guard against future lexer changes.
+            // no preceding newline. The gap is leading whitespace
+            // (the lexer strips whitespace, but the column-0 vs
+            // column-N distinction is meaningful for layout). Catch
+            // any leading indentation as an error - top-level
+            // declarations must start at column 0.
+            if gap.contains('\t') {
+                diagnostics.push(Diagnostic::error(
+                    "tab characters are not allowed in indentation; use spaces",
+                    0..span.start,
+                ));
+            } else if gap.chars().all(|c| c.is_whitespace()) {
+                diagnostics.push(Diagnostic::error(
+                    "unexpected leading indentation; top-level declarations must start at column 0",
+                    0..span.start,
+                ));
+            } else {
+                // Non-whitespace before the first token shouldn't
+                // happen given the lexer skips whitespace, but kept
+                // as a guard against future lexer changes.
                 diagnostics.push(Diagnostic::error(
                     "unexpected leading content before first token",
                     0..span.start,

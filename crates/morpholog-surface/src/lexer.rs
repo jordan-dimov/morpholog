@@ -102,6 +102,13 @@ pub enum Token {
     /// `for` block keyword (planned, P3b2).
     KwFor,
 
+    // ---- P3c (planned): derived claims ----
+    /// `derived` declaration keyword. Reserved at the lexer for
+    /// consistency with `program`/`predicate`/`invariant`/
+    /// `transformation`; not yet parseable, so the parser
+    /// rejects it with an unexpected-token diagnostic.
+    KwDerived,
+
     // ---- Layout virtual tokens (P3b1) ----
     //
     // These are NOT produced by the lexer's character-level
@@ -231,6 +238,7 @@ impl fmt::Display for Token {
             Token::KwRetract => write!(f, "`retract`"),
             Token::KwEmit => write!(f, "`emit`"),
             Token::KwFor => write!(f, "`for`"),
+            Token::KwDerived => write!(f, "`derived`"),
             Token::Indent => write!(f, "indent"),
             Token::Dedent => write!(f, "dedent"),
             Token::KwNot => write!(f, "`not`"),
@@ -304,6 +312,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "retract" => Token::KwRetract,
         "emit" => Token::KwEmit,
         "for" => Token::KwFor,
+        "derived" => Token::KwDerived,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),

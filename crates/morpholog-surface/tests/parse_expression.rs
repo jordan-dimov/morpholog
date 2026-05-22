@@ -877,3 +877,20 @@ fn sum_rejects_actor_as_target() {
         "expected actor-as-sum-target diagnostic; got: {errs:?}"
     );
 }
+
+/// Quantifier bodies (exists, forall) accept indented bodies via
+/// the `(Indent body Dedent | body)` choice. P3a-era tests only
+/// exercised the inline form; this pins the indented-body path
+/// and the layout pass's interaction with nested quantifier
+/// scoping.
+#[test]
+fn forall_body_can_be_indented_on_next_line() {
+    let source = "program demo\n\
+                  invariant cap:\n\
+                  \x20\x20\x20\x20forall x in xs:\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20Foo(x)\n";
+    let program =
+        morpholog_surface::parse_program(source).expect("indented quantifier body should parse");
+    let body = &program.invariants[0].body;
+    assert!(matches!(body, Expr::Forall { .. }));
+}
