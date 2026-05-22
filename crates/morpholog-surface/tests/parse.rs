@@ -496,24 +496,23 @@ fn duplicate_transformation_carries_both_spans() {
     assert_ne!(dup.primary, dup.secondary[0].0);
 }
 
+// ============================================================
+// P3b2: state-mutating statements + iteration
+// ============================================================
+
 #[test]
-fn admit_in_p3b1_is_rejected() {
-    // P3b1 deliberately does NOT include admit / retract / emit /
-    // for. Trying them should fail at parse with an unexpected-
-    // token diagnostic; statement parsing will be extended in P3b2.
-    //
-    // Note: `admit` is a lexer-reserved keyword now (since it's a
-    // surface verb the doctrine commits to), but the P3b1 statement
-    // parser does not accept it.
-    //
-    // For this test we use a more obviously-rejected form: the
-    // outer statement is recognised but `admit` inside the body
-    // surfaces as an error.
+fn parses_admit_statement() {
     let source = "program demo\n\
-                  transformation t():\n\
-                  \x20\x20\x20\x20admit Foo()\n";
-    let errs = parse_program(source).expect_err("admit should be unrecognised in P3b1");
-    assert!(!errs.is_empty());
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20admit Foo(x)\n";
+    let program = parse_program(source).expect("admit should parse");
+    use morpholog_core::Stmt;
+    let body = &program.transformations[0].body;
+    let Stmt::Assert(claim) = &body[0] else {
+        panic!("expected Stmt::Assert, got {:?}", body[0]);
+    };
+    assert_eq!(claim.predicate, "Foo");
+    assert_eq!(claim.args.len(), 1);
 }
 
 #[test]
@@ -597,4 +596,217 @@ fn unexpected_top_level_indentation_is_rejected() {
                   \x20\x20\x20\x20predicate Foo(x: Subject)\n";
     let errs = parse_program(source).expect_err("top-level indent should fail");
     assert!(!errs.is_empty());
+}
+
+#[test]
+fn parses_retract_statement() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20retract Foo(x, _)\n";
+    let program = parse_program(source).expect("retract should parse");
+    use morpholog_core::Stmt;
+    let body = &program.transformations[0].body;
+    let Stmt::Retract { predicate, args } = &body[0] else {
+        panic!("expected Stmt::Retract, got {:?}", body[0]);
+    };
+    assert_eq!(predicate, "Foo");
+    assert_eq!(args.len(), 2);
+    use morpholog_core::Term;
+    assert!(matches!(args[1], Term::Wildcard));
+}
+
+#[test]
+fn parses_emit_statement() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20emit Notify(x)\n";
+    let program = parse_program(source).expect("emit should parse");
+    use morpholog_core::Stmt;
+    let body = &program.transformations[0].body;
+    let Stmt::Emit(intent) = &body[0] else {
+        panic!("expected Stmt::Emit, got {:?}", body[0]);
+    };
+    assert_eq!(intent.name, "Notify");
+    assert_eq!(intent.args.len(), 1);
+}
+
+#[test]
+fn parses_for_block_with_single_statement() {
+    let source = "program demo\n\
+                  transformation t(items):\n\
+                  \x20\x20\x20\x20for item in items:\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20admit Foo(item)\n";
+    let program = parse_program(source).expect("for block should parse");
+    use morpholog_core::Stmt;
+    let body = &program.transformations[0].body;
+    let Stmt::For {
+        binding,
+        body: for_body,
+        ..
+    } = &body[0]
+    else {
+        panic!("expected Stmt::For, got {:?}", body[0]);
+    };
+    assert_eq!(binding, "item");
+    assert_eq!(for_body.len(), 1);
+    assert!(matches!(for_body[0], Stmt::Assert(_)));
+}
+
+#[test]
+fn for_body_preserves_statement_order() {
+    let source = "program demo\n\
+                  transformation t(items):\n\
+                  \x20\x20\x20\x20for item in items:\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20bind Foo(item, x)\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20require x <= 100\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20admit Bar(item, x)\n";
+    let program = parse_program(source).expect("multi-statement for body should parse");
+    use morpholog_core::Stmt;
+    let Stmt::For { body: for_body, .. } = &program.transformations[0].body[0] else {
+        panic!("expected Stmt::For");
+    };
+    assert_eq!(for_body.len(), 3);
+    assert!(matches!(for_body[0], Stmt::BindOne(_)));
+    assert!(matches!(for_body[1], Stmt::Require(_)));
+    assert!(matches!(for_body[2], Stmt::Assert(_)));
+}
+
+#[test]
+fn nested_for_blocks_parse() {
+    // for x in xs:
+    //     for y in ys:
+    //         admit P(x, y)
+    let source = "program demo\n\
+                  transformation t(xs, ys):\n\
+                  \x20\x20\x20\x20for x in xs:\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20for y in ys:\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20admit P(x, y)\n";
+    let program = parse_program(source).expect("nested for should parse");
+    use morpholog_core::Stmt;
+    let Stmt::For {
+        body: outer_body, ..
+    } = &program.transformations[0].body[0]
+    else {
+        panic!("expected outer Stmt::For");
+    };
+    assert_eq!(outer_body.len(), 1);
+    let Stmt::For {
+        body: inner_body, ..
+    } = &outer_body[0]
+    else {
+        panic!("expected inner Stmt::For");
+    };
+    assert!(matches!(inner_body[0], Stmt::Assert(_)));
+}
+
+#[test]
+fn for_inside_mixed_transformation_body() {
+    // Top-level transformation body mixes a for-block with other
+    // statements before and after. Confirms the parser resumes at
+    // the outer statement level after the `for` block's Dedent.
+    let source = "program demo\n\
+                  transformation t(claim, items):\n\
+                  \x20\x20\x20\x20require Claim(claim)\n\
+                  \x20\x20\x20\x20for item in items:\n\
+                  \x20\x20\x20\x20\x20\x20\x20\x20admit Line(claim, item)\n\
+                  \x20\x20\x20\x20admit Settled(claim)\n";
+    let program = parse_program(source).expect("mixed body should parse");
+    use morpholog_core::Stmt;
+    let body = &program.transformations[0].body;
+    assert_eq!(body.len(), 3);
+    assert!(matches!(body[0], Stmt::Require(_)));
+    assert!(matches!(body[1], Stmt::For { .. }));
+    assert!(matches!(body[2], Stmt::Assert(_)));
+}
+
+#[test]
+fn empty_for_body_is_rejected() {
+    // A `for ... :` with no body content (immediately followed by
+    // outer-level statements) should fail to parse because the
+    // body production requires at least one statement.
+    let source = "program demo\n\
+                  transformation t(items):\n\
+                  \x20\x20\x20\x20for item in items:\n\
+                  \x20\x20\x20\x20admit Done()\n";
+    let errs = parse_program(source).expect_err("empty for body should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn top_level_admit_is_rejected() {
+    // Statements outside a transformation body are not legal top-
+    // level declarations.
+    let source = "program demo\n\
+                  admit Foo()\n";
+    let errs = parse_program(source).expect_err("top-level admit should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn top_level_for_is_rejected() {
+    let source = "program demo\n\
+                  for x in xs:\n\
+                  \x20\x20\x20\x20admit Foo(x)\n";
+    let errs = parse_program(source).expect_err("top-level for should fail");
+    assert!(!errs.is_empty());
+}
+
+// PR #63 review tightening: admit/emit reject wildcards at parse
+// time because the kernel rejects them at runtime; the parser
+// refuses to produce IR the kernel will refuse to evaluate.
+
+#[test]
+fn admit_rejects_wildcard_arg() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20admit Foo(x, _)\n";
+    let errs = parse_program(source).expect_err("admit with wildcard should fail");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("wildcard") && d.message.contains("`admit`")),
+        "expected wildcard-in-admit diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn emit_rejects_wildcard_arg() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20emit Notify(_)\n";
+    let errs = parse_program(source).expect_err("emit with wildcard should fail");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("wildcard") && d.message.contains("`emit`")),
+        "expected wildcard-in-emit diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn retract_still_accepts_wildcard_arg() {
+    // Wildcards are MEANINGFUL in retract (pattern-based
+    // retraction). The surface preserves that.
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20retract Foo(x, _)\n";
+    let program = parse_program(source).expect("retract with wildcard should parse");
+    use morpholog_core::{Stmt, Term};
+    let Stmt::Retract { args, .. } = &program.transformations[0].body[0] else {
+        panic!("expected Stmt::Retract");
+    };
+    assert!(matches!(args[1], Term::Wildcard));
+}
+
+#[test]
+fn bind_still_accepts_wildcard_arg() {
+    // Wildcards are meaningful in bind (matching any value at
+    // that position while extracting other positions). Preserved.
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20bind Foo(x, _, y)\n";
+    let program = parse_program(source).expect("bind with wildcard should parse");
+    use morpholog_core::Stmt;
+    assert!(matches!(
+        program.transformations[0].body[0],
+        Stmt::BindOne(_)
+    ));
 }
