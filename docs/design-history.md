@@ -949,7 +949,7 @@ Note `Intent`'s field is `name`, not `predicate`; intents are not claims even th
 
 **What deliberately stayed out (P3c):**
 
-- `derived` claim declarations. The keyword is lexer-reserved; the parser surfaces an unexpected-token diagnostic. Two of six worked examples stop here.
+- `derived` claim declarations. The keyword is lexer-reserved; the parser surfaces an unexpected-token diagnostic. The worked examples that declare derived claims (currently the ledger and the insurance settlement) stop here.
 - The `format_program → parse_program` round-trip property test. Lands in P3c when the full surface is parseable.
 - Date-comparison surface form. Its own small PR after P3c, when an example actually needs it in a `.morph`-runnable transformation.
 
