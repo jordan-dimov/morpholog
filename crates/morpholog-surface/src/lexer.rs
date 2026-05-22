@@ -109,6 +109,15 @@ pub enum Token {
     /// rejects it with an unexpected-token diagnostic.
     KwDerived,
 
+    // ---- P3-dates: civil-date comparison ----
+    /// `on_or_before` infix operator for civil-date `<=`. Lowers
+    /// to `Expr::DateLe`. Distinct from decimal `<=` because the
+    /// kernel keeps `Expr::Le` (decimal) and `Expr::DateLe`
+    /// (civil date) as separate IR primitives; surface refuses
+    /// to overload by operand type (see `design-history.md` -
+    /// the `DateLe` entry explicitly rejected dispatch-on-kind).
+    KwOnOrBefore,
+
     // ---- Layout virtual tokens (P3b1) ----
     //
     // These are NOT produced by the lexer's character-level
@@ -239,6 +248,7 @@ impl fmt::Display for Token {
             Token::KwEmit => write!(f, "`emit`"),
             Token::KwFor => write!(f, "`for`"),
             Token::KwDerived => write!(f, "`derived`"),
+            Token::KwOnOrBefore => write!(f, "`on_or_before`"),
             Token::Indent => write!(f, "indent"),
             Token::Dedent => write!(f, "dedent"),
             Token::KwNot => write!(f, "`not`"),
@@ -313,6 +323,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "emit" => Token::KwEmit,
         "for" => Token::KwFor,
         "derived" => Token::KwDerived,
+        // P3-dates: civil-date <= comparator
+        "on_or_before" => Token::KwOnOrBefore,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),

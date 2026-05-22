@@ -894,3 +894,54 @@ fn forall_body_can_be_indented_on_next_line() {
     let body = &program.invariants[0].body;
     assert!(matches!(body, Expr::Forall { .. }));
 }
+
+// ============================================================
+// P3-dates: civil-date `on_or_before` comparator
+// ============================================================
+
+#[test]
+fn on_or_before_lowers_to_date_le() {
+    let got = parse_expression("from_date on_or_before action_date").unwrap();
+    assert_eq!(
+        got,
+        Expr::DateLe(
+            Box::new(var_expr("from_date")),
+            Box::new(var_expr("action_date")),
+        )
+    );
+}
+
+#[test]
+fn decimal_le_still_lowers_to_le() {
+    // Regression: P3-dates must not change decimal `<=` lowering.
+    let got = parse_expression("amount <= limit").unwrap();
+    assert_eq!(
+        got,
+        Expr::Le(Box::new(var_expr("amount")), Box::new(var_expr("limit")),)
+    );
+}
+
+#[test]
+fn on_or_before_at_same_precedence_as_le() {
+    // `a + 1 on_or_before b` parses as `(a + 1) on_or_before b`,
+    // matching `<=`'s precedence (arithmetic binds tighter).
+    let got = parse_expression("a + 1 on_or_before b").unwrap();
+    let Expr::DateLe(lhs, rhs) = got else {
+        panic!("expected DateLe, got non-DateLe");
+    };
+    assert!(matches!(*lhs, Expr::Add(_, _)));
+    assert_eq!(*rhs, var_expr("b"));
+}
+
+#[test]
+fn on_or_before_inside_and_chain() {
+    // Realistic shape from the clinical-trial example:
+    // `from on_or_before date and date on_or_before to`.
+    let got = parse_expression("from on_or_before date and date on_or_before to").unwrap();
+    let Expr::And(ops) = got else {
+        panic!("expected And, got {got:?}");
+    };
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(ops[0], Expr::DateLe(_, _)));
+    assert!(matches!(ops[1], Expr::DateLe(_, _)));
+}

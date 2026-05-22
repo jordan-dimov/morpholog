@@ -8,28 +8,25 @@
 -- The load-bearing rule is a set of inclusive `[from, to]` civil-date
 -- validity windows checked at admission time:
 --
---   protocol_from <= randomised_on <= protocol_to
---   consent_from  <= randomised_on <= consent_to
---   consented_on  <= randomised_on
---   del_from      <= randomised_on <= del_to
---   assessed_on   <= randomised_on <= expires_on
+--   protocol_from on_or_before randomised_on on_or_before protocol_to
+--   consent_from  on_or_before randomised_on on_or_before consent_to
+--   consented_on  on_or_before randomised_on
+--   del_from      on_or_before randomised_on on_or_before del_to
+--   assessed_on   on_or_before randomised_on on_or_before expires_on
 --
--- These are the IR shape Expr::DateLe was added for. Without civil-date
--- comparison the rule would either degrade to lexicographic ordering on
--- subject literals (wrong by construction the moment a year changes
+-- The `on_or_before` keyword is the surface for `Expr::DateLe`,
+-- distinct from decimal `<=` (which is `Expr::Le`). The kernel
+-- keeps the two comparators as separate IR primitives so each
+-- can type-check its operands; the surface refuses to overload
+-- `<=` by operand kind. Without this separation, civil-date
+-- comparison would degrade to lexicographic ordering on subject
+-- literals (wrong by construction the moment a year changes
 -- digits) or to ad-hoc string predicates outside the kernel.
 --
 -- Validity is an admission-time gate, not an eternal invariant.
 -- Closing a protocol window or amending the protocol must not
 -- retroactively invalidate an earlier randomisation - it must only
 -- govern future ones.
---
--- Note: the `<=` operator currently lowers to `Expr::Le` (decimal
--- comparison). The civil-date surface form for `Expr::DateLe` is
--- deferred to this worked example. Until then, the date
--- comparisons in this file are illustrative; the kernel's runtime
--- evaluator distinguishes decimal `<=` from date `<=` via separate
--- IR variants.
 
 program clinical_trial_enrolment
 
@@ -64,6 +61,24 @@ invariant at_most_one_consent_window_per_version:
 -- ============================================================
 invariant participant_randomised_once_per_trial:
     ParticipantRandomised(p, trial, proto_a, date_a, actor_a) and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies (proto_a = proto_b and date_a = date_b and actor_a = actor_b)
+
+-- ============================================================
+-- Invariant: consent must precede or coincide with randomisation.
+--
+-- For every randomised participant, an InformedConsentObtained
+-- claim must exist with consent date on-or-before the
+-- randomisation date. This is the date-window doctrine in its
+-- purest form: validity is fixed at admission time, but the rule
+-- itself is *eternal* over admitted state - if you accept a
+-- correction that backdates a randomisation, the prior consent
+-- must still cover the new date.
+--
+-- The civil-date `on_or_before` keyword here makes the comparator
+-- semantically explicit. Decimal `<=` would parse but lower to
+-- `Expr::Le`, which type-mismatches on `Date` operands at runtime.
+-- ============================================================
+invariant consent_obtained_before_randomisation:
+    ParticipantRandomised(p, t, _, randomised_on, _) implies (exists consented_on: InformedConsentObtained(p, t, _, consented_on, _) and consented_on on_or_before randomised_on)
 
 
 -- Transformations: illustrative transformation-body surface (not yet parser-supported).
@@ -180,22 +195,22 @@ transformation randomise_participant(
     require (
         Trial(trial_id)
         and ProtocolVersion(trial_id, protocol_version, protocol_from, protocol_to)
-        and protocol_from <= randomised_on
-        and randomised_on <= protocol_to
+        and protocol_from on_or_before randomised_on
+        and randomised_on on_or_before protocol_to
         and ProtocolApprovedBy(protocol_version, _, _)
         and ConsentFormVersion(trial_id, consent_form_version, consent_from, consent_to)
-        and consent_from <= randomised_on
-        and randomised_on <= consent_to
+        and consent_from on_or_before randomised_on
+        and randomised_on on_or_before consent_to
         and ConsentFormApprovedBy(consent_form_version, _, _)
         and InformedConsentObtained(participant_id, trial_id, consent_form_version, consented_on, _)
-        and consented_on <= randomised_on
+        and consented_on on_or_before randomised_on
         and DelegatedInvestigator(actor, trial_id, #randomise_participant, del_from, del_to)
-        and del_from <= randomised_on
-        and randomised_on <= del_to
+        and del_from on_or_before randomised_on
+        and randomised_on on_or_before del_to
         and EligibilityCriterion(protocol_version, criterion_id, required_result)
         and EligibilityAssessment(participant_id, criterion_id, required_result, assessed_on, expires_on)
-        and assessed_on <= randomised_on
-        and randomised_on <= expires_on
+        and assessed_on on_or_before randomised_on
+        and randomised_on on_or_before expires_on
         and not ImportantProtocolDeviationOpen(participant_id, trial_id, _)
     )
 

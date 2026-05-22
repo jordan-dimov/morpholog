@@ -243,6 +243,7 @@ where
                 just(Token::Eq).to(CmpOp::Eq),
                 just(Token::Neq).to(CmpOp::Neq),
                 just(Token::Le).to(CmpOp::Le),
+                just(Token::KwOnOrBefore).to(CmpOp::DateLe),
                 just(Token::KwIn).to(CmpOp::In),
             ))
             .then(arith.clone())
@@ -252,6 +253,7 @@ where
                 None => lhs,
                 Some((CmpOp::Eq, rhs)) => Expr::Eq(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::Le, rhs)) => Expr::Le(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::DateLe, rhs)) => Expr::DateLe(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::Neq, rhs)) => {
                     let span: SimpleSpan = e.span();
                     let lhs_term = expr_as_term(&lhs);
@@ -487,13 +489,22 @@ where
     })
 }
 
-/// Discriminator for the three comparison operators. Internal to
-/// the parser; the surface uses `=`, `!=`, `<=` directly.
+/// Discriminator for the comparison operators. Internal to the
+/// parser; the surface uses `=`, `!=`, `<=`, `in`, `on_or_before`
+/// directly.
 #[derive(Debug, Clone, Copy)]
 enum CmpOp {
     Eq,
     Neq,
+    /// Decimal `<=`. Lowers to `Expr::Le`. Type-checked at runtime
+    /// (operands must be `EvalValue::Decimal`).
     Le,
+    /// Civil-date `on_or_before` (P3-dates). Lowers to
+    /// `Expr::DateLe`. Type-checked at runtime (operands must be
+    /// `EvalValue::Date`). Distinct surface form from `<=` because
+    /// the kernel keeps `Le` and `DateLe` as separate IR primitives;
+    /// the surface refuses to overload `<=` by operand kind.
+    DateLe,
     /// Membership comparator (`x in xs`). Lowered to
     /// `Expr::In(Term, Term)` with the same term-only restriction
     /// as `Neq`. Distinct from the structural `in` in
