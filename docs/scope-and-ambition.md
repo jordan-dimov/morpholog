@@ -132,18 +132,20 @@ The cost of this discipline is that the parser does real translation work (infix
 
 **Verb-flavor renames (surface to IR):**
 
-| Surface verb | IR construct | Reason |
-|---|---|---|
-| `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
-| `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
-| `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
-| `<=` (infix) | `Expr::Le`, `Expr::DateLe` | Business mathematics reads with infix comparators. The kernel dispatches on operand type. |
-| `=`, `!=` (infix) | `Expr::Eq`, `Expr::Neq` | Same. |
-| `+`, `-` (infix) | `Expr::Add`, `Expr::Sub` | Same. |
-| `not`, `and`, `implies` (keywords) | `Expr::Not`, `Expr::And`, `Expr::Implies` | Boolean composition reads as keywords in business rules, not symbols. |
-| `forall x in coll: body` | `Expr::Forall` | Bounded quantification is mathematical convention. The `in` clause makes unbounded quantification syntactically impossible. |
-| `sum(target | body)` | `Expr::Sum` | Set-builder notation. Matches the kernel's bounded-comprehension contract. |
-| `value(target | body)` | `Expr::ValueOf` | Same shape as `sum`; the kernel separates them only because their cardinality contracts differ. |
+The "Phase" column indicates which parser PR the rename lands in. P2b and later rows are the planned shape, not yet committed to the parser; they appear here so the doctrine is visible up-front, but they are subject to refinement when the corresponding PR begins.
+
+| Surface verb | IR construct | Phase | Reason |
+|---|---|---|---|
+| `admit X(args)` | `Stmt::Assert` | P3 | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
+| `bind X(args)` | `Stmt::BindOne` | P3 | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `actor` (no parens) | `Term::Actor` | P2a | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
+| `<=` (infix) | `Expr::Le` (decimal) | P2a | Business mathematics reads with infix comparators. Decimal-only; the kernel keeps `Expr::Le` and `Expr::DateLe` as separate IR variants (no operator overloading - see `design-history.md`). Civil-date ordering gets its own surface rule in P2b. |
+| `=`, `!=` (infix) | `Expr::Eq` (Expr, Expr), `Expr::Neq` (Term, Term) | P2a | `Eq` operates on full expressions; `Neq` operates on terms only (the IR shape). The parser rejects arithmetic on either side of `!=`. |
+| `+`, `-` (infix) | `Expr::Add`, `Expr::Sub` (decimal) | P2a | Standard arithmetic notation, decimal-only. No unary minus until forced. |
+| `not`, `and`, `implies` (keywords) | `Expr::Not`, `Expr::And`, `Expr::Implies` | P2a | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Expr::And(Vec<Expr>)`; `implies` is right-associative. |
+| `forall x in coll: body` | `Expr::Forall` | P2b (planned) | Bounded quantification is mathematical convention. The `in` clause makes unbounded quantification syntactically impossible. |
+| `sum(target | body)` | `Expr::Sum` | P2b (planned) | Set-builder notation. Matches the kernel's bounded-comprehension contract. |
+| `value(target | body)` | `Expr::ValueOf` | P2b (planned) | Same shape as `sum`; the kernel separates them only because their cardinality contracts differ. |
 
 **What this rules out:**
 

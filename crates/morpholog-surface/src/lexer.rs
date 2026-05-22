@@ -33,11 +33,17 @@
 //! pairs - span is a byte-offset range into the source, compatible
 //! with [`crate::diagnostics::Span`] and `ariadne`.
 //!
-//! Reserved words (keywords, kind names, `true`/`false`) are
-//! recognised at lex level so the parser can match against
-//! specific `Token::*` variants directly. An identifier in
-//! kind-position that doesn't match a reserved kind falls through
-//! as `Token::Ident` and produces a parse-time diagnostic.
+//! Reserved words recognised in P2a are the structural keywords
+//! (`program`, `predicate`) and the kind names (`Subject`,
+//! `Decimal`, `Date`, `Bool`, `Collection`, `Any`) plus the
+//! boolean operators (`not`, `and`, `implies`). The lexer maps
+//! each to a specific `Token::*` variant so the parser can
+//! match against them directly. `true` and `false` deliberately
+//! remain ordinary identifiers until the IR has a `Value::Bool`
+//! literal - see the "Deliberately NOT recognised" block above.
+//! An identifier in kind-position that doesn't match a reserved
+//! kind falls through as `Token::Ident` and produces a
+//! parse-time diagnostic.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
