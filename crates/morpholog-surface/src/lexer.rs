@@ -1,20 +1,43 @@
 //! Lexer for the v0 surface fragment.
 //!
-//! Recognises: the `program` and `predicate` keywords; the kind
-//! keywords (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`,
-//! `Any`); identifiers (`[a-zA-Z_][a-zA-Z0-9_]*`); `(`, `)`, `:`,
-//! `,`; `//`-style line comments. Whitespace and comments are
-//! skipped; they never reach the parser.
+//! Recognised tokens (P1 + P2a):
 //!
-//! Output is a vector of `(Token, Span)` pairs. Span is a byte-
-//! offset range into the source string, compatible with
-//! [`crate::diagnostics::Span`] and `ariadne`.
+//! - Top-level keywords: `program`, `predicate`.
+//! - Kind keywords (lexer-level): `Subject`, `Decimal`, `Date`,
+//!   `Bool`, `Collection`, `Any`.
+//! - Boolean keywords (P2a): `not`, `and`, `implies`.
+//! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
+//!   `_-prefixed` names. The bare `_` is the wildcard token, not
+//!   an identifier.
+//! - Decimal literals (P2a): `<digits>` or `<digits>.<digits>`.
+//!   String-valued because the runtime stores decimals as
+//!   `rust_decimal::Decimal` parsed from strings, never as floats.
+//! - Punctuation: `(`, `)`, `:`, `,`.
+//! - Comparators (P2a): `=`, `!=`, `<=`. Multi-char forms must
+//!   be tried before single-char.
+//! - Arithmetic (P2a): `+`, `-`.
+//! - Wildcard (P2a): `_`.
 //!
-//! Kind keywords are recognised at the lexer level (rather than as
-//! identifiers later) so that the parser can match against
-//! [`Token::Kind`] directly. This also lets the parser produce
-//! "unknown kind" diagnostics by knowing a token was an ident, not
-//! a kind keyword - reserved-word recognition is a lexer concern.
+//! Deliberately NOT recognised in P2a: `true` / `false` bool
+//! literals. The IR's `Value` enum has variants for `Decimal`,
+//! `Subject`, and `Date` only - no `Value::Bool`. The runtime
+//! `EvalValue::Bool` is produced by comparators and other
+//! expressions; it never appears as an IR literal. Per the
+//! surface doctrine in `docs/scope-and-ambition.md`, the surface
+//! cannot create capabilities the kernel lacks: a `true` literal
+//! at the surface would have nowhere to lower to. It lands when
+//! a worked example forces `Value::Bool` into the IR, not before.
+//!
+//! Whitespace and `//` line comments are stripped at lex; they
+//! never reach the parser. Output is a vector of `(Token, Span)`
+//! pairs - span is a byte-offset range into the source, compatible
+//! with [`crate::diagnostics::Span`] and `ariadne`.
+//!
+//! Reserved words (keywords, kind names, `true`/`false`) are
+//! recognised at lex level so the parser can match against
+//! specific `Token::*` variants directly. An identifier in
+//! kind-position that doesn't match a reserved kind falls through
+//! as `Token::Ident` and produces a parse-time diagnostic.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -25,21 +48,54 @@ use crate::diagnostics::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
+    // ---- P1: top-level + predicate-declaration surface ----
     /// `program` keyword.
     KwProgram,
     /// `predicate` keyword.
     KwPredicate,
-    /// One of the recognised kind keywords. Lexed as a distinct
-    /// token so the parser can match without re-checking the string.
+    /// Kind keyword in a predicate-arg position.
     Kind(PredicateArgKind),
-    /// Any other word that matches identifier syntax. The parser
-    /// decides whether it's a programme name, a predicate name, or
-    /// an argument name based on position.
+
+    // ---- P2a: boolean composition ----
+    /// `not` prefix operator.
+    KwNot,
+    /// `and` infix operator.
+    KwAnd,
+    /// `implies` infix operator.
+    KwImplies,
+
+    // ---- Atoms ----
+    /// Identifier: any reserved-keyword-free word matching
+    /// `[a-zA-Z_][a-zA-Z0-9_]*`. The parser decides whether it's
+    /// a variable, a predicate name, an argument name, or
+    /// (later) a transformation name based on position.
     Ident(String),
+    /// Bare `_`. Distinguished from identifiers because it means
+    /// "match anything at this position", not "a name".
+    Wildcard,
+    /// Decimal literal carried as a string to preserve exactness;
+    /// the runtime parses to `rust_decimal::Decimal`. Never a
+    /// float.
+    DecimalLit(String),
+
+    // ---- Punctuation ----
     LParen,
     RParen,
     Colon,
     Comma,
+
+    // ---- P2a: operators ----
+    /// `=` (Eq).
+    Eq,
+    /// `!=` (Neq).
+    Neq,
+    /// `<=` (Le for decimals; in P2a, decimal-only - DateLe and
+    /// the date surface land in P2b).
+    Le,
+    /// `+` (Add).
+    Plus,
+    /// `-` (Sub).
+    Minus,
 }
 
 impl fmt::Display for Token {
@@ -48,11 +104,21 @@ impl fmt::Display for Token {
             Token::KwProgram => write!(f, "`program`"),
             Token::KwPredicate => write!(f, "`predicate`"),
             Token::Kind(k) => write!(f, "kind `{:?}`", k),
+            Token::KwNot => write!(f, "`not`"),
+            Token::KwAnd => write!(f, "`and`"),
+            Token::KwImplies => write!(f, "`implies`"),
             Token::Ident(s) => write!(f, "identifier `{s}`"),
+            Token::Wildcard => write!(f, "`_`"),
+            Token::DecimalLit(s) => write!(f, "decimal literal `{s}`"),
             Token::LParen => write!(f, "`(`"),
             Token::RParen => write!(f, "`)`"),
             Token::Colon => write!(f, "`:`"),
             Token::Comma => write!(f, "`,`"),
+            Token::Eq => write!(f, "`=`"),
+            Token::Neq => write!(f, "`!=`"),
+            Token::Le => write!(f, "`<=`"),
+            Token::Plus => write!(f, "`+`"),
+            Token::Minus => write!(f, "`-`"),
         }
     }
 }
@@ -76,7 +142,14 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, Vec<Rich<'_, char>>> {
 }
 
 fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<Rich<'a, char>>> {
+    // ---- Identifiers and reserved words ----
+    //
+    // The bare `_` is matched separately (as Token::Wildcard);
+    // `_-prefixed` identifiers (e.g. `_foo`) remain identifiers.
+    // We do this via the order of `choice` below: punctuation /
+    // wildcard / decimal / ident, where ident is the catch-all.
     let ident_or_keyword = text::ascii::ident().map(|s: &str| match s {
+        // P1 reserved words
         "program" => Token::KwProgram,
         "predicate" => Token::KwPredicate,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
@@ -85,8 +158,44 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "Bool" => Token::Kind(PredicateArgKind::Bool),
         "Collection" => Token::Kind(PredicateArgKind::Collection),
         "Any" => Token::Kind(PredicateArgKind::Any),
+        // P2a reserved words
+        "not" => Token::KwNot,
+        "and" => Token::KwAnd,
+        "implies" => Token::KwImplies,
+        // `true` / `false` are deliberately NOT recognised - see
+        // module-level comment. If a user writes `true`, it lexes
+        // as Token::Ident("true") and surfaces as an unknown
+        // identifier at parse time, which is the right diagnostic.
+        // Bare `_` is the wildcard, not an ident.
+        "_" => Token::Wildcard,
         other => Token::Ident(other.to_string()),
     });
+
+    // ---- Decimal literals ----
+    //
+    // `<digits>` or `<digits>.<digits>`. Carried as a string so
+    // the runtime parses to `rust_decimal::Decimal` without ever
+    // routing through f64. No underscore separators in v0; add
+    // when a worked example forces them.
+    let decimal_lit = text::digits(10)
+        .then(just('.').then(text::digits(10)).or_not())
+        .to_slice()
+        .map(|s: &str| Token::DecimalLit(s.to_string()));
+
+    // ---- Operators ----
+    //
+    // Multi-char forms come first in the choice so `!=` is matched
+    // as one token (Neq), not `!` followed by `=`. Single `!` and
+    // single `<` are not legal in P2a; if they appear, the next
+    // token-attempt fails and the lex error surfaces with their
+    // span.
+    let operator = choice((
+        just("!=").to(Token::Neq),
+        just("<=").to(Token::Le),
+        just('=').to(Token::Eq),
+        just('+').to(Token::Plus),
+        just('-').to(Token::Minus),
+    ));
 
     let punct = choice((
         just('(').to(Token::LParen),
@@ -95,10 +204,13 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         just(',').to(Token::Comma),
     ));
 
-    let token = choice((ident_or_keyword, punct)).map_with(|t, e| (t, e.span()));
+    // Order matters: try the more-specific patterns (multi-char
+    // operators, decimals) before the catch-all ident.
+    let token =
+        choice((operator, punct, decimal_lit, ident_or_keyword)).map_with(|t, e| (t, e.span()));
 
-    // Line comments: `//` to newline (or EOF). Skipped entirely; no
-    // inner padding so the outer `padding` parser is the single
+    // Line comments: `//` to newline (or EOF). Skipped entirely;
+    // no inner padding so the outer `padding` parser is the single
     // source of truth for whitespace consumption.
     let line_comment = just("//")
         .then(any().and_is(just('\n').not()).repeated())
@@ -108,13 +220,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     let padding = choice((text::whitespace().at_least(1).ignored(), line_comment)).repeated();
 
     // Consume leading padding, then any number of (token, trailing
-    // padding) pairs, then EOF. The explicit EOF prevents leftover
-    // characters from masquerading as a successful zero-token lex;
-    // the trailing-padding-per-token shape makes whitespace-only
-    // input succeed (returning zero tokens) rather than producing a
-    // confusing "expected punctuation" error. `padding` is `Copy`
-    // so passing it by value to both call sites is the idiomatic
-    // chumsky pattern - cloning would be a warning.
+    // padding) pairs, then EOF.
     padding
         .ignore_then(token.then_ignore(padding).repeated().collect())
         .then_ignore(end())

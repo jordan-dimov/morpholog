@@ -21,4 +21,4 @@ pub(crate) mod lexer;
 mod parser;
 
 pub use diagnostics::{Diagnostic, Severity, Span};
-pub use parser::parse_program;
+pub use parser::{parse_expression, parse_program};

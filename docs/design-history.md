@@ -702,3 +702,41 @@ The read path has had predicate-scoped loading since the trial-balance work (PR 
 - *Fail-fast error reporting.* Collecting multiple diagnostics in one parse run is materially more useful when an author is migrating Rust IR to `.morph` syntax for the first time. `chumsky`'s `recover_with` makes the recovery cheap.
 
 **Next:** **PR P2** parses expressions in isolation - the full operator set the kernel supports (`And`, `Not`, `Implies`, `Exists`, `Forall`, `Eq`, `Le`, `DateLe`, `Neq`, `Sub`, `Add`, `Sum`, `In`, `ValueOf`, `Term`), with precedence and span handling pinned by tests, before they're embedded in invariant or transformation bodies. The expression parser is the hardest single piece of the surface arc; isolating it lets the precedence/span/diagnostic decisions land without programme-level parsing hiding them.
+
+### Parser P2a: expression syntax
+
+**Forced by:** the parser arc continuing. P1 committed the file-level surface (program header + predicate declarations); P2a commits the **expression syntax** that subsequent parser PRs will embed in invariant bodies, transformation bodies, and derived-claim domains. Done in isolation - no invariants or transformations parse yet - because expressions are the hardest single piece of the surface arc (operator precedence, term-vs-expression asymmetry, span handling) and isolating them keeps those decisions visible.
+
+**The shape:**
+
+- New `parse_expression(source) -> Result<Expr, Vec<Diagnostic>>` public entry point alongside `parse_program`. Shares the same lexer.
+- Lexer extended with: decimal literals (`<digits>` or `<digits>.<digits>`, carried as strings to preserve exactness); operator tokens (`+`, `-`, `=`, `!=`, `<=`); boolean keywords (`not`, `and`, `implies`); wildcard token (`_`).
+- Parser grammar (informal precedence, highest to lowest): atoms (parens, vars, decimal literals, wildcards, predicate calls); `+` / `-` (left-assoc); `=` / `!=` / `<=` (non-assoc); `not` (prefix); `and` (left-assoc, flattened to `Expr::And(Vec<Expr>)`); `implies` (right-assoc).
+- Surface conventions: `actor` is a bare identifier that lowers to `Term::Actor` (no parens, per the surface doctrine); `=` and `<=` accept full expressions on both sides; `!=` accepts only Terms on both sides because `Expr::Neq(Term, Term)` is the IR shape.
+
+**Doctrine-enforced asymmetry.** The IR's `Expr::Neq` and `Expr::In` operate on `Term`s, not `Expr`s; `Eq`, `Le`, `Sub`, `Add` operate on `Expr`s. The parser must honour this directly: `a + 1 != b` is rejected with a clean diagnostic ("`!=` requires both sides to be terms; arithmetic and other expressions are not allowed because the IR's Neq operates on terms only"). Per Position A in `docs/scope-and-ambition.md`, the surface cannot create capabilities the kernel lacks - so the parser rejects what the IR cannot represent rather than silently producing ill-shaped IR. The same constraint rules out `Foo(x + 1, y)` because claim-call arguments are `Vec<Term>`, not `Vec<Expr>`.
+
+**Considered and rejected:**
+
+- *Bool literals (`true` / `false`).* The IR's `Value` enum has variants for `Decimal`, `Subject`, `Date` only. `EvalValue::Bool` exists as a runtime computed value (the result of comparators), but there is no IR literal path for `true`/`false`. Per the doctrine, surface forms must lower to existing IR; bool literals at the surface would have nowhere to lower to. They land when a worked example forces `Value::Bool` into the IR, not before. ChatGPT caught this in PR-P2a's review window.
+- *Date literals.* Defer to P2b alongside the other bounded-form work; civil-date literal syntax and `DateLe` deserve attention together.
+- *Subject literals.* `dsl::subj("name")` is the only current path. No worked example yet writes a subject literal at the surface; defer.
+- *`In` operator (`x in coll`).* Defer to P2b alongside `forall x in coll: body` because `in` is multi-purpose - used both as a comparator (`Expr::In(Term, Term)`) and as a binding keyword (`for x in coll`, `forall x in coll`). Bundling them keeps the keyword's roles clear in one PR.
+- *Unary minus.* The IR has `Expr::Sub` only; no unary minus. Surface `-5` would have to fold to a sub-expression or to a literal; both are awkward. Defer until forced. Users today write `0 - 5` or use `Sub(a, b)` IR directly.
+- *Error recovery within expressions.* P1's predicate-declaration recovery (sync at next `predicate` keyword) does not extend to expressions in P2a. A malformed expression surfaces as one diagnostic at the failure site; recovery within expressions would mean designing per-operator sync points, which is more design surface than P2a should commit.
+
+**What landed:**
+
+- `Token` extended with `KwNot`, `KwAnd`, `KwImplies`, `Wildcard`, `DecimalLit(String)`, `Eq`, `Neq`, `Le`, `Plus`, `Minus`. PascalCase kind keywords kept distinct from identifier-kind tokens.
+- `parse_expression` public API. Same diagnostic shape as `parse_program`.
+- 31 integration tests in `tests/parse_expression.rs` covering atoms, arithmetic, comparators, boolean composition, precedence (in both directions for each layer), associativity (left for `and`, right for `implies`, left for arithmetic), the Neq term-only restriction, the claim-call-args term-only restriction, and two realistic fragments from existing worked examples (insurance cap rule, netting per-line conjunct).
+- Doctrine committed first on the branch (preparatory commit), so the rest of the parser arc cites a settled rule rather than re-arguing it.
+
+**What this PR does NOT include (P2b and beyond):**
+
+- `exists x: body`, `forall x in coll: body`, `sum(target | body)`, `value(target | body)` - the bounded-form expressions.
+- Date literals, `DateLe`, subject literals.
+- `in` as either binding keyword or membership comparator.
+- The actual embedding of expressions into invariant or transformation bodies. P3 territory.
+
+**Pattern note:** P2a is the first parser PR where the surface diverges visibly from the IR shape. Position A says the surface is more readable than the IR but never more powerful; this PR is the first to exercise both halves of that constraint - making `amount + already_paid <= limit` readable, and refusing `Foo(x + 1)` because the kernel cannot represent it.
