@@ -785,3 +785,57 @@ The auto-lift only fires when the parsed source is `Expr::Term(t)`; anything els
 - General sum target (deferable but no forcing case yet).
 - Source maps into kernel error reports.
 - Formatter / LSP / tree-sitter grammar.
+
+### Parser P3a: invariant declarations
+
+**Forced by:** the parser arc continuing. P2b-lite completed the expression layer; P3a integrates expressions into the first programme-level construct, `invariant`. The deliberately tiny scope picks the construct whose body is a pure expression (already parseable) and which doesn't introduce statement syntax. This proves the integration mechanic before P3b takes on the harder transformation-body work.
+
+**Surface form:**
+
+```morph
+invariant <name>:
+    <expression>
+```
+
+The IR's `Invariant { name, version, body }` always has `version = 1` in v0 (a locked design decision in `docs/scope-and-ambition.md`). P3a does NOT add version syntax to the surface; the parser defaults `version` to 1, and the test suite pins that `invariant cap(v1): body` is currently a parse error. When versioning grows a second meaningful value, the surface and formatter both grow a version clause together. The `format_program` debug output's `(v1)` suffix is intentionally left as-is for now: the parser does not have to accept every debug-format shape, and full round-trip is deferred to P3c when the surface is complete.
+
+**Programme grammar (free interleaving):**
+
+```text
+program        ::= program_header top_level_decl*
+top_level_decl ::= predicate_decl | invariant_decl
+```
+
+A `.morph` file can mix predicates and invariants in any order. The parser collects declarations in source order and sorts them into `Program.predicates` and `Program.invariants` on a post-pass. This avoids committing the language to an "all predicates first" file convention - users will naturally group related decls together (a predicate plus the invariant that governs it) and the grammar should support that.
+
+**Duplicate-invariant detection (parser-side).**
+The kernel's `Program::validate` catches duplicate predicate declarations (added in PR-C) but not duplicate invariant names; no current example forces invariant-by-name lookup ambiguity. The parser nonetheless detects duplicates at the surface level so the diagnostic carries both spans, mirroring P1's duplicate-predicate detection. Kernel-side validation can be added if a future invariant-lifecycle PR forces name-based lookups; until then, the parser is the only gate.
+
+**Considered and rejected:**
+
+- *Required `(v1)` version clause at the surface.* Matches `format_program` output but requires every author to write `(v1)` even though it's the only possible value in v0. Reads as ceremony.
+- *Optional `(v1)` clause with default to 1.* Round-trip-compatible with current `format_program` output. Adds parser ambiguity (version-or-not) for negligible value when there's only one possible version.
+- *Update `format_program` to elide `(v1)` so round-trip works.* Reviewed and reverted on ChatGPT's suggestion: the parser surface and the debug formatter don't have to match. `format_program` stays as-is; full round-trip becomes a deliberate decision at P3c when the surface is complete and the formatter's role (debug vs canonical) can be decided alongside it.
+- *Strict ordering (`predicate_decl* invariant_decl*`).* Forces "all predicates first" file convention. No semantic reason to ban interleaved decls.
+- *Adding kernel-side duplicate-invariant validation in this PR.* No current example needs name-based invariant lookup. Parser-side detection is enough for `.morph` files; kernel validation can land when a future invariant lifecycle requires it.
+
+**What landed:**
+
+- New `KwInvariant` token, lexer-reserved.
+- New `invariant <Ident>: <expression>` production in the parser.
+- `program_parser` restructured: `program_header top_level_decl*` with free interleaving of predicate and invariant decls.
+- `parse_program` produces `Program { predicates, invariants, ... }` (other vectors still empty pending P3b/c).
+- Parser-side duplicate-invariant detection with span-rich diagnostics.
+- CLI `morpholog parse <file>` JSON projection extended to include invariants (body rendered as a string via `format_expr_inline`, since `Expr` doesn't yet derive `Serialize`).
+- 12 new integration tests: simple body, forall body, sum+Le body, version defaulted to 1, multiple invariants, free interleaving, predicates-first canonical order, missing colon, missing body, duplicate-with-both-spans, version-syntax rejection, reserved-keyword rejection.
+
+**What deliberately stayed out (P3b and beyond):**
+
+- Transformation declarations and the seven statement keywords (`require`, `bind`, `let`, `admit`, `retract`, `emit`, `for`).
+- Derived-claim declarations.
+- Date-comparison surface (no `Expr::DateLe` lowering at the surface yet).
+- Round-trip property tests (`format_program -> parse_program -> equal IR`). Land at P3c when the full surface is parseable.
+- Automatic `Program::validate()` inside `parse_program()`. Kept separate; can become `morpholog parse --validate` later.
+- A `morpholog run <file.morph>` command. Needs P3b at minimum for transformations.
+
+**Pattern note:** P3a is the smallest possible step that moves the parser into programme integration territory. Two more PRs (P3b for transformations + statements, P3c for derived claims) finish the v0 surface. After that, the parser arc is operationally complete and the next major investment is whatever the next forcing example demands.

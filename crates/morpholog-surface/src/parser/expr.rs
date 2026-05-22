@@ -1,240 +1,18 @@
-//! Parser for the v0 surface fragment.
+//! Expression-level parsing: the recursive `expression_parser`
+//! combinator plus the public `parse_expression` entry point.
 //!
-//! Grammar (BNF, P1 + P2a + P2b-lite):
-//!
-//! ```text
-//! program        ::= program_header predicate_decl*
-//! program_header ::= "program" Ident
-//! predicate_decl ::= "predicate" Ident "(" arg_list? ")"
-//! arg_list       ::= arg ("," arg)* ","?
-//! arg            ::= Ident ":" Kind
-//! Kind           ::= "Subject" | "Decimal" | "Date" | "Bool" | "Collection" | "Any"
-//!
-//! expression     ::= quantifier | implies
-//! quantifier     ::= "exists" Ident ":" expression
-//!                  | "forall" Ident "in" primary ":" expression
-//! implies        ::= and ("implies" implies)?
-//! and            ::= not_expr ("and" not_expr)*
-//! not_expr       ::= "not" not_expr | comparison
-//! comparison     ::= arith (cmp_op arith)?
-//! cmp_op         ::= "=" | "!=" | "<=" | "in"
-//! arith          ::= primary (("+" | "-") primary)*
-//! primary        ::= "(" expression ")"
-//!                  | sum_expr | value_expr
-//!                  | DecimalLit | DateLit | SubjectLit
-//!                  | "_"
-//!                  | Ident "(" term_list ")"           -- claim call (args optional)
-//!                  | Ident                             -- variable | actor
-//! sum_expr       ::= "sum" "(" Ident "|" expression ")"
-//! value_expr     ::= "value" Ident "(" term_list ")" ("default" expression)?
-//! term_list      ::= (term ("," term)* ","?)?         -- zero or more terms
-//! term           ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
-//! ```
-//!
-//! Newlines are insignificant. Trailing commas in argument lists
-//! are allowed. Comments are stripped at the lexer; the parser
-//! never sees them.
-//!
-//! Asymmetry to honour: `Expr::Neq(Term, Term)` and `Expr::In(Term,
-//! Term)` operate on *terms*, not expressions. `Eq`, `Le`, `Sub`,
-//! `Add` operate on full expressions. The parser must therefore
-//! reject `Foo + 1 != Bar` because both `!=` operands must be
-//! terms, not arithmetic expressions, and the same holds for
-//! membership: `a + 1 in xs` is rejected. Similarly, claim-call
-//! arguments are terms only - `Foo(x + 1, y)` is rejected. These
-//! constraints follow directly from the IR shape under the
-//! `docs/scope-and-ambition.md` surface doctrine.
-//!
-//! P2b-lite added bounded forms (`exists`, `forall`, `sum`,
-//! `value`), the membership comparator (`in`), and the date /
-//! subject literal sigils (`@YYYY-MM-DD`, `#NAME`). Two
-//! disambiguation rules govern them:
-//!
-//! - The `in` keyword is structural inside `forall <ident> in
-//!   <source>:` (consumed by the forall production before
-//!   reaching comparator-level grammar) and a membership
-//!   comparator everywhere else. Positional disambiguation; no
-//!   context-sensitive parsing.
-//! - `forall x in source: body` accepts the source at `primary`
-//!   precedence (variables, claim calls, parenthesised
-//!   expressions, primary-shaped literals). When the source is
-//!   a bare Term-wrapper (`Expr::Term(_)`), the parser auto-lifts
-//!   it to `Expr::In(Var(binding), source_term)` so the kernel
-//!   can iterate; when it's already predicate-shaped (a claim
-//!   call), it passes through unchanged.
-//!
-//! Error recovery: humble. On a parse failure inside a predicate
-//! declaration, the parser skips forward to the next `predicate`
-//! keyword (or EOF) and continues. The intent is "tell the author
-//! about every malformed declaration in one parse run", not a
-//! full-language error-recovery framework. The `program` keyword
-//! is not a recovery sync point in P1 because the grammar permits
-//! exactly one `program` header at the file start; a second one
-//! would be a separate, recoverable-only-by-restart kind of error.
-//! Expression parsing in P2a does not yet add recovery shapes; a
-//! malformed expression surfaces as one diagnostic at the failure
-//! site, sufficient for P2a's scope.
+//! Used in two places: directly by callers (and tests) for parsing
+//! standalone expressions, and indirectly by `program::program_parser`
+//! to parse invariant bodies (and, in P3+, transformation statement
+//! conditions and derived-claim domain/value expressions).
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Expr, PredicateArgDecl, PredicateDecl, Program, Term, Value};
-use std::collections::HashMap;
+use morpholog_core::{Expr, Term, Value};
 
-use crate::diagnostics::{Diagnostic, Span};
+use crate::diagnostics::Diagnostic;
 use crate::lexer::{Token, lex, token_stream};
 
-/// Parse a Morpholog source string into a [`Program`].
-///
-/// Returns `Ok(program)` when no diagnostics fire, even if the
-/// program is structurally minimal (e.g. just a `program` header
-/// with no predicates).
-///
-/// Returns `Err(diagnostics)` with one or more diagnostics on any
-/// lex or parse failure. Diagnostics carry byte-offset spans; the
-/// CLI renders them via `ariadne` against the original source.
-pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
-    let tokens = match lex(source) {
-        Ok(t) => t,
-        Err(errs) => {
-            return Err(errs
-                .into_iter()
-                .map(|e| {
-                    Diagnostic::error(format!("lex error: {}", e.reason()), e.span().into_range())
-                })
-                .collect());
-        }
-    };
-
-    if tokens.is_empty() {
-        // Span 0..1 (or 0..0 for a zero-length source) is the
-        // closest we can point at "the start"; the empty-file case
-        // doesn't have a more specific location.
-        let end = source.len().min(1);
-        return Err(vec![Diagnostic::error(
-            "expected `program` header, found empty file",
-            0..end,
-        )]);
-    }
-
-    let stream = token_stream(&tokens);
-    let (parsed, errs) = program_parser().parse(stream).into_output_errors();
-
-    let mut diagnostics: Vec<Diagnostic> = errs
-        .into_iter()
-        .map(|e| {
-            let span = e.span();
-            Diagnostic::error(
-                format!("parse error: {}", e.reason()),
-                span.start()..span.end(),
-            )
-        })
-        .collect();
-
-    let Some(raw) = parsed else {
-        if diagnostics.is_empty() {
-            diagnostics.push(Diagnostic::error("parse failed", 0..source.len()));
-        }
-        return Err(diagnostics);
-    };
-
-    // Build the final Program and run the duplicate-predicate check
-    // here on the parser side so the diagnostic carries source spans
-    // for BOTH declarations. `Program::validate` also detects this
-    // but loses the span context.
-    let mut by_name: HashMap<&str, &Span> = HashMap::new();
-    for (decl, span) in &raw.predicates {
-        if let Some(first_span) = by_name.get(decl.name.as_str()) {
-            diagnostics.push(
-                Diagnostic::error(
-                    format!("duplicate predicate declaration `{}`", decl.name),
-                    span.clone(),
-                )
-                .with_secondary((*first_span).clone(), "previously declared here"),
-            );
-        } else {
-            by_name.insert(decl.name.as_str(), span);
-        }
-    }
-
-    if !diagnostics.is_empty() {
-        return Err(diagnostics);
-    }
-
-    Ok(Program {
-        name: raw.name,
-        predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
-        invariants: Vec::new(),
-        transformations: Vec::new(),
-        derived_claims: Vec::new(),
-    })
-}
-
-/// Intermediate parse result. Carries spans alongside the parsed
-/// values so the post-pass (duplicate detection) can produce
-/// span-rich diagnostics. The final `Program` strips spans because
-/// the kernel IR is source-agnostic.
-#[derive(Debug)]
-struct RawProgram {
-    name: String,
-    predicates: Vec<(PredicateDecl, Span)>,
-}
-
-fn program_parser<'a, I>() -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    let ident = select! { Token::Ident(s) => s };
-    let kind = select! { Token::Kind(k) => k };
-
-    // arg ::= Ident ":" Kind
-    let arg = ident
-        .then_ignore(just(Token::Colon))
-        .then(kind)
-        .map(|(name, kind)| PredicateArgDecl { name, kind });
-
-    // arg_list ::= arg ("," arg)* ","?
-    let arg_list = arg
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<PredicateArgDecl>>();
-
-    // predicate_decl ::= "predicate" Ident "(" arg_list? ")"
-    let predicate_decl = just(Token::KwPredicate)
-        .ignore_then(ident)
-        .then(arg_list.delimited_by(just(Token::LParen), just(Token::RParen)))
-        .map_with(|(name, args), e| {
-            let span: SimpleSpan = e.span();
-            (PredicateDecl { name, args }, span.start()..span.end())
-        });
-
-    // Sync at the next `predicate` or `program` keyword on failure;
-    // skip the rest of the malformed declaration but keep the
-    // declarations on either side of it.
-    let predicate_decl_recovering = predicate_decl.recover_with(skip_then_retry_until(
-        any().ignored(),
-        just(Token::KwPredicate).ignored().or(end()),
-    ));
-
-    // program_header ::= "program" Ident
-    let header = just(Token::KwProgram).ignore_then(ident);
-
-    header
-        .then(predicate_decl_recovering.repeated().collect::<Vec<_>>())
-        .then_ignore(end())
-        .map(|(name, predicates)| RawProgram { name, predicates })
-}
-
-// ============================================================
-// Expressions (P2a)
-// ============================================================
-
-/// Parse a Morpholog expression into [`Expr`]. Used by tests for
-/// P2a and (later) by invariant/transformation parsers when the
-/// rest of the surface lands.
-///
-/// Same error model as [`parse_program`]: returns a list of
-/// diagnostics on failure, each carrying a byte-offset span
-/// suitable for rendering with `ariadne`.
 pub fn parse_expression(source: &str) -> Result<Expr, Vec<Diagnostic>> {
     let tokens = match lex(source) {
         Ok(t) => t,
@@ -294,7 +72,7 @@ pub fn parse_expression(source: &str) -> Result<Expr, Vec<Diagnostic>> {
 ///
 /// `recursive` lets `primary` reference `expression` so parenthesised
 /// sub-expressions can nest arbitrarily.
-fn expression_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>>
+pub(super) fn expression_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {

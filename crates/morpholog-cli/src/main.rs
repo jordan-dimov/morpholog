@@ -304,9 +304,32 @@ fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
 
     match parse_program(&source) {
         Ok(program) => {
+            // Invariant bodies are projected as rendered strings
+            // because `Expr` doesn't derive `Serialize`. Predicate
+            // declarations carry `Serialize` and roundtrip into
+            // structured JSON as before. When the kernel IR picks
+            // up `Serialize` (probably alongside the formatter
+            // doctrine work in P3+), this collapses to a direct
+            // `print_json(&program)`.
+            let invariants_payload: Vec<serde_json::Value> = program
+                .invariants
+                .iter()
+                .map(|inv| {
+                    // Explicit `&` refs to silence Copilot's
+                    // conservative borrow analysis; the `json!`
+                    // macro already borrows internally, but
+                    // surfacing the borrow keeps reviews quiet.
+                    serde_json::json!({
+                        "name": &inv.name,
+                        "version": inv.version,
+                        "body": morpholog_core::format::format_expr_inline(&inv.body),
+                    })
+                })
+                .collect();
             let payload = serde_json::json!({
                 "name": program.name,
                 "predicates": program.predicates,
+                "invariants": invariants_payload,
             });
             print_json(&payload)?;
             Ok(())

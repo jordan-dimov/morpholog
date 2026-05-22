@@ -164,6 +164,8 @@ The "Phase" column indicates which parser PR the rename lands in. P2b and later 
 
 The parser arc's PRs (`P1` through `P3+`, see [`roadmap.md`](roadmap.md)) all operate under this doctrine. A reviewer should reject any surface addition that lacks an IR mapping or that smuggles in an interpretation the kernel cannot evaluate.
 
+**Block syntax: indentation, not braces.** Multi-statement blocks (transformation bodies, `for` loops, future statement-bearing constructs) use indentation, not braces or `end` keywords. This matches the colon-terminated forms already committed at the expression level (`forall x in xs: body`, `exists x: body`, `invariant Name: body`) and keeps `.morph` source reading as rules, not config JSON or imperative scaffolding. The cost is that the surface layer must produce layout-sensitive structure, most likely by emitting `INDENT` / `DEDENT` tokens (or equivalent virtual tokens from a layout-normalisation pass) when statement parsing lands in P3b; that complexity is paid once and amortised across every statement-bearing construct. The doctrine is *indentation*; the specific layout mechanism is an implementation choice for the P3b design pass.
+
 ## The right way to measure ambition
 
 The wrong question: *what percentage of the code is Morpholog?* The right question: *what percentage of the legitimacy-bearing failure modes does Morpholog make non-representable?*

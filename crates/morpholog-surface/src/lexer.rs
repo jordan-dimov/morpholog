@@ -66,6 +66,10 @@ pub enum Token {
     /// Kind keyword in a predicate-arg position.
     Kind(PredicateArgKind),
 
+    // ---- P3a: invariant declarations ----
+    /// `invariant` keyword (P3a).
+    KwInvariant,
+
     // ---- P2a: boolean composition ----
     /// `not` prefix operator.
     KwNot,
@@ -160,6 +164,7 @@ impl fmt::Display for Token {
             Token::KwProgram => write!(f, "`program`"),
             Token::KwPredicate => write!(f, "`predicate`"),
             Token::Kind(k) => write!(f, "kind `{:?}`", k),
+            Token::KwInvariant => write!(f, "`invariant`"),
             Token::KwNot => write!(f, "`not`"),
             Token::KwAnd => write!(f, "`and`"),
             Token::KwImplies => write!(f, "`implies`"),
@@ -218,6 +223,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         // P1 reserved words
         "program" => Token::KwProgram,
         "predicate" => Token::KwPredicate,
+        "invariant" => Token::KwInvariant,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),
