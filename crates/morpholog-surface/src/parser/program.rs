@@ -137,6 +137,46 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         } else {
             derived_by_name.insert(d.predicate.as_str(), span);
         }
+
+        // Duplicate key names inside a single derived declaration.
+        // The IR's `keys: Vec<String>` is positional; two same-named
+        // keys would shadow each other in the binding context and
+        // produce silently wrong enumeration.
+        let mut seen_keys: HashMap<&str, ()> = HashMap::new();
+        for k in &d.keys {
+            if seen_keys.contains_key(k.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "duplicate key `{}` in derived-claim `{}`",
+                        k, d.predicate
+                    ),
+                    span.clone(),
+                ));
+            } else {
+                seen_keys.insert(k.as_str(), ());
+            }
+        }
+
+        // Duplicate value names inside a single derived declaration.
+        // The IR's `values: Vec<DerivedValue>` is positional; two
+        // same-named values would emit two output fields with the
+        // same documentary name (the kernel doesn't enforce
+        // uniqueness internally, but a derived claim with two `v`
+        // outputs is a programmer error).
+        let mut seen_values: HashMap<&str, ()> = HashMap::new();
+        for v in &d.values {
+            if seen_values.contains_key(v.name.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "duplicate value name `{}` in derived-claim `{}`",
+                        v.name, d.predicate
+                    ),
+                    span.clone(),
+                ));
+            } else {
+                seen_values.insert(v.name.as_str(), ());
+            }
+        }
     }
 
     if !diagnostics.is_empty() {

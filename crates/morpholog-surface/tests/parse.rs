@@ -907,3 +907,34 @@ fn derived_can_interleave_with_other_top_level_decls() {
     assert_eq!(program.predicates.len(), 2);
     assert_eq!(program.derived_claims.len(), 1);
 }
+
+#[test]
+fn duplicate_keys_in_derived_are_rejected() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject, a: Decimal)\n\
+                  \n\
+                  derived Test(x, x):\n\
+                  \x20\x20\x20\x20over Foo(x, _)\n\
+                  \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n";
+    let errs = parse_program(source).expect_err("duplicate keys should fail");
+    assert!(
+        errs.iter().any(|d| d.message.contains("duplicate key")),
+        "expected duplicate-key diagnostic; got: {errs:?}"
+    );
+}
+
+#[test]
+fn duplicate_value_names_in_derived_are_rejected() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject, a: Decimal)\n\
+                  \n\
+                  derived Test(x):\n\
+                  \x20\x20\x20\x20over Foo(x, _)\n\
+                  \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n\
+                  \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n";
+    let errs = parse_program(source).expect_err("duplicate values should fail");
+    assert!(
+        errs.iter().any(|d| d.message.contains("duplicate value name")),
+        "expected duplicate-value-name diagnostic; got: {errs:?}"
+    );
+}
