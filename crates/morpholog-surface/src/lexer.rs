@@ -18,15 +18,20 @@
 //! - Arithmetic (P2a): `+`, `-`.
 //! - Wildcard (P2a): `_`.
 //!
-//! Deliberately NOT recognised in P2a: `true` / `false` bool
-//! literals. The IR's `Value` enum has variants for `Decimal`,
+//! `true` and `false` are lexer-reserved but parser-rejected
+//! in v0. The IR's `Value` enum has variants for `Decimal`,
 //! `Subject`, and `Date` only - no `Value::Bool`. The runtime
 //! `EvalValue::Bool` is produced by comparators and other
 //! expressions; it never appears as an IR literal. Per the
 //! surface doctrine in `docs/scope-and-ambition.md`, the surface
 //! cannot create capabilities the kernel lacks: a `true` literal
-//! at the surface would have nowhere to lower to. It lands when
-//! a worked example forces `Value::Bool` into the IR, not before.
+//! has nowhere to lower to today. Treating `true` as an ordinary
+//! identifier would silently lower to `Term::Var("true")` and
+//! fail at runtime as `UnboundVariable`; reserving it at the
+//! lexer (as `Token::ReservedBoolLit`) lets the parser reject
+//! it with an "unexpected token" diagnostic instead. It lifts
+//! to a proper bool-literal token the moment a worked example
+//! forces `Value::Bool` into the IR.
 //!
 //! Whitespace and `//` line comments are stripped at lex; they
 //! never reach the parser. Output is a vector of `(Token, Span)`
@@ -34,14 +39,13 @@
 //! with [`crate::diagnostics::Span`] and `ariadne`.
 //!
 //! Reserved words recognised in P2a are the structural keywords
-//! (`program`, `predicate`) and the kind names (`Subject`,
-//! `Decimal`, `Date`, `Bool`, `Collection`, `Any`) plus the
-//! boolean operators (`not`, `and`, `implies`). The lexer maps
-//! each to a specific `Token::*` variant so the parser can
-//! match against them directly. `true` and `false` deliberately
-//! remain ordinary identifiers until the IR has a `Value::Bool`
-//! literal - see the "Deliberately NOT recognised" block above.
-//! An identifier in kind-position that doesn't match a reserved
+//! (`program`, `predicate`), the kind names (`Subject`,
+//! `Decimal`, `Date`, `Bool`, `Collection`, `Any`), the boolean
+//! operators (`not`, `and`, `implies`), and the placeholder bool
+//! literals (`true`, `false`, lexed but not parseable per the
+//! note above). The lexer maps each to a specific `Token::*`
+//! variant so the parser can match against them directly. An
+//! identifier in kind-position that doesn't match a reserved
 //! kind falls through as `Token::Ident` and produces a
 //! parse-time diagnostic.
 
