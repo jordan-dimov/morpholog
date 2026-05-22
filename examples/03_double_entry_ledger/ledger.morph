@@ -39,9 +39,6 @@ invariant at_most_one_direct_successor:
     Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
--- Transformations:
--- The locked verb-flavour decisions are in use (admit, =); statement
--- parsing is the next parser increment.
 
 transformation post_simple_entry(
     entry_id, posting_date, period,

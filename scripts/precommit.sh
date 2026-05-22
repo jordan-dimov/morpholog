@@ -86,21 +86,19 @@ fi
 # any .morph elsewhere in the tree (test fixtures, scratch files)
 # as a side benefit; today that's still just the examples.
 #
-# Uses `cargo run` to avoid depending on `cargo install` having
-# happened; the build is incremental and a no-op once the binary
-# is up to date.
+# Uses `cargo run` so the script is location-independent (honours
+# CARGO_TARGET_DIR) and doesn't depend on `cargo install` having
+# happened. Cargo's startup amortises across the loop because the
+# build is cached after the first iteration.
 # ----------------------------------------------------------------
 step 'morpholog check on every .morph file'
 MORPH_FILES=$(find . -name '*.morph' -not -path './target/*')
 if [ -z "$MORPH_FILES" ]; then
     echo '  No .morph files found; skipping.'
 else
-    # Build once so the inner loop calls the binary directly
-    # (cheaper than re-invoking `cargo run` per file).
-    cargo build --quiet --locked -p morpholog-cli
     for f in $MORPH_FILES; do
         echo "  $f"
-        ./target/debug/morpholog check "$f"
+        cargo run --quiet --locked -p morpholog-cli -- check "$f"
     done
 fi
 

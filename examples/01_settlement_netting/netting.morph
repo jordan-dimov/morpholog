@@ -37,12 +37,6 @@ invariant net_amount_equals_lines:
 invariant no_double_netting:
     SettlementLine(line, net, _) implies not (exists other: SettlementLine(line, other, _) and other != net)
 
--- Transformations:
--- The locked verb-flavour decisions are in use (admit, bind, actor,
--- =, sum(...), forall x in xs: body); the indented block structure
--- matches the doctrine in docs/scope-and-ambition.md. Statement
--- parsing is the next parser increment.
-
 transformation create_net_settlement(party_a, party_b, lines):
     require forall line in lines: ApprovedSettlementLine(line) and Between(line, party_a, party_b) and not Netted(line)
 
