@@ -143,9 +143,12 @@ The "Phase" column indicates which parser PR the rename lands in. P2b and later 
 | `=`, `!=` (infix) | `Expr::Eq` (Expr, Expr), `Expr::Neq` (Term, Term) | P2a | `Eq` operates on full expressions; `Neq` operates on terms only (the IR shape). The parser rejects arithmetic on either side of `!=`. |
 | `+`, `-` (infix) | `Expr::Add`, `Expr::Sub` (decimal) | P2a | Standard arithmetic notation, decimal-only. No unary minus until forced. |
 | `not`, `and`, `implies` (keywords) | `Expr::Not`, `Expr::And`, `Expr::Implies` | P2a | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Expr::And(Vec<Expr>)`; `implies` is right-associative. |
-| `forall x in coll: body` | `Expr::Forall` | P2b (planned) | Bounded quantification is mathematical convention. The `in` clause makes unbounded quantification syntactically impossible. |
-| `sum(target | body)` | `Expr::Sum` | P2b (planned) | Set-builder notation. Matches the kernel's bounded-comprehension contract. |
-| `value(target | body)` | `Expr::ValueOf` | P2b (planned) | Same shape as `sum`; the kernel separates them only because their cardinality contracts differ. |
+| `forall x in coll: body`, `exists x: body` | `Expr::Forall`, `Expr::Exists` | P2b | Bounded quantification is mathematical convention. The `in` clause on `forall` makes unbounded quantification syntactically impossible. `exists` carries no source clause because the IR's `Expr::Exists` doesn't model one - the bound variable is whatever the body matches. |
+| `sum(target | body)` | `Expr::Sum` | P2b | Set-builder notation. Target restricted to a variable in v0; relax when a worked example forces it. |
+| `value Pred(args)` (with optional `default expr`) | `Expr::ValueOf` | P2b | Claim-pattern form. The wildcard `_` in `args` marks the value position to extract. The kernel's `ValueOf { predicate, args, default }` is shaped this way deliberately; a `value(target | body)` shape would imply a general query and be more expressive than the IR. |
+| `x in xs` (membership) | `Expr::In(Term, Term)` | P2b | Infix at comparator precedence. Distinct from the structural `in` in `forall x in xs: body`; disambiguated positionally (the structural `in` comes immediately after the binder in `forall`). |
+| `@2026-05-22` | `Value::Date("2026-05-22")` | P2b | `@` sigil avoids the lexer ambiguity between bare ISO-8601 dates and arithmetic (e.g. `2026 - 05 - 22`). |
+| `#NAME` | `Value::Subject("NAME")` | P2b | `#` sigil makes subject literals visibly distinct from variables and reflects that subjects are opaque symbolic identifiers, not strings. |
 
 **What this rules out:**
 
