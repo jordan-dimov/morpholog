@@ -40,10 +40,18 @@ fn check_clean_program_exits_zero_with_no_output() {
         "expected exit 0; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    // The contract for `check` on a clean programme is that it is
+    // silent on both streams. Asserting both keeps accidental
+    // warnings or stdout writes from sneaking in unnoticed.
     assert!(
         out.stdout.is_empty(),
-        "clean check should be silent; got stdout:\n{}",
+        "clean check should be silent on stdout; got:\n{}",
         String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "clean check should be silent on stderr; got:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -103,6 +111,14 @@ fn check_parse_failure_renders_ariadne_diagnostic() {
     assert!(
         stderr.contains("program") || stderr.contains("Error"),
         "expected parse-error rendering; got:\n{stderr}"
+    );
+    // Diagnostics go to stderr; stdout must stay empty so that
+    // scripts piping `check`'s stdout don't get diagnostic text
+    // mixed into their data stream.
+    assert!(
+        out.stdout.is_empty(),
+        "parse failure should not write to stdout; got:\n{}",
+        String::from_utf8_lossy(&out.stdout)
     );
 }
 

@@ -1,51 +1,45 @@
 //! Morpholog CLI.
 //!
-//! v0 exposes two surfaces:
+//! Subcommands:
 //!
-//! - `inspect` dumps the durable substrate (current claims, audit
-//!   rows, pending outbox intents) as JSON, and enumerates derived
-//!   claims declared by a built-in program against the current state
-//!   (`inspect derived <program> <name>`). Read-only.
-//! - `propose` runs a named transformation from a built-in [`Program`]
-//!   against a Morpholog PostgreSQL database, with arguments supplied
-//!   as a JSON array of `EvalValue`s. Outcome is JSON on stdout, with
-//!   exit codes that let scripts distinguish commit from business
-//!   rejection from operational error.
+//! - `inspect` - read-only inspection of the durable substrate (claims,
+//!   audit rows, pending outbox intents, derived-claim enumerations,
+//!   declared predicate vocabulary). `inspect claims` and `inspect
+//!   derived` accept an optional `--as-of <transition_id>` for
+//!   historical reconstruction.
+//! - `propose` - runs a named transformation from a built-in
+//!   [`Program`] against a Morpholog PostgreSQL database, with
+//!   arguments supplied as a JSON array of `EvalValue`s. JSON
+//!   outcomes on stdout; exit codes distinguish commit, business
+//!   rejection, and operational error.
+//! - `parse` - read a `.morph` source file and print the parsed
+//!   `Program` as JSON. No database connection.
+//! - `check` - read a `.morph` source file, parse it, and run
+//!   `Program::validate()` against the IR. Silent on clean input;
+//!   uniform diagnostics on parse or validation failure.
 //!
 //! [`Program`]: morpholog_core::Program
 //!
-//! Both surfaces accept `--database-url <url>` or read `DATABASE_URL`
-//! from the environment; if neither is supplied, clap emits a clear
-//! error. Output is pretty-printed JSON via
+//! `propose` and `inspect` accept `--database-url <url>` or read
+//! `DATABASE_URL` from the environment; if neither is supplied, clap
+//! emits a clear error. Output is pretty-printed JSON via
 //! `serde_json::to_string_pretty`.
 //!
-//! `inspect claims` and `inspect derived` both accept an optional
-//! `--as-of <transition_id>` flag. With it, the inspection runs
-//! against the state reconstructed from the audit log at that past
-//! transition; without it, the current state is returned. `inspect
-//! audit` and `inspect outbox` do not accept `--as-of` (audit IS
-//! the chronological record; outbox is delivery state, not claim
-//! state).
-//!
-//! The CLI is still deliberately narrow. Explicit non-goals: no
-//! parser, no user-supplied program loading (`propose` and `inspect
-//! derived` only accept built-in programs from
-//! `morpholog_examples::all_programs()`), no outbox-delivery
+//! Explicit non-goals (today): no user-supplied program loading
+//! (`propose` and `inspect derived` only accept built-in programs
+//! from `morpholog_examples::all_programs()`), no outbox-delivery
 //! worker, no filtering or pagination DSL, no materialised
 //! derived-claim storage.
+//!
+//! Module layout: `main.rs` carries the `clap`-derived CLI structs
+//! and the dispatch loop only. Each subcommand's logic lives in
+//! `commands/<name>.rs` and is invoked via `commands::<name>::run`.
 
-use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
-use morpholog_core::{EvalValue, Transition};
-use morpholog_postgres::{
-    PgPool, PgProposalOutcome, PgTracedOutcome, list_audit_rows, list_claims, list_claims_at,
-    list_derived, list_derived_at, list_pending_outbox, propose_against_pg,
-    propose_against_pg_with_trace,
-};
-use morpholog_surface::parse_program;
-use serde::Serialize;
 use std::path::PathBuf;
 use uuid::Uuid;
+
+mod commands;
 
 /// Top-level Morpholog CLI.
 #[derive(Parser, Debug)]
@@ -84,14 +78,14 @@ enum Command {
     /// the resulting IR (strict-arity check, duplicate-predicate
     /// check, predicate-reference resolution). Exits zero on a clean
     /// programme; exits one with diagnostics on either a parse
-    /// failure or a validation failure. The shape is: one command to
-    /// answer "is this program well-formed?", with uniform output
-    /// regardless of which layer raised the issue.
+    /// failure or a validation failure. One command to answer "is
+    /// this program well-formed?", with uniform output regardless of
+    /// which layer raised the issue.
     Check(SourceFileArgs),
 }
 
 #[derive(Subcommand, Debug)]
-enum Inspect {
+pub(crate) enum Inspect {
     /// List currently-admitted claims, or claims as they were at a
     /// past `transition_id` via `--as-of`.
     Claims(InspectClaimsArgs),
@@ -123,21 +117,21 @@ enum Inspect {
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
 /// declarations are programme metadata, not state.
 #[derive(clap::Args, Debug)]
-struct InspectPredicatesArgs {
+pub(crate) struct InspectPredicatesArgs {
     /// Built-in program name (e.g. `double_entry_ledger`). The same
     /// registry that `propose` uses.
-    program: String,
+    pub(crate) program: String,
 }
 
 /// Arguments for `inspect claims`. Same shape as the shared
 /// `InspectArgs` but with an optional `--as-of` for historical
 /// claim listing.
 #[derive(clap::Args, Debug)]
-struct InspectClaimsArgs {
+pub(crate) struct InspectClaimsArgs {
     /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    pub(crate) database_url: String,
 
     /// Optional: list claims as they were at this past
     /// `transition_id` (UUIDv7). Without this flag, the current
@@ -146,31 +140,31 @@ struct InspectClaimsArgs {
     /// historical claim set. Unknown ids return an error
     /// (`TransitionNotFound`).
     #[arg(long)]
-    as_of: Option<Uuid>,
+    pub(crate) as_of: Option<Uuid>,
 }
 
 /// Arguments for `inspect derived`.
 #[derive(clap::Args, Debug)]
-struct InspectDerivedArgs {
+pub(crate) struct InspectDerivedArgs {
     /// Built-in program name (e.g. `double_entry_ledger`). The same
     /// registry that `propose` uses.
-    program: String,
+    pub(crate) program: String,
 
     /// Derived claim predicate name (e.g. `TrialBalanceRow`). Looked
     /// up against the program's `derived_claims` by `predicate`.
-    derived: String,
+    pub(crate) derived: String,
 
     /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    pub(crate) database_url: String,
 
     /// Optional: enumerate the derived claim against the state at
     /// this past `transition_id` (UUIDv7) instead of current state.
     /// Same predicate-scoped replay as the current-state version;
     /// unknown ids return `TransitionNotFound`.
     #[arg(long)]
-    as_of: Option<Uuid>,
+    pub(crate) as_of: Option<Uuid>,
 }
 
 /// Shared arguments for the `inspect` subcommands that do NOT
@@ -182,33 +176,33 @@ struct InspectDerivedArgs {
 /// clap emits a "required argument was not provided" error before any
 /// async work happens.
 #[derive(clap::Args, Debug)]
-struct InspectArgs {
+pub(crate) struct InspectArgs {
     /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    pub(crate) database_url: String,
 }
 
 /// Arguments for any subcommand whose only input is a `.morph` source
 /// file (today: `parse` and `check`). No database connection; these
 /// subcommands are pure source-to-IR pipelines.
 #[derive(clap::Args, Debug)]
-struct SourceFileArgs {
+pub(crate) struct SourceFileArgs {
     /// Path to a `.morph` source file.
-    file: PathBuf,
+    pub(crate) file: PathBuf,
 }
 
 /// Arguments for the `propose` subcommand.
 #[derive(clap::Args, Debug)]
-struct ProposeArgs {
+pub(crate) struct ProposeArgs {
     /// Built-in program name (e.g. `double_entry_ledger`). The full
     /// list is in the per-example READMEs under `examples/`.
-    program: String,
+    pub(crate) program: String,
 
     /// Transformation name within the program (e.g. `post_simple_entry`).
     /// The per-example README documents each transformation's parameters
     /// and the expected argument shape.
-    transformation: String,
+    pub(crate) transformation: String,
 
     /// JSON array of arguments matching the transformation's parameter
     /// list. Each element must be an `EvalValue` in the codec's tagged
@@ -217,7 +211,7 @@ struct ProposeArgs {
     /// `{"type":"collection","value":[...]}`. See `examples/<n>/README.md`
     /// for the expected shape of each transformation's argument list.
     #[arg(long)]
-    args: String,
+    pub(crate) args: String,
 
     /// Subject value identifying the actor under whose authority this
     /// transition is being proposed. Free-form subject string (e.g.
@@ -225,473 +219,34 @@ struct ProposeArgs {
     /// an `EvalValue::Subject`. Persisted to `morpholog.audit.actor`
     /// on commit. Required: every transition carries an actor.
     #[arg(long)]
-    actor: String,
+    pub(crate) actor: String,
 
     /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    pub(crate) database_url: String,
 
     /// When set, emit a structured per-statement trace alongside the
     /// outcome. Output shape becomes `{"result": <PgProposalOutcome>,
     /// "trace": [<TraceEntry>...]}` on commit or rejection. Useful
     /// for diagnosing why a transformation rejected: the trace shows
-    /// which require/bind_one fired, what bindings each statement
-    /// produced, and which invariant (if any) failed. Kernel errors
-    /// at the PG boundary still surface via the normal anyhow error
-    /// chain on stderr - PR D2's known limitation.
+    /// which require/bind fired, what bindings each statement produced,
+    /// and which invariant (if any) failed. Kernel errors at the PG
+    /// boundary still surface via the normal anyhow error chain on
+    /// stderr.
     #[arg(long)]
-    trace: bool,
+    pub(crate) trace: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Inspect { what } => match what {
-            Inspect::Claims(args) => {
-                let pool = connect(&args.database_url).await?;
-                let claims = match args.as_of {
-                    Some(tid) => list_claims_at(&pool, tid)
-                        .await
-                        .context("list_claims_at failed")?,
-                    None => list_claims(&pool).await.context("list_claims failed")?,
-                };
-                print_json(&claims)?;
-            }
-            Inspect::Audit(args) => {
-                let pool = connect(&args.database_url).await?;
-                let rows = list_audit_rows(&pool)
-                    .await
-                    .context("list_audit_rows failed")?;
-                print_json(&rows)?;
-            }
-            Inspect::Outbox(args) => {
-                let pool = connect(&args.database_url).await?;
-                let rows = list_pending_outbox(&pool)
-                    .await
-                    .context("list_pending_outbox failed")?;
-                print_json(&rows)?;
-            }
-            Inspect::Derived(args) => {
-                inspect_derived(args).await?;
-            }
-            Inspect::Predicates(args) => {
-                inspect_predicates(args)?;
-            }
-        },
-        Command::Propose(args) => {
-            propose(args).await?;
-        }
-        Command::Parse(args) => {
-            parse_subcommand(args)?;
-        }
-        Command::Check(args) => {
-            check_subcommand(args)?;
-        }
+        Command::Inspect { what } => commands::inspect::run(what).await,
+        Command::Propose(args) => commands::propose::run(args).await,
+        Command::Parse(args) => commands::parse::run(args),
+        Command::Check(args) => commands::check::run(args),
     }
-    Ok(())
-}
-
-/// Run the `check` subcommand. Parse + validate the source file,
-/// surface diagnostics with a uniform shape from either layer.
-///
-/// - Parse failure: render parse diagnostics via ariadne, exit 1.
-/// - Validation failure: render validation errors as plain
-///   `error: <message>` lines (the kernel's `ValidationError`
-///   carries no source span), exit 1.
-/// - Both clean: print nothing, exit 0.
-fn check_subcommand(args: SourceFileArgs) -> anyhow::Result<()> {
-    let source = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("read source file {}", args.file.display()))?;
-    let source_name = args.file.display().to_string();
-
-    let program = match parse_program(&source) {
-        Ok(p) => p,
-        Err(diagnostics) => {
-            for d in &diagnostics {
-                eprint!("{}", d.render(&source_name, &source));
-            }
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(errors) = program.validate() {
-        for err in &errors {
-            // `ValidationError` carries a `Display` impl with the
-            // canonical phrasing; no per-variant rewording here.
-            eprintln!("error: {err}");
-        }
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
-
-/// Run the `parse` subcommand. Reads the `.morph` file at the given
-/// path, parses it, and either prints the resulting `Program` as
-/// pretty JSON (on success) or renders each diagnostic to stderr via
-/// ariadne (on failure, exiting non-zero).
-///
-/// `Program` does not derive `Serialize` directly today, so the CLI
-/// emits a small projection rather than the full IR. When the IR
-/// types pick up `Serialize`, this can collapse to a direct
-/// `print_json(&program)` call.
-fn parse_subcommand(args: SourceFileArgs) -> anyhow::Result<()> {
-    let source = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("read source file {}", args.file.display()))?;
-    let source_name = args.file.display().to_string();
-
-    match parse_program(&source) {
-        Ok(program) => {
-            // Invariant bodies are projected as rendered strings
-            // because `Expr` doesn't derive `Serialize`. Predicate
-            // declarations carry `Serialize` and roundtrip into
-            // structured JSON as before. When the kernel IR picks
-            // up `Serialize` (probably alongside the formatter
-            // doctrine work in P3+), this collapses to a direct
-            // `print_json(&program)`.
-            let invariants_payload: Vec<serde_json::Value> = program
-                .invariants
-                .iter()
-                .map(|inv| {
-                    // Explicit `&` refs to silence Copilot's
-                    // conservative borrow analysis; the `json!`
-                    // macro already borrows internally, but
-                    // surfacing the borrow keeps reviews quiet.
-                    serde_json::json!({
-                        "name": &inv.name,
-                        "version": inv.version,
-                        "body": morpholog_core::format::format_expr_inline(&inv.body),
-                    })
-                })
-                .collect();
-            // Transformation bodies are projected as rendered
-            // strings for the same reason as invariant bodies:
-            // `Stmt` and `Expr` don't yet derive `Serialize`.
-            // Each statement is rendered via `format_stmt(s, 0)`;
-            // gate statements (require / bind / let) produce a
-            // single line each. `Stmt::For` produces
-            // multi-line output via embedded newlines, which
-            // will appear as a single JSON string with `\n`s
-            // when it lands - revisit if a stricter "one-line-per-
-            // entry" projection is needed.
-            let transformations_payload: Vec<serde_json::Value> = program
-                .transformations
-                .iter()
-                .map(|t| {
-                    let body_lines: Vec<String> = t
-                        .body
-                        .iter()
-                        .map(|s| morpholog_core::format::format_stmt(s, 0))
-                        .collect();
-                    serde_json::json!({
-                        "name": &t.name,
-                        "parameters": &t.parameters,
-                        "body": body_lines,
-                    })
-                })
-                .collect();
-            // Derived claims are projected with their rendered domain and
-            // values for the same reason as transformation bodies:
-            // `DerivedClaim` and its `Expr` fields do not derive `Serialize`.
-            let derived_payload: Vec<serde_json::Value> = program
-                .derived_claims
-                .iter()
-                .map(|d| {
-                    let values: Vec<serde_json::Value> = d
-                        .values
-                        .iter()
-                        .map(|v| {
-                            serde_json::json!({
-                                "name": &v.name,
-                                "expr": morpholog_core::format::format_expr_inline(&v.expr),
-                            })
-                        })
-                        .collect();
-                    serde_json::json!({
-                        "predicate": &d.predicate,
-                        "keys": &d.keys,
-                        "over": morpholog_core::format::format_expr_inline(&d.domain),
-                        "values": values,
-                    })
-                })
-                .collect();
-            let payload = serde_json::json!({
-                "name": program.name,
-                "predicates": program.predicates,
-                "invariants": invariants_payload,
-                "transformations": transformations_payload,
-                "derived_claims": derived_payload,
-            });
-            print_json(&payload)?;
-            Ok(())
-        }
-        Err(diagnostics) => {
-            for d in &diagnostics {
-                eprint!("{}", d.render(&source_name, &source));
-            }
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Run the `propose` subcommand end-to-end:
-/// look up the named program and transformation, parse the JSON `--args`
-/// as a `Vec<EvalValue>`, open a SERIALIZABLE PostgreSQL transaction
-/// via `propose_against_pg`, and print the outcome as JSON.
-///
-/// Exit-code semantics:
-/// - The outcome is *always* printed to stdout as JSON, both on commit
-///   and on business rejection. Callers can distinguish by reading the
-///   `"status"` field.
-/// - On `Committed`, the function returns `Ok(())` and the process
-///   exits 0 via `main`'s default.
-/// - On `Rejected`, the function calls `std::process::exit(1)` after
-///   printing, so scripts can detect business rejection without parsing
-///   JSON.
-/// - On any earlier error (unknown program/transformation, malformed
-///   `--args` JSON, connection failure), the function returns `Err`
-///   and anyhow's default exit path prints the error chain to stderr
-///   and exits 1. Stdout vs stderr distinguishes the two failure
-///   modes; in both cases the exit code is 1.
-async fn propose(args: ProposeArgs) -> anyhow::Result<()> {
-    // 1. Resolve the program from the built-in registry.
-    let programs = morpholog_examples::all_programs();
-    let program = programs
-        .iter()
-        .find(|p| p.name == args.program)
-        .ok_or_else(|| {
-            let available = programs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "program `{}` not found. Available built-in programs: {}",
-                args.program,
-                available
-            )
-        })?;
-
-    // 2. Resolve the transformation within the program.
-    let transformation = program
-        .transformation(&args.transformation)
-        .ok_or_else(|| {
-            let available = program
-                .transformations
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "transformation `{}` not found in program `{}`. Available: {}",
-                args.transformation,
-                args.program,
-                available
-            )
-        })?;
-
-    // 3. Parse --args as a JSON array of EvalValues using the same
-    //    tagged codec that `morpholog inspect` emits, so output of one
-    //    invocation can plausibly be piped into the input of another.
-    let eval_args: Vec<morpholog_core::EvalValue> = serde_json::from_str(&args.args).context(
-        "failed to parse --args as a JSON array of EvalValues \
-         (each element must be a tagged object such as \
-         `{\"type\":\"subject\",\"value\":\"...\"}` or \
-         `{\"type\":\"decimal\",\"value\":\"100\"}`)",
-    )?;
-
-    // 4. Connect and propose.
-    //
-    // Known v0 limitation: `PgError::SerializationFailure` (PostgreSQL
-    // SSI conflict; SQLSTATE 40001) is documented as caller-retryable,
-    // but the CLI surfaces it as a single failed invocation instead of
-    // retrying internally. Acceptable for the developer/operator use
-    // case the CLI is built for; concurrent `morpholog propose`
-    // pipelines should add their own retry wrapper, or this code
-    // should grow a small bounded-retry loop. Deferred until concurrent
-    // CLI use is actually pressured.
-    let pool = connect(&args.database_url).await?;
-    let transition = Transition {
-        transformation_name: transformation.name.clone(),
-        args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone()),
-    };
-    // 5. Propose, with or without trace, and emit JSON accordingly.
-    //    Trace branch emits `{"result": ..., "trace": [...]}` for
-    //    every kernel-side outcome (Committed, Rejected, and
-    //    Errored). Non-trace branch emits the bare outcome (its
-    //    existing wire shape) so scripts that parse stdout don't
-    //    break. PG-layer errors surface via anyhow on both branches.
-    if args.trace {
-        let traced =
-            propose_against_pg_with_trace(&pool, transformation, &transition, &program.invariants)
-                .await
-                .context("propose_against_pg_with_trace failed")?;
-        match traced {
-            PgTracedOutcome::Outcome { outcome, trace } => {
-                print_json(&serde_json::json!({
-                    "result": &outcome,
-                    "trace": &trace,
-                }))?;
-                if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
-                    std::process::exit(1);
-                }
-            }
-            PgTracedOutcome::KernelErrored { error, trace } => {
-                // Kernel error with structured trace preserved. Emit
-                // a tagged "errored" result alongside the trace so
-                // downstream JSON consumers can distinguish from a
-                // lawful rejection, then exit non-zero.
-                print_json(&serde_json::json!({
-                    "result": {
-                        "status": "errored",
-                        "error": format!("{error}"),
-                    },
-                    "trace": &trace,
-                }))?;
-                std::process::exit(1);
-            }
-        }
-    } else {
-        let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
-            .await
-            .context("propose_against_pg failed")?;
-        print_json(&outcome)?;
-        if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
-            std::process::exit(1);
-        }
-    }
-    Ok(())
-}
-
-/// Run the `inspect derived` subcommand end-to-end: look up the named
-/// program and derived claim, connect, and enumerate the derived
-/// extension against the current durable state via [`list_derived`].
-///
-/// Errors:
-/// - Unknown program: surfaces the list of available built-in programs
-///   in the error message.
-/// - Unknown derived claim: surfaces the list of derived predicates
-///   declared on the matched program.
-/// - Connection failure or kernel error from `list_derived`: propagated
-///   via anyhow context.
-///
-/// Output: pretty-printed JSON array of `ClaimInstance`s. The ordering
-/// matches the kernel contract (sorted by `(keys ++ values)` under
-/// structural `EvalValue` ordering), so the output is deterministic
-/// for a given state.
-async fn inspect_derived(args: InspectDerivedArgs) -> anyhow::Result<()> {
-    let programs = morpholog_examples::all_programs();
-    let program = programs
-        .iter()
-        .find(|p| p.name == args.program)
-        .ok_or_else(|| {
-            let available = programs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "program `{}` not found. Available built-in programs: {}",
-                args.program,
-                available
-            )
-        })?;
-
-    let derived = program.derived_claim(&args.derived).ok_or_else(|| {
-        let available = program
-            .derived_claims
-            .iter()
-            .map(|d| d.predicate.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        if available.is_empty() {
-            anyhow!("program `{}` declares no derived claims", args.program)
-        } else {
-            anyhow!(
-                "derived claim `{}` not found in program `{}`. Available: {}",
-                args.derived,
-                args.program,
-                available
-            )
-        }
-    })?;
-
-    let pool = connect(&args.database_url).await?;
-    let rows = match args.as_of {
-        Some(tid) => list_derived_at(&pool, derived, tid)
-            .await
-            .context("list_derived_at failed")?,
-        None => list_derived(&pool, derived)
-            .await
-            .context("list_derived failed")?,
-    };
-    print_json(&rows)?;
-    Ok(())
-}
-
-async fn connect(url: &str) -> anyhow::Result<PgPool> {
-    // The URL is deliberately NOT included in error context: a typical
-    // PostgreSQL connection string is `postgres://user:password@host/db`,
-    // and echoing it into stderr (where it may be captured by shells,
-    // CI logs, or terminal scrollback) would leak credentials. The
-    // underlying sqlx error already describes what went wrong (DNS
-    // failure, connection refused, authentication failed, etc.); the
-    // user knows which URL they supplied via `--database-url` or
-    // `DATABASE_URL`.
-    PgPool::connect(url)
-        .await
-        .context("failed to connect to PostgreSQL")
-}
-
-fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
-    let json = serde_json::to_string_pretty(value).context("JSON encoding failed")?;
-    println!("{json}");
-    Ok(())
-}
-
-/// Implement `inspect predicates <program>` end-to-end. Looks up the
-/// program by name in the built-in registry, then prints its declared
-/// predicates as JSON. Read-only and synchronous; no database
-/// connection.
-///
-/// JSON shape (array of objects):
-///
-/// ```text
-/// [
-///   {
-///     "name": "Policy",
-///     "args": [
-///       {"name": "policy_id", "kind": "Subject"},
-///       {"name": "aggregate_limit", "kind": "Decimal"}
-///     ]
-///   }
-/// ]
-/// ```
-///
-/// `PredicateDecl` and `PredicateArgDecl` derive `Serialize` via the
-/// kernel's existing serde derives; the order in the array matches
-/// the order in `Program::predicates`.
-fn inspect_predicates(args: InspectPredicatesArgs) -> anyhow::Result<()> {
-    let programs = morpholog_examples::all_programs();
-    let program = programs
-        .iter()
-        .find(|p| p.name == args.program)
-        .ok_or_else(|| {
-            let available = programs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "program `{}` not found. Available built-in programs: {}",
-                args.program,
-                available
-            )
-        })?;
-    print_json(&program.predicates)
 }
 
 // ===========================================================================
@@ -722,16 +277,9 @@ mod tests {
             Inspect::Claims(args) => args.database_url,
             Inspect::Audit(args) | Inspect::Outbox(args) => args.database_url,
             Inspect::Derived(_) => {
-                // `Inspect::Derived` has its own arg struct; the other
-                // helper tests cover it directly. Reaching this arm
-                // here means a test passed `inspect derived` argv into
-                // `parsed_url`, which is a test bug.
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
             }
             Inspect::Predicates(_) => {
-                // `inspect predicates` takes no database URL. Same
-                // reasoning as the Derived arm: this helper exists for
-                // the URL-bearing subcommands only.
                 panic!("inspect predicates does not take a database URL")
             }
         }
@@ -1115,7 +663,7 @@ mod tests {
         // The codec uses a `status` discriminant via serde's tagged-enum
         // representation; the CLI relies on this so that scripts can
         // parse stdout and branch on `.status`.
-        use morpholog_core::ClaimInstance;
+        use morpholog_core::{ClaimInstance, EvalValue};
         use morpholog_postgres::PgProposalOutcome;
         use uuid::Uuid;
 
