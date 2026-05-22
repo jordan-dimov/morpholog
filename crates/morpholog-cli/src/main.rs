@@ -77,13 +77,17 @@ enum Command {
     /// Parse a `.morph` source file. On success, prints the parsed
     /// `Program` as JSON and exits zero. On parse failure, renders
     /// ariadne-formatted diagnostics to stderr and exits one.
-    ///
-    /// v0 recognises only the `program` header and `predicate`
-    /// declarations. A `.morph` file containing invariants,
-    /// transformations, or derived claims currently fails with a
-    /// parse error - the parser requires the file to end after the
-    /// last predicate declaration. Subsequent PRs expand the surface.
-    Parse(ParseArgs),
+    Parse(SourceFileArgs),
+
+    /// Parse and validate a `.morph` source file. Runs the parser
+    /// first; if parsing succeeds, runs `Program::validate()` against
+    /// the resulting IR (strict-arity check, duplicate-predicate
+    /// check, predicate-reference resolution). Exits zero on a clean
+    /// programme; exits one with diagnostics on either a parse
+    /// failure or a validation failure. The shape is: one command to
+    /// answer "is this program well-formed?", with uniform output
+    /// regardless of which layer raised the issue.
+    Check(SourceFileArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -185,13 +189,12 @@ struct InspectArgs {
     database_url: String,
 }
 
-/// Arguments for the `parse` subcommand. No database connection;
-/// `parse` is a pure source-to-IR transformation.
+/// Arguments for any subcommand whose only input is a `.morph` source
+/// file (today: `parse` and `check`). No database connection; these
+/// subcommands are pure source-to-IR pipelines.
 #[derive(clap::Args, Debug)]
-struct ParseArgs {
-    /// Path to a `.morph` source file. The file is read in full,
-    /// lexed, and parsed; success prints the resulting `Program` as
-    /// JSON, failure renders ariadne-formatted diagnostics on stderr.
+struct SourceFileArgs {
+    /// Path to a `.morph` source file.
     file: PathBuf,
 }
 
@@ -283,6 +286,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Parse(args) => {
             parse_subcommand(args)?;
         }
+        Command::Check(args) => {
+            check_subcommand(args)?;
+        }
     }
     Ok(())
 }
@@ -297,7 +303,42 @@ async fn main() -> anyhow::Result<()> {
 /// rather than the full IR. When the rest of the surface lands and
 /// the IR types pick up `Serialize`, this can collapse to a direct
 /// `print_json(&program)` call.
-fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
+/// Run the `check` subcommand. Parse + validate the source file,
+/// surface diagnostics with a uniform shape from either layer.
+///
+/// - Parse failure: render parse diagnostics via ariadne, exit 1.
+/// - Validation failure: render validation errors as plain
+///   `error: <message>` lines (the kernel's `ValidationError`
+///   carries no source span), exit 1.
+/// - Both clean: print nothing, exit 0.
+fn check_subcommand(args: SourceFileArgs) -> anyhow::Result<()> {
+    let source = std::fs::read_to_string(&args.file)
+        .with_context(|| format!("read source file {}", args.file.display()))?;
+    let source_name = args.file.display().to_string();
+
+    let program = match parse_program(&source) {
+        Ok(p) => p,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprint!("{}", d.render(&source_name, &source));
+            }
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(errors) = program.validate() {
+        for err in &errors {
+            // `ValidationError` carries a `Display` impl with the
+            // canonical phrasing; no per-variant rewording here.
+            eprintln!("error: {err}");
+        }
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn parse_subcommand(args: SourceFileArgs) -> anyhow::Result<()> {
     let source = std::fs::read_to_string(&args.file)
         .with_context(|| format!("read source file {}", args.file.display()))?;
     let source_name = args.file.display().to_string();
