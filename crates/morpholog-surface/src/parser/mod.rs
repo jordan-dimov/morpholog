@@ -1,6 +1,6 @@
 //! Parser for the v0 surface fragment.
 //!
-//! Grammar (BNF, P1 + P2a + P2b-lite + P3a):
+//! Grammar (BNF):
 //!
 //! ```text
 //! program        ::= program_header top_level_decl*

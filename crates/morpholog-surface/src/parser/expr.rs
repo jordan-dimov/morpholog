@@ -226,12 +226,12 @@ where
 
         // comparison ::= arith (cmp_op arith)?  (non-assoc)
         //
-        // Five forms (P2a + P2b-lite + P3-dates):
+        // Surface forms and their IR lowering:
         //   - `=` -> Expr::Eq(Expr, Expr)
         //   - `<=` -> Expr::Le(Expr, Expr)   (decimal)
         //   - `on_or_before` -> Expr::DateLe(Expr, Expr)   (civil date)
         //   - `!=` -> Expr::Neq(Term, Term)  - requires both sides to be Terms
-        //   - `in` (P2b) -> Expr::In(Term, Term)  - requires both sides to be Terms
+        //   - `in` -> Expr::In(Term, Term)  - requires both sides to be Terms
         //
         // `<=` and `on_or_before` are distinct surface forms because
         // the kernel keeps `Expr::Le` (decimal) and `Expr::DateLe`
@@ -505,7 +505,7 @@ enum CmpOp {
     /// Decimal `<=`. Lowers to `Expr::Le`. Type-checked at runtime
     /// (operands must be `EvalValue::Decimal`).
     Le,
-    /// Civil-date `on_or_before` (P3-dates). Lowers to
+    /// Civil-date `on_or_before`. Lowers to
     /// `Expr::DateLe`. Type-checked at runtime (operands must be
     /// `EvalValue::Date`). Distinct surface form from `<=` because
     /// the kernel keeps `Le` and `DateLe` as separate IR primitives;

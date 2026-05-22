@@ -1,10 +1,10 @@
-//! Integration tests for the v0 expression parser (P2a).
+//! Integration tests for the v0 expression parser.
 //!
 //! Covers: atoms (vars, literals, wildcards, actor, claim calls),
 //! arithmetic, comparators, boolean composition, precedence,
 //! associativity, the term-only restriction on `!=`.
 //!
-//! Deferred to P2b and not tested here: bool literals (`true` /
+//! Deferred until later increments (not tested here): bool literals (`true` /
 //! `false`), date literals, subject literals, `in`, `exists`,
 //! `forall`, `sum`, `value`.
 
@@ -307,7 +307,7 @@ fn implies_is_right_associative() {
 #[test]
 fn realistic_insurance_cap_rule() {
     // The cap rule from the insurance settlement example, but
-    // simplified to the P2a-supported fragment (no sum yet).
+    // simplified (no sum yet (no sum yet).
     // `already_paid + proposed <= limit`.
     let got = parse_expression("already_paid + proposed <= limit").unwrap();
     let Expr::Le(lhs, rhs) = got else {
@@ -378,7 +378,7 @@ fn true_and_false_are_reserved_not_parseable() {
 }
 
 // ============================================================
-// P2b-lite: bounded forms + literals + membership
+// Bounded forms + literals + membership
 // ============================================================
 
 // ---- Date and subject literals ----
@@ -689,7 +689,7 @@ fn realistic_verified_revenue_admissibility() {
 
 #[test]
 fn realistic_clinical_trial_window_via_claims() {
-    // Without DateLe in P2b-lite, the date-window check is
+    // Before on_or_before existed in the surface, the date-window check is
     // represented purely as claim queries. This pins that the
     // claim-args date-literal flow works.
     let got = parse_expression(
@@ -879,7 +879,7 @@ fn sum_rejects_actor_as_target() {
 }
 
 /// Quantifier bodies (exists, forall) accept indented bodies via
-/// the `(Indent body Dedent | body)` choice. P3a-era tests only
+/// the `(Indent body Dedent | body)` choice. earlier-era tests only
 /// exercised the inline form; this pins the indented-body path
 /// and the layout pass's interaction with nested quantifier
 /// scoping.
@@ -896,7 +896,7 @@ fn forall_body_can_be_indented_on_next_line() {
 }
 
 // ============================================================
-// P3-dates: civil-date `on_or_before` comparator
+// Civil-date `on_or_before` comparator
 // ============================================================
 
 #[test]
@@ -913,7 +913,7 @@ fn on_or_before_lowers_to_date_le() {
 
 #[test]
 fn decimal_le_still_lowers_to_le() {
-    // Regression: P3-dates must not change decimal `<=` lowering.
+    // Regression: do not change decimal `<=` lowering.
     let got = parse_expression("amount <= limit").unwrap();
     assert_eq!(
         got,

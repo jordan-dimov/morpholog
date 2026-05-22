@@ -46,7 +46,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     }
 
     // Layout pass: enriches the token stream with virtual
-    // Indent/Dedent at block boundaries. P3b1's transformation
+    // Indent/Dedent at block boundaries. Transformation
     // bodies need this; predicate and invariant productions work
     // either way (the layout pass only inserts tokens where
     // indentation actually changes).
