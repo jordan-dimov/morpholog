@@ -84,6 +84,29 @@ pub enum Token {
     /// `Value::Bool` into the IR.
     ReservedBoolLit(bool),
 
+    // ---- P2b-lite: bounded forms + membership ----
+    /// `exists` quantifier keyword.
+    KwExists,
+    /// `forall` quantifier keyword.
+    KwForall,
+    /// `sum` aggregator keyword.
+    KwSum,
+    /// `value` claim-lookup keyword.
+    KwValue,
+    /// `default` keyword (only meaningful after `value Pred(args)`
+    /// in v0; reserved at the lexer everywhere so users can't
+    /// accidentally name a variable `default`).
+    KwDefault,
+    /// `in` keyword. Dual-purpose: structural binder in
+    /// `forall x in source: body`, and membership comparator
+    /// in `x in xs`. Positional disambiguation by the parser.
+    KwIn,
+    /// `|` (pipe). Set-builder separator in aggregators:
+    /// `sum(target | body)`. Distinct from boolean composition
+    /// in the surface grammar - the pipe never separates
+    /// quantifier bindings (which use `:`).
+    Pipe,
+
     // ---- Atoms ----
     /// Identifier: any reserved-keyword-free word matching
     /// `[a-zA-Z_][a-zA-Z0-9_]*`. The parser decides whether it's
@@ -97,6 +120,19 @@ pub enum Token {
     /// the runtime parses to `rust_decimal::Decimal`. Never a
     /// float.
     DecimalLit(String),
+    /// Date literal: `@YYYY-MM-DD`. The `@` sigil avoids
+    /// ambiguity with bare arithmetic on integer-looking tokens
+    /// (`2026 - 05 - 22`). String form is the inner ISO-8601
+    /// date without the leading `@`; the runtime parses it via
+    /// `jiff::civil::Date`. Lex-level format validation: digits
+    /// and dashes only; semantic validation (real calendar
+    /// dates) happens at runtime.
+    DateLit(String),
+    /// Subject literal: `#NAME`. The `#` sigil makes opaque
+    /// symbolic subjects visibly distinct from variables; the
+    /// inner string is the subject's identifier (without the
+    /// `#`). Maps to `Value::Subject(name)`.
+    SubjectLit(String),
 
     // ---- Punctuation ----
     LParen,
@@ -128,6 +164,15 @@ impl fmt::Display for Token {
             Token::KwAnd => write!(f, "`and`"),
             Token::KwImplies => write!(f, "`implies`"),
             Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
+            Token::KwExists => write!(f, "`exists`"),
+            Token::KwForall => write!(f, "`forall`"),
+            Token::KwSum => write!(f, "`sum`"),
+            Token::KwValue => write!(f, "`value`"),
+            Token::KwDefault => write!(f, "`default`"),
+            Token::KwIn => write!(f, "`in`"),
+            Token::Pipe => write!(f, "`|`"),
+            Token::DateLit(s) => write!(f, "date literal `@{s}`"),
+            Token::SubjectLit(s) => write!(f, "subject literal `#{s}`"),
             Token::Ident(s) => write!(f, "identifier `{s}`"),
             Token::Wildcard => write!(f, "`_`"),
             Token::DecimalLit(s) => write!(f, "decimal literal `{s}`"),
@@ -183,6 +228,13 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "not" => Token::KwNot,
         "and" => Token::KwAnd,
         "implies" => Token::KwImplies,
+        // P2b-lite reserved words
+        "exists" => Token::KwExists,
+        "forall" => Token::KwForall,
+        "sum" => Token::KwSum,
+        "value" => Token::KwValue,
+        "default" => Token::KwDefault,
+        "in" => Token::KwIn,
         // `true` / `false` are reserved at the lexer level but
         // NOT parseable in v0 (no `Value::Bool` in the IR). The
         // parser rejects the token with an "unexpected" diagnostic;
@@ -209,6 +261,40 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         .to_slice()
         .map(|s: &str| Token::DecimalLit(s.to_string()));
 
+    // ---- Date literal: @YYYY-MM-DD ----
+    //
+    // Lex shape: `@` followed by exactly 4 digits, dash, exactly
+    // 2 digits, dash, exactly 2 digits. Authors get immediate
+    // lexer feedback for `@2026-5-22` (wrong digit count) rather
+    // than discovering it at runtime. Semantic validation (real
+    // calendar dates - e.g. `@2026-13-40` is not a valid date)
+    // happens at runtime via `jiff::civil::Date`. The body of
+    // the literal is captured without the leading `@`.
+    let digit_run = |n: usize| {
+        any()
+            .filter(|c: &char| c.is_ascii_digit())
+            .repeated()
+            .exactly(n)
+    };
+    let date_lit = just('@')
+        .ignore_then(
+            digit_run(4)
+                .then(just('-'))
+                .then(digit_run(2))
+                .then(just('-'))
+                .then(digit_run(2))
+                .to_slice(),
+        )
+        .map(|s: &str| Token::DateLit(s.to_string()));
+
+    // ---- Subject literal: #IDENT ----
+    //
+    // Lex shape: `#` followed by an ASCII identifier. Captured
+    // without the leading `#`. Maps to `Value::Subject(name)`.
+    let subject_lit = just('#')
+        .ignore_then(text::ascii::ident())
+        .map(|s: &str| Token::SubjectLit(s.to_string()));
+
     // ---- Operators ----
     //
     // Multi-char forms come first in the choice so `!=` is matched
@@ -222,6 +308,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         just('=').to(Token::Eq),
         just('+').to(Token::Plus),
         just('-').to(Token::Minus),
+        just('|').to(Token::Pipe),
     ));
 
     let punct = choice((
@@ -232,9 +319,21 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     ));
 
     // Order matters: try the more-specific patterns (multi-char
-    // operators, decimals) before the catch-all ident.
-    let token =
-        choice((operator, punct, decimal_lit, ident_or_keyword)).map_with(|t, e| (t, e.span()));
+    // operators, sigil-led literals, decimals) before the catch-all
+    // ident. The sigil literals must precede `operator` because
+    // operators include single-char punctuation that could clash
+    // with sigil start chars in some grammars - here they don't
+    // (`@` and `#` aren't operators), but the convention keeps the
+    // priority order obvious.
+    let token = choice((
+        date_lit,
+        subject_lit,
+        operator,
+        punct,
+        decimal_lit,
+        ident_or_keyword,
+    ))
+    .map_with(|t, e| (t, e.span()));
 
     // Line comments: `//` to newline (or EOF). Skipped entirely;
     // no inner padding so the outer `padding` parser is the single
