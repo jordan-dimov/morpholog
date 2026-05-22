@@ -122,6 +122,45 @@ The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation 
 
 Not on the list, deliberately: workflow primitives, projection DSL beyond derived claims, query language beyond derived-claim queries, ORM, BI engine, scheduler, solver runtime, message broker. These are *outside the boundary*. If a real example forces one, that is a design event worth a separate doctrine doc, not an incremental feature.
 
+## Surface syntax and the IR
+
+The `.morph` parser arc commits surface syntax to a deliberately narrower contract than the IR.
+
+**The doctrine:** the parser can rename, rearrange, and add sugar; it cannot add semantic capability the kernel does not have. Surface syntax is more domain-native than the IR but never more expressive than it. Every legal `.morph` file must map to a legal `morpholog_core::Program`, and the surface offers no operator, no construct, and no escape hatch that the kernel cannot evaluate.
+
+The cost of this discipline is that the parser does real translation work (infix to prefix, keyword to enum variant, bounded form to comprehension). The payoff is that the language stays *uncircumventable*. Surface affordances cannot accumulate into a parallel evaluator. The IR remains the single source of semantic truth.
+
+**Verb-flavor renames (surface to IR):**
+
+The "Phase" column indicates which parser PR the rename lands in. P2b and later rows are the planned shape, not yet committed to the parser; they appear here so the doctrine is visible up-front, but they are subject to refinement when the corresponding PR begins.
+
+| Surface verb | IR construct | Phase | Reason |
+|---|---|---|---|
+| `admit X(args)` | `Stmt::Assert` | P3 | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
+| `bind X(args)` | `Stmt::BindOne` | P3 | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `actor` (no parens) | `Term::Actor` | P2a | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
+| `<=` (infix) | `Expr::Le` (decimal) | P2a | Business mathematics reads with infix comparators. Decimal-only; the kernel keeps `Expr::Le` and `Expr::DateLe` as separate IR variants (no operator overloading - see `design-history.md`). Civil-date ordering gets its own surface rule in P2b. |
+| `=`, `!=` (infix) | `Expr::Eq` (Expr, Expr), `Expr::Neq` (Term, Term) | P2a | `Eq` operates on full expressions; `Neq` operates on terms only (the IR shape). The parser rejects arithmetic on either side of `!=`. |
+| `+`, `-` (infix) | `Expr::Add`, `Expr::Sub` (decimal) | P2a | Standard arithmetic notation, decimal-only. No unary minus until forced. |
+| `not`, `and`, `implies` (keywords) | `Expr::Not`, `Expr::And`, `Expr::Implies` | P2a | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Expr::And(Vec<Expr>)`; `implies` is right-associative. |
+| `forall x in coll: body` | `Expr::Forall` | P2b (planned) | Bounded quantification is mathematical convention. The `in` clause makes unbounded quantification syntactically impossible. |
+| `sum(target | body)` | `Expr::Sum` | P2b (planned) | Set-builder notation. Matches the kernel's bounded-comprehension contract. |
+| `value(target | body)` | `Expr::ValueOf` | P2b (planned) | Same shape as `sum`; the kernel separates them only because their cardinality contracts differ. |
+
+**What this rules out:**
+
+- A surface form that maps to no IR construct (would be a fictitious operator).
+- A surface form that adds an interpretation the kernel does not have (e.g., `<` for strict decimal comparison - the kernel only has `Le`, so `<` is not in the surface until the kernel grows `Lt`).
+- A surface escape hatch like `unsafe_block { ... }` or `evaluate_in_rust(...)`.
+
+**What this leaves room for:**
+
+- Different layouts (block-style `invariant X:\n  body` vs inline `invariant X: body`) that map to the same IR.
+- Macros / convenience forms that expand to existing IR (e.g., `between(x, lo, hi)` could desugar to `lo <= x and x <= hi`).
+- Renaming, reordering, and disambiguation rules in the surface that have no IR cost.
+
+The parser arc's PRs (`P1` through `P3+`, see [`roadmap.md`](roadmap.md)) all operate under this doctrine. A reviewer should reject any surface addition that lacks an IR mapping or that smuggles in an interpretation the kernel cannot evaluate.
+
 ## The right way to measure ambition
 
 The wrong question: *what percentage of the code is Morpholog?* The right question: *what percentage of the legitimacy-bearing failure modes does Morpholog make non-representable?*
