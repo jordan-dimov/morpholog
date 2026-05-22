@@ -3,13 +3,14 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Invariant, PredicateArgDecl, PredicateDecl, Program};
+use morpholog_core::{Invariant, PredicateArgDecl, PredicateDecl, Program, Transformation};
 use std::collections::HashMap;
 
 use crate::diagnostics::{Diagnostic, Span};
 use crate::lexer::{Token, lex, token_stream};
 
 use super::expr::expression_parser;
+use super::stmt::statement_parser;
 
 /// Parse a Morpholog source string into a [`Program`].
 ///
@@ -21,7 +22,7 @@ use super::expr::expression_parser;
 /// lex or parse failure. Diagnostics carry byte-offset spans; the
 /// CLI renders them via `ariadne` against the original source.
 pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
-    let tokens = match lex(source) {
+    let raw_tokens = match lex(source) {
         Ok(t) => t,
         Err(errs) => {
             return Err(errs
@@ -33,7 +34,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         }
     };
 
-    if tokens.is_empty() {
+    if raw_tokens.is_empty() {
         // Span 0..1 (or 0..0 for a zero-length source) is the
         // closest we can point at "the start"; the empty-file case
         // doesn't have a more specific location.
@@ -43,6 +44,13 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
             0..end,
         )]);
     }
+
+    // Layout pass: enriches the token stream with virtual
+    // Indent/Dedent at block boundaries. P3b1's transformation
+    // bodies need this; predicate and invariant productions work
+    // either way (the layout pass only inserts tokens where
+    // indentation actually changes).
+    let tokens = crate::layout::apply_layout(source, raw_tokens)?;
 
     let stream = token_stream(&tokens);
     let (parsed, errs) = program_parser().parse(stream).into_output_errors();
@@ -69,10 +77,9 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     // here on the parser side so the diagnostics carry source
     // spans for BOTH declarations. `Program::validate` also
     // detects duplicate predicate declarations but loses span
-    // context; invariant-name duplication is not validated
-    // kernel-side at all (no current example forces name-based
-    // invariant lookup), so the parser is the only place it gets
-    // caught.
+    // context; invariant- and transformation-name duplication
+    // are not validated kernel-side at all, so the parser is the
+    // only place they get caught.
     let mut pred_by_name: HashMap<&str, &Span> = HashMap::new();
     for (decl, span) in &raw.predicates {
         if let Some(first_span) = pred_by_name.get(decl.name.as_str()) {
@@ -101,6 +108,20 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
             inv_by_name.insert(inv.name.as_str(), span);
         }
     }
+    let mut txn_by_name: HashMap<&str, &Span> = HashMap::new();
+    for (txn, span) in &raw.transformations {
+        if let Some(first_span) = txn_by_name.get(txn.name.as_str()) {
+            diagnostics.push(
+                Diagnostic::error(
+                    format!("duplicate transformation declaration `{}`", txn.name),
+                    span.clone(),
+                )
+                .with_secondary((*first_span).clone(), "previously declared here"),
+            );
+        } else {
+            txn_by_name.insert(txn.name.as_str(), span);
+        }
+    }
 
     if !diagnostics.is_empty() {
         return Err(diagnostics);
@@ -110,7 +131,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         name: raw.name,
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
         invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
-        transformations: Vec::new(),
+        transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
         derived_claims: Vec::new(),
     })
 }
@@ -124,17 +145,19 @@ struct RawProgram {
     name: String,
     predicates: Vec<(PredicateDecl, Span)>,
     invariants: Vec<(Invariant, Span)>,
+    transformations: Vec<(Transformation, Span)>,
 }
 
-/// One top-level declaration in a programme body. Predicates and
-/// invariants can be freely interleaved (e.g. `predicate Foo /
-/// invariant cap over Foo / predicate Bar`); the parser partitions
-/// them into the `RawProgram` vectors after collection, preserving
-/// source order within each category. This shape avoids committing
-/// the language to an "all predicates first" file convention.
+/// One top-level declaration in a programme body. Predicates,
+/// invariants, and transformations can be freely interleaved; the
+/// parser partitions them into the `RawProgram` vectors after
+/// collection, preserving source order within each category. This
+/// shape avoids committing the language to an "all predicates
+/// first" file convention.
 enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
     Invariant(Invariant, Span),
+    Transformation(Transformation, Span),
 }
 
 fn program_parser<'a, I>() -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
@@ -165,17 +188,30 @@ where
             TopLevelDecl::Predicate(PredicateDecl { name, args }, span.start()..span.end())
         });
 
-    // invariant_decl ::= "invariant" Ident ":" expression
+    // invariant_decl ::= "invariant" Ident ":" body
+    // body           ::= Indent expression Dedent | expression
+    //
+    // The body alternative accepts both inline form
+    // (`invariant cap: Foo(x)`) and indented multi-line form
+    // (`invariant cap:\n    Foo(x)`). The layout pass produces
+    // `Indent`/`Dedent` around the indented form; the inline form
+    // has no layout tokens.
     //
     // No version syntax in v0: the version field defaults to 1.
     // When versioning grows a second meaningful value, the surface
     // adds a clause (e.g. `version <N>`) and the parser starts
     // accepting it. Today, an attempted `invariant Name (v1):`
     // surfaces as an unexpected-token diagnostic on the `(`.
+    let invariant_body = choice((
+        just(Token::Indent)
+            .ignore_then(expression_parser())
+            .then_ignore(just(Token::Dedent)),
+        expression_parser(),
+    ));
     let invariant_decl = just(Token::KwInvariant)
         .ignore_then(ident)
         .then_ignore(just(Token::Colon))
-        .then(expression_parser())
+        .then(invariant_body)
         .map_with(|(name, body), e| {
             let span: SimpleSpan = e.span();
             TopLevelDecl::Invariant(
@@ -188,22 +224,58 @@ where
             )
         });
 
-    // top_level_decl ::= predicate_decl | invariant_decl
+    // transformation_decl ::= "transformation" Ident "(" param-list ")" ":" Indent stmt+ Dedent
     //
-    // Free interleaving: a programme may mix predicate and
-    // invariant declarations in any order. The parser collects
-    // them into a single sequence and partitions on the post-pass
-    // (source order preserved within each category).
-    let top_level_decl = choice((predicate_decl, invariant_decl));
+    // Params are bare identifiers (no kinds; the IR's
+    // `Transformation` has `params: Vec<String>` only).
+    // The body uses indented-block layout: the layout pass emits
+    // Indent after the colon and Dedent at block end.
+    let param_list = ident
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<String>>();
+    let transformation_body = just(Token::Indent)
+        .ignore_then(
+            statement_parser()
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(just(Token::Dedent));
+    let transformation_decl = just(Token::KwTransformation)
+        .ignore_then(ident)
+        .then(param_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then_ignore(just(Token::Colon))
+        .then(transformation_body)
+        .map_with(|((name, parameters), body), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Transformation(
+                Transformation {
+                    name,
+                    parameters,
+                    body,
+                },
+                span.start()..span.end(),
+            )
+        });
 
-    // Sync at the next `predicate` or `invariant` keyword on
-    // failure; skip the rest of the malformed declaration but
-    // keep the declarations on either side of it.
+    // top_level_decl ::= predicate_decl | invariant_decl | transformation_decl
+    //
+    // Free interleaving: a programme may mix any of the three in
+    // any order. The parser collects them into a single sequence
+    // and partitions on the post-pass (source order preserved
+    // within each category).
+    let top_level_decl = choice((predicate_decl, invariant_decl, transformation_decl));
+
+    // Sync at the next top-level keyword on failure; skip the rest
+    // of the malformed declaration but keep the declarations on
+    // either side of it.
     let top_level_recovering = top_level_decl.recover_with(skip_then_retry_until(
         any().ignored(),
         just(Token::KwPredicate)
             .ignored()
             .or(just(Token::KwInvariant).ignored())
+            .or(just(Token::KwTransformation).ignored())
             .or(end()),
     ));
 
@@ -216,16 +288,19 @@ where
         .map(|(name, decls)| {
             let mut predicates = Vec::new();
             let mut invariants = Vec::new();
+            let mut transformations = Vec::new();
             for d in decls {
                 match d {
                     TopLevelDecl::Predicate(p, s) => predicates.push((p, s)),
                     TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
+                    TopLevelDecl::Transformation(t, s) => transformations.push((t, s)),
                 }
             }
             RawProgram {
                 name,
                 predicates,
                 invariants,
+                transformations,
             }
         })
 }

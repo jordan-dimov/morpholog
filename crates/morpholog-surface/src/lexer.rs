@@ -70,6 +70,63 @@ pub enum Token {
     /// `invariant` keyword (P3a).
     KwInvariant,
 
+    // ---- P3b1: transformations + gate statements ----
+    /// `transformation` keyword.
+    KwTransformation,
+    /// `require` statement keyword.
+    KwRequire,
+    /// `bind` statement keyword (unique-claim lookup that extends
+    /// the binding context).
+    KwBind,
+    /// `let` statement keyword (value binding).
+    KwLet,
+    /// `new` keyword (only meaningful in `let x = new Subject()`,
+    /// reserved at the lexer everywhere so a variable named
+    /// `new` is rejected at the parser rather than silently
+    /// shadowing the keyword's future meaning).
+    KwNew,
+
+    // ---- P3b2 (planned): state-mutating statements + iteration ----
+    //
+    // Reserved at the lexer now so a user who writes `admit
+    // Foo(...)` in P3b1 gets a clean "unexpected token `admit`"
+    // diagnostic, not a silent `Var("admit")` interpretation. The
+    // statement parser rejects all four; they become productions
+    // when P3b2 lands.
+    /// `admit` statement keyword (planned, P3b2).
+    KwAdmit,
+    /// `retract` statement keyword (planned, P3b2).
+    KwRetract,
+    /// `emit` statement keyword (planned, P3b2).
+    KwEmit,
+    /// `for` block keyword (planned, P3b2).
+    KwFor,
+
+    // ---- Layout virtual tokens (P3b1) ----
+    //
+    // These are NOT produced by the lexer's character-level
+    // recogniser; the layout normalisation pass in `layout.rs`
+    // inserts them at block boundaries. The parser matches them
+    // to recognise block structure. Lex outputs include physical
+    // tokens only; the layout pass enriches the stream.
+    //
+    // No virtual `Newline` token. Each statement and top-level
+    // declaration starts with its own keyword (`require`, `bind`,
+    // `let`, `predicate`, `invariant`, `transformation`, etc.); the
+    // keyword anchors the boundary, so no separator token is
+    // needed. This also lets parenthesised expressions span lines
+    // freely with no layout interaction.
+    //
+    /// Block-start marker. Inserted by the layout pass when a
+    /// non-blank line begins at a greater indentation than the
+    /// previous non-blank line.
+    Indent,
+    /// Block-end marker. Inserted by the layout pass when a
+    /// non-blank line begins at a smaller indentation than the
+    /// previous non-blank line; one `Dedent` per indentation
+    /// level closed.
+    Dedent,
+
     // ---- P2a: boolean composition ----
     /// `not` prefix operator.
     KwNot,
@@ -165,6 +222,17 @@ impl fmt::Display for Token {
             Token::KwPredicate => write!(f, "`predicate`"),
             Token::Kind(k) => write!(f, "kind `{:?}`", k),
             Token::KwInvariant => write!(f, "`invariant`"),
+            Token::KwTransformation => write!(f, "`transformation`"),
+            Token::KwRequire => write!(f, "`require`"),
+            Token::KwBind => write!(f, "`bind`"),
+            Token::KwLet => write!(f, "`let`"),
+            Token::KwNew => write!(f, "`new`"),
+            Token::KwAdmit => write!(f, "`admit`"),
+            Token::KwRetract => write!(f, "`retract`"),
+            Token::KwEmit => write!(f, "`emit`"),
+            Token::KwFor => write!(f, "`for`"),
+            Token::Indent => write!(f, "indent"),
+            Token::Dedent => write!(f, "dedent"),
             Token::KwNot => write!(f, "`not`"),
             Token::KwAnd => write!(f, "`and`"),
             Token::KwImplies => write!(f, "`implies`"),
@@ -224,6 +292,18 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "program" => Token::KwProgram,
         "predicate" => Token::KwPredicate,
         "invariant" => Token::KwInvariant,
+        "transformation" => Token::KwTransformation,
+        "require" => Token::KwRequire,
+        "bind" => Token::KwBind,
+        "let" => Token::KwLet,
+        "new" => Token::KwNew,
+        // P3b2 keywords - reserved at the lexer but not yet
+        // parseable. The parser rejects them with an unexpected-
+        // token diagnostic, which is honest about the v0 limit.
+        "admit" => Token::KwAdmit,
+        "retract" => Token::KwRetract,
+        "emit" => Token::KwEmit,
+        "for" => Token::KwFor,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),

@@ -326,10 +326,32 @@ fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
                     })
                 })
                 .collect();
+            // Transformation bodies are projected as rendered
+            // strings for the same reason as invariant bodies:
+            // `Stmt` and `Expr` don't yet derive `Serialize`.
+            // Each statement is rendered on its own line via
+            // format_stmt_inline.
+            let transformations_payload: Vec<serde_json::Value> = program
+                .transformations
+                .iter()
+                .map(|t| {
+                    let body_lines: Vec<String> = t
+                        .body
+                        .iter()
+                        .map(|s| morpholog_core::format::format_stmt(s, 0))
+                        .collect();
+                    serde_json::json!({
+                        "name": &t.name,
+                        "parameters": &t.parameters,
+                        "body": body_lines,
+                    })
+                })
+                .collect();
             let payload = serde_json::json!({
                 "name": program.name,
                 "predicates": program.predicates,
                 "invariants": invariants_payload,
+                "transformations": transformations_payload,
             });
             print_json(&payload)?;
             Ok(())
