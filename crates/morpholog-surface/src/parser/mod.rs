@@ -83,6 +83,7 @@
 
 mod expr;
 mod program;
+mod stmt;
 
 pub use expr::parse_expression;
 pub use program::parse_program;

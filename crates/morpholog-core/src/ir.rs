@@ -179,7 +179,7 @@ pub enum Value {
     Date(String),
 }
 
-/// A Claim is an admitted assertion candidate — a statement that may be
+/// A Claim is an admitted assertion candidate - a statement that may be
 /// admitted into governed state. It is not objective reality.
 ///
 /// Distinct from `Expr::Claim`, which is a *query* over candidate state.

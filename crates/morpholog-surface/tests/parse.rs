@@ -367,3 +367,234 @@ fn invariant_cannot_use_reserved_keyword_as_name() {
     let errs = parse_program(source).expect_err("reserved keyword as name should fail");
     assert!(!errs.is_empty());
 }
+
+// ============================================================
+// P3b1: transformation declarations + gate statements
+// ============================================================
+
+#[test]
+fn parses_transformation_with_zero_params() {
+    let source = "program demo\n\
+                  transformation noop():\n\
+                  \x20\x20\x20\x20require Foo()\n";
+    let program = parse_program(source).expect("parse should succeed");
+    assert_eq!(program.transformations.len(), 1);
+    let t = &program.transformations[0];
+    assert_eq!(t.name, "noop");
+    assert!(t.parameters.is_empty());
+    assert_eq!(t.body.len(), 1);
+}
+
+#[test]
+fn parses_transformation_with_params() {
+    let source = "program demo\n\
+                  transformation foo(x, y, z):\n\
+                  \x20\x20\x20\x20require Bar(x)\n";
+    let program = parse_program(source).expect("parse should succeed");
+    let t = &program.transformations[0];
+    assert_eq!(t.parameters, vec!["x", "y", "z"]);
+}
+
+#[test]
+fn parses_require_statement() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20require Foo(x)\n";
+    let program = parse_program(source).expect("parse should succeed");
+    use morpholog_core::Stmt;
+    assert!(matches!(
+        program.transformations[0].body[0],
+        Stmt::Require(_)
+    ));
+}
+
+#[test]
+fn parses_bind_statement() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20bind Foo(x, y)\n";
+    let program = parse_program(source).expect("parse should succeed");
+    use morpholog_core::Stmt;
+    assert!(matches!(
+        program.transformations[0].body[0],
+        Stmt::BindOne(_)
+    ));
+}
+
+#[test]
+fn parses_let_statement_with_expression() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20let z = sum(amount | Foo(amount))\n";
+    let program = parse_program(source).expect("parse should succeed");
+    use morpholog_core::Stmt;
+    let stmt = &program.transformations[0].body[0];
+    let Stmt::Let { name, .. } = stmt else {
+        panic!("expected Stmt::Let, got {stmt:?}");
+    };
+    assert_eq!(name, "z");
+}
+
+#[test]
+fn parses_let_new_subject() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20let s = new Subject()\n";
+    let program = parse_program(source).expect("parse should succeed");
+    use morpholog_core::Stmt;
+    let stmt = &program.transformations[0].body[0];
+    let Stmt::LetNewSubject { name } = stmt else {
+        panic!("expected Stmt::LetNewSubject, got {stmt:?}");
+    };
+    assert_eq!(name, "s");
+}
+
+#[test]
+fn statement_order_is_preserved() {
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20bind Foo(x, y)\n\
+                  \x20\x20\x20\x20let z = y\n\
+                  \x20\x20\x20\x20require z <= 10\n";
+    let program = parse_program(source).expect("parse should succeed");
+    use morpholog_core::Stmt;
+    let body = &program.transformations[0].body;
+    assert_eq!(body.len(), 3);
+    assert!(matches!(body[0], Stmt::BindOne(_)));
+    assert!(matches!(body[1], Stmt::Let { .. }));
+    assert!(matches!(body[2], Stmt::Require(_)));
+}
+
+#[test]
+fn transformation_can_interleave_with_predicates_and_invariants() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject)\n\
+                  transformation make_foo(x):\n\
+                  \x20\x20\x20\x20require Foo(x)\n\
+                  invariant cap: Foo(_)\n\
+                  predicate Bar(y: Decimal)\n";
+    let program = parse_program(source).expect("interleaved parse should succeed");
+    assert_eq!(program.predicates.len(), 2);
+    assert_eq!(program.invariants.len(), 1);
+    assert_eq!(program.transformations.len(), 1);
+}
+
+#[test]
+fn duplicate_transformation_carries_both_spans() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20require A()\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20require B()\n";
+    let errs = parse_program(source).expect_err("duplicate transformation should fail");
+    let dup = errs
+        .iter()
+        .find(|e| e.message.contains("duplicate transformation"))
+        .expect("expected a duplicate-transformation diagnostic");
+    assert!(dup.message.contains("`t`"));
+    assert!(!dup.secondary.is_empty());
+    assert_ne!(dup.primary, dup.secondary[0].0);
+}
+
+#[test]
+fn admit_in_p3b1_is_rejected() {
+    // P3b1 deliberately does NOT include admit / retract / emit /
+    // for. Trying them should fail at parse with an unexpected-
+    // token diagnostic; statement parsing will be extended in P3b2.
+    //
+    // Note: `admit` is a lexer-reserved keyword now (since it's a
+    // surface verb the doctrine commits to), but the P3b1 statement
+    // parser does not accept it.
+    //
+    // For this test we use a more obviously-rejected form: the
+    // outer statement is recognised but `admit` inside the body
+    // surfaces as an error.
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20admit Foo()\n";
+    let errs = parse_program(source).expect_err("admit should be unrecognised in P3b1");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn reserved_keyword_cannot_be_transformation_name() {
+    // Trying to use `predicate` as a transformation name fails:
+    // the lexer recognises `predicate` as Token::KwPredicate, so
+    // the parser never sees an Ident at that position.
+    let source = "program demo\n\
+                  transformation predicate():\n\
+                  \x20\x20\x20\x20require A()\n";
+    let errs = parse_program(source).expect_err("reserved keyword as name should fail");
+    assert!(!errs.is_empty());
+}
+
+// ============================================================
+// PR #62 review tightenings
+// ============================================================
+
+/// `bind` accepts only a claim pattern. Arbitrary expressions
+/// (booleans, arithmetic, value lookups, etc.) are rejected at
+/// the surface even though `Stmt::BindOne` can technically hold
+/// any `Expr` in the kernel. See `parser/stmt.rs` module-level
+/// doc for the doctrine rationale.
+#[test]
+fn bind_rejects_boolean_expression() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20bind not Foo(x)\n";
+    let errs = parse_program(source).expect_err("bind not Foo(x) should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn bind_rejects_comparison() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20bind amount <= limit\n";
+    let errs = parse_program(source).expect_err("bind amount <= limit should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn bind_rejects_value_lookup() {
+    let source = "program demo\n\
+                  transformation t():\n\
+                  \x20\x20\x20\x20bind value Policy(x, _)\n";
+    let errs = parse_program(source).expect_err("bind value Policy(...) should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn bind_accepts_claim_pattern() {
+    // The valid surface form is a claim pattern: predicate name
+    // followed by parenthesised term list.
+    let source = "program demo\n\
+                  transformation t(x):\n\
+                  \x20\x20\x20\x20bind Foo(x, y, _)\n";
+    let program = parse_program(source).expect("claim-pattern bind should parse");
+    use morpholog_core::{Expr, Stmt};
+    let body = &program.transformations[0].body;
+    assert_eq!(body.len(), 1);
+    let Stmt::BindOne(Expr::Claim { predicate, args }) = &body[0] else {
+        panic!(
+            "expected Stmt::BindOne(Expr::Claim {{ .. }}); got {:?}",
+            body[0]
+        );
+    };
+    assert_eq!(predicate, "Foo");
+    assert_eq!(args.len(), 3);
+}
+
+/// Top-level indentation (a top-level decl line that is not at
+/// column 0) currently surfaces as a parse error because the
+/// resulting `Indent` token isn't a valid top-level construct.
+/// The diagnostic is generic but the behaviour is pinned so any
+/// future improvement (e.g. a dedicated "unexpected top-level
+/// indentation" diagnostic) lands as a deliberate change.
+#[test]
+fn unexpected_top_level_indentation_is_rejected() {
+    let source = "program demo\n\
+                  \x20\x20\x20\x20predicate Foo(x: Subject)\n";
+    let errs = parse_program(source).expect_err("top-level indent should fail");
+    assert!(!errs.is_empty());
+}

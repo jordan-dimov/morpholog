@@ -51,25 +51,19 @@ predicate ParticipantRandomised(participant_id: Subject, trial_id: Subject, prot
 -- Invariant: protocol version has at most one effective window.
 -- ============================================================
 invariant at_most_one_protocol_window_per_version:
-    ProtocolVersion(trial, version, from_a, to_a)
-        and ProtocolVersion(trial, version, from_b, to_b) implies
-            from_a = from_b and to_a = to_b
+    ProtocolVersion(trial, version, from_a, to_a) and ProtocolVersion(trial, version, from_b, to_b) implies (from_a = from_b and to_a = to_b)
 
 -- ============================================================
 -- Invariant: consent form version has at most one effective window.
 -- ============================================================
 invariant at_most_one_consent_window_per_version:
-    ConsentFormVersion(trial, version, from_a, to_a)
-        and ConsentFormVersion(trial, version, from_b, to_b) implies
-            from_a = from_b and to_a = to_b
+    ConsentFormVersion(trial, version, from_a, to_a) and ConsentFormVersion(trial, version, from_b, to_b) implies (from_a = from_b and to_a = to_b)
 
 -- ============================================================
 -- Invariant: a participant is randomised at most once per trial.
 -- ============================================================
 invariant participant_randomised_once_per_trial:
-    ParticipantRandomised(p, trial, proto_a, date_a, actor_a)
-        and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies
-            proto_a = proto_b and date_a = date_b and actor_a = actor_b
+    ParticipantRandomised(p, trial, proto_a, date_a, actor_a) and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies (proto_a = proto_b and date_a = date_b and actor_a = actor_b)
 
 
 -- Transformations: illustrative transformation-body surface (not yet parser-supported).

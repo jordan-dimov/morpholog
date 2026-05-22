@@ -550,7 +550,7 @@ fn idempotency_key_matches_golden_hash() {
     // canonical_json(args) is `[{"type":"subject","value":"net1"}]`.
     //
     // The expected hex value below was computed independently (Python's
-    // hashlib.sha256). Do NOT recompute it via the production helper —
+    // hashlib.sha256). Do NOT recompute it via the production helper -
     // the point is to detect formula drift, including delimiter changes.
     let transition_id = Uuid::nil();
     let intent = IntentInstance {
@@ -1283,7 +1283,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
 }
 
 // ============================================================
-// Read API — current-state inspection helpers
+// Read API - current-state inspection helpers
 //
 // The helpers are deliberately boring: current state only, no
 // as-of, no derived claims, no filtering beyond the natural
@@ -1711,7 +1711,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].predicate, "PeriodClosed");
 
-    // audit and outbox are empty — rejected transformations leave no
+    // audit and outbox are empty - rejected transformations leave no
     // governed trace.
     let audit = list_audit_rows(&pool).await.unwrap();
     assert!(audit.is_empty(), "rejected transformation must not audit");

@@ -20,18 +20,22 @@ predicate Netted(line_id: Subject)
 -- after the colon greedily; parens are how you embed them inside
 -- compound booleans.
 
+-- Multi-line expressions: without parentheses, continuation lines
+-- must stay at the same indentation as the body's first line; the
+-- layout pass treats deeper indent as a new block, and a `: body`
+-- production only accepts one Indent. Wrapping in parens disables
+-- layout for the parenthesised region, which makes long
+-- expressions like multi-line `sum(...)` arbitrarily indented
+-- continuation work naturally.
+
 invariant net_settlement_has_lines:
-    NetSettlement(net, _, _, _) implies
-        (exists line: SettlementLine(line, net, _))
+    NetSettlement(net, _, _, _) implies (exists line: SettlementLine(line, net, _))
 
 invariant net_amount_equals_lines:
-    NetSettlement(net, _, _, amount) implies
-        amount = sum(x | SettlementLine(_, net, x))
+    NetSettlement(net, _, _, amount) implies amount = sum(x | SettlementLine(_, net, x))
 
 invariant no_double_netting:
-    SettlementLine(line, net, _) implies
-        not (exists other:
-            SettlementLine(line, other, _) and other != net)
+    SettlementLine(line, net, _) implies not (exists other: SettlementLine(line, other, _) and other != net)
 
 -- Transformation: illustrative transformation-body surface (not yet parser-supported).
 -- The locked verb-flavour decisions are in use (admit, bind, actor,
@@ -40,10 +44,7 @@ invariant no_double_netting:
 -- parsing is the next parser increment.
 
 transformation create_net_settlement(party_a, party_b, lines):
-    require forall line in lines:
-        ApprovedSettlementLine(line)
-            and Between(line, party_a, party_b)
-            and not Netted(line)
+    require forall line in lines: ApprovedSettlementLine(line) and Between(line, party_a, party_b) and not Netted(line)
 
     let net = new Subject()
 

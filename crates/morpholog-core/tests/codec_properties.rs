@@ -77,7 +77,7 @@ proptest! {
     /// Every `EvalValue` we can generate round-trips through JSON
     /// without value loss: the parsed value equals the original.
     /// Includes nested collections. Does *not* assert byte-identical
-    /// JSON on re-serialisation — that is a serde-implementation
+    /// JSON on re-serialisation - that is a serde-implementation
     /// property, not a Morpholog contract.
     #[test]
     fn eval_value_json_round_trip(v in arb_eval_value()) {

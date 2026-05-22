@@ -63,8 +63,8 @@ mod tests {
     //! Kernel-internal unit tests for IR literals.
     //!
     //! Tests that depend on private items (`unify_args`, `resolve_term`,
-    //! `Bindings`) live here. Tests that exercise the public surface —
-    //! example chains, codec round-trips, IR-shape assertions — live in
+    //! `Bindings`) live here. Tests that exercise the public surface -
+    //! example chains, codec round-trips, IR-shape assertions - live in
     //! the `tests/` directory as integration tests, one file per example
     //! plus `tests/codec.rs` and the shared `tests/common/mod.rs`.
 

@@ -375,10 +375,22 @@ where
         // kernel's Forall requires its source to be predicate-
         // shaped. A claim-call source is already predicate-shaped
         // and used as-is.
+        // Quantifier body accepts both inline and indented forms,
+        // mirroring how the invariant decl's body works in
+        // `program.rs`. The layout pass emits `Indent` / `Dedent`
+        // around an indented body; the inline form has no layout
+        // tokens.
+        let quantifier_body = choice((
+            just(Token::Indent)
+                .ignore_then(expression.clone())
+                .then_ignore(just(Token::Dedent)),
+            expression.clone(),
+        ));
+
         let exists_expr = just(Token::KwExists)
             .ignore_then(ident)
             .then_ignore(just(Token::Colon))
-            .then(expression.clone())
+            .then(quantifier_body.clone())
             .validate(|(binding, body): (String, Expr), e, emitter| {
                 if binding == "actor" {
                     let span: SimpleSpan = e.span();
@@ -445,7 +457,7 @@ where
             .then_ignore(just(Token::KwIn))
             .then(forall_source)
             .then_ignore(just(Token::Colon))
-            .then(expression.clone())
+            .then(quantifier_body)
             .validate(|((binding, source), body): ((String, Expr), Expr), e, emitter| {
                 if binding == "actor" {
                     let span: SimpleSpan = e.span();

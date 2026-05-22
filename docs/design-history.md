@@ -839,3 +839,76 @@ The kernel's `Program::validate` catches duplicate predicate declarations (added
 - A `morpholog run <file.morph>` command. Needs P3b at minimum for transformations.
 
 **Pattern note:** P3a is the smallest possible step that moves the parser into programme integration territory. Two more PRs (P3b for transformations + statements, P3c for derived claims) finish the v0 surface. After that, the parser arc is operationally complete and the next major investment is whatever the next forcing example demands.
+
+### Parser P3b1: layout pipeline + transformation headers + gate statements
+
+**Forced by:** the parser arc continuing into programme-level integration. P3a integrated invariants (whose bodies are pure expressions, already parseable). P3b is the first time `.morph` becomes operational - the transformation surface introduces statement blocks, indentation, and the first programme-level constructs that change admitted state. P3b1 proves the layout foundation and the simplest statement subset (`require`, `bind`, `let`); P3b2 will add the state-mutating statements (`admit`, `retract`, `emit`, `for`).
+
+The split into P3b1 / P3b2 was deliberate. P3b's natural scope is large enough that the parser code can become hard to review; splitting at the seam between "gate statements over admitted state" (require/bind/let) and "statements that change admitted state or iterate" (admit/retract/emit/for) keeps each PR a clean review unit.
+
+**Layout pipeline: C/A hybrid.** Per the indentation doctrine in `scope-and-ambition.md`, blocks use indentation, not braces. The implementation lives in a new `crates/morpholog-surface/src/layout.rs` module that sits between the character-level lexer and the structural parser. The lexer remains ignorant of line structure; the parser consumes a token stream pre-enriched with virtual `Indent` and `Dedent` tokens at block boundaries.
+
+Three options were on the table for where indentation-awareness lives: lexer-level INDENT/DEDENT emission (Option A), parser-side indentation lookahead (Option B), separate layout pass (Option C). The hybrid that landed is closest to **Option C**, with one structural simplification borrowed from Option A: the layout pass operates on the lexer's `(Token, Span)` output (a typed structure), not on raw character input. The doctrine's softened wording in `scope-and-ambition.md` made this implementation choice explicit: the *doctrine* is indentation; the *implementation* is virtual tokens from a layout pass.
+
+**Layout rules.** Documented in the `layout.rs` module header; pinned by the test suite:
+
+- Spaces only for indentation. Tab characters in indentation emit a diagnostic. The floor is to refuse the tabs-vs-spaces ambiguity rather than guess.
+- Parens disable layout. When a token's preceding gap is inside open parentheses, its newlines do not trigger Indent / Dedent. This is what makes long expressions span lines naturally: `require sum(amount | Foo(amount)) + proposed <= limit` can break across lines as long as it stays inside the outer parens.
+- Blank lines and comment-only lines do not affect indentation. The layout pass uses the position of the *next real token* after a newline.
+- No virtual `Newline` tokens emitted. Each statement and top-level declaration starts with its own keyword (`require`, `bind`, `let`, `predicate`, `invariant`, `transformation`, etc.). The keyword anchors statement boundaries; no separator token is needed. This also lets parenthesised expressions span lines freely with no layout interaction.
+
+**Statement parser.** The new `crates/morpholog-surface/src/parser/stmt.rs` module recognises:
+
+- `require <expression>` -> `Stmt::Require(_)`
+- `bind <claim-pattern>` -> `Stmt::BindOne(Expr::Claim { .. })` (parser restricts the surface to a claim pattern; the IR's `Stmt::BindOne` is technically `Expr` but the meaningful authoring form is a single claim, and arbitrary expressions are rejected at parse time per the surface doctrine)
+- `let <name> = <expression>` -> `Stmt::Let { name, value }`
+- `let <name> = new Subject ( )` -> `Stmt::LetNewSubject { name }`
+
+The `let new Subject()` form is the only place in P3b1 surface where the `new` keyword appears; it's a specific token sequence the parser matches directly (`KwLet Ident Eq KwNew Kind(Subject) LParen RParen`).
+
+**Transformation parser.** Extends `program.rs` with the `transformation` production:
+
+```text
+transformation <Ident> ( <param-list> ) : Indent <stmt>+ Dedent
+```
+
+Parameters are identifiers only; no kinds. The IR's `Transformation { parameters: Vec<String> }` field has no kind information; surface kinds would be more expressive than IR, violating Position A. The body is `Indent stmt+ Dedent` - at least one statement is required (an empty transformation body has no use in v0).
+
+**Free interleaving across top-level decls.** Same convention as P3a (predicate + invariant): the grammar now accepts `predicate | invariant | transformation` in any order. The parser collects in source order and partitions into the `Program`'s three vectors on a post-pass.
+
+**Parser-side duplicate detection for transformation names.** Mirrors the predicate and invariant duplicate detection. Both spans land in the diagnostic.
+
+**Body greediness in `: <expr>` productions.** Three productions across the parser now consume `: <expr>` with an optional indented body: invariant decl, exists, forall. Each accepts both inline form (`exists x: Foo(x)`) and indented form (`exists x:\n    Foo(x)`), via a common `(Indent expression Dedent | expression)` choice. Without this, the layout pass's `Indent` token would block parsing of any multi-line body. The fix is local to each `: <body>` consumer; there is no global "skip Indent here" hack.
+
+**P3b2 keywords reserved at the lexer.** `admit`, `retract`, `emit`, `for` are reserved as `Token::Kw{Admit,Retract,Emit,For}` even though no production consumes them. The parser rejects them with an unexpected-token diagnostic. This mirrors how `true`/`false` are lexer-reserved in P2a: it prevents the surface from silently treating these as identifiers and lets users get a clean diagnostic at the v0 limit. P3b2 will turn them into productions without any further lexer work.
+
+**Considered and rejected:**
+
+- *Newline tokens as statement separators.* Considered following Python's tokeniser pattern (NEWLINE / INDENT / DEDENT). Rejected because each Morpholog statement starts with its own keyword - the keyword IS the boundary. Newlines would be either redundant or interfere with parenthesised line continuation. The simpler design (Indent / Dedent only) covers the entire block-structure problem.
+- *Including `admit` / `retract` / `emit` / `for` in P3b1.* These are the state-mutating + iteration surface. Their grammars are individually small, but the `for x in coll: <indented body>` form introduces *nested* layout (a Indent inside an Indent) which is a separate testing concern from "transformation has one Indent/Dedent". Splitting them off keeps P3b1's layout testing tractable.
+- *`let x = new Subject()` deferred to P3b2.* Briefly considered (its grammar shape is distinct from `let x = expr`). Kept in P3b1 because `let` is the value-binding statement and splitting its two RHS shapes across PRs would be artificial.
+- *Statement-level recovery on parse failure.* The top-level recovery (sync at next predicate/invariant/transformation keyword) covers programme-level errors; statement-level recovery would mean syncing at the next statement keyword inside a body. Deferred until P3b2 - the simpler "one diagnostic per malformed transformation body" works for now.
+- *Parameter kinds on transformation headers.* Surface would be `transformation foo(claim_id: Subject, amount: Decimal):`. The IR's `Transformation` doesn't carry kinds. Adding them surface-side would be more expressive than the IR; rejected.
+
+**What landed:**
+
+- 9 new lexer tokens: `KwTransformation`, `KwRequire`, `KwBind`, `KwLet`, `KwNew`, `KwAdmit`, `KwRetract`, `KwEmit`, `KwFor`, plus the virtual `Indent` and `Dedent`. (Four P3b2 keywords reserved now.)
+- New `layout.rs` module + 14 layout-only integration tests.
+- New `parser/stmt.rs` module for the four P3b1 statement forms.
+- `parser/program.rs` extended: transformation_decl production, free interleaving in the top-level grammar, duplicate-transformation-name detection.
+- 11 new transformation-parsing tests in `tests/parse.rs`, including statement-order preservation (the load-bearing test that confirms `Vec<Stmt>` mirrors source order), interleaving with predicates and invariants, `admit` rejection (P3b2 territory), `let new Subject()` round-trip.
+- CLI `morpholog parse` JSON output extended with a `transformations` array, each entry projecting body statements through `format_stmt`.
+- Quantifier bodies (`exists`, `forall`) and invariant bodies all accept optional `Indent body Dedent` wrapping, enabling multi-line bodies.
+
+**What deliberately stayed out (P3b2 and beyond):**
+
+- `admit`, `retract`, `emit`, `for` statements. Reserved at the lexer but not yet parseable.
+- Statement-level error recovery (sync at next statement keyword).
+- `for x in coll: <indented body>` nested layout.
+- Derived claims (P3c).
+- Date-comparison surface form (lands with a worked example body that needs it).
+- A `morpholog run <file.morph>` command (needs the full surface and the rest of P3 done).
+
+**Pattern note:** P3b1 is the first parser PR where the surface introduces a *layout* concept the kernel doesn't model. The kernel's IR has flat `Vec<Stmt>` for transformation bodies - no nesting, no blocks. The surface adds indentation to make multi-statement bodies readable; the layout pass + statement parser collapse it back to a flat IR. This is the doctrine in action - the surface adds *organisation* (visual structure) that the kernel doesn't need; the IR stays minimal.
+
+**Next:** **PR P3b2** adds the four state-mutating + iteration statements (`admit`, `retract`, `emit`, `for x in coll: <indented body>`). With those, `.morph` becomes operationally complete for v0 transformations - the existing worked examples can parse end-to-end. **PR P3c** then completes the parser arc with derived claims and the `format_program -> parse_program` round-trip property test.

@@ -42,7 +42,7 @@ pub fn system_actor() -> EvalValue {
 
 /// Errors returned by the PostgreSQL adapter.
 ///
-/// Lawful business rejection is **not** an error — it is returned as
+/// Lawful business rejection is **not** an error - it is returned as
 /// [`PgProposalOutcome::Rejected`]. This enum captures only conditions
 /// where the caller cannot or should not proceed as if the kernel had
 /// run successfully.
@@ -395,7 +395,7 @@ async fn write_accepted(
 ) -> Result<(), PgError> {
     // Retractions: dedupe, then delete each distinct claim. We expect
     // exactly one row affected per distinct retraction. Zero rows
-    // indicates a persistent-state mismatch — either a concurrent
+    // indicates a persistent-state mismatch - either a concurrent
     // transaction has interfered (SSI will catch it later) or the
     // pre-state snapshot disagrees with the live table.
     let mut seen: HashSet<(String, String)> = HashSet::new();
@@ -503,14 +503,14 @@ async fn write_accepted(
 /// `Serialize` and there are no map-like runtime values).
 ///
 /// The key is unique per `(transition_id, intent.name, intent.args)`. It
-/// prevents duplicate outbox rows under retry/redelivery mechanics — not
+/// prevents duplicate outbox rows under retry/redelivery mechanics - not
 /// duplicate business events, which would require an idempotency key
 /// derived from the inbound request.
 ///
 /// **Duplicate intents within one transformation:** if a transformation
 /// emits the same intent (same `name` and `args`) twice, both rows will
 /// share an idempotency key and the second `INSERT` will violate the
-/// `outbox.idempotency_key` UNIQUE constraint — surfacing as a
+/// `outbox.idempotency_key` UNIQUE constraint - surfacing as a
 /// `PgError::Database` and rolling back the whole transformation. This
 /// is intentional for v0: identical duplicate intents are almost always
 /// a bug and should not silently produce two outbox rows. If genuinely
@@ -615,7 +615,7 @@ pub enum OutboxUpdate {
 
 /// Return every currently-admitted claim from `morpholog.claims`.
 ///
-/// Order is `(asserted_at, predicate_name, arguments::text)` — causal
+/// Order is `(asserted_at, predicate_name, arguments::text)` - causal
 /// admission order, with predicate-then-args as the stable tie-break.
 /// Two claims admitted in the same microsecond will appear in a
 /// deterministic order across runs.
@@ -687,13 +687,13 @@ pub async fn list_claims_for_predicates(
 }
 
 /// Return every committed audit row from `morpholog.audit`, ordered by
-/// `(committed_at, transition_id)` — causal commit order with the
+/// `(committed_at, transition_id)` - causal commit order with the
 /// `transition_id` PRIMARY KEY (UUIDv7, time-ordered) as the stable
 /// tie-break.
 ///
 /// All five JSONB columns are decoded through the codec; the caller
 /// receives typed values, not raw `serde_json::Value`. A decoding error
-/// surfaces as [`PgError::Encoding`] — that should never happen against
+/// surfaces as [`PgError::Encoding`] - that should never happen against
 /// a database the runtime itself wrote to, and indicates corruption or
 /// out-of-band tampering.
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
@@ -753,7 +753,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 }
 
 /// Return outbox rows whose `status = 'pending'`, ordered by
-/// `(enqueued_at, intent_id)` — the same causal-order-with-PK-tie-break
+/// `(enqueued_at, intent_id)` - the same causal-order-with-PK-tie-break
 /// pattern used elsewhere. This is the natural "what does the worker
 /// have to deliver?" query.
 ///
@@ -2069,7 +2069,7 @@ mod tests {
 
     /// Pins the SQLSTATE used to identify PostgreSQL SSI serialization
     /// failures. If anyone changes the magic string `"40001"` this test
-    /// fails — the retry contract cannot regress silently.
+    /// fails - the retry contract cannot regress silently.
     #[test]
     fn sqlstate_40001_classified_as_serialization_failure() {
         assert!(is_serialization_failure_code(Some("40001")));
