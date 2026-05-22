@@ -66,9 +66,9 @@ pub fn parse_expression(source: &str) -> Result<Expr, Vec<Diagnostic>> {
 }
 
 /// Build the recursive expression parser. The grammar is laid out
-/// in increasing precedence: implies (lowest) wraps and, which
-/// wraps not, which wraps comparison, which wraps arith, which
-/// wraps primary (highest).
+/// in increasing precedence: implies (lowest) wraps or, which wraps
+/// and, which wraps not, which wraps comparison, which wraps arith,
+/// which wraps primary (highest).
 ///
 /// `recursive` lets `primary` reference `expression` so parenthesised
 /// sub-expressions can nest arbitrarily.
@@ -324,16 +324,42 @@ where
                 }
             });
 
-        // implies ::= and ("implies" implies)?  (right-assoc)
-        let implies_expr = and_expr
+        // or_expr ::= and_expr ("or" and_expr)*  (left-assoc,
+        // flattened into a single Expr::Or(Vec<Expr>))
+        //
+        // Standard logical precedence: `and` binds tighter than `or`,
+        // so `a and b or c` parses as `(a and b) or c`. `or` in turn
+        // binds tighter than `implies`, so `a or b implies c` parses
+        // as `(a or b) implies c`.
+        let or_expr = and_expr
+            .clone()
+            .then(
+                just(Token::KwOr)
+                    .ignore_then(and_expr.clone())
+                    .repeated()
+                    .collect::<Vec<Expr>>(),
+            )
+            .map(|(first, rest)| {
+                if rest.is_empty() {
+                    first
+                } else {
+                    let mut all = Vec::with_capacity(rest.len() + 1);
+                    all.push(first);
+                    all.extend(rest);
+                    Expr::Or(all)
+                }
+            });
+
+        // implies ::= or ("implies" implies)?  (right-assoc)
+        let implies_expr = or_expr
             .clone()
             .then(
                 just(Token::KwImplies)
                     .ignore_then(
-                        and_expr.clone().then(
+                        or_expr.clone().then(
                             // Allow chained `implies` via recursion: a implies b implies c.
                             just(Token::KwImplies)
-                                .ignore_then(and_expr)
+                                .ignore_then(or_expr)
                                 .repeated()
                                 .collect::<Vec<Expr>>(),
                         ),

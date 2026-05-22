@@ -45,7 +45,7 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
             predicates_referenced_by_expr(left, out);
             predicates_referenced_by_expr(right, out);
         }
-        Expr::And(exprs) => {
+        Expr::And(exprs) | Expr::Or(exprs) => {
             for e in exprs {
                 predicates_referenced_by_expr(e, out);
             }

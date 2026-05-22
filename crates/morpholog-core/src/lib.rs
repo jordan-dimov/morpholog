@@ -300,6 +300,8 @@ mod tests {
             // ValueOf carries its own predicate AND a recursive
             // default expression with another predicate.
             value_of("P_valueof_self", Some(claim("P_valueof_default"))),
+            // Or flattens its branches; each branch must contribute.
+            Expr::Or(vec![claim("P_or_left"), claim("P_or_right")]),
             // Variants that carry no predicate references: must
             // contribute nothing. If any of these incorrectly added
             // entries the test below would still pass, but the
@@ -333,6 +335,8 @@ mod tests {
             "P_forall_body",
             "P_valueof_self",
             "P_valueof_default",
+            "P_or_left",
+            "P_or_right",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -606,6 +610,92 @@ mod tests {
         )
         .unwrap();
         assert!(matches.is_empty(), "60 + 50 <= 100 should reject");
+    }
+
+    /// `Expr::Or` returns the concatenation of each branch's binding
+    /// sets, with no deduplication, mirroring `find_conjunction`'s
+    /// multiplicity-preserving convention. Pins the four load-bearing
+    /// cases: one branch matches, both branches match (multiplicity
+    /// preserved), neither branch matches (empty), and a branch with a
+    /// fresh binding contributes its extension.
+    #[test]
+    fn or_returns_union_of_branch_binding_sets() {
+        // State holds two A claims and one B claim. Different keys per
+        // predicate so a branch's extensions are distinguishable.
+        let state = State::from_claims(vec![
+            ClaimInstance {
+                predicate: "A".to_string(),
+                args: vec![EvalValue::Subject("a1".to_string())],
+            },
+            ClaimInstance {
+                predicate: "A".to_string(),
+                args: vec![EvalValue::Subject("a2".to_string())],
+            },
+            ClaimInstance {
+                predicate: "B".to_string(),
+                args: vec![EvalValue::Subject("b1".to_string())],
+            },
+        ]);
+
+        let a_x = Expr::Claim {
+            predicate: "A".to_string(),
+            args: vec![Term::Var("x".to_string())],
+        };
+        let b_x = Expr::Claim {
+            predicate: "B".to_string(),
+            args: vec![Term::Var("x".to_string())],
+        };
+        let c_x = Expr::Claim {
+            predicate: "C".to_string(),
+            args: vec![Term::Var("x".to_string())],
+        };
+
+        // Both branches match: two A extensions + one B extension = 3.
+        let both = Expr::Or(vec![a_x.clone(), b_x.clone()]);
+        let matches = find_matches(&both, &state, &Bindings::new(), None).unwrap();
+        assert_eq!(
+            matches.len(),
+            3,
+            "Or must concatenate every branch's binding extensions"
+        );
+        let bound_x: Vec<_> = matches
+            .iter()
+            .map(|b| match b.get("x").expect("x bound in every extension") {
+                EvalValue::Subject(s) => s.clone(),
+                _ => panic!("x must be a subject"),
+            })
+            .collect();
+        assert!(bound_x.contains(&"a1".to_string()));
+        assert!(bound_x.contains(&"a2".to_string()));
+        assert!(bound_x.contains(&"b1".to_string()));
+
+        // One branch matches, one doesn't: only the matching branch's
+        // extensions are returned.
+        let one_matches = Expr::Or(vec![a_x.clone(), c_x.clone()]);
+        let matches = find_matches(&one_matches, &state, &Bindings::new(), None).unwrap();
+        assert_eq!(
+            matches.len(),
+            2,
+            "Or with one empty branch returns the other branch's matches"
+        );
+
+        // Neither branch matches: empty.
+        let none = Expr::Or(vec![c_x.clone(), c_x]);
+        let matches = find_matches(&none, &state, &Bindings::new(), None).unwrap();
+        assert!(
+            matches.is_empty(),
+            "Or with every branch empty produces an empty result"
+        );
+
+        // No deduplication: two branches admitting the same extension
+        // appear twice, matching find_conjunction's convention.
+        let dup = Expr::Or(vec![a_x.clone(), a_x]);
+        let matches = find_matches(&dup, &state, &Bindings::new(), None).unwrap();
+        assert_eq!(
+            matches.len(),
+            4,
+            "Or preserves multiplicity; identical branches double-count"
+        );
     }
 
     // ============================================================

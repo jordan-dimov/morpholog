@@ -5,7 +5,7 @@
 //! - Top-level keywords: `program`, `predicate`.
 //! - Kind keywords (lexer-level): `Subject`, `Decimal`, `Date`,
 //!   `Bool`, `Collection`, `Any`.
-//! - Boolean keywords: `not`, `and`, `implies`.
+//! - Boolean keywords: `not`, `and`, `or`, `implies`.
 //! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
 //!   `_-prefixed` names. The bare `_` is the wildcard token, not
 //!   an identifier.
@@ -41,7 +41,7 @@
 //! Reserved words include the structural keywords
 //! (`program`, `predicate`), the kind names (`Subject`,
 //! `Decimal`, `Date`, `Bool`, `Collection`, `Any`), the boolean
-//! operators (`not`, `and`, `implies`), and the placeholder bool
+//! operators (`not`, `and`, `or`, `implies`), and the placeholder bool
 //! literals (`true`, `false`, lexed but not parseable per the
 //! note above). The lexer maps each to a specific `Token::*`
 //! variant so the parser can match against them directly. An
@@ -152,6 +152,10 @@ pub enum Token {
     KwNot,
     /// `and` infix operator.
     KwAnd,
+    /// `or` infix operator. Lowers to `Expr::Or`. Sits at lower
+    /// precedence than `and` and higher than `implies` (standard
+    /// logical-operator precedence).
+    KwOr,
     /// `implies` infix operator.
     KwImplies,
 
@@ -258,6 +262,7 @@ impl fmt::Display for Token {
             Token::Dedent => write!(f, "dedent"),
             Token::KwNot => write!(f, "`not`"),
             Token::KwAnd => write!(f, "`and`"),
+            Token::KwOr => write!(f, "`or`"),
             Token::KwImplies => write!(f, "`implies`"),
             Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
             Token::KwExists => write!(f, "`exists`"),
@@ -340,6 +345,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         // Operator and boolean keywords
         "not" => Token::KwNot,
         "and" => Token::KwAnd,
+        "or" => Token::KwOr,
         "implies" => Token::KwImplies,
         // Bounded forms and membership keywords
         "exists" => Token::KwExists,

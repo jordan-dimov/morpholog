@@ -87,6 +87,7 @@ pub(crate) fn find_matches(
     match e {
         Expr::Claim { predicate, args } => find_claim_matches(predicate, args, state, base, actor),
         Expr::And(exprs) => find_conjunction(exprs, state, base, actor),
+        Expr::Or(exprs) => find_disjunction(exprs, state, base, actor),
         Expr::Not(inner) => {
             let m = find_matches(inner, state, base, actor)?;
             Ok(if m.is_empty() {
@@ -333,6 +334,24 @@ pub(crate) fn find_conjunction(
     Ok(current)
 }
 
+/// Evaluate a disjunction by concatenating the binding sets each
+/// branch produces against the same base context. Empty when every
+/// branch is empty. No deduplication - if two branches admit the
+/// same extension, both copies appear, mirroring `find_conjunction`'s
+/// multiplicity-preserving convention.
+pub(crate) fn find_disjunction(
+    exprs: &[Expr],
+    state: &State,
+    base: &Bindings,
+    actor: Option<&EvalValue>,
+) -> Result<Vec<Bindings>, EvalError> {
+    let mut out = vec![];
+    for expr in exprs {
+        out.extend(find_matches(expr, state, base, actor)?);
+    }
+    Ok(out)
+}
+
 pub(crate) fn find_in_matches(
     elem: &Term,
     coll: &Term,
@@ -502,11 +521,12 @@ pub(crate) fn resolve_term(
 ///   values are **not substituted** into the rendered string in v0
 ///   (per the PR-G review constraint); the caller correlates the
 ///   failing iteration separately if needed.
-/// - `Not`, `Exists`: return `None`. Structurally these have
+/// - `Not`, `Exists`, `Or`: return `None`. Structurally these have
 ///   no single sub-expression that's "the one responsible": `Not`
-///   describes what *held* rather than what failed; `Exists` and
-///   `Exists` failures mean "no member of the set satisfied", which is
-///   the whole expression, not any sub-part.
+///   describes what *held* rather than what failed; `Exists`
+///   failures mean "no member of the set satisfied", which is the
+///   whole expression, not any sub-part; `Or` failures mean every
+///   branch failed, so picking one branch to blame would mislead.
 /// - Leaf expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
 ///   `Term`, `Sub`, `Add`, `Sum`, `ValueOf`): return `None`. Already
 ///   as specific as the kernel can be.
@@ -600,6 +620,7 @@ pub(crate) fn find_failing_subexpr(
         }
         // No useful drill-down for these:
         Expr::Not(_)
+        | Expr::Or(_)
         | Expr::Exists { .. }
         | Expr::Claim { .. }
         | Expr::Le(..)
