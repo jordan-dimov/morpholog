@@ -24,12 +24,12 @@
 -- retroactively invalidate an earlier randomisation - it must only
 -- govern future ones.
 --
--- Note: The `<=` operator currently currently lowers to `Expr::Le` (decimal
+-- Note: the `<=` operator currently lowers to `Expr::Le` (decimal
 -- comparison). The civil-date surface form for `Expr::DateLe` is
--- deliberately deferred to the worked example that drives the worked example that
--- drives it (this one). Until then, the date comparisons in this
--- file are illustrative; the kernel's runtime evaluator distinguishes
--- decimal `<=` from date `<=` via separate IR variants.
+-- deferred to this worked example. Until then, the date
+-- comparisons in this file are illustrative; the kernel's runtime
+-- evaluator distinguishes decimal `<=` from date `<=` via separate
+-- IR variants.
 
 program clinical_trial_enrolment
 
