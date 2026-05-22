@@ -1,4 +1,4 @@
-//! Worked examples — the IR for the canonical Morpholog illustrations.
+//! Worked examples - the IR for the canonical Morpholog illustrations.
 //!
 //! These constructors serve double duty as both test fixtures (used by
 //! `morpholog-core`'s own tests and by `morpholog-postgres` integration

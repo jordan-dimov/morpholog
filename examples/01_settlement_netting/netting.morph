@@ -20,12 +20,13 @@ predicate Netted(line_id: Subject)
 -- after the colon greedily; parens are how you embed them inside
 -- compound booleans.
 
--- Expression continuation lines stay at the same column as the
--- body's first line. The layout pass treats deeper indentation
--- as a new block - which the grammar accepts in exactly one
--- place per `: body` production - so multi-line expressions
--- inside an invariant or quantifier body must avoid further
--- indent. Use parens for visual grouping where helpful.
+-- Multi-line expressions: without parentheses, continuation lines
+-- must stay at the same indentation as the body's first line; the
+-- layout pass treats deeper indent as a new block, and a `: body`
+-- production only accepts one Indent. Wrapping in parens disables
+-- layout for the parenthesised region, which makes long
+-- expressions like multi-line `sum(...)` arbitrarily indented
+-- continuation work naturally.
 
 invariant net_settlement_has_lines:
     NetSettlement(net, _, _, _) implies (exists line: SettlementLine(line, net, _))

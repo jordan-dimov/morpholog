@@ -220,7 +220,7 @@ fn restatement_into_closed_period_preserves_original() {
 
     // 3. Restate the entry with a corrected amount (101 instead of
     //    100). The restatement transformation does *not* check
-    //    PeriodClosed — restatement is the path for closed periods.
+    //    PeriodClosed - restatement is the path for closed periods.
     let s3 = must_accept(
         &double_entry_ledger::restate_entry(),
         vec![

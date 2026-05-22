@@ -342,3 +342,17 @@ fn tab_on_comment_only_line_is_diagnosed() {
         "expected tab diagnostic; got: {errs:?}"
     );
 }
+
+/// Indentation that's "spaces then tab" (e.g. `"  \t-- comment"`)
+/// must also be rejected, not just a leading-tab line. The lexer
+/// strips comments, so the layout pass scans the raw gap for any
+/// tab in the leading-whitespace run of any line.
+#[test]
+fn space_then_tab_indentation_on_comment_line_diagnosed() {
+    let source = "program demo\n  \t-- a tab-indented comment\npredicate Foo(x: Subject)\n";
+    let errs = tokens_or_err(source).expect_err("space+tab in comment indent should fail");
+    assert!(
+        errs.iter().any(|m| m.contains("tab")),
+        "expected tab diagnostic; got: {errs:?}"
+    );
+}

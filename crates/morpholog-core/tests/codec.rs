@@ -94,7 +94,7 @@ fn intent_instance_round_trips_through_json() {
 
 #[test]
 fn decimal_value_preserves_high_precision_through_json() {
-    // 18 fractional digits — well within rust_decimal's 96-bit range.
+    // 18 fractional digits - well within rust_decimal's 96-bit range.
     let exact = "1234567890.123456789";
     let v = EvalValue::Decimal(Decimal::from_str(exact).unwrap());
     let json = serde_json::to_string(&v).unwrap();

@@ -100,30 +100,21 @@ pub fn apply_layout(
             // diagnostic per gap is enough; the flag avoids piling
             // up duplicates for files with many tab-indented
             // comment lines.
+            //
+            // For each line after a `\n` in the gap, extract the
+            // leading whitespace run and check for tabs. This
+            // catches plain leading tabs (`\trest`), tabs after
+            // spaces (`  \trest`), and tabs in pure-whitespace
+            // lines.
             if !tab_diagnosed_for_this_gap {
                 for line in gap.split('\n').skip(1) {
-                    let leading: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                    if leading.contains('\t') && !leading.trim().is_empty() {
-                        diagnostics.push(Diagnostic::error(
-                            "tab characters are not allowed in indentation; use spaces",
-                            prev_end..span.start,
-                        ));
-                        break;
-                    }
-                    // The trim().is_empty() check excludes pure-
-                    // whitespace lines (just a tab and a newline)
-                    // which produce no visible diagnostic anchor.
-                    // Adjust if a future test forces stricter
-                    // whole-line tab detection.
-                }
-                // Walk gap looking specifically for `\t<non-newline>`
-                // patterns immediately after a `\n` - this catches
-                // the comment-line case where the indentation isn't
-                // "whitespace only" by the line's own measure but
-                // does contain a tab.
-                let bytes = gap.as_bytes();
-                for i in 0..bytes.len().saturating_sub(1) {
-                    if bytes[i] == b'\n' && bytes[i + 1] == b'\t' {
+                    let indent_end = line
+                        .char_indices()
+                        .find(|(_, c)| !c.is_whitespace())
+                        .map(|(i, _)| i)
+                        .unwrap_or(line.len());
+                    let indent_run = &line[..indent_end];
+                    if indent_run.contains('\t') {
                         diagnostics.push(Diagnostic::error(
                             "tab characters are not allowed in indentation; use spaces",
                             prev_end..span.start,

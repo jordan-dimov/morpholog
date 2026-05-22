@@ -18,7 +18,7 @@ use morpholog_core::{ClaimInstance, EvalValue, Expr, Outcome, State, Stmt, eval_
 use morpholog_examples::settlement_netting;
 
 // ============================================================
-// IR shape — the example's invariants and transformation look
+// IR shape - the example's invariants and transformation look
 // like what we expect at the IR level.
 // ============================================================
 
@@ -116,7 +116,7 @@ fn for_body_contains_bind_one_and_two_asserts() {
 }
 
 // ============================================================
-// Evaluator — `net_amount_equals_lines` against curated state.
+// Evaluator - `net_amount_equals_lines` against curated state.
 // ============================================================
 
 fn netting_state(amount: i64) -> State {
@@ -156,7 +156,7 @@ fn net_amount_equals_lines_fails_when_amount_mismatches() {
 }
 
 // ============================================================
-// Chain — `propose(create_net_settlement, ...)`.
+// Chain - `propose(create_net_settlement, ...)`.
 // ============================================================
 
 /// Build a pre-state with l1 (60) and l2 (40), both approved, between

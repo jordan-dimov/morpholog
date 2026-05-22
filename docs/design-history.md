@@ -860,7 +860,7 @@ Three options were on the table for where indentation-awareness lives: lexer-lev
 **Statement parser.** The new `crates/morpholog-surface/src/parser/stmt.rs` module recognises:
 
 - `require <expression>` -> `Stmt::Require(_)`
-- `bind <expression>` -> `Stmt::BindOne(_)` (any predicate-shaped expression accepted; runtime validation catches non-claim shapes)
+- `bind <claim-pattern>` -> `Stmt::BindOne(Expr::Claim { .. })` (parser restricts the surface to a claim pattern; the IR's `Stmt::BindOne` is technically `Expr` but the meaningful authoring form is a single claim, and arbitrary expressions are rejected at parse time per the surface doctrine)
 - `let <name> = <expression>` -> `Stmt::Let { name, value }`
 - `let <name> = new Subject ( )` -> `Stmt::LetNewSubject { name }`
 
