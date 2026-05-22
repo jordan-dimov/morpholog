@@ -1,8 +1,10 @@
 # Morpholog: IR and Runtime Semantics (v0)
 
-Status: design doctrine. The IR and runtime are implemented in `crates/morpholog-core`; surface syntax and parser commitments remain deferred. This document is the authoritative source for the semantics; the code is one realisation of them.
+Status: design doctrine. The IR and runtime are implemented in `crates/morpholog-core`; the `.morph` parser is implemented in `crates/morpholog-surface`. This document is the authoritative source for what the runtime *means*; the code is one realisation of them.
 
-Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
+Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`design-history.md`](design-history.md), which records retrospectively which worked example forced each design decision.
+
+This doc uses IR names (`Stmt::BindOne`, `Stmt::Assert`, `Term::Actor`) because it describes the kernel. The `.morph` surface uses domain-flavoured verbs that map one-to-one: `bind`, `admit`, `actor` and so on - the full table is in [`scope-and-ambition.md`](scope-and-ambition.md). When this doc says `bind_one`, the surface says `bind`.
 
 ## Conceptual core
 

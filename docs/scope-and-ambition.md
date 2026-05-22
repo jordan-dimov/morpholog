@@ -65,7 +65,7 @@ Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predic
 
 This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
 
-**Status:** landed via the refactor arc. Every `Program` now carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity: every claim/assert/retract/value_of/derived-claim reference must target a declared predicate. The CLI exposes the declarations via `morpholog inspect predicates <program>`. Kind validation against the kinds of values flowing through the binding context is not yet enforced (the metadata is recorded; enforcement is a future evaluator pass).
+**Status:** landed. Every `Program` carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity: every claim/assert/retract/value_of/derived-claim reference must target a declared predicate. The CLI exposes the declarations via `morpholog inspect predicates <program>`. Kind validation against the values flowing through the binding context is recorded but not yet enforced; it's the highest-leverage layer of the enriched-`morpholog check` work on [`roadmap.md`](roadmap.md).
 
 ### 2. Derived claims
 
@@ -124,7 +124,7 @@ Not on the list, deliberately: workflow primitives, projection DSL beyond derive
 
 ## Surface syntax and the IR
 
-The `.morph` parser arc commits surface syntax to a deliberately narrower contract than the IR.
+The `.morph` parser commits surface syntax to a deliberately narrower contract than the IR.
 
 **The doctrine:** the parser can rename, rearrange, and add sugar; it cannot add semantic capability the kernel does not have. Surface syntax is more domain-native than the IR but never more expressive than it. Every legal `.morph` file must map to a legal `morpholog_core::Program`, and the surface offers no operator, no construct, and no escape hatch that the kernel cannot evaluate.
 
@@ -132,24 +132,22 @@ The cost of this discipline is that the parser does real translation work (infix
 
 **Verb-flavor renames (surface to IR):**
 
-The "Phase" column indicates which parser PR the rename lands in. P3b and later rows are the planned shape, not yet committed to the parser; they appear here so the doctrine is visible up-front, but they are subject to refinement when the corresponding PR begins.
-
-| Surface verb | IR construct | Phase | Reason |
-|---|---|---|---|
-| `admit X(args)` | `Stmt::Assert` | P3 | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
-| `bind X(args)` | `Stmt::BindOne` | P3 | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
-| `actor` (no parens) | `Term::Actor` | P2a | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
-| `<=` (infix) | `Expr::Le` (decimal) | P2a | Business mathematics reads with infix comparators. Decimal-only; the kernel keeps `Expr::Le` and `Expr::DateLe` as separate IR variants (no operator overloading - see `design-history.md`). |
-| `on_or_before` (infix) | `Expr::DateLe` (civil date) | P3-dates | Distinct keyword (not overloaded `<=`) for civil-date `<=`. Reads as business prose, aligns with the `[from, to]` inclusive-window doctrine. Runtime type-checks the operands as `EvalValue::Date`; using it on decimals surfaces as a runtime `TypeMismatch`. |
-| `=`, `!=` (infix) | `Expr::Eq` (Expr, Expr), `Expr::Neq` (Term, Term) | P2a | `Eq` operates on full expressions; `Neq` operates on terms only (the IR shape). The parser rejects arithmetic on either side of `!=`. |
-| `+`, `-` (infix) | `Expr::Add`, `Expr::Sub` (decimal) | P2a | Standard arithmetic notation, decimal-only. No unary minus until forced. |
-| `not`, `and`, `implies` (keywords) | `Expr::Not`, `Expr::And`, `Expr::Implies` | P2a | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Expr::And(Vec<Expr>)`; `implies` is right-associative. |
-| `forall x in coll: body`, `exists x: body` | `Expr::Forall`, `Expr::Exists` | P2b | Bounded quantification is mathematical convention. The `in` clause on `forall` makes unbounded quantification syntactically impossible. `exists` carries no source clause because the IR's `Expr::Exists` doesn't model one - the bound variable is whatever the body matches. |
-| `sum(target | body)` | `Expr::Sum` | P2b | Set-builder notation. Target restricted to a variable in v0; relax when a worked example forces it. |
-| `value Pred(args)` (with optional `default expr`) | `Expr::ValueOf` | P2b | Claim-pattern form. The wildcard `_` in `args` marks the value position to extract. The kernel's `ValueOf { predicate, args, default }` is shaped this way deliberately; a `value(target | body)` shape would imply a general query and be more expressive than the IR. |
-| `x in xs` (membership) | `Expr::In(Term, Term)` | P2b | Infix at comparator precedence. Distinct from the structural `in` in `forall x in xs: body`; disambiguated positionally (the structural `in` comes immediately after the binder in `forall`). |
-| `@2026-05-22` | `Value::Date("2026-05-22")` | P2b | `@` sigil avoids the lexer ambiguity between bare ISO-8601 dates and arithmetic (e.g. `2026 - 05 - 22`). |
-| `#NAME` | `Value::Subject("NAME")` | P2b | `#` sigil makes subject literals visibly distinct from variables and reflects that subjects are opaque symbolic identifiers, not strings. |
+| Surface verb | IR construct | Reason |
+|---|---|---|
+| `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
+| `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
+| `<=` (infix) | `Expr::Le` (decimal) | Business mathematics reads with infix comparators. Decimal-only; the kernel keeps `Expr::Le` and `Expr::DateLe` as separate IR variants (no operator overloading - see `design-history.md`). |
+| `on_or_before` (infix) | `Expr::DateLe` (civil date) | Distinct keyword (not overloaded `<=`) for civil-date `<=`. Reads as business prose, aligns with the `[from, to]` inclusive-window doctrine. Runtime type-checks the operands as `EvalValue::Date`; using it on decimals surfaces as a runtime `TypeMismatch`. |
+| `=`, `!=` (infix) | `Expr::Eq` (Expr, Expr), `Expr::Neq` (Term, Term) | `Eq` operates on full expressions; `Neq` operates on terms only (the IR shape). The parser rejects arithmetic on either side of `!=`. |
+| `+`, `-` (infix) | `Expr::Add`, `Expr::Sub` (decimal) | Standard arithmetic notation, decimal-only. No unary minus until forced. |
+| `not`, `and`, `implies` (keywords) | `Expr::Not`, `Expr::And`, `Expr::Implies` | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Expr::And(Vec<Expr>)`; `implies` is right-associative. |
+| `forall x in coll: body`, `exists x: body` | `Expr::Forall`, `Expr::Exists` | Bounded quantification is mathematical convention. The `in` clause on `forall` makes unbounded quantification syntactically impossible. `exists` carries no source clause because the IR's `Expr::Exists` doesn't model one - the bound variable is whatever the body matches. |
+| `sum(target | body)` | `Expr::Sum` | Set-builder notation. Target restricted to a variable in v0; relax when a worked example forces it. |
+| `value Pred(args)` (with optional `default expr`) | `Expr::ValueOf` | Claim-pattern form. The wildcard `_` in `args` marks the value position to extract. The kernel's `ValueOf { predicate, args, default }` is shaped this way deliberately; a `value(target | body)` shape would imply a general query and be more expressive than the IR. |
+| `x in xs` (membership) | `Expr::In(Term, Term)` | Infix at comparator precedence. Distinct from the structural `in` in `forall x in xs: body`; disambiguated positionally (the structural `in` comes immediately after the binder in `forall`). |
+| `@2026-05-22` | `Value::Date("2026-05-22")` | `@` sigil avoids the lexer ambiguity between bare ISO-8601 dates and arithmetic (e.g. `2026 - 05 - 22`). |
+| `#NAME` | `Value::Subject("NAME")` | `#` sigil makes subject literals visibly distinct from variables and reflects that subjects are opaque symbolic identifiers, not strings. |
 
 **What this rules out:**
 
@@ -163,9 +161,9 @@ The "Phase" column indicates which parser PR the rename lands in. P3b and later 
 - Macros / convenience forms that expand to existing IR (e.g., `between(x, lo, hi)` could desugar to `lo <= x and x <= hi`).
 - Renaming, reordering, and disambiguation rules in the surface that have no IR cost.
 
-The parser arc's PRs (`P1` through `P3+`, see [`roadmap.md`](roadmap.md)) all operate under this doctrine. A reviewer should reject any surface addition that lacks an IR mapping or that smuggles in an interpretation the kernel cannot evaluate.
+The doctrine governs every surface addition. A reviewer should reject any surface addition that lacks an IR mapping or that smuggles in an interpretation the kernel cannot evaluate.
 
-**Block syntax: indentation, not braces.** Multi-statement blocks (transformation bodies, `for` loops, future statement-bearing constructs) use indentation, not braces or `end` keywords. This matches the colon-terminated forms already committed at the expression level (`forall x in xs: body`, `exists x: body`, `invariant Name: body`) and keeps `.morph` source reading as rules, not config JSON or imperative scaffolding. The cost is that the surface layer must produce layout-sensitive structure, most likely by emitting `INDENT` / `DEDENT` tokens (or equivalent virtual tokens from a layout-normalisation pass) when statement parsing lands in P3b; that complexity is paid once and amortised across every statement-bearing construct. The doctrine is *indentation*; the specific layout mechanism is an implementation choice for the P3b design pass.
+**Block syntax: indentation, not braces.** Multi-statement blocks (transformation bodies, `for` loops, future statement-bearing constructs) use indentation, not braces or `end` keywords. This matches the colon-terminated forms at the expression level (`forall x in xs: body`, `exists x: body`, `invariant Name: body`) and keeps `.morph` source reading as rules, not config JSON or imperative scaffolding. The layout mechanism is an implementation choice; the doctrine is *indentation*.
 
 ## The right way to measure ambition
 

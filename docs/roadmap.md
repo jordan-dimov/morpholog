@@ -6,35 +6,32 @@ Each item below either has a concrete forcing scenario or is explicitly held unt
 
 ## Status today
 
-The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are in good shape. Programmes are declared-vocabulary objects. Execution is structurally inspectable through `propose_with_trace` and the CLI's `--trace` flag, including expression-internal failure-walk that identifies which sub-expression of a rejected `require` or `bind_one` was responsible. Predicate-scoped loading runs on both read and write paths. The kernel is split into focused submodules; no module is over ~750 lines.
+The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are all in good shape. Programmes are declared-vocabulary objects. Execution is structurally inspectable through `propose_with_trace` and the CLI's `--trace` flag, including expression-internal failure-walk that identifies which sub-expression of a rejected `require` or `bind` was responsible. Predicate-scoped loading runs on both read and write paths.
 
-The parser arc is mid-stream. A `.morph` source file can carry: the `program` header, `predicate` declarations, full expressions (atoms, arithmetic, comparators, boolean composition, `exists`/`forall`/`sum`/`value`/`in`, date and subject literals), and `invariant` declarations. `morpholog parse <file>` parses these end-to-end. What remains to land: transformations + statement syntax (P3b), derived claims (P3c), and date-comparison surface form (lands when an invariant body needs it). Worked examples are still constructed via the Rust `dsl` module for their transformation bodies.
+The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON) and `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean). See [`design-history.md`](design-history.md) for the per-PR retrospectives; this file no longer enumerates the parser PRs.
 
-## Imminent: surface syntax
+The CLI is split by subcommand under `crates/morpholog-cli/src/commands/`. Adding a new subcommand is "add a file there, add a `Command` variant, add one dispatch arm in `main`."
 
-The parser arc has started. Programmes are Rust IR via the public `dsl` module today; the natural reader of a Morpholog programme is a domain expert, not a Rust developer. The parser is what makes the programme legible to that audience, and it commits the surface syntax decisions that nothing else has forced yet.
+## Imminent
 
-The arc is multi-PR; each PR is one focused production. The crate is `morpholog-surface` (broader than "parser" so a future formatter / source-mapper / LSP shares the same crate). Tooling: `chumsky` for parsing, `ariadne` for diagnostics. File extension: `.morph`.
+The parser arc settled the source representation. The next investment is making `.morph` programmes *trustworthy to author* and *executable from source*, in that order.
 
-- **PR P1 (landed): predicate declarations only.** The `program <name>` header plus zero or more `predicate Name(arg: Kind, ...)` declarations. `morpholog parse <file>` CLI subcommand, ariadne-rendered diagnostics, parser-side duplicate detection. Commits the file-level surface decisions (identifier syntax, kind keywords, comments, trailing commas).
-- **PR P2a (landed): expressions, no bounded forms.** Atoms (vars, decimal literals, wildcards, `actor`, predicate calls), arithmetic (`+`, `-`), comparators (`=`, `!=`, `<=`), boolean composition (`not`, `and`, `implies`) with standard precedence. The expression parser exposed as `parse_expression`. Honours the IR/surface doctrine in `docs/scope-and-ambition.md` (no bool literals, no escape hatches, term-only restriction on `Neq` and claim-call args). See `docs/design-history.md` entry "Parser P2a" for the per-operator decisions.
-- **PR P2b-lite (landed): bounded forms + literals.** `exists x: body`, `forall x in source: body` (with auto-lift when source is a bare Term), `sum(target | body)` with target restricted to a variable, `value Pred(args) [default expr]` in claim-pattern shape (NOT a general query form - see the doctrine), `x in xs` membership comparator at comparator precedence, `@YYYY-MM-DD` date literals, `#NAME` subject literals. Date *comparison* (the surface form for `Expr::DateLe`) is deliberately deferred alongside the worked example that drives it.
-- **PR P3a (landed): invariant declarations.** Smallest programme-integration step: `invariant <name>: <expression>`. Invariant bodies are pure expressions. No version syntax in v0 (`version` defaults to 1). Free interleaving of predicate and invariant declarations. Parser-side duplicate-invariant detection. Parser source split into `parser/{program,expr}.rs` ahead of P3b. Indentation block-syntax doctrine locked.
-- **PR P3b1 (landing): transformations + gate statements + layout pipeline.** New `layout.rs` module emits virtual `Indent`/`Dedent` tokens at block boundaries (parens disable layout; tabs in indentation are a diagnostic). Transformation header (`transformation name(params):`) plus `require`, `bind`, `let name = expr`, `let name = new Subject()`. The P3b2 keywords (`admit`, `retract`, `emit`, `for`) are reserved at the lexer but not yet parseable. Quantifier bodies and invariant bodies accept optional `Indent body Dedent` wrapping.
-- **PR P3b2 (landing): state-mutating statements + iteration.** `admit`, `retract`, `emit`, plus `for x in coll: <indented body>` (introduces nested layout). Reuses the P3b1 `claim_pattern` helper across all four verbs. After this, the worked examples that don't declare derived claims parse end-to-end via `morpholog parse`; examples with derived claims stop at the `derived` keyword (P3c). Date-comparison surface form deliberately deferred to its own focused PR.
-- **PR P3-dates (landing): civil-date comparison surface.** `on_or_before` infix keyword lowering to `Expr::DateLe`. Distinct surface form from decimal `<=` because the kernel keeps the two comparators as separate IR primitives. Clinical-trial-enrolment example updated; new `consent_obtained_before_randomisation` invariant exercises the comparator inside an invariant body.
-- **PR P3c: derived claims.** `DerivedClaim` shape with keys, values, and domain. Round-trip property tests (`format_program -> parse_program`) land here when the full surface is parseable. After P3c, all worked examples parse end-to-end.
-- **`morpholog run <file.morph>`.** Once the full surface is parsable.
+- **Enriched `morpholog check`.** Today's check is "parse + `Program::validate()`": strict arity, duplicate predicates, undeclared-predicate references. A richer check would add four layers, each independently testable:
+    - **Kind/type compatibility** (highest leverage). Predicate declarations carry kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`); today they are documentation. A static pass could catch `amount on_or_before limit` against decimal-typed args, or arithmetic on subject literals - the same `TypeMismatch` the kernel raises at runtime, surfaced at authoring time with source spans. This is what predicate declarations were *designed for*.
+    - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced.
+    - **Actor-in-wrong-context.** `Term::Actor` resolves only inside transformation bodies; the kernel raises `UnboundActor` if an invariant or derived claim mentions `actor`. Catch it statically with a clear "actor is not available in invariant bodies - authority belongs in `require`" message.
+    - **Lint-grade hints under `--strict`.** Unused predicate declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on UndeclaredPredicate.
 
-## After the parser: legibility tooling
+    Each layer is a separate small PR. `--strict` promotes hints to errors. `--json` emits diagnostics in a tooling-friendly form for IDE integration later.
 
-Surface syntax makes programmes readable; the next gap is making them *reviewable*. Three `morpholog inspect` subcommands derived from static analysis of parsed `.morph` programmes:
+- **`morpholog run <file.morph>`.** Execute a transformation from `.morph` source against PostgreSQL state. Today's `propose` only accepts built-in programmes from `morpholog_examples::all_programs()`; `run` would resolve the programme from the parsed source. The thin first cut: `morpholog run <file.morph> <transformation> --actor <s> --args <json>`. Same exit-code semantics as `propose`. Closes the loop from "I wrote a `.morph` file" to "I committed a transition described by that file."
 
-1. **`morpholog inspect exclusions <program>`** - walks invariants and `not` / `Neq` requires across the programme; emits the mutually-exclusive predicate pairs it can derive. The audience-first design here is that controllers and regulators ask "what does this system *prevent*?" before "what does it enable?", and nothing in `inspect` today answers that. Highest-leverage first tool; smallest implementation.
-2. **`morpholog inspect transformation <name> --graph`** - renders each transformation body as a pre/post dependency DAG: bind-one and require gates on one side, asserts and emits on the other. Mechanically derived from the IR.
-3. **Subject-flow profiles** - walks predicate declarations to surface clusters where the same `Subject`-kind position recurs (the cluster of predicates that all carry a `participant_id`, for example). Static analysis output, not a runtime type system; presents the cluster as a behavioural profile, not a class.
+- **Legibility tooling.** Surface syntax makes programmes readable; the next gap is making them *reviewable*. Three `morpholog inspect` subcommands derived from static analysis of parsed `.morph` programmes:
+    1. `morpholog inspect exclusions <program>` - walks invariants and `not` / `Neq` requires; emits the mutually-exclusive predicate pairs it can derive. Controllers and regulators ask "what does this system *prevent*?" before "what does it enable?", and nothing in `inspect` today answers that. Highest-leverage first tool; smallest implementation.
+    2. `morpholog inspect transformation <name> --graph` - renders each transformation body as a pre/post dependency DAG: bind / require gates on one side, admits / emits on the other. Mechanically derived from the IR.
+    3. **Subject-flow profiles** - walks predicate declarations to surface clusters where the same `Subject`-kind position recurs (the cluster of predicates that all carry a `participant_id`, for example). Static analysis output, not a runtime type system.
 
-All three live above the parser and are statically derivable; none add new IR primitives or runtime concepts.
+    All three live above the parser and are statically derivable; none add new IR primitives or runtime concepts.
 
 ## Performance, when forced
 
@@ -45,10 +42,10 @@ The current bench shows linear scaling on additive workloads (~1.6s per commit, 
 
 ## Operational completeness, when forced
 
-These are deferred until a worked example or a real operator forces them.
+Deferred until a worked example or a real operator forces them.
 
 - **Worker supervisor.** The polling outbox worker exists and ships a `StdoutDeliverer`. Missing: a supervisor running multiple workers under restart-with-intensity, with crash isolation between deliverers.
-- **Per-target circuit breakers.** A delivery target that's misbehaving should be ring-fenced (back off, alert, eventually quarantine), not continue eating the worker's loop indefinitely.
+- **Per-target circuit breakers.** A delivery target that misbehaves should be ring-fenced (back off, alert, eventually quarantine), not continue eating the worker's loop indefinitely.
 - **HTTP-aware deliverer.** Once a worked example actually sends an outbox intent over the wire, an `HttpDeliverer` with the right retry/idempotency semantics.
 
 ## Language affordances awaiting a worked example
@@ -56,15 +53,16 @@ These are deferred until a worked example or a real operator forces them.
 Each lands when an example actually demands the shape. None are pre-decided.
 
 - **Higher-order authority / predicate-pattern matching.** *One* authority claim governing a *family* of transformations, instead of one per kind. The declared predicate vocabulary now provides a metadata home; the shape itself still needs a worked example.
-- **Effective time as a separate axis.** As-of gives knowledge time. Effective time - the day a contract becomes binding, the period a posting reflects - is expressible as ordinary claims; combining the two gives bitemporal addressability without any `valid_from`/`valid_to` schema columns.
+- **Effective time as a separate axis.** As-of gives knowledge time. Effective time - the day a contract becomes binding, the period a posting reflects - is expressible as ordinary claims; combining the two gives bitemporal addressability without `valid_from`/`valid_to` schema columns.
 - **Validity windows + repair transitions + exception claims.** First-class typed claims that mark an admitted assertion as in-repair, contested, or quarantined, with audit standing. No bypass flags ever.
-- **Materialised derived claims.** Reports are recomputed on demand today. For long audit logs and frequent queries, materialised snapshots become forced - with invalidation discipline modelled as ordinary claims, not as cache machinery.
+- **Materialised derived claims.** Reports are recomputed on demand today. For long audit logs and frequent queries, materialised snapshots become forced - with invalidation modelled as ordinary claims, not as cache machinery.
 - **Migrations framework.** A small one. The schema is hand-written today; with multiple deployments and an evolving claim vocabulary, a migrations story will be forced. The shape should be claim-shaped (migration as transformation, schema version as admitted claim).
 - **Strict decimal comparisons (`Lt`, `Gt`, `Ge`), date arithmetic, civil intervals.** The current single-comparator-per-kind (`Le` for decimal, `DateLe` for civil dates) is a deliberate floor. The third comparator is what would force the generic dispatch shape; until then, one per kind.
+- **`morph fmt` (canonical formatter as a CLI).** The formatter exists in `morpholog-core::format` and is coupled to the parser by the round-trip property test. A CLI front-end (`morpholog fmt <file.morph>` or `--check` mode) lands when a project's worth of `.morph` files starts to feel like editorial drift; not before.
 
 ## Deliberately out of scope (revisit only with explicit reason)
 
-These are floors, not preferences. The reasons live in [`scope-and-ambition.md`](scope-and-ambition.md)'s "Non-goals" section. Restating here for completeness:
+Floors, not preferences. Reasons live in [`scope-and-ambition.md`](scope-and-ambition.md)'s "Non-goals" section.
 
 - No entities, classes, services, or ORM in the surface language. Subjects are opaque; predicates attach to subjects; that is the entire object model.
 - No general workflow engine. Lifecycle is conjunctions of admitted claims, eventually derived claims. Morpholog is not Camunda and must not grow toward it.
@@ -73,8 +71,8 @@ These are floors, not preferences. The reasons live in [`scope-and-ambition.md`]
 - No optimisation / solver runtime. ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.
 - No ad-hoc query DSL beyond derived-claim queries and the as-of operator.
 - **No bypass flags ever** (`skip_validation`, `force_commit`). Exceptions are first-class typed claims with full audit standing.
-- No tree-sitter or LSP grammar pre-built before the parser ships. The parser is the forcing pressure for those.
 - No self-hosting. Morpholog governs business state; the compiler is Rust.
+- Tree-sitter / LSP grammars: the parser is the forcing pressure. Deferred until an authoring workflow puts real demand on them.
 
 ## How to read this file
 

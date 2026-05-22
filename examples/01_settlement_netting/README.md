@@ -24,7 +24,7 @@ One transformation, `create_net_settlement(party_a, party_b, lines)`. It checks 
 
 ## How to run it
 
-The program is executed as Rust IR. The `.morph` parser arc covers predicates, expressions, and invariants today (see [`docs/roadmap.md`](../../docs/roadmap.md)); transformation bodies still use the Rust constructor surface until P3b lands. Two layers of tests prove the same example:
+The program runs both as Rust IR and as `.morph` source: `examples/01_settlement_netting/netting.morph` parses end-to-end via `morpholog parse` and validates via `morpholog check`. Two layers of tests prove the same example:
 
 ### In-memory (sync kernel)
 

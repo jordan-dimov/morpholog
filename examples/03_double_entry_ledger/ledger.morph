@@ -39,9 +39,6 @@ invariant at_most_one_direct_successor:
     Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
--- Transformations: illustrative transformation-body surface (not yet parser-supported).
--- The locked verb-flavour decisions are in use (admit, =); statement
--- parsing is the next parser increment.
 
 transformation post_simple_entry(
     entry_id, posting_date, period,
@@ -87,7 +84,7 @@ transformation restate_entry(
     emit JournalEntryRestated(new_entry_id, prior_entry_id)
 
 
--- Derived claim (illustrative derived-claim surface; not yet parser-supported).
+-- Derived claim:
 -- A derived claim is a governed view: not in the claim set, not
 -- persisted, not visible to invariants, enumerated on demand from
 -- admitted claims by the same kernel that admits them. The trial
