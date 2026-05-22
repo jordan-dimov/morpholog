@@ -1,22 +1,22 @@
 //! Lexer for the v0 surface fragment.
 //!
-//! Recognised tokens (P1 + P2a):
+//! Recognised tokens:
 //!
 //! - Top-level keywords: `program`, `predicate`.
 //! - Kind keywords (lexer-level): `Subject`, `Decimal`, `Date`,
 //!   `Bool`, `Collection`, `Any`.
-//! - Boolean keywords (P2a): `not`, `and`, `implies`.
+//! - Boolean keywords: `not`, `and`, `implies`.
 //! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
 //!   `_-prefixed` names. The bare `_` is the wildcard token, not
 //!   an identifier.
-//! - Decimal literals (P2a): `<digits>` or `<digits>.<digits>`.
+//! - Decimal literals: `<digits>` or `<digits>.<digits>`.
 //!   String-valued because the runtime stores decimals as
 //!   `rust_decimal::Decimal` parsed from strings, never as floats.
 //! - Punctuation: `(`, `)`, `:`, `,`.
-//! - Comparators (P2a): `=`, `!=`, `<=`. Multi-char forms must
+//! - Comparators: `=`, `!=`, `<=`. Multi-char forms must
 //!   be tried before single-char.
-//! - Arithmetic (P2a): `+`, `-`.
-//! - Wildcard (P2a): `_`.
+//! - Arithmetic: `+`, `-`.
+//! - Wildcard: `_`.
 //!
 //! `true` and `false` are lexer-reserved but parser-rejected
 //! in v0. The IR's `Value` enum has variants for `Decimal`,
@@ -38,7 +38,7 @@
 //! pairs - span is a byte-offset range into the source, compatible
 //! with [`crate::diagnostics::Span`] and `ariadne`.
 //!
-//! Reserved words recognised in P2a are the structural keywords
+//! Reserved words include the structural keywords
 //! (`program`, `predicate`), the kind names (`Subject`,
 //! `Decimal`, `Date`, `Bool`, `Collection`, `Any`), the boolean
 //! operators (`not`, `and`, `implies`), and the placeholder bool
@@ -66,11 +66,11 @@ pub enum Token {
     /// Kind keyword in a predicate-arg position.
     Kind(PredicateArgKind),
 
-    // ---- P3a: invariant declarations ----
-    /// `invariant` keyword (P3a).
+    // ---- Invariant declarations ----
+    /// `invariant` keyword.
     KwInvariant,
 
-    // ---- P3b1: transformations + gate statements ----
+    // ---- Transformations + gate statements ----
     /// `transformation` keyword.
     KwTransformation,
     /// `require` statement keyword.
@@ -86,30 +86,39 @@ pub enum Token {
     /// shadowing the keyword's future meaning).
     KwNew,
 
-    // ---- P3b2 (planned): state-mutating statements + iteration ----
+    // ---- Planned: state-mutating statements + iteration ----
     //
     // Reserved at the lexer now so a user who writes `admit
-    // Foo(...)` in P3b1 gets a clean "unexpected token `admit`"
+    // Foo(...)` gets a clean "unexpected token `admit`"
     // diagnostic, not a silent `Var("admit")` interpretation. The
     // statement parser rejects all four; they become productions
-    // when P3b2 lands.
-    /// `admit` statement keyword (planned, P3b2).
+    // when the planned support lands.
+    /// `admit` statement keyword (planned).
     KwAdmit,
-    /// `retract` statement keyword (planned, P3b2).
+    /// `retract` statement keyword (planned).
     KwRetract,
-    /// `emit` statement keyword (planned, P3b2).
+    /// `emit` statement keyword (planned).
     KwEmit,
-    /// `for` block keyword (planned, P3b2).
+    /// `for` block keyword (planned).
     KwFor,
 
-    // ---- P3c (planned): derived claims ----
+    // ---- Planned: derived claims ----
     /// `derived` declaration keyword. Reserved at the lexer for
     /// consistency with `program`/`predicate`/`invariant`/
     /// `transformation`; not yet parseable, so the parser
     /// rejects it with an unexpected-token diagnostic.
     KwDerived,
 
-    // ---- Layout virtual tokens (P3b1) ----
+    // ---- Civil-date comparison ----
+    /// `on_or_before` infix operator for civil-date `<=`. Lowers
+    /// to `Expr::DateLe`. Distinct from decimal `<=` because the
+    /// kernel keeps `Expr::Le` (decimal) and `Expr::DateLe`
+    /// (civil date) as separate IR primitives; surface refuses
+    /// to overload by operand type (see `design-history.md` -
+    /// the `DateLe` entry explicitly rejected dispatch-on-kind).
+    KwOnOrBefore,
+
+    // ---- Layout virtual tokens ----
     //
     // These are NOT produced by the lexer's character-level
     // recogniser; the layout normalisation pass in `layout.rs`
@@ -134,7 +143,7 @@ pub enum Token {
     /// level closed.
     Dedent,
 
-    // ---- P2a: boolean composition ----
+    // ---- Boolean composition ----
     /// `not` prefix operator.
     KwNot,
     /// `and` infix operator.
@@ -152,7 +161,7 @@ pub enum Token {
     /// `Value::Bool` into the IR.
     ReservedBoolLit(bool),
 
-    // ---- P2b-lite: bounded forms + membership ----
+    // ---- Bounded forms + membership ----
     /// `exists` quantifier keyword.
     KwExists,
     /// `forall` quantifier keyword.
@@ -208,13 +217,13 @@ pub enum Token {
     Colon,
     Comma,
 
-    // ---- P2a: operators ----
+    // ---- Operators ----
     /// `=` (Eq).
     Eq,
     /// `!=` (Neq).
     Neq,
-    /// `<=` (Le for decimals; in P2a, decimal-only - DateLe and
-    /// the date surface land in P2b).
+    /// `<=` lowers to Expr::Le for decimal operands (decimal-only;
+    /// on_or_before is the surface for Expr::DateLe on civil dates).
     Le,
     /// `+` (Add).
     Plus,
@@ -239,6 +248,7 @@ impl fmt::Display for Token {
             Token::KwEmit => write!(f, "`emit`"),
             Token::KwFor => write!(f, "`for`"),
             Token::KwDerived => write!(f, "`derived`"),
+            Token::KwOnOrBefore => write!(f, "`on_or_before`"),
             Token::Indent => write!(f, "indent"),
             Token::Dedent => write!(f, "dedent"),
             Token::KwNot => write!(f, "`not`"),
@@ -305,7 +315,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "bind" => Token::KwBind,
         "let" => Token::KwLet,
         "new" => Token::KwNew,
-        // P3b2 keywords - reserved at the lexer but not yet
+        // Planned-statement keywords - reserved at the lexer but not yet
         // parseable. The parser rejects them with an unexpected-
         // token diagnostic, which is honest about the v0 limit.
         "admit" => Token::KwAdmit,
@@ -313,17 +323,19 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "emit" => Token::KwEmit,
         "for" => Token::KwFor,
         "derived" => Token::KwDerived,
+        // Civil-date <= comparator
+        "on_or_before" => Token::KwOnOrBefore,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),
         "Bool" => Token::Kind(PredicateArgKind::Bool),
         "Collection" => Token::Kind(PredicateArgKind::Collection),
         "Any" => Token::Kind(PredicateArgKind::Any),
-        // P2a reserved words
+        // Operator and boolean keywords
         "not" => Token::KwNot,
         "and" => Token::KwAnd,
         "implies" => Token::KwImplies,
-        // P2b-lite reserved words
+        // Bounded forms and membership keywords
         "exists" => Token::KwExists,
         "forall" => Token::KwForall,
         "sum" => Token::KwSum,
@@ -394,7 +406,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     //
     // Multi-char forms come first in the choice so `!=` is matched
     // as one token (Neq), not `!` followed by `=`. Single `!` and
-    // single `<` are not legal in P2a; if they appear, the next
+    // single `<` is not legal; if they appear, the next
     // token-attempt fails and the lex error surfaces with their
     // span.
     let operator = choice((

@@ -4,7 +4,7 @@
 //! [`morpholog_core::Program`]. No `format_program` round-trip is
 //! attempted here - that test would force the parser to recognise
 //! invariants / transformations / derived claims, which are out of
-//! scope for PR P1.
+//! scope for the predicate-declaration grammar.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -202,7 +202,7 @@ fn empty_and_whitespace_only_sources_produce_friendly_error() {
 }
 
 // ============================================================
-// P3a: invariant declarations
+// Invariant declarations
 // ============================================================
 
 #[test]
@@ -349,7 +349,7 @@ invariant cap: Bar(y)
 
 #[test]
 fn version_syntax_is_rejected() {
-    // P3a deliberately does not have version syntax. `(v1)` after
+    // the parser deliberately does not have version syntax. `(v1)` after
     // the invariant name fails with an unexpected-token error on
     // the `(`. When versioning gains real meaning, both formatter
     // and parser grow the clause together.
@@ -369,7 +369,7 @@ fn invariant_cannot_use_reserved_keyword_as_name() {
 }
 
 // ============================================================
-// P3b1: transformation declarations + gate statements
+// Transformation declarations + gate statements
 // ============================================================
 
 #[test]
@@ -497,7 +497,7 @@ fn duplicate_transformation_carries_both_spans() {
 }
 
 // ============================================================
-// P3b2: state-mutating statements + iteration
+// State-mutating statements + iteration
 // ============================================================
 
 #[test]

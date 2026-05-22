@@ -956,3 +956,41 @@ Note `Intent`'s field is `name`, not `predicate`; intents are not claims even th
 **Pattern note:** the recursive statement parser is the first place in the parser arc where the grammar is genuinely self-referential. P2a/P2b-lite's `expression_parser` is also recursive (for nested parens, quantifiers inside quantifiers, etc.) but that was within a single closure. P3b2 has cross-statement recursion: `for` body contains statements which might contain another `for`. The layout pass's matched `Indent`/`Dedent` pairs bound the recursion; without that, the parser would have no way to know where a `for` body ends.
 
 **Next:** **PR P3c** completes the parser arc: derived-claim declarations (`derived Pred(keys) over <body>` with optional `where <name> = <expr>` value bindings), the format-program round-trip property test, and possibly a doctrine note on date-comparison surface for a future P-PR to pick up. After P3c, the `.morph` surface is operationally complete for v0.
+
+### Parser P3-dates: civil-date comparison surface (`on_or_before`)
+
+**Forced by:** the clinical-trial-enrolment worked example. P3b2 left clinical-trial parsing end-to-end via decimal `<=` for date operands - syntactically successful but semantically wrong: those `<=` expressions lower to `Expr::Le`, which type-checks its operands as `EvalValue::Decimal` and would raise `TypeMismatch` at runtime against the `Date` operands the example actually passes in. The surface needed a comparator that lowers to `Expr::DateLe` (the kernel's separate civil-date primitive) before any of the clinical-trial transformations could be runnable from `.morph` source.
+
+**The surface choice: `on_or_before` keyword.** Three candidates were on the table:
+
+- Operator-dispatched `<=` (lowering decided at parse time by operand kind). Rejected by the original `Expr::DateLe` design-history entry; the kernel deliberately separates `Le` and `DateLe` to give each its own type-check, and the parser doesn't have a type environment to dispatch from anyway.
+- A new symbolic operator like `<:=`. Compact but code-flavoured; would not match Morpholog's verb-keyword aesthetic where the surface reads as business prose.
+- A new keyword. Picked: `on_or_before`. It reads as a regulatory clause (`effective_from on_or_before randomisation_date`), aligns with the `[from, to]` inclusive-window doctrine, and is distinct enough from decimal `<=` that the reader cannot confuse them.
+
+**Implementation.** Lexer adds `Token::KwOnOrBefore`; parser adds it to the comparator-level production alongside `=`/`!=`/`<=`/`in`. Both sides accept full expressions (the IR's `Expr::DateLe(Box<Expr>, Box<Expr>)` matches this shape). The parser does no type checking on the operands; if a user writes `amount on_or_before limit` against decimal-typed variables, the parser accepts and the kernel raises `TypeMismatch` at evaluation - the same pattern P2a uses for arithmetic in `Neq`'s LHS.
+
+**Why no parse-time type check on operands.** The parser has no type environment - predicate declarations carry kinds, but expression operands are bound at runtime and their kinds aren't statically tracked through `bind` / `let`. Adding a parser-side type pass would be a substantial new layer for marginal benefit; the runtime already catches the mismatch with a clear message. Per the doctrine of "smallest possible increment", leave it.
+
+**Considered and rejected:**
+
+- *Restricting `on_or_before` to specific argument shapes (e.g. only `Var` operands).* The clinical-trial use cases include both `var on_or_before var` and `var on_or_before claim_arg`; restricting would either reject legitimate patterns or add complexity. The expression-level shape mirrors `<=` and is the right floor.
+- *Adding `before` (strict `<`) at the same time.* The doctrine in `Expr::DateLe`'s entry already said `DateLt`/`DateGt`/`DateGe` each earn their place when an example forces them. Inclusive `on_or_before` is what clinical-trial needs; strict ordering can land separately.
+- *Mirroring decimal `<=` with a `<=` overload that the parser dispatches.* Would require operand-kind inference at parse time, which the parser doesn't do. Also relitigated the original design-history decision that explicitly rejected operator overloading.
+
+**What landed:**
+
+- `Token::KwOnOrBefore` in the lexer.
+- `CmpOp::DateLe` discriminator in the parser; the comparison production accepts `on_or_before` at the same precedence as `<=`, lowers to `Expr::DateLe`.
+- Doctrine table row in `scope-and-ambition.md` mapping `on_or_before` -> `Expr::DateLe`.
+- New `consent_obtained_before_randomisation` invariant in `clinical_trial_enrolment.morph`, exercising `on_or_before` inside an invariant body (the rest of the file uses it in `require` bodies). Forces the surface to work at both expression-in-invariant and expression-in-require levels.
+- All 11 date-`<=` sites in clinical-trial's randomise_participant transformation updated to `on_or_before`.
+- Header comment in clinical-trial.morph updated to describe the new surface.
+- New parser tests pinning `on_or_before` lowering to `Expr::DateLe`, decimal `<=` still lowering to `Expr::Le`.
+
+**What stays out:**
+
+- Strict-ordering date comparators (`before`, `after`, `on_or_after`). Land when an example forces them.
+- Date arithmetic, intervals, business calendars. Locked decision: deferred until a worked example needs them.
+- A type-aware static checker for comparator operands. The runtime catches misuse; static checking is bigger than this PR.
+
+**Next:** **PR P3c** completes the parser arc with `derived` claim declarations and the format-program round-trip property test. After P3c, the `.morph` surface is operationally complete for v0 and all six worked examples parse end-to-end.

@@ -1,4 +1,4 @@
-//! Statement parsing (P3b1 + P3b2).
+//! Statement parsing.
 //!
 //! Recognises every statement form a transformation body can hold:
 //!

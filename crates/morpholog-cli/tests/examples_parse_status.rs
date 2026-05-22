@@ -3,15 +3,15 @@
 //!
 //! For each file in `examples/*/*.morph`, this test runs the
 //! `morpholog` binary and pins the current parse outcome. After
-//! P3b2 (state-mutating statements + iteration):
+//! the state-mutating-statement increment:
 //!
 //! - The settlement-netting, verified-revenue, approval-controls,
 //!   and clinical-trial-enrolment examples parse fully end-to-end.
 //! - The double-entry-ledger and insurance-claim-settlement
-//!   examples stop at `derived` (the only remaining P3c keyword
+//!   examples stop at `derived` (the only remaining the derived-claims increment keyword
 //!   that hasn't landed); both declare derived claims.
 //!
-//! When P3c lands, the `derived`-stopping tests get updated to
+//! When the derived-claims increment lands, the `derived`-stopping tests get updated to
 //! expect full success and this file becomes a steady-state
 //! "all examples parse" smoke harness.
 //!
@@ -49,7 +49,7 @@ fn parse_file(rel: &str) -> (bool, String) {
 }
 
 // ============================================================
-// Examples that parse end-to-end post-P3b2.
+// Examples that parse end-to-end once the state-mutating increment lands.
 // ============================================================
 
 #[test]
@@ -78,7 +78,7 @@ fn clinical_trial_enrolment_parses_fully() {
 }
 
 // ============================================================
-// Examples that still stop at `derived` (P3c territory).
+// Examples that still stop at `derived` (the derived-claims increment territory).
 // ============================================================
 
 #[test]

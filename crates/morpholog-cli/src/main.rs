@@ -330,8 +330,8 @@ fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
             // strings for the same reason as invariant bodies:
             // `Stmt` and `Expr` don't yet derive `Serialize`.
             // Each statement is rendered via `format_stmt(s, 0)`;
-            // P3b1 statements (require / bind / let) produce a
-            // single line each. `Stmt::For` (P3b2) produces
+            // gate statements (require / bind / let) produce a
+            // single line each. `Stmt::For` produces
             // multi-line output via embedded newlines, which
             // will appear as a single JSON string with `\n`s
             // when it lands - revisit if a stricter "one-line-per-
