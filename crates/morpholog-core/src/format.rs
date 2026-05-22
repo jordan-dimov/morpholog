@@ -131,6 +131,15 @@ pub fn format_transformation(t: &Transformation) -> String {
 }
 
 pub fn format_derived_claim(d: &DerivedClaim) -> String {
+    // The surface grammar requires at least one `value` clause; an
+    // empty `values` Vec would format to text the parser refuses.
+    // The kernel doesn't enforce this today, so panic with a clear
+    // message rather than silently emit unparseable .morph.
+    assert!(
+        !d.values.is_empty(),
+        "format_derived_claim: derived claim `{}` has no values; the surface grammar requires at least one `value` clause",
+        d.predicate,
+    );
     let mut out = String::new();
     out.push_str(&format!(
         "derived {}({}):\n",
@@ -158,7 +167,19 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
     let pad = indent(depth);
     match s {
         Stmt::Require(e) => format!("{pad}require {}", format_expr_inline(e)),
-        Stmt::BindOne(e) => format!("{pad}bind {}", format_expr_inline(e)),
+        Stmt::BindOne(e) => {
+            // The surface grammar restricts `bind` to a claim
+            // pattern; the IR's `Stmt::BindOne(Expr)` is broader.
+            // Panic on non-Claim shapes rather than emit text the
+            // parser refuses. If a future worked example forces a
+            // wider `bind` surface, the IR change and the formatter
+            // change land together.
+            assert!(
+                matches!(e, Expr::Claim { .. }),
+                "format_stmt: bind requires a claim pattern; got {e:?}",
+            );
+            format!("{pad}bind {}", format_expr_inline(e))
+        }
         Stmt::Let { name, value } => {
             format!("{pad}let {name} = {}", format_expr_inline(value))
         }
@@ -215,10 +236,21 @@ pub fn format_expr_inline(e: &Expr) -> String {
             Expr::Term(t) => format_term(t),
             Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
             Expr::Sum {
-                value: _,
+                value,
                 binding,
                 body,
-            } => format!("sum({binding} | {})", format_expr_inline(body)),
+            } => {
+                // The surface form `sum(binding | body)` lowers to
+                // `Sum { value: Var(binding), binding, body }`; the
+                // formatter can only canonically emit that surface,
+                // so a Sum with `value != Var(binding)` cannot
+                // round-trip. Panic loudly if encountered.
+                assert!(
+                    matches!(value, Term::Var(name) if name == binding),
+                    "format_expr_inline: sum's value must be Var(binding); got value={value:?}, binding={binding:?}",
+                );
+                format!("sum({binding} | {})", format_expr_inline(body))
+            }
             Expr::ValueOf {
                 predicate,
                 args,
@@ -329,16 +361,36 @@ fn format_term(t: &Term) -> String {
 
 fn format_value(v: &Value) -> String {
     match v {
-        // Subjects use the `#name` sigil. Subject literals in worked
-        // examples are always identifier-safe (ASCII letters, digits,
-        // underscore); if a non-identifier subject ever needs
-        // rendering, the formatter will round-trip incorrectly and
-        // the round-trip test will catch it.
-        Value::Subject(s) => format!("#{s}"),
+        // Subjects use the `#name` sigil. The surface lexer only
+        // accepts an ASCII identifier after `#` (letters, digits,
+        // underscore; not starting with a digit). Subjects in
+        // worked examples are always identifier-safe; panic loudly
+        // on any subject that wouldn't round-trip so the issue
+        // surfaces at format time rather than as a confusing parse
+        // failure downstream.
+        Value::Subject(s) => {
+            assert!(
+                is_identifier_safe_subject(s),
+                "format_value: Value::Subject({s:?}) is not identifier-safe; the `#name` surface accepts only ASCII identifiers",
+            );
+            format!("#{s}")
+        }
         Value::Decimal(s) => s.clone(),
         // Date literals use the @YYYY-MM-DD sigil.
         Value::Date(s) => format!("@{s}"),
     }
+}
+
+/// `#<ident>` accepts ASCII letters / digits / underscore, with a
+/// non-digit first character. Matches the surface lexer's
+/// subject-literal production.
+fn is_identifier_safe_subject(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn indent(depth: usize) -> String {
