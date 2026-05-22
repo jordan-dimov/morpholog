@@ -352,11 +352,37 @@ fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
                     })
                 })
                 .collect();
+            // Derived claims are projected with their rendered domain and
+            // values for the same reason as transformation bodies:
+            // `DerivedClaim` and its `Expr` fields do not derive `Serialize`.
+            let derived_payload: Vec<serde_json::Value> = program
+                .derived_claims
+                .iter()
+                .map(|d| {
+                    let values: Vec<serde_json::Value> = d
+                        .values
+                        .iter()
+                        .map(|v| {
+                            serde_json::json!({
+                                "name": &v.name,
+                                "expr": morpholog_core::format::format_expr_inline(&v.expr),
+                            })
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "predicate": &d.predicate,
+                        "keys": &d.keys,
+                        "over": morpholog_core::format::format_expr_inline(&d.domain),
+                        "values": values,
+                    })
+                })
+                .collect();
             let payload = serde_json::json!({
                 "name": program.name,
                 "predicates": program.predicates,
                 "invariants": invariants_payload,
                 "transformations": transformations_payload,
+                "derived_claims": derived_payload,
             });
             print_json(&payload)?;
             Ok(())

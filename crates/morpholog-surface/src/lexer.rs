@@ -102,12 +102,16 @@ pub enum Token {
     /// `for` block keyword (planned).
     KwFor,
 
-    // ---- Planned: derived claims ----
-    /// `derived` declaration keyword. Reserved at the lexer for
-    /// consistency with `program`/`predicate`/`invariant`/
-    /// `transformation`; not yet parseable, so the parser
-    /// rejects it with an unexpected-token diagnostic.
+    // ---- Derived claims ----
+    /// `derived` declaration keyword. Heads a derived-claim block:
+    /// `derived Name(keys): Indent over <expr> value <name> = <expr>+ Dedent`.
     KwDerived,
+    /// `over` keyword for the derived-claim domain expression.
+    KwOver,
+    // Note: derived-claim bodies use `value <name> = <expr>` clauses;
+    // the parser reuses the existing `KwValue` token for that form
+    // (same keyword as the expression-level `value Pred(args)`; the
+    // parser disambiguates by position).
 
     // ---- Civil-date comparison ----
     /// `on_or_before` infix operator for civil-date `<=`. Lowers
@@ -248,6 +252,7 @@ impl fmt::Display for Token {
             Token::KwEmit => write!(f, "`emit`"),
             Token::KwFor => write!(f, "`for`"),
             Token::KwDerived => write!(f, "`derived`"),
+            Token::KwOver => write!(f, "`over`"),
             Token::KwOnOrBefore => write!(f, "`on_or_before`"),
             Token::Indent => write!(f, "indent"),
             Token::Dedent => write!(f, "dedent"),
@@ -323,6 +328,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "emit" => Token::KwEmit,
         "for" => Token::KwFor,
         "derived" => Token::KwDerived,
+        "over" => Token::KwOver,
         // Civil-date <= comparator
         "on_or_before" => Token::KwOnOrBefore,
         "Subject" => Token::Kind(PredicateArgKind::Subject),

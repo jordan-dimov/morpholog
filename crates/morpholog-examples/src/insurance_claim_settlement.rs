@@ -167,12 +167,12 @@ pub fn report_claim() -> Transformation {
 pub fn grant_settlement_authority() -> Transformation {
     Transformation {
         name: "grant_settlement_authority".to_string(),
-        parameters: params(&["actor", "limit"]),
+        parameters: params(&["principal", "limit"]),
         body: vec![
-            assert_("SettlementAuthority", vec![var("actor"), var("limit")]),
+            assert_("SettlementAuthority", vec![var("principal"), var("limit")]),
             emit(
                 "SettlementAuthorityGranted",
-                vec![var("actor"), var("limit")],
+                vec![var("principal"), var("limit")],
             ),
         ],
     }

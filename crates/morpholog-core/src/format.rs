@@ -105,8 +105,13 @@ fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
 
 pub fn format_invariant(inv: &Invariant) -> String {
     let mut out = String::new();
-    out.push_str(&format!("invariant {} (v{}):\n", inv.name, inv.version));
-    out.push_str(&format_expr(&inv.body, 1));
+    // Surface has no version syntax in v0; the IR's `version` field
+    // defaults to 1 and the formatter omits it. When versioning
+    // grows a meaningful second value, both the surface and this
+    // emitter add a clause.
+    out.push_str(&format!("invariant {}:\n", inv.name));
+    out.push_str(&indent(1));
+    out.push_str(&format_expr_inline(&inv.body));
     out.push('\n');
     out
 }
@@ -132,20 +137,16 @@ pub fn format_derived_claim(d: &DerivedClaim) -> String {
         d.predicate,
         d.keys.join(", ")
     ));
-    if !d.values.is_empty() {
-        out.push_str(&indent(1));
-        out.push_str("values:\n");
-        for v in &d.values {
-            out.push_str(&indent(2));
-            out.push_str(&format!("{} = ", v.name));
-            out.push_str(&format_expr_inline(&v.expr));
-            out.push('\n');
-        }
-    }
     out.push_str(&indent(1));
-    out.push_str("over\n");
-    out.push_str(&format_expr(&d.domain, 2));
-    out.push('\n');
+    out.push_str(&format!("over {}\n", format_expr_inline(&d.domain)));
+    for v in &d.values {
+        out.push_str(&indent(1));
+        out.push_str(&format!(
+            "value {} = {}\n",
+            v.name,
+            format_expr_inline(&v.expr)
+        ));
+    }
     out
 }
 
@@ -157,14 +158,14 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
     let pad = indent(depth);
     match s {
         Stmt::Require(e) => format!("{pad}require {}", format_expr_inline(e)),
-        Stmt::BindOne(e) => format!("{pad}bind_one {}", format_expr_inline(e)),
+        Stmt::BindOne(e) => format!("{pad}bind {}", format_expr_inline(e)),
         Stmt::Let { name, value } => {
             format!("{pad}let {name} = {}", format_expr_inline(value))
         }
         Stmt::LetNewSubject { name } => {
-            format!("{pad}let {name} = new_subject()")
+            format!("{pad}let {name} = new Subject()")
         }
-        Stmt::Assert(c) => format!("{pad}assert {}", format_claim(c)),
+        Stmt::Assert(c) => format!("{pad}admit {}", format_claim(c)),
         Stmt::Retract { predicate, args } => {
             format!("{pad}retract {}", format_predicate_call(predicate, args))
         }
@@ -195,105 +196,107 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
 
 /// Indented multi-line expression. Used by invariant bodies, derived-
 /// claim domains, and `For` bodies where vertical layout aids reading.
-fn format_expr(e: &Expr, depth: usize) -> String {
-    let pad = indent(depth);
-    match e {
-        Expr::And(exprs) if exprs.len() > 1 => {
-            let mut out = format!("{pad}and(\n");
-            for (i, sub) in exprs.iter().enumerate() {
-                out.push_str(&format_expr(sub, depth + 1));
-                if i + 1 < exprs.len() {
-                    out.push(',');
-                }
-                out.push('\n');
-            }
-            out.push_str(&pad);
-            out.push(')');
-            out
-        }
-        Expr::Implies { left, right } => {
-            let mut out = format!("{pad}implies(\n");
-            out.push_str(&format_expr(left, depth + 1));
-            out.push_str(",\n");
-            out.push_str(&format_expr(right, depth + 1));
-            out.push('\n');
-            out.push_str(&pad);
-            out.push(')');
-            out
-        }
-        _ => format!("{pad}{}", format_expr_inline(e)),
-    }
-}
-
-/// One-line expression rendering. Used inline in `require`, `let`,
-/// and `bind_one` statements, as the base case of the indented
-/// multi-line printer for leaf-shaped nodes, and by kernel
-/// diagnostic paths (`bind_one` rejection reasons, `bind_one`
-/// multi-match errors) that need a compact human-readable rendering
+/// One-line expression rendering. The only expression printer in
+/// the kernel; produces canonical surface text that round-trips
+/// through `parse_program`. Used inline in `require`, `let`,
+/// `bind`, invariant bodies, derived-claim domain and value
+/// expressions, and kernel diagnostic paths (`bind` rejection
+/// reasons, multi-match errors) that need a compact human-readable
+/// rendering
 /// of an expression.
 pub fn format_expr_inline(e: &Expr) -> String {
+    // Emits canonical surface text. Composite sub-expressions are
+    // wrapped in parens unconditionally; the result is verbose but
+    // unambiguous and round-trips through `parse_program`. The
+    // surface comparator precedence (arithmetic > comparators > not
+    // > and > implies) makes the parens a no-op for the parser.
+    fn primary(e: &Expr) -> String {
+        match e {
+            Expr::Term(t) => format_term(t),
+            Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
+            Expr::Sum {
+                value: _,
+                binding,
+                body,
+            } => format!("sum({binding} | {})", format_expr_inline(body)),
+            Expr::ValueOf {
+                predicate,
+                args,
+                default,
+            } => {
+                let base = format!("value {}", format_predicate_call(predicate, args));
+                match default {
+                    Some(d) => format!("{base} default {}", format_expr_inline(d)),
+                    None => base,
+                }
+            }
+            // Any composite gets parens.
+            _ => format!("({})", format_expr_inline(e)),
+        }
+    }
+
     match e {
-        Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
-        Expr::Implies { left, right } => format!(
-            "implies({}, {})",
-            format_expr_inline(left),
-            format_expr_inline(right)
-        ),
-        Expr::Exists { binding, body } => {
-            format!("exists({binding}, {})", format_expr_inline(body))
-        }
-        Expr::And(exprs) => {
-            let inner: Vec<String> = exprs.iter().map(format_expr_inline).collect();
-            format!("and({})", inner.join(", "))
-        }
-        // Always wrap the negated expression in parens, even for
-        // claim-shaped inner expressions. Without parens, `not a == b`
-        // is genuinely ambiguous between `(not a) == b` and
-        // `not(a == b)`; the parens cost a few characters and remove
-        // the question.
-        Expr::Not(inner) => format!("not({})", format_expr_inline(inner)),
-        Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::Term(t) => format_term(t),
-        Expr::Eq(l, r) => format!("{} == {}", format_expr_inline(l), format_expr_inline(r)),
-        Expr::Le(l, r) => format!("{} <= {}", format_expr_inline(l), format_expr_inline(r)),
-        Expr::DateLe(l, r) => format!(
-            "date_le({}, {})",
-            format_expr_inline(l),
-            format_expr_inline(r)
-        ),
-        Expr::Sub(l, r) => format!("({} - {})", format_expr_inline(l), format_expr_inline(r)),
-        Expr::Add(l, r) => format!("({} + {})", format_expr_inline(l), format_expr_inline(r)),
+        Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
         Expr::Sum {
-            value,
+            value: _,
             binding,
             body,
-        } => format!(
-            "sum({} | {} in {})",
-            format_term(value),
-            binding,
-            format_expr_inline(body)
-        ),
-        Expr::Forall {
-            binding,
-            source,
-            body,
-        } => format!(
-            "forall({} in {}, {})",
-            binding,
-            format_expr_inline(source),
-            format_expr_inline(body)
-        ),
-        Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
+        } => format!("sum({binding} | {})", format_expr_inline(body)),
         Expr::ValueOf {
             predicate,
             args,
             default,
         } => {
-            let base = format!("value_of {}", format_predicate_call(predicate, args));
+            let base = format!("value {}", format_predicate_call(predicate, args));
             match default {
-                Some(d) => format!("{base} ?? {}", format_expr_inline(d)),
+                Some(d) => format!("{base} default {}", format_expr_inline(d)),
                 None => base,
             }
+        }
+
+        // Arithmetic and comparators: operands are primary-shaped.
+        Expr::Add(l, r) => format!("{} + {}", primary(l), primary(r)),
+        Expr::Sub(l, r) => format!("{} - {}", primary(l), primary(r)),
+        Expr::Eq(l, r) => format!("{} = {}", primary(l), primary(r)),
+        Expr::Le(l, r) => format!("{} <= {}", primary(l), primary(r)),
+        Expr::DateLe(l, r) => format!("{} on_or_before {}", primary(l), primary(r)),
+        Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
+        Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
+
+        // Boolean composition: prefix `not`, infix `and`, infix `implies`.
+        Expr::Not(inner) => format!("not {}", primary(inner)),
+        Expr::And(exprs) => {
+            let inner: Vec<String> = exprs.iter().map(primary).collect();
+            inner.join(" and ")
+        }
+        Expr::Implies { left, right } => {
+            format!("{} implies {}", primary(left), primary(right))
+        }
+
+        // Quantifiers: colon-block form. Source for `forall` is a
+        // primary expression (typically a Claim or bare Var).
+        Expr::Exists { binding, body } => {
+            format!("exists {binding}: {}", format_expr_inline(body))
+        }
+        Expr::Forall {
+            binding,
+            source,
+            body,
+        } => {
+            // The IR's source is an Expr; the natural surface
+            // form `forall x in coll:` is built by the parser as
+            // `Expr::In(Term::Var(x), coll)`. Detect that lifted
+            // shape and emit the natural surface; otherwise fall
+            // back to whatever primary expression the source is.
+            let source_text = match source.as_ref() {
+                Expr::In(Term::Var(b), coll) if b == binding => format_term(coll),
+                _ => primary(source),
+            };
+            format!(
+                "forall {binding} in {source_text}: {}",
+                format_expr_inline(body)
+            )
         }
     }
 }
@@ -320,40 +323,22 @@ fn format_term(t: &Term) -> String {
         Term::Var(name) => name.clone(),
         Term::Wildcard => "_".to_string(),
         Term::Literal(v) => format_value(v),
-        Term::Actor => "$actor".to_string(),
+        Term::Actor => "actor".to_string(),
     }
 }
 
 fn format_value(v: &Value) -> String {
     match v {
-        // Subjects are quoted to disambiguate from variable names.
-        // Escape control characters and embedded quotes so a subject
-        // like `bad"name` or one containing a newline cannot break
-        // the rendering. Most subjects in practice are snake_case
-        // identifiers and pass through unchanged.
-        Value::Subject(s) => format!("\"{}\"", escape_subject(s)),
+        // Subjects use the `#name` sigil. Subject literals in worked
+        // examples are always identifier-safe (ASCII letters, digits,
+        // underscore); if a non-identifier subject ever needs
+        // rendering, the formatter will round-trip incorrectly and
+        // the round-trip test will catch it.
+        Value::Subject(s) => format!("#{s}"),
         Value::Decimal(s) => s.clone(),
-        Value::Date(s) => s.clone(),
+        // Date literals use the @YYYY-MM-DD sigil.
+        Value::Date(s) => format!("@{s}"),
     }
-}
-
-/// Minimal escape for subject strings inside the pretty-printer.
-/// Mirrors Rust's source-string escaping for the characters that
-/// would otherwise produce ambiguous output: backslashes, double
-/// quotes, and newlines. Other characters pass through.
-fn escape_subject(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 fn indent(depth: usize) -> String {
@@ -398,11 +383,11 @@ mod tests {
         };
         let s = format_transformation(&t);
         assert!(s.contains("transformation open_trial(trial_id):"));
-        assert!(s.contains("  assert Trial(trial_id)"));
+        assert!(s.contains("  admit Trial(trial_id)"));
         assert!(s.contains("  emit TrialOpened(trial_id)"));
     }
 
-    /// `Stmt::BindOne` renders as `bind_one <expr>` with the inner
+    /// `Stmt::BindOne` renders as `bind <expr>` with the inner
     /// expression formatted inline. Mirrors the `require <expr>`
     /// shape; the two read in parallel in any pretty-printed
     /// transformation body.
@@ -412,7 +397,7 @@ mod tests {
             &bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
             1,
         );
-        assert_eq!(s, "  bind_one Policy(policy_id, limit)");
+        assert_eq!(s, "  bind Policy(policy_id, limit)");
     }
 
     /// Predicate declarations render between the header and the
@@ -503,29 +488,31 @@ mod tests {
         ]);
         let s = format_expr_inline(&e);
 
-        // Each variant contributes at least one recognisable token.
+        // Each variant contributes at least one recognisable token
+        // matching the surface syntax that round-trips through the
+        // parser.
         assert!(s.contains("P(x, _)"));
-        assert!(s.contains("not(Q(x))"));
-        assert!(s.contains("implies("));
-        assert!(s.contains("exists(z"));
-        assert!(s.contains("forall(w"));
-        assert!(s.contains("a == b"));
+        assert!(s.contains("not Q(x)"));
+        assert!(s.contains("implies"));
+        assert!(s.contains("exists z:"));
+        assert!(s.contains("forall w in"));
+        assert!(s.contains("a = b"));
         assert!(s.contains("a != b"));
         assert!(s.contains("a <= b"));
-        assert!(s.contains("date_le(d1, d2)"));
-        assert!(s.contains("(p + q)"));
-        assert!(s.contains("(p - q)"));
+        assert!(s.contains("d1 on_or_before d2"));
+        assert!(s.contains("p + q"));
+        assert!(s.contains("p - q"));
         assert!(s.contains("sum(v |"));
         assert!(s.contains("e in coll"));
-        assert!(s.contains("value_of X(k, _)"));
-        assert!(s.contains("$actor"));
+        assert!(s.contains("value X(k, _)"));
+        assert!(s.contains("actor"));
     }
 
     #[test]
     fn format_term_renders_literals_subject_decimal_date() {
         assert_eq!(
             format_term(&Term::Literal(Value::Subject("foo".to_string()))),
-            "\"foo\""
+            "#foo"
         );
         assert_eq!(
             format_term(&Term::Literal(Value::Decimal("1250.75".to_string()))),
@@ -533,32 +520,11 @@ mod tests {
         );
         assert_eq!(
             format_term(&Term::Literal(Value::Date("2026-03-12".to_string()))),
-            "2026-03-12"
+            "@2026-03-12"
         );
         assert_eq!(format_term(&Term::Wildcard), "_");
-        assert_eq!(format_term(&Term::Actor), "$actor");
+        assert_eq!(format_term(&Term::Actor), "actor");
         assert_eq!(format_term(&Term::Var("x".to_string())), "x");
-    }
-
-    /// Subjects containing characters that would break the
-    /// `"<subject>"` rendering must be escaped, not silently passed
-    /// through. Most subjects in real programmes are snake_case
-    /// identifiers and need no escaping; the test pins behaviour
-    /// for the pathological cases.
-    #[test]
-    fn format_term_escapes_special_chars_in_subject_literal() {
-        assert_eq!(
-            format_term(&Term::Literal(Value::Subject(r#"bad"name"#.to_string()))),
-            r#""bad\"name""#
-        );
-        assert_eq!(
-            format_term(&Term::Literal(Value::Subject("line\nbreak".to_string()))),
-            "\"line\\nbreak\""
-        );
-        assert_eq!(
-            format_term(&Term::Literal(Value::Subject("back\\slash".to_string()))),
-            "\"back\\\\slash\""
-        );
     }
 
     /// `format_program` documents that its output ends with a

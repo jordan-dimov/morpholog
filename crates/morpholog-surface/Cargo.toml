@@ -13,3 +13,6 @@ workspace = true
 morpholog-core = { path = "../morpholog-core" }
 chumsky = { workspace = true }
 ariadne = { workspace = true }
+
+[dev-dependencies]
+morpholog-examples = { path = "../morpholog-examples" }

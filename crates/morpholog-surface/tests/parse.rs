@@ -810,3 +810,100 @@ fn bind_still_accepts_wildcard_arg() {
         Stmt::BindOne(_)
     ));
 }
+
+// ============================================================
+// Derived claims
+// ============================================================
+
+#[test]
+fn parses_simple_derived_claim() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject, amount: Decimal)\n\
+                  \n\
+                  derived Total(x):\n\
+                  \x20\x20\x20\x20over Foo(x, _)\n\
+                  \x20\x20\x20\x20value sum_amount = sum(a | Foo(x, a))\n";
+    let program = parse_program(source).expect("derived claim should parse");
+    assert_eq!(program.derived_claims.len(), 1);
+    let d = &program.derived_claims[0];
+    assert_eq!(d.predicate, "Total");
+    assert_eq!(d.keys, vec!["x"]);
+    assert_eq!(d.values.len(), 1);
+    assert_eq!(d.values[0].name, "sum_amount");
+}
+
+#[test]
+fn parses_derived_with_multiple_values() {
+    let source = "program demo\n\
+                  predicate Debit(account: Subject, amount: Decimal)\n\
+                  predicate Credit(account: Subject, amount: Decimal)\n\
+                  \n\
+                  derived AccountSummary(account):\n\
+                  \x20\x20\x20\x20over Debit(account, _)\n\
+                  \x20\x20\x20\x20value total_debits = sum(d | Debit(account, d))\n\
+                  \x20\x20\x20\x20value total_credits = sum(c | Credit(account, c))\n";
+    let program = parse_program(source).expect("multi-value derived should parse");
+    let d = &program.derived_claims[0];
+    assert_eq!(d.values.len(), 2);
+    assert_eq!(d.values[0].name, "total_debits");
+    assert_eq!(d.values[1].name, "total_credits");
+}
+
+#[test]
+fn parses_derived_with_multiple_keys() {
+    let source = "program demo\n\
+                  predicate Posting(account: Subject, period: Subject, amount: Decimal)\n\
+                  \n\
+                  derived PeriodRow(account, period):\n\
+                  \x20\x20\x20\x20over Posting(account, period, _)\n\
+                  \x20\x20\x20\x20value total = sum(a | Posting(account, period, a))\n";
+    let program = parse_program(source).expect("multi-key derived should parse");
+    let d = &program.derived_claims[0];
+    assert_eq!(d.keys, vec!["account", "period"]);
+}
+
+#[test]
+fn derived_with_no_value_clauses_is_rejected() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject)\n\
+                  \n\
+                  derived Empty(x):\n\
+                  \x20\x20\x20\x20over Foo(x)\n";
+    let errs = parse_program(source).expect_err("derived with no value should fail");
+    assert!(!errs.is_empty());
+}
+
+#[test]
+fn duplicate_derived_name_carries_both_spans() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject, a: Decimal)\n\
+                  \n\
+                  derived Total(x):\n\
+                  \x20\x20\x20\x20over Foo(x, _)\n\
+                  \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n\
+                  \n\
+                  derived Total(x):\n\
+                  \x20\x20\x20\x20over Foo(x, _)\n\
+                  \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n";
+    let errs = parse_program(source).expect_err("duplicate derived should fail");
+    let dup = errs
+        .iter()
+        .find(|d| d.message.contains("duplicate derived"))
+        .expect("expected duplicate diagnostic");
+    assert!(!dup.secondary.is_empty());
+}
+
+#[test]
+fn derived_can_interleave_with_other_top_level_decls() {
+    let source = "program demo\n\
+                  predicate Foo(x: Subject, a: Decimal)\n\
+                  \n\
+                  derived Total(x):\n\
+                  \x20\x20\x20\x20over Foo(x, _)\n\
+                  \x20\x20\x20\x20value v = sum(a | Foo(x, a))\n\
+                  \n\
+                  predicate Bar(y: Subject)\n";
+    let program = parse_program(source).expect("interleaved decls should parse");
+    assert_eq!(program.predicates.len(), 2);
+    assert_eq!(program.derived_claims.len(), 1);
+}

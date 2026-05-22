@@ -99,10 +99,13 @@ transformation restate_entry(
 --                 - sum of credits posted to the account.
 -- Domain: every distinct account that appears in any JournalLine.
 --
--- The exact surface for derived claims is decided when derived-claim parsing lands; the
--- form below uses the locked expression syntax (sum(x | body), -)
--- but the wrapping `derived ... where ... over` shape is illustrative.
+-- A derived claim declares: keys (positional), an `over` domain
+-- expression that produces matching bindings, and one or more
+-- `value` clauses whose expressions are evaluated against the
+-- per-key bindings. Each `value` is independent - values cannot
+-- reference one another (no intermediate `let` bindings); each
+-- expression sees only the keys.
 
-derived TrialBalanceRow(account, balance)
-    where balance = sum(d | JournalLine(_, account, d, _)) - sum(c | JournalLine(_, account, _, c))
+derived TrialBalanceRow(account):
     over JournalLine(_, account, _, _)
+    value balance = sum(d | JournalLine(_, account, d, _)) - sum(c | JournalLine(_, account, _, c))
