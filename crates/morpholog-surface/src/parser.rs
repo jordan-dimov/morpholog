@@ -16,10 +16,13 @@
 //! never sees them.
 //!
 //! Error recovery: humble. On a parse failure inside a predicate
-//! declaration, the parser skips forward to the next `predicate` or
-//! `program` keyword and continues. The intent is "tell the author
+//! declaration, the parser skips forward to the next `predicate`
+//! keyword (or EOF) and continues. The intent is "tell the author
 //! about every malformed declaration in one parse run", not a
-//! full-language error-recovery framework.
+//! full-language error-recovery framework. The `program` keyword
+//! is not a recovery sync point in P1 because the grammar permits
+//! exactly one `program` header at the file start; a second one
+//! would be a separate, recoverable-only-by-restart kind of error.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;

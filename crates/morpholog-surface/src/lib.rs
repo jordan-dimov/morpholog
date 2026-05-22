@@ -17,7 +17,7 @@
 //! to render via `ariadne`.
 
 mod diagnostics;
-mod lexer;
+pub(crate) mod lexer;
 mod parser;
 
 pub use diagnostics::{Diagnostic, Severity, Span};

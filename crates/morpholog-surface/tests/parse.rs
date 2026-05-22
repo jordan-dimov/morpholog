@@ -184,3 +184,19 @@ fn render_produces_ariadne_output() {
     assert!(!rendered.is_empty());
     assert!(rendered.contains("test.morph"));
 }
+
+/// Whitespace-only and empty files both report "expected `program`
+/// header" via the parser's custom diagnostic, not a confusing lex
+/// error about expected punctuation. Regression test for the
+/// lexer's trailing-padding handling.
+#[test]
+fn empty_and_whitespace_only_sources_produce_friendly_error() {
+    for source in ["", "   ", "\n\n\n", "// just a comment\n"] {
+        let errs = parse_program(source).expect_err("should fail");
+        assert!(
+            errs[0].message.contains("expected `program`"),
+            "source {source:?} produced unexpected message: {}",
+            errs[0].message
+        );
+    }
+}

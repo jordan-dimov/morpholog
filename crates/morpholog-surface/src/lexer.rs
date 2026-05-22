@@ -97,16 +97,27 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
 
     let token = choice((ident_or_keyword, punct)).map_with(|t, e| (t, e.span()));
 
-    // Line comments: `//` to newline (or EOF). Skipped entirely.
+    // Line comments: `//` to newline (or EOF). Skipped entirely; no
+    // inner padding so the outer `padding` parser is the single
+    // source of truth for whitespace consumption.
     let line_comment = just("//")
         .then(any().and_is(just('\n').not()).repeated())
-        .padded()
         .ignored();
 
-    // Whitespace and comments interleaved; padded() handles either.
+    // Padding = zero or more (whitespace-run | line-comment).
     let padding = choice((text::whitespace().at_least(1).ignored(), line_comment)).repeated();
 
-    token.padded_by(padding).repeated().collect()
+    // Consume leading padding, then any number of (token, trailing
+    // padding) pairs, then EOF. The explicit EOF prevents leftover
+    // characters from masquerading as a successful zero-token lex;
+    // the trailing-padding-per-token shape makes whitespace-only
+    // input succeed (returning zero tokens) rather than producing a
+    // confusing "expected punctuation" error. `padding` is `Copy`
+    // so passing it by value to both call sites is the idiomatic
+    // chumsky pattern - cloning would be a warning.
+    padding
+        .ignore_then(token.then_ignore(padding).repeated().collect())
+        .then_ignore(end())
 }
 
 /// Convenience input adapter for the parser: wraps a vector of

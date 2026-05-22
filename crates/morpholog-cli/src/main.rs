@@ -79,11 +79,10 @@ enum Command {
     /// ariadne-formatted diagnostics to stderr and exits one.
     ///
     /// v0 recognises only the `program` header and `predicate`
-    /// declarations; invariants, transformations, and derived claims
-    /// are not yet supported. A `.morph` file containing those
-    /// sections will parse the predicates and ignore the rest, or
-    /// fail with a parse error on the first unrecognised keyword
-    /// depending on placement. Subsequent PRs expand the surface.
+    /// declarations. A `.morph` file containing invariants,
+    /// transformations, or derived claims currently fails with a
+    /// parse error - the parser requires the file to end after the
+    /// last predicate declaration. Subsequent PRs expand the surface.
     Parse(ParseArgs),
 }
 
@@ -580,7 +579,7 @@ fn inspect_predicates(args: InspectPredicatesArgs) -> anyhow::Result<()> {
 }
 
 // ===========================================================================
-// Tests — CLI argument parsing only.
+// Tests - CLI argument parsing only.
 //
 // End-to-end CLI-against-PostgreSQL tests would duplicate the read-helper
 // integration tests in morpholog-postgres without adding signal. These tests
@@ -792,7 +791,7 @@ mod tests {
     }
 
     /// Sanity-check that `Cli::try_parse_from` *can* surface a
-    /// `MissingRequiredArgument` error — without actually mutating the
+    /// `MissingRequiredArgument` error - without actually mutating the
     /// process environment (which would require `unsafe` in edition
     /// 2024 and the workspace forbids it). We trigger the error by
     /// omitting the subcommand entirely, which is unambiguously

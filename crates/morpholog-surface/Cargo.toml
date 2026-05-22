@@ -13,4 +13,3 @@ workspace = true
 morpholog-core = { path = "../morpholog-core" }
 chumsky = { workspace = true }
 ariadne = { workspace = true }
-thiserror = { workspace = true }
