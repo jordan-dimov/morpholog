@@ -527,7 +527,7 @@ Standing rationale for the kernel addition independent of the example: every oth
 - `find_disjunction` evaluator: concatenation of each branch's binding extensions against the same base context. No deduplication - multiplicity is preserved, matching `find_conjunction`'s convention. Downstream uses that care only about non-emptiness (`require`, invariants) are unaffected; `Forall` over an `Or` source iterates duplicates, which is the documented behaviour.
 - `find_failing_subexpr` returns `None` for `Or`. When a disjunction fails, every branch failed - picking one to blame would mislead. Same rationale as `Not` and `Exists`.
 - Surface keyword `or`, precedence layer between `and` and `implies`. Standard logical precedence: `a and b or c` parses as `(a and b) or c`; `a or b implies c` parses as `(a or b) implies c`; `not a or b` parses as `(not a) or b`.
-- `or_()` DSL constructor for Rust-authored programmes, alongside `and`, `not`, `implies`.
+- `or()` DSL constructor for Rust-authored programmes, alongside `and()`, `not()`, `implies()`.
 - Walkers extended: `predicates_referenced_by_expr`, `validate_expr`, `format_expr_inline` all gain `Or` arms parallel to `And`.
 
 **Considered and rejected:**

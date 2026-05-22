@@ -10,6 +10,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use morpholog_core::format::format_expr_inline;
 use morpholog_core::{Expr, Term, Value};
 use morpholog_surface::parse_expression;
 
@@ -354,6 +355,32 @@ fn not_binds_tighter_than_or() {
     assert_eq!(ops.len(), 2);
     assert!(matches!(ops[0], Expr::Not(_)));
     assert!(matches!(ops[1], Expr::Claim { .. }));
+}
+
+/// Round-trip property over a mixed-precedence boolean expression:
+/// parse, format, parse again, and the IR must be unchanged. Pins the
+/// formatter's behaviour for `Or` operands that are themselves
+/// composite (an `And`, an `Implies`) - they must be parenthesised so
+/// the surface text reparses to the original tree, not a precedence-
+/// reshuffled one.
+///
+/// The kernel-wide `every_worked_example_round_trips` test will cover
+/// this transitively once a worked example uses `or`; until then, this
+/// is the local pin.
+#[test]
+fn formatter_preserves_mixed_and_or_implies_precedence() {
+    // `A and B or C implies D` parses as `((A and B) or C) implies D`
+    // under the standard precedence (and > or > implies).
+    let source = "A() and B() or C() implies D()";
+    let parsed = parse_expression(source).unwrap();
+    let formatted = format_expr_inline(&parsed);
+    let reparsed = parse_expression(&formatted).unwrap_or_else(|errs| {
+        panic!("formatted text did not reparse: {formatted}\nerrors: {errs:?}")
+    });
+    assert_eq!(
+        reparsed, parsed,
+        "formatter must round-trip mixed and/or/implies precedence; formatted text was: {formatted}"
+    );
 }
 
 #[test]

@@ -296,7 +296,7 @@ pub fn format_expr_inline(e: &Expr) -> String {
         Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
-        // Boolean composition: prefix `not`, infix `and`, infix `implies`.
+        // Boolean composition: prefix `not`, infix `and`, `or`, and `implies`.
         Expr::Not(inner) => format!("not {}", primary(inner)),
         Expr::And(exprs) => {
             let inner: Vec<String> = exprs.iter().map(primary).collect();
