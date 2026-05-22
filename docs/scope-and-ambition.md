@@ -132,7 +132,7 @@ The cost of this discipline is that the parser does real translation work (infix
 
 **Verb-flavor renames (surface to IR):**
 
-The "Phase" column indicates which parser PR the rename lands in. P2b and later rows are the planned shape, not yet committed to the parser; they appear here so the doctrine is visible up-front, but they are subject to refinement when the corresponding PR begins.
+The "Phase" column indicates which parser PR the rename lands in. P3b and later rows are the planned shape, not yet committed to the parser; they appear here so the doctrine is visible up-front, but they are subject to refinement when the corresponding PR begins.
 
 | Surface verb | IR construct | Phase | Reason |
 |---|---|---|---|

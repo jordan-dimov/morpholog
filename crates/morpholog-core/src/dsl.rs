@@ -33,14 +33,20 @@
 //! ```
 //!
 //! These constructors are thin wrappers; the kernel never sees them.
-//! They exist because every worked example, every test, and (when there
-//! is no parser yet) every external user assembles IR by hand. Making
-//! the construction surface readable is the v0 substitute for surface
-//! syntax.
+//! They exist because every worked example, every test, and (until
+//! the parser surface covers all of v0) every external user
+//! assembles IR by hand. Making the construction surface readable
+//! is the v0 substitute for surface syntax where the parser does
+//! not yet reach.
 //!
-//! When a parser arrives, the parser will emit IR directly (via the
-//! same constructors). This module stays as the lower-level
-//! programmatic API the parser is built on.
+//! The parser arc is mid-stream: predicates, expressions, and
+//! invariants parse from `.morph` source today; transformations
+//! and derived claims still use this constructor surface. The
+//! `morpholog-surface` parser currently builds IR directly
+//! (`Program`, `PredicateDecl`, `Invariant`) without going through
+//! these helpers - they have different ergonomic audiences (the
+//! parser builds from token streams; this DSL serves hand-authored
+//! Rust IR). Both target the same `morpholog_core::Program` shape.
 //!
 //! Naming conventions:
 //! - Term literals are short: `subj`, `dec`, `date`. They return `Term`,
