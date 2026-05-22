@@ -226,11 +226,17 @@ where
 
         // comparison ::= arith (cmp_op arith)?  (non-assoc)
         //
-        // Four forms (P2a + P2b-lite):
+        // Five forms (P2a + P2b-lite + P3-dates):
         //   - `=` -> Expr::Eq(Expr, Expr)
-        //   - `<=` -> Expr::Le(Expr, Expr)
+        //   - `<=` -> Expr::Le(Expr, Expr)   (decimal)
+        //   - `on_or_before` -> Expr::DateLe(Expr, Expr)   (civil date)
         //   - `!=` -> Expr::Neq(Term, Term)  - requires both sides to be Terms
         //   - `in` (P2b) -> Expr::In(Term, Term)  - requires both sides to be Terms
+        //
+        // `<=` and `on_or_before` are distinct surface forms because
+        // the kernel keeps `Expr::Le` (decimal) and `Expr::DateLe`
+        // (civil date) as separate IR primitives; the surface refuses
+        // to overload `<=` by operand kind.
         //
         // For `!=` and `in`, we accept any Expr on either side and
         // then require it to be a bare `Expr::Term(t)`; otherwise
