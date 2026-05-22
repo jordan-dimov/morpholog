@@ -23,26 +23,41 @@
 -- standing are preserved by construction (no invariant ties decisions
 -- to live standing).
 
+program verified_revenue
+
+predicate IndependentlyVerifiedRevenue(asset: Subject, period: Subject, amount: Decimal, verification_id: Subject)
+predicate CurrentVerification(asset: Subject, period: Subject, verification_id: Subject)
+predicate Supersedes(new_verification_id: Subject, prior_verification_id: Subject)
+predicate StandingGrantedBy(verification_id: Subject, purpose: Subject, authority: Subject, grant_id: Subject)
+predicate AdmissibleFor(verification_id: Subject, purpose: Subject)
+predicate StandingRevoked(verification_id: Subject, purpose: Subject, revocation_id: Subject)
+predicate DebtServiceRevenue(asset: Subject, period: Subject, amount: Decimal, decision_id: Subject, verification_id: Subject)
+predicate InvestorReportedRevenue(asset: Subject, period: Subject, amount: Decimal, report_id: Subject, verification_id: Subject)
+
 
 invariant admissibility_has_provenance:
     AdmissibleFor(v, p) implies StandingGrantedBy(v, p, _, _)
 
 
 invariant admissibility_excludes_revocation:
-    AdmissibleFor(v, p) implies not exists { StandingRevoked(v, p, _) }
+    AdmissibleFor(v, p) implies not (exists r: StandingRevoked(v, p, r))
 
 
 invariant at_most_one_current_verification_per_asset_period:
     CurrentVerification(asset, period, a)
     and CurrentVerification(asset, period, b)
-        implies a == b
+        implies a = b
 
 
 invariant at_most_one_direct_successor:
     Supersedes(new_a, old)
     and Supersedes(new_b, old)
-        implies new_a == new_b
+        implies new_a = new_b
 
+
+-- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- The locked verb-flavour decisions are in use (admit, =, subject
+-- literals via #NAME); statement parsing is the next parser increment.
 
 -- First admission. Asserts both the underlying IV claim and the
 -- singleton CurrentVerification pointer. Rejected if there is already
@@ -51,8 +66,8 @@ transformation admit_independent_verification(
     asset, period, amount, verification_id
 ):
     require not CurrentVerification(asset, period, _)
-    assert IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
-    assert CurrentVerification(asset, period, verification_id)
+    admit IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    admit CurrentVerification(asset, period, verification_id)
     emit IndependentVerificationAdmitted(verification_id)
 
 
@@ -65,11 +80,11 @@ transformation correct_independent_verification(
 ):
     require IndependentlyVerifiedRevenue(asset, period, _, prior_verification_id)
     require not Supersedes(_, prior_verification_id)
-    assert IndependentlyVerifiedRevenue(asset, period, new_amount, new_verification_id)
-    assert Supersedes(new_verification_id, prior_verification_id)
+    admit IndependentlyVerifiedRevenue(asset, period, new_amount, new_verification_id)
+    admit Supersedes(new_verification_id, prior_verification_id)
     retract CurrentVerification(asset, period, prior_verification_id)
     retract AdmissibleFor(prior_verification_id, _)
-    assert CurrentVerification(asset, period, new_verification_id)
+    admit CurrentVerification(asset, period, new_verification_id)
     emit VerificationCorrected(new_verification_id, prior_verification_id)
 
 
@@ -85,15 +100,15 @@ transformation grant_standing(
     require CurrentVerification(_, _, verification_id)
     require not StandingRevoked(verification_id, purpose, _)
     require not AdmissibleFor(verification_id, purpose)
-    assert StandingGrantedBy(verification_id, purpose, authority, grant_id)
-    assert AdmissibleFor(verification_id, purpose)
+    admit StandingGrantedBy(verification_id, purpose, authority, grant_id)
+    admit AdmissibleFor(verification_id, purpose)
     emit StandingGranted(grant_id)
 
 
 transformation revoke_standing(verification_id, purpose, revocation_id):
     require AdmissibleFor(verification_id, purpose)
     retract AdmissibleFor(verification_id, purpose)
-    assert StandingRevoked(verification_id, purpose, revocation_id)
+    admit StandingRevoked(verification_id, purpose, revocation_id)
     emit StandingRevocationAdmitted(revocation_id)
 
 
@@ -101,8 +116,8 @@ transformation admit_debt_service_revenue(
     asset, period, amount, decision_id, verification_id
 ):
     require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
-    require AdmissibleFor(verification_id, bank_debt_service)
-    assert DebtServiceRevenue(asset, period, amount, decision_id, verification_id)
+    require AdmissibleFor(verification_id, #bank_debt_service)
+    admit DebtServiceRevenue(asset, period, amount, decision_id, verification_id)
     emit DebtServiceRevenueAdmitted(decision_id)
 
 
@@ -110,6 +125,6 @@ transformation admit_investor_reported_revenue(
     asset, period, amount, report_id, verification_id
 ):
     require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
-    require AdmissibleFor(verification_id, investor_reporting)
-    assert InvestorReportedRevenue(asset, period, amount, report_id, verification_id)
+    require AdmissibleFor(verification_id, #investor_reporting)
+    admit InvestorReportedRevenue(asset, period, amount, report_id, verification_id)
     emit InvestorReportedRevenueAdmitted(report_id)

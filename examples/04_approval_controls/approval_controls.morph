@@ -16,8 +16,8 @@
 -- document is *transition context*, not a transformation parameter.
 -- The approve transformations declare no `actor` parameter; the
 -- proposing actor is reached from inside the body via the reserved
--- term `$actor` (Term::Actor in the IR). In an invariant body,
--- `$actor` raises UnboundActor at evaluation time - authority lives
+-- term `actor` (Term::Actor in the IR). In an invariant body,
+-- `actor` raises UnboundActor at evaluation time - authority lives
 -- in require, not in invariants.
 --
 -- No invariants. Tying a recorded approval to live authority via
@@ -28,13 +28,24 @@
 -- on July 1. This is the require-vs-invariant lesson the verified-
 -- revenue example crystallised.
 
+program approval_controls
+
+predicate MayApprove(actor: Subject, doc_type: Subject)
+predicate Approval(doc_id: Subject, doc_type: Subject, actor: Subject)
+predicate ApprovalLimit(actor: Subject, doc_type: Subject, limit: Decimal)
+predicate LimitedApproval(doc_id: Subject, doc_type: Subject, amount: Decimal, actor: Subject)
+
+
+-- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- The locked verb-flavour decisions are in use (admit, actor (no
+-- sigil), =); statement parsing is the next parser increment.
 
 -- ===========================================================
 -- Unconditional authority
 -- ===========================================================
 
 transformation grant_approval_authority(actor, doc_type):
-    assert MayApprove(actor, doc_type)
+    admit MayApprove(actor, doc_type)
     emit ApprovalAuthorityGranted(actor, doc_type)
 
 
@@ -45,9 +56,9 @@ transformation revoke_approval_authority(actor, doc_type):
 
 
 transformation approve_document(doc_id, doc_type):
-    require MayApprove($actor, doc_type)
-    assert Approval(doc_id, doc_type, $actor)
-    emit DocumentApproved(doc_id, $actor)
+    require MayApprove(actor, doc_type)
+    admit Approval(doc_id, doc_type, actor)
+    emit DocumentApproved(doc_id, actor)
 
 
 -- ===========================================================
@@ -55,7 +66,7 @@ transformation approve_document(doc_id, doc_type):
 -- ===========================================================
 
 transformation grant_approval_limit(actor, doc_type, limit):
-    assert ApprovalLimit(actor, doc_type, limit)
+    admit ApprovalLimit(actor, doc_type, limit)
     emit ApprovalLimitGranted(actor, doc_type, limit)
 
 
@@ -66,6 +77,6 @@ transformation revoke_approval_limit(actor, doc_type, limit):
 
 
 transformation approve_within_limit(doc_id, doc_type, amount):
-    require ApprovalLimit($actor, doc_type, limit) and amount <= limit
-    assert LimitedApproval(doc_id, doc_type, amount, $actor)
-    emit DocumentApprovedWithinLimit(doc_id, $actor, amount)
+    require ApprovalLimit(actor, doc_type, limit) and amount <= limit
+    admit LimitedApproval(doc_id, doc_type, amount, actor)
+    emit DocumentApprovedWithinLimit(doc_id, actor, amount)

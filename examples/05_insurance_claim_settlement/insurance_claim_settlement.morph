@@ -16,8 +16,19 @@
 --
 -- The proposing actor is *transition context*, not a transformation
 -- parameter. authorise_settlement declares no `actor` parameter; the
--- proposing actor is consulted via $actor inside the require for
--- authority and stamped onto the SettlementAuthorised record.
+-- proposing actor is consulted via the reserved term `actor` inside
+-- the require for authority and stamped onto the SettlementAuthorised
+-- record.
+
+program insurance_claim_settlement
+
+predicate Policy(policy_id: Subject, aggregate_limit: Decimal)
+predicate ClaimReported(claim_id: Subject, policy_id: Subject, claimed_amount: Decimal)
+predicate SettlementAuthority(actor: Subject, limit: Decimal)
+predicate SettlementAuthorised(claim_id: Subject, settlement_id: Subject, amount: Decimal, actor: Subject)
+predicate SettlementPaid(policy_id: Subject, claim_id: Subject, settlement_id: Subject, amount: Decimal)
+predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
+
 
 -- ============================================================
 -- Invariant: payment must have authorisation.
@@ -32,11 +43,16 @@ invariant paid_implies_authorised:
     SettlementPaid(_, claim, settlement, amount) implies
         SettlementAuthorised(claim, settlement, amount, _)
 
+
+-- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- The locked verb-flavour decisions are in use (admit, bind, actor,
+-- sum(x | body), <=); statement parsing is the next parser increment.
+
 -- ============================================================
 -- Open a policy with an aggregate limit.
 -- ============================================================
 transformation issue_policy(policy_id, aggregate_limit):
-    assert Policy(policy_id, aggregate_limit)
+    admit Policy(policy_id, aggregate_limit)
     emit PolicyIssued(policy_id)
 
 -- ============================================================
@@ -46,7 +62,7 @@ transformation issue_policy(policy_id, aggregate_limit):
 -- ============================================================
 transformation report_claim(claim_id, policy_id, claimed_amount):
     require Policy(policy_id, _)
-    assert ClaimReported(claim_id, policy_id, claimed_amount)
+    admit ClaimReported(claim_id, policy_id, claimed_amount)
     emit ClaimReported(claim_id)
 
 -- ============================================================
@@ -54,7 +70,7 @@ transformation report_claim(claim_id, policy_id, claimed_amount):
 -- authority for granting is out of scope.
 -- ============================================================
 transformation grant_settlement_authority(actor, limit):
-    assert SettlementAuthority(actor, limit)
+    admit SettlementAuthority(actor, limit)
     emit SettlementAuthorityGranted(actor, limit)
 
 -- ============================================================
@@ -65,41 +81,39 @@ transformation grant_settlement_authority(actor, limit):
 --      proposed amount.
 --   2. The cumulative-cap rule holds against the policy aggregate.
 --
--- bind_one pulls policy_id and aggregate_limit into scope from
--- their uniquely-matching claims. Where require is a yes/no
--- existence gate that does not export bindings, bind_one is a
--- deterministic unique lookup that does. Together with let (for
--- value-producing expressions like sum) and for (for iteration),
--- this is the statement-level binding doctrine.
+-- bind pulls policy_id and aggregate_limit into scope from their
+-- uniquely-matching claims. Where require is a yes/no existence
+-- gate that does not export bindings, bind is a deterministic
+-- unique lookup that does. Together with let (for value-producing
+-- expressions like sum) and for (for iteration), this is the
+-- statement-level binding doctrine.
 -- ============================================================
 transformation authorise_settlement(claim_id, settlement_id, amount):
     -- Pull policy_id from the reported claim, then aggregate_limit
     -- from the policy. Zero matches reject lawfully; multiple
     -- matches surface a kernel error (the at_most_one_*
     -- structural-uniqueness invariants exist to prevent this).
-    bind_one ClaimReported(claim_id, policy_id, _)
-    bind_one Policy(policy_id, aggregate_limit)
+    bind ClaimReported(claim_id, policy_id, _)
+    bind Policy(policy_id, aggregate_limit)
 
     -- actor authority gate
-    require SettlementAuthority($actor, actor_limit)
+    require SettlementAuthority(actor, actor_limit)
         and amount <= actor_limit
 
     -- cumulative-cap gate (the Expr::Add shape)
-    require sum { paid | SettlementPaid(policy_id, _, _, paid) }
+    require sum(paid | SettlementPaid(policy_id, _, _, paid))
                 + amount
             <= aggregate_limit
 
-    assert SettlementAuthorised(claim_id, settlement_id, amount, $actor)
-    assert SettlementPaid(policy_id, claim_id, settlement_id, amount)
-    emit ClaimPaymentRequested(settlement_id, amount, $actor)
+    admit SettlementAuthorised(claim_id, settlement_id, amount, actor)
+    admit SettlementPaid(policy_id, claim_id, settlement_id, amount)
+    emit ClaimPaymentRequested(settlement_id, amount, actor)
 
--- ============================================================
--- Derived claim: cumulative paid per policy.
---
+
+-- Derived claim (illustrative derived-claim surface; not yet parser-supported).
 -- Enumerated on demand via `morpholog inspect derived
 -- insurance_claim_settlement PolicyLimitUsage`. As-of replay
 -- reconstructs the usage as it stood at any prior transition.
--- ============================================================
 derived PolicyLimitUsage(policy_id):
-    used = sum { paid | SettlementPaid(policy_id, _, _, paid) }
+    used = sum(paid | SettlementPaid(policy_id, _, _, paid))
     over SettlementPaid(policy_id, _, _, _)

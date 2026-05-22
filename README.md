@@ -34,22 +34,28 @@ Two first-class constructs. Everything else is built from these.
 
 An **invariant** says what must always be true of admitted records. A **transformation** is the only path that gets to change them. It proposes additions, removals, and outbound notifications; the runtime checks every active invariant against the proposed result; if anything fails, nothing happens.
 
-In the double-entry ledger example (illustrative surface syntax - the parser is on the roadmap; programs are Rust IR today):
+In the double-entry ledger example (the program header, predicate declarations, and invariant parse today; the transformation surface lands in the next parser increment):
 
 ```
+program double_entry_ledger
+
+predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
+predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
+predicate PeriodClosed(period: Subject)
+
 invariant balanced_posted_entry:
     JournalEntry(entry, _, _) implies
-        sum { d | JournalLine(entry, _, d, _) }
-        == sum { c | JournalLine(entry, _, _, c) }
+        sum(d | JournalLine(entry, _, d, _))
+        = sum(c | JournalLine(entry, _, _, c))
 
 transformation post_simple_entry(
     entry_id, posting_date, period,
     debit_account, credit_account, amount
 ):
     require not PeriodClosed(period)
-    assert JournalEntry(entry_id, posting_date, period)
-    assert JournalLine(entry_id, debit_account, amount, 0)
-    assert JournalLine(entry_id, credit_account, 0, amount)
+    admit JournalEntry(entry_id, posting_date, period)
+    admit JournalLine(entry_id, debit_account, amount, 0)
+    admit JournalLine(entry_id, credit_account, 0, amount)
     emit JournalEntryPosted(entry_id)
 ```
 

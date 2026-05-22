@@ -33,7 +33,7 @@
 //! to a proper bool-literal token the moment a worked example
 //! forces `Value::Bool` into the IR.
 //!
-//! Whitespace and `//` line comments are stripped at lex; they
+//! Whitespace and `--` line comments are stripped at lex; they
 //! never reach the parser. Output is a vector of `(Token, Span)`
 //! pairs - span is a byte-offset range into the source, compatible
 //! with [`crate::diagnostics::Span`] and `ariadne`.
@@ -202,7 +202,7 @@ pub type SpannedToken = (Token, Span);
 /// or a `Rich` error describing what could not be lexed.
 ///
 /// Whitespace is the standard Unicode `is_whitespace` set;
-/// comments are `//` to end-of-line.
+/// comments are `--` to end-of-line.
 pub fn lex(source: &str) -> Result<Vec<SpannedToken>, Vec<Rich<'_, char>>> {
     lexer().parse(source).into_result().map(|tokens| {
         tokens
@@ -341,10 +341,12 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     ))
     .map_with(|t, e| (t, e.span()));
 
-    // Line comments: `//` to newline (or EOF). Skipped entirely;
-    // no inner padding so the outer `padding` parser is the single
-    // source of truth for whitespace consumption.
-    let line_comment = just("//")
+    // Line comments: `--` to newline (or EOF). SQL/Haskell flavour
+    // chosen to match Morpholog's database-flavoured audience and
+    // the historical example files. Skipped entirely; no inner
+    // padding so the outer `padding` parser is the single source
+    // of truth for whitespace consumption.
+    let line_comment = just("--")
         .then(any().and_is(just('\n').not()).repeated())
         .ignored();
 

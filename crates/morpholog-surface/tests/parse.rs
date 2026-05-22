@@ -71,11 +71,11 @@ predicate Foo(a: Subject, b: Decimal,)
 #[test]
 fn line_comments_are_skipped() {
     let source = r#"
-// top-level comment
-program with_comments  // comment after header
+-- top-level comment
+program with_comments  -- comment after header
 
-// comment between decls
-predicate Foo(a: Subject) // comment after decl
+-- comment between decls
+predicate Foo(a: Subject) -- comment after decl
 predicate Bar(b: Decimal)
 "#;
     let program = parse_program(source).expect("comments should be skipped");
@@ -191,7 +191,7 @@ fn render_produces_ariadne_output() {
 /// lexer's trailing-padding handling.
 #[test]
 fn empty_and_whitespace_only_sources_produce_friendly_error() {
-    for source in ["", "   ", "\n\n\n", "// just a comment\n"] {
+    for source in ["", "   ", "\n\n\n", "-- just a comment\n"] {
         let errs = parse_program(source).expect_err("should fail");
         assert!(
             errs[0].message.contains("expected `program`"),

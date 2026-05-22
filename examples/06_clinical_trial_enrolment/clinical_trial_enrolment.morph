@@ -23,6 +23,29 @@
 -- Closing a protocol window or amending the protocol must not
 -- retroactively invalidate an earlier randomisation - it must only
 -- govern future ones.
+--
+-- Note: the `<=` operator currently lowers to `Expr::Le` (decimal
+-- comparison). The civil-date surface form for `Expr::DateLe` is
+-- deferred to this worked example. Until then, the date
+-- comparisons in this file are illustrative; the kernel's runtime
+-- evaluator distinguishes decimal `<=` from date `<=` via separate
+-- IR variants.
+
+program clinical_trial_enrolment
+
+predicate Trial(trial_id: Subject)
+predicate ProtocolVersion(trial_id: Subject, protocol_version: Subject, effective_from: Date, effective_to: Date)
+predicate ProtocolApprovedBy(protocol_version: Subject, ethics_committee: Subject, approval_id: Subject)
+predicate ConsentFormVersion(trial_id: Subject, consent_form_version: Subject, effective_from: Date, effective_to: Date)
+predicate ConsentFormApprovedBy(consent_form_version: Subject, ethics_committee: Subject, approval_id: Subject)
+predicate ParticipantScreened(participant_id: Subject, trial_id: Subject, screened_on: Date)
+predicate InformedConsentObtained(participant_id: Subject, trial_id: Subject, consent_form_version: Subject, consented_on: Date, obtained_by: Subject)
+predicate EligibilityCriterion(protocol_version: Subject, criterion_id: Subject, required_result: Subject)
+predicate EligibilityAssessment(participant_id: Subject, criterion_id: Subject, result: Subject, assessed_on: Date, expires_on: Date)
+predicate DelegatedInvestigator(investigator: Subject, trial_id: Subject, role: Subject, effective_from: Date, effective_to: Date)
+predicate ImportantProtocolDeviationOpen(participant_id: Subject, trial_id: Subject, deviation_id: Subject)
+predicate ParticipantRandomised(participant_id: Subject, trial_id: Subject, protocol_version: Subject, randomised_on: Date, randomised_by: Subject)
+
 
 -- ============================================================
 -- Invariant: protocol version has at most one effective window.
@@ -30,7 +53,7 @@
 invariant at_most_one_protocol_window_per_version:
     ProtocolVersion(trial, version, from_a, to_a)
         and ProtocolVersion(trial, version, from_b, to_b) implies
-            from_a == from_b and to_a == to_b
+            from_a = from_b and to_a = to_b
 
 -- ============================================================
 -- Invariant: consent form version has at most one effective window.
@@ -38,7 +61,7 @@ invariant at_most_one_protocol_window_per_version:
 invariant at_most_one_consent_window_per_version:
     ConsentFormVersion(trial, version, from_a, to_a)
         and ConsentFormVersion(trial, version, from_b, to_b) implies
-            from_a == from_b and to_a == to_b
+            from_a = from_b and to_a = to_b
 
 -- ============================================================
 -- Invariant: a participant is randomised at most once per trial.
@@ -46,7 +69,13 @@ invariant at_most_one_consent_window_per_version:
 invariant participant_randomised_once_per_trial:
     ParticipantRandomised(p, trial, proto_a, date_a, actor_a)
         and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies
-            proto_a == proto_b and date_a == date_b and actor_a == actor_b
+            proto_a = proto_b and date_a = date_b and actor_a = actor_b
+
+
+-- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- The locked verb-flavour decisions are in use (admit, actor (no
+-- sigil), =, #SubjectLiteral); civil-date `<=` is the planned extension
+-- to the comparator surface. Statement parsing is the next parser increment.
 
 -- ============================================================
 -- Setup transformations - enough surface to make randomisation
@@ -54,7 +83,7 @@ invariant participant_randomised_once_per_trial:
 -- claims rather than as side-effects of randomisation.
 -- ============================================================
 transformation open_trial(trial_id):
-    assert Trial(trial_id)
+    admit Trial(trial_id)
     emit TrialOpened(trial_id)
 
 transformation approve_protocol_version(
@@ -66,8 +95,8 @@ transformation approve_protocol_version(
     approval_id
 ):
     require Trial(trial_id)
-    assert ProtocolVersion(trial_id, protocol_version, effective_from, effective_to)
-    assert ProtocolApprovedBy(protocol_version, ethics_committee, approval_id)
+    admit ProtocolVersion(trial_id, protocol_version, effective_from, effective_to)
+    admit ProtocolApprovedBy(protocol_version, ethics_committee, approval_id)
     emit ProtocolVersionApproved(trial_id, protocol_version)
 
 transformation approve_consent_form_version(
@@ -79,8 +108,8 @@ transformation approve_consent_form_version(
     approval_id
 ):
     require Trial(trial_id)
-    assert ConsentFormVersion(trial_id, consent_form_version, effective_from, effective_to)
-    assert ConsentFormApprovedBy(consent_form_version, ethics_committee, approval_id)
+    admit ConsentFormVersion(trial_id, consent_form_version, effective_from, effective_to)
+    admit ConsentFormApprovedBy(consent_form_version, ethics_committee, approval_id)
     emit ConsentFormVersionApproved(trial_id, consent_form_version)
 
 transformation delegate_investigator(
@@ -91,12 +120,12 @@ transformation delegate_investigator(
     effective_to
 ):
     require Trial(trial_id)
-    assert DelegatedInvestigator(investigator, trial_id, role, effective_from, effective_to)
+    admit DelegatedInvestigator(investigator, trial_id, role, effective_from, effective_to)
     emit InvestigatorDelegated(investigator, trial_id, role)
 
 transformation screen_participant(participant_id, trial_id, screened_on):
     require Trial(trial_id)
-    assert ParticipantScreened(participant_id, trial_id, screened_on)
+    admit ParticipantScreened(participant_id, trial_id, screened_on)
     emit ParticipantScreened(participant_id, trial_id)
 
 transformation record_consent(
@@ -107,7 +136,7 @@ transformation record_consent(
     obtained_by
 ):
     require Trial(trial_id)
-    assert InformedConsentObtained(
+    admit InformedConsentObtained(
         participant_id,
         trial_id,
         consent_form_version,
@@ -117,7 +146,7 @@ transformation record_consent(
     emit InformedConsentObtained(participant_id, consent_form_version)
 
 transformation record_eligibility_criterion(protocol_version, criterion_id, required_result):
-    assert EligibilityCriterion(protocol_version, criterion_id, required_result)
+    admit EligibilityCriterion(protocol_version, criterion_id, required_result)
 
 transformation record_eligibility_assessment(
     participant_id,
@@ -126,11 +155,11 @@ transformation record_eligibility_assessment(
     assessed_on,
     expires_on
 ):
-    assert EligibilityAssessment(participant_id, criterion_id, result, assessed_on, expires_on)
+    admit EligibilityAssessment(participant_id, criterion_id, result, assessed_on, expires_on)
 
 transformation open_important_protocol_deviation(participant_id, trial_id, deviation_id):
     require Trial(trial_id)
-    assert ImportantProtocolDeviationOpen(participant_id, trial_id, deviation_id)
+    admit ImportantProtocolDeviationOpen(participant_id, trial_id, deviation_id)
     emit ImportantProtocolDeviationOpened(participant_id, trial_id, deviation_id)
 
 -- ============================================================
@@ -141,7 +170,7 @@ transformation open_important_protocol_deviation(participant_id, trial_id, devia
 -- `protocol_version` is an explicit parameter: the investigator
 -- knows which protocol version they are enrolling under, and a
 -- single require-And does not propagate its match's bindings out.
--- Making it a parameter lets the bound value flow into the assert
+-- Making it a parameter lets the bound value flow into the admit
 -- without a separate Let + ValueOf.
 -- ============================================================
 transformation randomise_participant(
@@ -168,9 +197,9 @@ transformation randomise_participant(
             )
         and consented_on <= randomised_on
         and DelegatedInvestigator(
-                $actor,
+                actor,
                 trial_id,
-                "randomise_participant",
+                #randomise_participant,
                 del_from,
                 del_to
             )
@@ -188,11 +217,11 @@ transformation randomise_participant(
         and randomised_on <= expires_on
         and not ImportantProtocolDeviationOpen(participant_id, trial_id, _)
 
-    assert ParticipantRandomised(
+    admit ParticipantRandomised(
         participant_id,
         trial_id,
         protocol_version,
         randomised_on,
-        $actor
+        actor
     )
     emit ParticipantRandomised(participant_id)
