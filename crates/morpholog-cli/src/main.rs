@@ -42,7 +42,9 @@ use morpholog_postgres::{
     list_derived, list_derived_at, list_pending_outbox, propose_against_pg,
     propose_against_pg_with_trace,
 };
+use morpholog_surface::parse_program;
 use serde::Serialize;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Top-level Morpholog CLI.
@@ -71,6 +73,17 @@ enum Command {
     /// prints an error message to stderr and exits one via anyhow's
     /// default.
     Propose(ProposeArgs),
+
+    /// Parse a `.morph` source file. On success, prints the parsed
+    /// `Program` as JSON and exits zero. On parse failure, renders
+    /// ariadne-formatted diagnostics to stderr and exits one.
+    ///
+    /// v0 recognises only the `program` header and `predicate`
+    /// declarations. A `.morph` file containing invariants,
+    /// transformations, or derived claims currently fails with a
+    /// parse error - the parser requires the file to end after the
+    /// last predicate declaration. Subsequent PRs expand the surface.
+    Parse(ParseArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -172,6 +185,16 @@ struct InspectArgs {
     database_url: String,
 }
 
+/// Arguments for the `parse` subcommand. No database connection;
+/// `parse` is a pure source-to-IR transformation.
+#[derive(clap::Args, Debug)]
+struct ParseArgs {
+    /// Path to a `.morph` source file. The file is read in full,
+    /// lexed, and parsed; success prints the resulting `Program` as
+    /// JSON, failure renders ariadne-formatted diagnostics on stderr.
+    file: PathBuf,
+}
+
 /// Arguments for the `propose` subcommand.
 #[derive(clap::Args, Debug)]
 struct ProposeArgs {
@@ -257,8 +280,44 @@ async fn main() -> anyhow::Result<()> {
         Command::Propose(args) => {
             propose(args).await?;
         }
+        Command::Parse(args) => {
+            parse_subcommand(args)?;
+        }
     }
     Ok(())
+}
+
+/// Run the `parse` subcommand. Reads the `.morph` file at the given
+/// path, parses it, and either prints the resulting `Program` as
+/// pretty JSON (on success) or renders each diagnostic to stderr via
+/// ariadne (on failure, exiting non-zero).
+///
+/// `Program` does not derive `Serialize` directly today, so the CLI
+/// emits a small projection (`{"name": ..., "predicates": [...]}`)
+/// rather than the full IR. When the rest of the surface lands and
+/// the IR types pick up `Serialize`, this can collapse to a direct
+/// `print_json(&program)` call.
+fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
+    let source = std::fs::read_to_string(&args.file)
+        .with_context(|| format!("read source file {}", args.file.display()))?;
+    let source_name = args.file.display().to_string();
+
+    match parse_program(&source) {
+        Ok(program) => {
+            let payload = serde_json::json!({
+                "name": program.name,
+                "predicates": program.predicates,
+            });
+            print_json(&payload)?;
+            Ok(())
+        }
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprint!("{}", d.render(&source_name, &source));
+            }
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Run the `propose` subcommand end-to-end:
@@ -520,7 +579,7 @@ fn inspect_predicates(args: InspectPredicatesArgs) -> anyhow::Result<()> {
 }
 
 // ===========================================================================
-// Tests — CLI argument parsing only.
+// Tests - CLI argument parsing only.
 //
 // End-to-end CLI-against-PostgreSQL tests would duplicate the read-helper
 // integration tests in morpholog-postgres without adding signal. These tests
@@ -732,7 +791,7 @@ mod tests {
     }
 
     /// Sanity-check that `Cli::try_parse_from` *can* surface a
-    /// `MissingRequiredArgument` error — without actually mutating the
+    /// `MissingRequiredArgument` error - without actually mutating the
     /// process environment (which would require `unsafe` in edition
     /// 2024 and the workspace forbids it). We trigger the error by
     /// omitting the subcommand entirely, which is unambiguously
@@ -995,6 +1054,26 @@ mod tests {
                     | ErrorKind::MissingSubcommand
             ),
             "expected a missing-argument/subcommand error, got {:?}",
+            err.kind()
+        );
+    }
+
+    #[test]
+    fn parse_with_file_argument_parses() {
+        let cli = Cli::try_parse_from(["morpholog", "parse", "demo.morph"]).unwrap();
+        let Command::Parse(args) = cli.command else {
+            panic!("expected Command::Parse, got {:?}", cli.command);
+        };
+        assert_eq!(args.file.as_os_str(), "demo.morph");
+    }
+
+    #[test]
+    fn parse_missing_file_argument_errors() {
+        let err =
+            Cli::try_parse_from(["morpholog", "parse"]).expect_err("expected clap parse error");
+        assert!(
+            matches!(err.kind(), ErrorKind::MissingRequiredArgument),
+            "expected missing-argument error, got {:?}",
             err.kind()
         );
     }

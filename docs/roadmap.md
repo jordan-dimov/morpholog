@@ -12,11 +12,14 @@ What's still in Rust IR: every programme. There is no parser yet.
 
 ## Imminent: surface syntax
 
-The next major investment is the parser. Programmes today are Rust IR via the public `dsl` module - usable, but the natural reader of a Morpholog programme is a domain expert (a controller, an auditor, the person who actually understands the business rules), not a Rust developer. The parser is what makes the programme legible to that audience, and it commits the surface syntax decisions that nothing else has forced yet.
+The parser arc has started. Programmes are Rust IR via the public `dsl` module today; the natural reader of a Morpholog programme is a domain expert, not a Rust developer. The parser is what makes the programme legible to that audience, and it commits the surface syntax decisions that nothing else has forced yet.
 
-The arc is multi-PR, planned but not pre-decided in detail. The first PR bites off one focused fragment - probably predicate declarations, lexer, and `ariadne` diagnostic wiring - and the rest of the surface lands incrementally as fragments are added.
+The arc is multi-PR; each PR is one focused production. The crate is `morpholog-surface` (broader than "parser" so a future formatter / source-mapper / LSP shares the same crate). Tooling: `chumsky` for parsing, `ariadne` for diagnostics. File extension: `.morph`.
 
-Tooling choices: `chumsky` for parsing, `ariadne` for diagnostics. File extension: `.morph`.
+- **PR P1 (landing): predicate declarations only.** The `program <name>` header plus zero or more `predicate Name(arg: Kind, ...)` declarations. New `morpholog-surface` crate, `morpholog parse <file>` CLI subcommand, ariadne-rendered diagnostics, parser-side duplicate detection with both spans. Commits the file-level surface decisions (identifier syntax, kind keywords, comments, trailing commas). See `docs/design-history.md` entry "Parser P1" for the full decision matrix.
+- **PR P2: expressions in isolation.** Operator parsing for the kernel's full `Expr` surface (`And`, `Not`, `Implies`, `Exists`, `Forall`, `Eq`, `Le`, `DateLe`, `Neq`, `Sub`, `Add`, `Sum`, `In`, `ValueOf`, `Term`). Tested in isolation before they're attached to any programme-level construct. Precedence, span handling, and operator formatting decisions land here.
+- **PR P3+: invariants, transformations, derived claims.** In some order, once expressions are stable.
+- **`morpholog run <file.morph>`.** Once the full surface is parsable.
 
 ## After the parser: legibility tooling
 

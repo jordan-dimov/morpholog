@@ -14,6 +14,7 @@ path = "src/main.rs"
 morpholog-core = { path = "../morpholog-core" }
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-postgres = { path = "../morpholog-postgres" }
+morpholog-surface = { path = "../morpholog-surface" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -23,6 +24,8 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
 
 [lints]
 workspace = true
