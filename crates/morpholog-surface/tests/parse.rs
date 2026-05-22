@@ -218,7 +218,7 @@ invariant something: Foo(x)
     assert_eq!(inv.version, 1);
     // Body is the claim Foo(x).
     use morpholog_core::Expr;
-    assert!(matches!(inv.body, Expr::Claim { .. }));
+    assert!(matches!(&inv.body, Expr::Claim { .. }));
 }
 
 #[test]
@@ -235,7 +235,7 @@ invariant all_lines_unnetted:
     assert_eq!(program.invariants.len(), 1);
     use morpholog_core::Expr;
     let inv = &program.invariants[0];
-    assert!(matches!(inv.body, Expr::Forall { .. }));
+    assert!(matches!(&inv.body, Expr::Forall { .. }));
 }
 
 #[test]
@@ -249,7 +249,7 @@ invariant within_limit:
     let program = parse_program(source).expect("parse should succeed");
     use morpholog_core::Expr;
     let inv = &program.invariants[0];
-    assert!(matches!(inv.body, Expr::Le(_, _)));
+    assert!(matches!(&inv.body, Expr::Le(_, _)));
 }
 
 #[test]

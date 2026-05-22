@@ -315,8 +315,12 @@ fn parse_subcommand(args: ParseArgs) -> anyhow::Result<()> {
                 .invariants
                 .iter()
                 .map(|inv| {
+                    // Explicit `&` refs to silence Copilot's
+                    // conservative borrow analysis; the `json!`
+                    // macro already borrows internally, but
+                    // surfacing the borrow keeps reviews quiet.
                     serde_json::json!({
-                        "name": inv.name,
+                        "name": &inv.name,
                         "version": inv.version,
                         "body": morpholog_core::format::format_expr_inline(&inv.body),
                     })
