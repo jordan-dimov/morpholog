@@ -51,7 +51,7 @@ invariant at_most_one_direct_successor:
     Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
--- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- Transformations:
 -- The locked verb-flavour decisions are in use (admit, =, subject
 -- literals via #NAME); statement parsing is the next parser increment.
 

@@ -36,7 +36,7 @@ predicate ApprovalLimit(actor: Subject, doc_type: Subject, limit: Decimal)
 predicate LimitedApproval(doc_id: Subject, doc_type: Subject, amount: Decimal, actor: Subject)
 
 
--- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- Transformations:
 -- The locked verb-flavour decisions are in use (admit, actor (no
 -- sigil), =); statement parsing is the next parser increment.
 

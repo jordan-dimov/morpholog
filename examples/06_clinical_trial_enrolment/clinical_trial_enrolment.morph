@@ -84,7 +84,7 @@ invariant consent_obtained_before_randomisation:
     ParticipantRandomised(p, t, _, randomised_on, _) implies (exists consented_on: InformedConsentObtained(p, t, _, consented_on, _) and consented_on on_or_before randomised_on)
 
 
--- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- Transformations:
 -- The locked verb-flavour decisions are in use (admit, actor (no
 -- sigil), =, #SubjectLiteral); civil-date `<=` is the planned extension
 -- to the comparator surface. Statement parsing is the next parser increment.

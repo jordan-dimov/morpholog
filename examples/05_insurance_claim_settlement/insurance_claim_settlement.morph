@@ -43,7 +43,7 @@ invariant paid_implies_authorised:
     SettlementPaid(_, claim, settlement, amount) implies SettlementAuthorised(claim, settlement, amount, _)
 
 
--- Transformations: illustrative transformation-body surface (not yet parser-supported).
+-- Transformations:
 -- The locked verb-flavour decisions are in use (admit, bind, actor,
 -- sum(x | body), <=); statement parsing is the next parser increment.
 
