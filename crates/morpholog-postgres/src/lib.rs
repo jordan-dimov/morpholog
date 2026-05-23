@@ -769,6 +769,77 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
     rows.into_iter().map(decode_outbox_row).collect()
 }
 
+/// Return outbox rows filtered by status and/or intent type. Both
+/// filters are optional: `status_filter = None` returns rows of every
+/// status (pending, in_progress, delivered, failed); `intent_type_filter
+/// = None` returns rows of every intent type. Order is `(enqueued_at,
+/// intent_id)` - the same chronological-with-tie-break order
+/// `list_pending_outbox` uses.
+///
+/// Counterpart to `list_pending_outbox` that lets a reader ask "what
+/// failed in the last hour?" or "what is in flight right now?"
+/// without writing custom SQL. Used by `morpholog inspect outbox` to
+/// surface non-pending rows.
+pub async fn list_outbox_rows(
+    pool: &PgPool,
+    status_filter: Option<&str>,
+    intent_type_filter: Option<&str>,
+) -> Result<Vec<OutboxRow>, PgError> {
+    // Build the WHERE clause dynamically based on which filters are
+    // supplied. `sqlx::query_as` does not support optional bind
+    // parameters, so the branch structure here matches the four
+    // possible combinations directly.
+    let rows: Vec<OutboxRowRaw> = match (status_filter, intent_type_filter) {
+        (Some(status), Some(intent_type)) => sqlx::query_as(
+            "SELECT intent_id, transition_id, intent_type, arguments,
+                    idempotency_key, status, attempt_count, enqueued_at,
+                    last_attempt_at, delivered_at, failed_at, failure_reason,
+                    next_attempt_at, compensation_transition_id, locked_by,
+                    lock_expires_at
+             FROM morpholog.outbox
+             WHERE status = $1 AND intent_type = $2
+             ORDER BY enqueued_at, intent_id",
+        )
+        .bind(status)
+        .bind(intent_type)
+        .fetch_all(pool)
+        .await
+        .map_err(classify)?,
+        (Some(status), None) => sqlx::query_as(OUTBOX_SELECT_ALL_COLUMNS)
+            .bind(status)
+            .fetch_all(pool)
+            .await
+            .map_err(classify)?,
+        (None, Some(intent_type)) => sqlx::query_as(
+            "SELECT intent_id, transition_id, intent_type, arguments,
+                    idempotency_key, status, attempt_count, enqueued_at,
+                    last_attempt_at, delivered_at, failed_at, failure_reason,
+                    next_attempt_at, compensation_transition_id, locked_by,
+                    lock_expires_at
+             FROM morpholog.outbox
+             WHERE intent_type = $1
+             ORDER BY enqueued_at, intent_id",
+        )
+        .bind(intent_type)
+        .fetch_all(pool)
+        .await
+        .map_err(classify)?,
+        (None, None) => sqlx::query_as(
+            "SELECT intent_id, transition_id, intent_type, arguments,
+                    idempotency_key, status, attempt_count, enqueued_at,
+                    last_attempt_at, delivered_at, failed_at, failure_reason,
+                    next_attempt_at, compensation_transition_id, locked_by,
+                    lock_expires_at
+             FROM morpholog.outbox
+             ORDER BY enqueued_at, intent_id",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(classify)?,
+    };
+    rows.into_iter().map(decode_outbox_row).collect()
+}
+
 /// The full column list returned by every outbox-row read in this
 /// module. Single source of truth so the `OutboxRowRaw` tuple shape,
 /// the `decode_outbox_row` helper, and the SQL all evolve together.

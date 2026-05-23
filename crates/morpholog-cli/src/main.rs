@@ -220,9 +220,12 @@ pub(crate) enum Inspect {
     /// wrong rows when commit order and UUID order diverge under
     /// concurrent commits).
     Audit(InspectArgs),
-    /// List every pending outbox intent, in enqueue order. `--as-of`
+    /// List outbox rows, in enqueue order. Defaults to `--status pending`
+    /// (the in-flight queue, matching the historical behaviour); use
+    /// `--status all` for a full historical view, or any of
+    /// `delivered|failed|in-progress` for a specific slice. `--as-of`
     /// does not apply: outbox is delivery state, not claim state.
-    Outbox(InspectArgs),
+    Outbox(InspectOutboxArgs),
     /// Enumerate a derived claim from a built-in program against the
     /// current state, or against the state at a past `transition_id`
     /// via `--as-of`. Read-only: no claims are written, no audit row
@@ -302,6 +305,52 @@ pub(crate) struct InspectArgs {
     /// environment variable.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
+}
+
+/// Arguments for `inspect outbox`. Carries the same connection-string
+/// flag as [`InspectArgs`] plus the status and intent-type filters.
+#[derive(clap::Args, Debug)]
+pub(crate) struct InspectOutboxArgs {
+    /// Filter by row status. Default `pending` matches the
+    /// operationally common question "what is waiting?". `all` returns
+    /// every row regardless of status.
+    #[arg(long, value_enum, default_value_t = InspectOutboxStatus::Pending)]
+    pub(crate) status: InspectOutboxStatus,
+
+    /// Filter by intent type. Optional; omitting returns rows of every
+    /// intent type matching the status filter.
+    #[arg(long)]
+    pub(crate) intent_type: Option<String>,
+
+    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
+    /// environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+/// Status filter for `inspect outbox`. The first four map directly to
+/// the database's `status` column; `All` disables the status filter.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum InspectOutboxStatus {
+    Pending,
+    InProgress,
+    Delivered,
+    Failed,
+    All,
+}
+
+impl InspectOutboxStatus {
+    /// Database status string, or `None` for the `All` filter (which
+    /// drops the `WHERE status = ?` clause).
+    pub(crate) fn db_filter(self) -> Option<&'static str> {
+        match self {
+            InspectOutboxStatus::Pending => Some("pending"),
+            InspectOutboxStatus::InProgress => Some("in_progress"),
+            InspectOutboxStatus::Delivered => Some("delivered"),
+            InspectOutboxStatus::Failed => Some("failed"),
+            InspectOutboxStatus::All => None,
+        }
+    }
 }
 
 /// Arguments for any subcommand whose only input is a `.morph` source
@@ -441,7 +490,8 @@ mod tests {
         };
         match what {
             Inspect::Claims(args) => args.database_url,
-            Inspect::Audit(args) | Inspect::Outbox(args) => args.database_url,
+            Inspect::Audit(args) => args.database_url,
+            Inspect::Outbox(args) => args.database_url,
             Inspect::Derived(_) => {
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
             }

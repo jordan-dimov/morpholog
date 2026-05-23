@@ -729,3 +729,132 @@ async fn outbox_release_puts_a_claimed_row_back_to_pending() {
         "released row should be reclaimable; got: {json}"
     );
 }
+
+// ============================================================
+// `inspect outbox` filters
+//
+// `--status pending` is the default (matches the operational
+// "what is waiting" question); the new filters expose the rest.
+// ============================================================
+
+/// Helper for the filter tests: seed the outbox with two pending
+/// rows so the filter assertions can distinguish "all" from
+/// "delivered" / "failed".
+fn seed_two_pending_outbox_rows() {
+    let _ = post_balanced_entry("filter_seed_a", 100);
+    let _ = post_balanced_entry("filter_seed_b", 200);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_defaults_to_pending() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    // Drive one row through to `delivered` so we can confirm it
+    // does NOT appear in the default (pending) listing.
+    let claim_out: Value = serde_json::from_str(
+        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
+    )
+    .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+    let (s, _, _) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(s.success());
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = rows.as_array().expect("inspect outbox emits a JSON array");
+    assert_eq!(
+        arr.len(),
+        1,
+        "default should show the remaining pending row only"
+    );
+    assert_eq!(arr[0]["status"], "pending");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_status_all_shows_every_row() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    // Drive one row to `delivered`.
+    let claim_out: Value = serde_json::from_str(
+        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
+    )
+    .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+    run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "all"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = rows.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "all should show both rows; got {arr:?}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_status_delivered_shows_only_delivered_rows() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    let claim_out: Value = serde_json::from_str(
+        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
+    )
+    .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+    run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "delivered"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = rows.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["status"], "delivered");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_intent_type_filter_narrows_results() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    let (status, stdout, _stderr) = run_cli(&[
+        "inspect",
+        "outbox",
+        "--status",
+        "all",
+        "--intent-type",
+        "DoesNotExist",
+    ]);
+    assert!(status.success(), "unknown intent_type is not an error");
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 0);
+
+    let (status, stdout, _stderr) =
+        run_cli(&["inspect", "outbox", "--intent-type", "JournalEntryPosted"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+}
