@@ -99,9 +99,14 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
                 .context("mark_outbox_delivered failed")?
         }
         OutboxCompleteOutcome::Transient => {
-            // unwrap is safe: the validation block above proved the
-            // option is Some for the transient branch.
-            let retry_after = Duration::from_secs(args.retry_after_seconds.unwrap());
+            // The validation block above proved this option is Some
+            // for the transient branch; the error case is unreachable
+            // here, but we surface it as anyhow rather than
+            // unwrap/expect (clippy::unwrap_used / expect_used).
+            let secs = args
+                .retry_after_seconds
+                .ok_or_else(|| anyhow!("--outcome transient requires --retry-after-seconds N"))?;
+            let retry_after = Duration::from_secs(secs);
             let next_attempt_at: DateTime<Utc> = Utc::now()
                 + chrono::Duration::from_std(retry_after)
                     .context("retry-after-seconds overflowed chrono::Duration")?;
