@@ -1,9 +1,11 @@
-//! Insurance claim settlement IR: actor authority + cumulative
-//! aggregate policy limit. The load-bearing transformation gates
-//! authorisation on `Le(Add(running_paid, proposed), aggregate_limit)`,
-//! which is the IR shape Expr::Add was added for. See
-//! `examples/05_insurance_claim_settlement/README.md` for the business
-//! framing.
+//! Insurance claim settlement: an insurer authorises payments
+//! against a policy's aggregate limit. Authorisation depends on
+//! both an actor-authority gate and a per-policy spend cap, and
+//! every payment must consume exactly its amount of the policy's
+//! remaining headroom (the conservation invariant).
+//!
+//! See `examples/05_insurance_claim_settlement/README.md` for the
+//! business framing.
 
 use morpholog_core::{Invariant, Transformation};
 
@@ -86,6 +88,88 @@ pub fn at_most_one_claim_report_per_id() -> Invariant {
     }
 }
 
+/// Every `SettlementPaid(p, ...)` needs a current
+/// `PolicyHeadroom(p, _)`. Closes a gap in
+/// `headroom_consumed_by_payment`: the conservation rule is
+/// vacuously true when no headroom claim exists for the policy.
+pub fn paid_implies_headroom() -> Invariant {
+    Invariant {
+        name: "paid_implies_headroom".to_string(),
+        version: 1,
+        body: implies(
+            claim(
+                "SettlementPaid",
+                vec![var("p"), wildcard(), wildcard(), wildcard()],
+            ),
+            exists("r", claim("PolicyHeadroom", vec![var("p"), var("r")])),
+        ),
+    }
+}
+
+/// At most one `PolicyHeadroom` per policy. `authorise_settlement`'s
+/// `bind_one` lookup relies on this; two competing headroom claims
+/// would also mean two answers to "how much capacity remains?".
+pub fn at_most_one_headroom_per_policy() -> Invariant {
+    Invariant {
+        name: "at_most_one_headroom_per_policy".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim("PolicyHeadroom", vec![var("policy"), var("a")]),
+                claim("PolicyHeadroom", vec![var("policy"), var("b")]),
+            ]),
+            eq(term(var("a")), term(var("b"))),
+        ),
+    }
+}
+
+/// Per-policy headroom delta conservation: the change in
+/// `PolicyHeadroom` must equal the total of newly-admitted
+/// `SettlementPaid` amounts for that policy. The `aggregate_limit`
+/// require is an admission gate ("is there enough?"); this is the
+/// conservation law ("did the delta match?"). A transformation
+/// that admitted `SettlementPaid` without retracting and
+/// re-asserting `PolicyHeadroom` would pass the require and fail
+/// this invariant.
+///
+/// Sum-based rather than per-row (`after = before - amt` for each
+/// new payment) because the per-row form is too weak: a
+/// multi-payment transition admitting two same-amount settlements
+/// while decrementing headroom once would pass each individual
+/// equation while consuming twice the headroom it credits.
+pub fn headroom_consumed_by_payment() -> Invariant {
+    Invariant {
+        name: "headroom_consumed_by_payment".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim("PolicyHeadroom", vec![var("p"), var("after")]),
+                pre(claim("PolicyHeadroom", vec![var("p"), var("before")])),
+            ]),
+            eq(
+                term(var("after")),
+                sub(
+                    term(var("before")),
+                    sum(
+                        var("amt"),
+                        "amt",
+                        and(vec![
+                            claim(
+                                "SettlementPaid",
+                                vec![var("p"), wildcard(), var("s"), var("amt")],
+                            ),
+                            not(pre(claim(
+                                "SettlementPaid",
+                                vec![var("p"), wildcard(), var("s"), var("amt")],
+                            ))),
+                        ]),
+                    ),
+                ),
+            ),
+        ),
+    }
+}
+
 /// `settlement_id` is globally unique across admitted payments. Two
 /// `SettlementPaid` claims sharing a `settlement_id` must agree on
 /// every other field. Without this, an audit log could carry two
@@ -121,18 +205,20 @@ pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
 // Transformations
 // ============================================================
 
-/// Open a policy with an aggregate limit. The aggregate limit is the
-/// cumulative cap across every settlement on this policy. A
-/// duplicate `policy_id` admission is caught by
-/// `at_most_one_policy_per_id` against the candidate state -
-/// `authorise_settlement` later relies on this uniqueness through
-/// `bind_one Policy(policy_id, aggregate_limit)`.
+/// Open a policy. Admits the contractual `Policy` and the initial
+/// `PolicyHeadroom` (= aggregate_limit; no settlement has consumed
+/// it yet). The structural-uniqueness invariants catch duplicate
+/// admissions.
 pub fn issue_policy() -> Transformation {
     Transformation {
         name: "issue_policy".to_string(),
         parameters: params(&["policy_id", "aggregate_limit"]),
         body: vec![
             assert_("Policy", vec![var("policy_id"), var("aggregate_limit")]),
+            assert_(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("aggregate_limit")],
+            ),
             emit("PolicyIssued", vec![var("policy_id")]),
         ],
     }
@@ -178,44 +264,16 @@ pub fn grant_settlement_authority() -> Transformation {
     }
 }
 
-/// The load-bearing transformation. Pulls the claim's policy_id and
-/// the policy's aggregate_limit into bindings via `Stmt::BindOne`,
-/// then gates settlement authorisation on:
-///
-/// 1. The proposing actor has settlement authority covering the
-///    proposed amount (`actor_limit` bound by the authority claim,
-///    `amount <= actor_limit`).
-/// 2. Cumulative paid settlements on this policy plus the proposed
-///    amount do not exceed the policy aggregate. Encoded as
-///    `Le(Add(Sum(paid), amount), aggregate_limit)` - this is the
-///    `Expr::Add` shape the example forces.
-///
-/// On admission, asserts both `SettlementAuthorised` (who decided
-/// what) and `SettlementPaid` (the payment record the cumulative
-/// running total reads from) and emits a payment-request intent for
-/// the outbox.
-/// No actor parameter on the transformation; the actor flows through
-/// transition context as `actor()`, persisted to the
-/// authorisation record.
-///
-/// Each `bind_one` looks up a uniquely-matching claim and binds its
-/// values into the surrounding context. `at_most_one_claim_report_per_id`
-/// and `at_most_one_policy_per_id` are the structural-uniqueness
-/// invariants that make these lookups safe: without them a duplicate
-/// admission would surface as `bind_one matched 2 candidates`
-/// (kernel error) rather than a lawful business rejection.
+/// The main transformation. Looks up the claim, the policy, and
+/// the current headroom; checks the actor has enough authority and
+/// the policy has enough capacity; then updates the headroom and
+/// admits the authorisation and payment claims. The proposing
+/// actor flows through transition context, not as a parameter.
 pub fn authorise_settlement() -> Transformation {
     Transformation {
         name: "authorise_settlement".to_string(),
         parameters: params(&["claim_id", "settlement_id", "amount"]),
         body: vec![
-            // Unique-lookup pair: pull `policy_id` from the claim
-            // report, then `aggregate_limit` from the policy. Each
-            // bind_one rejects if zero matches (no such claim
-            // reported / no such policy) and surfaces a kernel
-            // error if multiple matches (programme bug -
-            // structural-uniqueness invariants exist precisely to
-            // prevent this).
             bind_one(claim(
                 "ClaimReported",
                 vec![var("claim_id"), var("policy_id"), wildcard()],
@@ -224,10 +282,17 @@ pub fn authorise_settlement() -> Transformation {
                 "Policy",
                 vec![var("policy_id"), var("aggregate_limit")],
             )),
+            bind_one(claim(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("current_headroom")],
+            )),
             require(and(vec![
                 claim("SettlementAuthority", vec![actor(), var("actor_limit")]),
                 le(term(var("amount")), term(var("actor_limit"))),
             ])),
+            // Admission gate: is there enough headroom? The
+            // `headroom_consumed_by_payment` invariant separately
+            // verifies that the post-state delta matches the payment.
             require(le(
                 add(
                     sum(
@@ -242,6 +307,18 @@ pub fn authorise_settlement() -> Transformation {
                 ),
                 term(var("aggregate_limit")),
             )),
+            let_(
+                "new_headroom",
+                sub(term(var("current_headroom")), term(var("amount"))),
+            ),
+            retract(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("current_headroom")],
+            ),
+            assert_(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("new_headroom")],
+            ),
             assert_(
                 "SettlementAuthorised",
                 vec![
@@ -295,6 +372,10 @@ pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
             .subject("settlement_id")
             .decimal("amount")
             .build(),
+        predicate("PolicyHeadroom")
+            .subject("policy_id")
+            .decimal("remaining")
+            .build(),
         predicate("PolicyLimitUsage")
             .subject("policy_id")
             .decimal("used")
@@ -305,15 +386,27 @@ pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         paid_implies_authorised(),
+        paid_implies_headroom(),
         at_most_one_policy_per_id(),
         at_most_one_claim_report_per_id(),
+        at_most_one_headroom_per_policy(),
         settlement_id_uniquely_identifies_payment(),
+        headroom_consumed_by_payment(),
     ]
 }
 
-/// Read-side projection: cumulative paid per policy. Enumerated on
-/// demand via `enumerate_derived`; not added to admitted state, not
-/// visible to invariants or transformations, not persisted.
+/// Read-side reporting projection: cumulative paid per policy as a
+/// sum over `SettlementPaid` claims. Enumerated on demand via
+/// `enumerate_derived`; not added to admitted state, not visible to
+/// invariants or transformations, not persisted.
+///
+/// Distinct in role from the admitted `PolicyHeadroom(policy_id,
+/// remaining)` predicate: `PolicyLimitUsage` is a recomputed-from-
+/// history view (how much has been spent), `PolicyHeadroom` is
+/// operational admitted state (how much remains). Both are derivable
+/// from each other (`used = aggregate_limit - remaining`), but they
+/// serve different consumers - one for reporting, the other for
+/// the conservation invariant `headroom_consumed_by_payment`.
 pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
     morpholog_core::DerivedClaim {
         predicate: "PolicyLimitUsage".to_string(),

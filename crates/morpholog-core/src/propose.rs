@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::derive::eval_invariant;
 use crate::eval::{
-    EvalError, eval_value, find_failing_subexpr, find_matches, resolve_term, unify_args,
+    EvalContext, EvalError, eval_value, find_failing_subexpr, find_matches, resolve_term,
+    unify_args,
 };
 use crate::format;
 use crate::ir::{Claim, Intent, Invariant, Stmt, Term, Transformation};
@@ -445,9 +446,10 @@ pub(crate) fn execute_stmt(
             // Transformation bodies read pre-state as the only state in
             // scope - there is no post to flip back from. `Expr::Pre`
             // inside a `require` therefore surfaces as
-            // `EvalError::PreStateUnavailable`. The `None` here is what
-            // enforces that doctrine.
-            let matches = find_matches(expr, pre_state, None, bindings, actor)?;
+            // `EvalError::PreStateUnavailable`. The `None` for pre_state
+            // in the context is what enforces that doctrine.
+            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
                 // The rejection path renders the expression for the
                 // reason string regardless of tracing (existing
@@ -457,7 +459,7 @@ pub(crate) fn execute_stmt(
                 let rendered = format::format_expr_inline(expr);
                 let reason = format!("require failed: {rendered} did not hold over pre-state");
                 if trace.is_on() {
-                    let failing = find_failing_subexpr(expr, pre_state, None, bindings, actor);
+                    let failing = find_failing_subexpr(expr, &ctx);
                     trace.push(TraceEntry::Require {
                         expression: rendered,
                         outcome: RequireOutcome::Rejected {
@@ -490,13 +492,14 @@ pub(crate) fn execute_stmt(
             // (existing behaviour from PR B); the trace entry reuses
             // that single rendering rather than calling
             // format_expr_inline a second time.
-            let mut matches = find_matches(expr, pre_state, None, bindings, actor)?;
+            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
                 0 => {
                     let rendered = format::format_expr_inline(expr);
                     let reason = format!("bind_one failed: {rendered} matched no candidates");
                     if trace.is_on() {
-                        let failing = find_failing_subexpr(expr, pre_state, None, bindings, actor);
+                        let failing = find_failing_subexpr(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
                             expression: rendered,
                             outcome: BindOneOutcome::NoMatch {
@@ -538,7 +541,8 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Let { name, value } => {
-            let v = eval_value(value, pre_state, None, bindings, actor)?;
+            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let v = eval_value(value, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Let {
                     name: name.clone(),
@@ -608,7 +612,8 @@ pub(crate) fn execute_stmt(
             collection,
             body,
         } => {
-            let coll_val = eval_value(collection, pre_state, None, bindings, actor)?;
+            let coll_ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let coll_val = eval_value(collection, &coll_ctx)?;
             let items = match coll_val {
                 EvalValue::Collection(v) => v,
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),

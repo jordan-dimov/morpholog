@@ -94,17 +94,17 @@ In-memory tests pin: happy-path admission, boundary equality at both window endp
 
 ## Design notes
 
-### What `Expr::DateLe` earned its place for
+### Why civil-date comparison was added to the runtime
 
-This example forced `Expr::DateLe` into the kernel, and `Value::Date` / `EvalValue::Date` with it. The validity-window rule
+This example is the reason Morpholog gained a date type and a date-comparison operator (`on_or_before` in the surface, `Expr::DateLe` in the IR). The validity-window rule
 
 ```text
-effective_from <= action_date and action_date <= effective_to
+effective_from on_or_before action_date and action_date on_or_before effective_to
 ```
 
-is the natural shape of a regulated decision: *was this thing in force on this date?* Encoding it without civil-date ordering means either degrading dates to subject literals and comparing them lexicographically (correct for ISO-8601 only as long as nobody mixes formats; brittle to refactoring), or hand-rolling a date predicate outside the kernel (no audit standing, no replay).
+is the natural shape of a regulated decision: *was this thing in force on this date?* Without first-class date ordering, the choices would be to compare dates as text (correct only as long as nobody mixes formats, brittle to refactoring) or to write a custom date predicate outside the runtime (which then has no audit standing and no replay).
 
-`DateLe` is a separate primitive from decimal `Le`. Two semantically distinct ordered domains share no useful generic shape yet; introducing one ahead of a third comparator would be premature. The same discipline applies to date arithmetic, time-of-day values, time zones, durations, and business calendars - all explicitly deferred until a worked example forces them. Civil-date ordering, inclusive `[from, to]` windows, and that alone is the temporal surface of v0.
+Date ordering is a separate operator from decimal ordering on purpose. Two distinct ordered domains share no useful generic shape yet, and a generic comparator would be premature until a third domain forces one. The same discipline keeps date arithmetic, time-of-day values, time zones, durations, and business calendars out for now - each will arrive with the worked example that needs it. Civil-date ordering and inclusive `[from, to]` windows is the entire temporal surface of v0.
 
 ### Inclusive window semantics
 

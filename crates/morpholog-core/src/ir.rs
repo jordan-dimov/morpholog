@@ -55,79 +55,27 @@ pub enum Expr {
         body: Box<Expr>,
     },
     And(Vec<Expr>),
-    /// Predicate-shaped disjunction. Evaluates each branch against the
-    /// same base bindings and returns the concatenation of all
-    /// satisfying binding sets. Empty when every branch is empty.
-    ///
-    /// Mirrors `And`'s flattened `Vec<Expr>` shape rather than a
-    /// binary `Box<Expr>, Box<Expr>` so that `a or b or c` is a
-    /// single `Or` node, matching how the parser already lowers `a
-    /// and b and c` to a single `And`.
-    ///
-    /// Duplicates are not deduplicated. If two branches admit the
-    /// same binding extension, both copies appear in the result -
-    /// the same convention `And` follows when a conjunct produces
-    /// the same extension under multiple prior contexts. Downstream
-    /// uses (`require`, invariants) that only care whether the
-    /// result is non-empty are unaffected; `Forall` over an `Or`
-    /// source would iterate duplicates, which is the documented
-    /// behaviour.
+    /// Predicate-shaped disjunction. Concatenates the binding sets each
+    /// branch produces against the same base context; empty when every
+    /// branch is empty. No deduplication (matches `And`'s convention).
+    /// Flattened `Vec<Expr>` so `a or b or c` is one node.
     Or(Vec<Expr>),
-    /// Evaluates the wrapped subtree against the *pre-transition*
-    /// state instead of the candidate (post-transition) state.
-    /// Predicate-shaped: the result is whatever the inner expression
-    /// produces (binding extensions, truth-witness), but every claim
-    /// lookup, `Sum` aggregation, `Forall` source, and `ValueOf`
-    /// inside resolves against pre-state.
+    /// Evaluates the wrapped subtree against the pre-transition state
+    /// instead of the candidate (post) state. The default for an
+    /// invariant body is post; `Pre` flips the lookup for one subtree
+    /// so a single invariant can relate pre and post values.
     ///
-    /// The default state for an invariant body is the candidate
-    /// state (the world after the proposed transition's staged
-    /// assertions and retractions). `Pre` is the **opt-in escape
-    /// hatch** that flips the lookup for one subtree. Together with
-    /// the default, this lets an invariant compare a pre-state value
-    /// to a post-state value in a single body:
+    /// Raises [`crate::EvalError::PreStateUnavailable`] when the
+    /// evaluation context has no pre-state in scope: derived-claim
+    /// bodies, transformation `require`s, evaluator calls whose
+    /// `EvalContext` was constructed with `pre_state: None`, and the
+    /// inner of a nested `Pre`.
     ///
-    /// ```text
-    /// MoveCount(n) and pre(MoveCount(m)) implies n = m + 1
-    /// ```
-    ///
-    /// Evaluation contract: `Pre(inner)` is legal only in contexts
-    /// that have both a pre-state and a post-state in scope - today,
-    /// that is invariant evaluation during `propose`. Derived-claim
-    /// enumeration, standalone `find_matches` calls, transformation
-    /// `require` bodies (which already see pre-state by default), and
-    /// any other one-state context surface
-    /// [`crate::EvalError::PreStateUnavailable`] when they hit a
-    /// `Pre` node. The error is about evaluation context, not AST
-    /// position, so future contexts that legitimately carry both
-    /// states (transformation post-conditions, trace assertions) can
-    /// share the same primitive without IR change.
-    ///
-    /// Nested `Pre` is also `PreStateUnavailable`: there is no
-    /// "pre-pre-state" to flip into. The evaluator enforces this by
-    /// clearing the pre-state slot when descending into a `Pre`
-    /// subtree.
-    ///
-    /// Quantifier composition is intentional and non-commutative:
-    ///
-    /// - `pre(forall x in Squares: Empty(x))` reads "in pre-state,
-    ///   every square was empty" - both the iteration domain and
-    ///   the body resolve against pre.
-    /// - `forall x in Squares: pre(Empty(x))` reads "for each square
-    ///   (chosen in post-state), it was empty in pre-state" - the
-    ///   iteration domain is post-state, only the body is pre.
-    ///
-    /// The two differ when the iteration set itself changes between
-    /// states (accounts created or removed, board squares always
-    /// fixed). This distinction is what makes `Pre` more honest than
-    /// a per-Term lookup primitive.
-    ///
-    /// Genesis behaviour falls out of `Implies` vacuity: an
-    /// invariant like `pre(MoveCount(m)) implies ...` is vacuously
-    /// true before the very first admission of `MoveCount`, because
-    /// `pre(MoveCount(m))` produces no bindings. Authors who need to
-    /// distinguish "creation" from "update" write the two cases as
-    /// disjuncts.
+    /// Quantifier composition is non-commutative: `pre(forall x in
+    /// Squares: ...)` resolves both the iteration domain and the body
+    /// against pre; `forall x in Squares: pre(...)` iterates the post-
+    /// state domain and only flips the body. The two diverge when the
+    /// iteration set itself changes between states.
     Pre(Box<Expr>),
     Not(Box<Expr>),
     Neq(Term, Term),

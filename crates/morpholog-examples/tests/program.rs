@@ -90,7 +90,7 @@ fn double_entry_ledger_program_has_expected_shape() {
 fn insurance_claim_settlement_program_has_expected_shape() {
     let p = insurance_claim_settlement::program();
     assert_eq!(p.name, "insurance_claim_settlement");
-    assert_eq!(p.invariants.len(), 4);
+    assert_eq!(p.invariants.len(), 7);
     assert_eq!(p.transformations.len(), 4);
 
     assert!(p.transformation("issue_policy").is_some());
@@ -99,12 +99,15 @@ fn insurance_claim_settlement_program_has_expected_shape() {
     assert!(p.transformation("authorise_settlement").is_some());
 
     assert!(p.invariant("paid_implies_authorised").is_some());
+    assert!(p.invariant("paid_implies_headroom").is_some());
     assert!(p.invariant("at_most_one_policy_per_id").is_some());
     assert!(p.invariant("at_most_one_claim_report_per_id").is_some());
+    assert!(p.invariant("at_most_one_headroom_per_policy").is_some());
     assert!(
         p.invariant("settlement_id_uniquely_identifies_payment")
             .is_some()
     );
+    assert!(p.invariant("headroom_consumed_by_payment").is_some());
 }
 
 #[test]

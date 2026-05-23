@@ -61,7 +61,7 @@ The shape is **keys, values, domain**: one row per distinct account; balance = s
 ## How to run it
 
 ```bash
-# In-memory (sync kernel)
+# In-memory
 cargo test -p morpholog-examples --test double_entry_ledger
 cargo test -p morpholog-examples --test derived_claims
 

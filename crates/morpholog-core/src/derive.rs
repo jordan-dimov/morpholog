@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::eval::{EvalError, eval_value, find_matches};
+use crate::eval::{EvalContext, EvalError, eval_value, find_matches};
 use crate::ir::{DerivedClaim, Invariant};
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
@@ -37,7 +37,8 @@ pub fn eval_invariant(
     // scope. `Term::Actor` inside an invariant body surfaces as
     // `EvalError::UnboundActor`, enforcing the doctrine that authority
     // checks live in `require`, not in invariants.
-    let matches = find_matches(&inv.body, state, pre_state, &bindings, None)?;
+    let ctx = EvalContext::new(state, pre_state, &bindings, None);
+    let matches = find_matches(&inv.body, &ctx)?;
     Ok(!matches.is_empty())
 }
 
@@ -72,7 +73,9 @@ pub fn enumerate_derived(
     // in a derived-claim body surfaces as `EvalError::UnboundActor`;
     // `Expr::Pre` surfaces as `EvalError::PreStateUnavailable` (derived
     // claims are a function of one state).
-    let raw_bindings = find_matches(&derived.domain, state, None, &Bindings::new(), None)?;
+    let empty_bindings = Bindings::new();
+    let domain_ctx = EvalContext::new(state, None, &empty_bindings, None);
+    let raw_bindings = find_matches(&derived.domain, &domain_ctx)?;
 
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
     for b in &raw_bindings {
@@ -96,8 +99,9 @@ pub fn enumerate_derived(
             per_key.insert(k.clone(), v.0.clone());
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
+        let value_ctx = EvalContext::new(state, None, &per_key, None);
         for value_def in &derived.values {
-            let v = eval_value(&value_def.expr, state, None, &per_key, None)?;
+            let v = eval_value(&value_def.expr, &value_ctx)?;
             args.push(v);
         }
         out.push(ClaimInstance {
