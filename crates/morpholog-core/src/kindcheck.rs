@@ -22,17 +22,16 @@
 //! specific slot refines it to that specific kind. This keeps `Any`
 //! as an honest escape hatch without making it a kind-eraser.
 
-// The scaffolding lands in one commit; the per-pass walkers that
-// consume `InferredKind` / `KindEnv` arrive in following commits.
-// The unit tests below already exercise the types, so the
-// scaffolding is not load-bearing-untested - just not yet wired
-// into `validate_program`.
+// Layer 1 lands in stages: scaffolding + predicate-claim walk in
+// commits 2-3, value-expression inference (Add/Sub/Le/DateLe/
+// Eq/Neq) in commit 4, Sum + ValueOf in commit 5, then wiring
+// into `validate_program` in commit 6.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 
-use crate::ir::{PredicateArgKind, Program};
-use crate::validate::ValidationError;
+use crate::ir::{Expr, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
+use crate::validate::{ValidationContext, ValidationError};
 
 /// Inferred kind of a value during static analysis. Distinct from
 /// [`PredicateArgKind`] (which is the *declared* kind on a predicate
@@ -145,13 +144,329 @@ impl KindEnv {
     }
 }
 
-/// Run the kind checker over the whole programme. Currently a
-/// stub returning no errors; per-pass logic lands in following
-/// commits (predicate arg checking, comparators / arithmetic, Sum
-/// / ValueOf, statement flow). Wired into `validate_program` once
-/// the per-pass logic is in place.
-pub(crate) fn kindcheck_program(_program: &Program) -> Vec<ValidationError> {
-    Vec::new()
+/// Run the kind checker over the whole programme. Returns the full
+/// list of detected mismatches; the caller (today
+/// [`crate::validate::validate_program`] in a later commit) merges
+/// these into the existing arity-and-declaration error list. An
+/// empty `Vec` means the programme is kind-consistent.
+pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let predicate_decls: HashMap<&str, &PredicateDecl> = program
+        .predicates
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
+
+    for inv in &program.invariants {
+        let mut env = KindEnv::new();
+        let ctx = ValidationContext::Invariant {
+            name: inv.name.clone(),
+        };
+        walk_predicate_expr(&inv.body, &mut env, &predicate_decls, &ctx, &mut errors);
+    }
+
+    for derived in &program.derived_claims {
+        let mut env = KindEnv::new();
+        let ctx = ValidationContext::DerivedClaim {
+            predicate: derived.predicate.clone(),
+        };
+        walk_predicate_expr(
+            &derived.domain,
+            &mut env,
+            &predicate_decls,
+            &ctx,
+            &mut errors,
+        );
+        // Each `value <name> = <expr>` is a value-producing
+        // expression, fully type-checked in commit 5 when value-
+        // inference lands. For now, recurse into any predicate
+        // subexpressions so claim-call arg kinds are still checked.
+        for value in &derived.values {
+            walk_predicate_expr(&value.expr, &mut env, &predicate_decls, &ctx, &mut errors);
+        }
+    }
+
+    for transformation in &program.transformations {
+        let ctx = ValidationContext::Transformation {
+            name: transformation.name.clone(),
+        };
+        let mut env = KindEnv::new();
+        // Transformation parameters arrive untyped from the caller;
+        // each gets observed at `UnknownOrAny` so subsequent uses
+        // refine. First-observation against `UnknownOrAny` never
+        // conflicts, so the `expect` cannot fire.
+        for param in &transformation.parameters {
+            env.observe(param, InferredKind::UnknownOrAny)
+                .expect("first observation never conflicts");
+        }
+        for stmt in &transformation.body {
+            walk_stmt(stmt, &mut env, &predicate_decls, &ctx, &mut errors);
+        }
+    }
+
+    errors
+}
+
+/// Walk a predicate-shaped expression and emit any claim-arg or
+/// variable-conflict errors. Threads bindings through `env` for
+/// composition (`And`, `Or`, `Implies`, `Pre`, etc.) and across
+/// the iteration domain of `Forall`. Does not currently descend
+/// into value-shaped subtrees (`Add`, `Sub`, `Sum`, `ValueOf`,
+/// `Term`) - that arrives with value-expression inference in a
+/// following commit.
+fn walk_predicate_expr(
+    expr: &Expr,
+    env: &mut KindEnv,
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    match expr {
+        Expr::Claim { predicate, args } => {
+            check_claim_args(predicate, args, env, predicate_decls, ctx, errors);
+        }
+        Expr::And(items) | Expr::Or(items) => {
+            for item in items {
+                walk_predicate_expr(item, env, predicate_decls, ctx, errors);
+            }
+        }
+        Expr::Not(inner) | Expr::Pre(inner) => {
+            walk_predicate_expr(inner, env, predicate_decls, ctx, errors);
+        }
+        Expr::Implies { left, right } => {
+            walk_predicate_expr(left, env, predicate_decls, ctx, errors);
+            walk_predicate_expr(right, env, predicate_decls, ctx, errors);
+        }
+        Expr::Exists { binding: _, body } => {
+            walk_predicate_expr(body, env, predicate_decls, ctx, errors);
+        }
+        Expr::Forall {
+            binding: _,
+            source,
+            body,
+        } => {
+            walk_predicate_expr(source, env, predicate_decls, ctx, errors);
+            walk_predicate_expr(body, env, predicate_decls, ctx, errors);
+        }
+        // Comparators land in commit 4. Stub: do nothing today.
+        Expr::Le(_, _) | Expr::DateLe(_, _) | Expr::Eq(_, _) => {}
+        // Neq's operands are Terms; full check lands in commit 4.
+        Expr::Neq(_, _) | Expr::In(_, _) => {}
+        // Value-shaped expressions cannot appear at a predicate
+        // position; the runtime raises NotPredicate. Static
+        // surfacing lives with value inference in commit 4.
+        Expr::Term(_)
+        | Expr::Add(_, _)
+        | Expr::Sub(_, _)
+        | Expr::Sum { .. }
+        | Expr::ValueOf { .. } => {}
+    }
+}
+
+/// Walk a statement, threading kind information through the env
+/// according to the runtime quartet doctrine. The semantics must
+/// match what `propose.rs` does at runtime:
+///
+/// - `Require(expr)` - checks against the current env but does
+///   **not** export new bindings to subsequent statements. Mirrors
+///   `Stmt::Require`'s "yes/no gate" role.
+/// - `BindOne(expr)` - unique-lookup binding statement. Extends
+///   the env with any new variables observed in the expression.
+/// - `Let { name, value }` - infer the value expression's kind
+///   (commit 4) and observe `name` at that kind. For commit 3
+///   `name` is observed as `UnknownOrAny`; commit 4 refines.
+/// - `For { binding, collection, body }` - the body runs against
+///   a scoped env (bindings inside `body` do not leak). The
+///   collection is value-shaped; full check arrives in commit 4.
+/// - `Assert(claim)` / `Retract { predicate, args }` - check
+///   args against declared kinds, same as `Expr::Claim`. Assert
+///   does not export bindings (statement-level write only).
+/// - `Emit` - no checks today; awaits `IntentDecl`.
+/// - `LetNewSubject { name }` - observe `name` at `Subject` kind.
+fn walk_stmt(
+    stmt: &Stmt,
+    env: &mut KindEnv,
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    match stmt {
+        Stmt::Require(expr) => {
+            // Require does NOT export bindings. Walk against a
+            // clone so any refinements inside the require do not
+            // leak forward - this mirrors how the runtime treats
+            // require as a yes/no gate that returns the original
+            // binding context unchanged on success.
+            let mut scoped = env.clone();
+            walk_predicate_expr(expr, &mut scoped, predicate_decls, ctx, errors);
+        }
+        Stmt::BindOne(expr) => {
+            // BindOne extends the binding context with the matched
+            // binding set. Refinements observed here flow forward.
+            walk_predicate_expr(expr, env, predicate_decls, ctx, errors);
+        }
+        Stmt::Let { name, value: _ } => {
+            // Value inference lands in commit 4; observing `name`
+            // as `UnknownOrAny` today means subsequent uses of the
+            // bound name simply refine on demand.
+            let _ = env.observe(name, InferredKind::UnknownOrAny);
+        }
+        Stmt::LetNewSubject { name } => {
+            // `new Subject()` mints a fresh subject id; the
+            // bound name is unambiguously Subject-kinded.
+            observe_or_report(
+                env,
+                name,
+                InferredKind::Known(PredicateArgKind::Subject),
+                ctx,
+                errors,
+            );
+        }
+        Stmt::Assert(claim) => {
+            check_claim_args(
+                &claim.predicate,
+                &claim.args,
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+        }
+        Stmt::Retract { predicate, args } => {
+            check_claim_args(predicate, args, env, predicate_decls, ctx, errors);
+        }
+        Stmt::For {
+            binding,
+            collection: _,
+            body,
+        } => {
+            // The body runs against a scoped env: bindings inside
+            // the loop do not leak out, matching runtime For
+            // semantics. The collection expression is value-shaped
+            // and gets proper inference in commit 4.
+            let mut scoped = env.clone();
+            // The iteration variable's element kind is unknown
+            // without collection-element typing; observe at
+            // UnknownOrAny so body uses refine on demand.
+            let _ = scoped.observe(binding, InferredKind::UnknownOrAny);
+            for inner in body {
+                walk_stmt(inner, &mut scoped, predicate_decls, ctx, errors);
+            }
+        }
+        Stmt::Emit(_intent) => {
+            // Intent emission has no declared vocabulary today;
+            // `IntentDecl` would gate this. Until then, nothing
+            // to check at the kind layer.
+        }
+    }
+}
+
+/// Check a predicate-call's arg list against the declared kinds.
+/// For each position: a literal contributes its kind directly; a
+/// variable is observed (refining the env); `Term::Wildcard` is
+/// skipped (matches anything, binds nothing); `Term::Actor`
+/// contributes `Subject` (its inherent kind; whether `actor` is
+/// reachable in this context is a separate Layer-3 concern).
+///
+/// An undeclared predicate is *not* an error here - the existing
+/// arity-and-declaration pass surfaces that earlier with
+/// `UndeclaredPredicate`. We skip silently if the predicate is
+/// unknown.
+fn check_claim_args(
+    predicate: &str,
+    args: &[Term],
+    env: &mut KindEnv,
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(decl) = predicate_decls.get(predicate) else {
+        return;
+    };
+    // Arity mismatch is also out of scope for the kind layer; the
+    // existing pass emits it. Walk only as many positions as both
+    // sides have.
+    let n = args.len().min(decl.args.len());
+    for (position, (arg, decl_arg)) in args
+        .iter()
+        .take(n)
+        .zip(decl.args.iter().take(n))
+        .enumerate()
+    {
+        check_one_claim_arg(predicate, position, arg, decl_arg.kind, env, ctx, errors);
+    }
+}
+
+fn check_one_claim_arg(
+    predicate: &str,
+    position: usize,
+    arg: &Term,
+    expected: PredicateArgKind,
+    env: &mut KindEnv,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let actual = term_kind(arg);
+    // For variables, observe (refining the env). For literals and
+    // actor, just check compatibility - they carry their kind
+    // directly and cannot themselves be refined.
+    if let Term::Var(name) = arg {
+        if let Err((previous, new)) = env.observe(name, InferredKind::Known(expected)) {
+            errors.push(ValidationError::VariableKindConflict {
+                variable: name.clone(),
+                previous,
+                new,
+                context: ctx.clone(),
+            });
+        }
+        // Variable-vs-declaration conflict (e.g. var was already
+        // refined to Decimal and the current slot expects Subject)
+        // already comes out as VariableKindConflict above; nothing
+        // more to emit here.
+    } else if let InferredKind::Known(actual_kind) = actual
+        && !kinds_compatible(expected, actual_kind)
+    {
+        errors.push(ValidationError::PredicateArgKindMismatch {
+            predicate: predicate.to_string(),
+            position,
+            expected,
+            actual: actual_kind,
+            context: ctx.clone(),
+        });
+    }
+}
+
+/// Inherent kind of a `Term`. Variables are `UnknownOrAny` here;
+/// callers that want the env-resolved kind look it up separately.
+fn term_kind(term: &Term) -> InferredKind {
+    match term {
+        Term::Var(_) => InferredKind::UnknownOrAny,
+        Term::Wildcard => InferredKind::UnknownOrAny,
+        Term::Actor => InferredKind::Known(PredicateArgKind::Subject),
+        Term::Literal(Value::Subject(_)) => InferredKind::Known(PredicateArgKind::Subject),
+        Term::Literal(Value::Decimal(_)) => InferredKind::Known(PredicateArgKind::Decimal),
+        Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),
+    }
+}
+
+/// Helper used by statement-flow observation paths (`LetNewSubject`,
+/// future `Let` and `For` paths) that wrap `KindEnv::observe`'s
+/// conflict tuple in a `VariableKindConflict` diagnostic.
+fn observe_or_report(
+    env: &mut KindEnv,
+    name: &str,
+    kind: InferredKind,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Err((previous, new)) = env.observe(name, kind) {
+        errors.push(ValidationError::VariableKindConflict {
+            variable: name.to_string(),
+            previous,
+            new,
+            context: ctx.clone(),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -270,5 +585,311 @@ mod tests {
             .observe("x", InferredKind::Known(PredicateArgKind::Subject))
             .expect_err("conflict");
         assert_eq!(err, (PredicateArgKind::Decimal, PredicateArgKind::Subject));
+    }
+
+    // ============================================================
+    // kindcheck_program: claim arg checking + statement flow
+    // ============================================================
+
+    use crate::dsl::*;
+    use crate::ir::{Invariant, PredicateArgDecl, Program, Transformation};
+
+    /// Build a `PredicateDecl` shorthand for tests.
+    fn pdecl(name: &str, args: &[(&str, PredicateArgKind)]) -> crate::ir::PredicateDecl {
+        crate::ir::PredicateDecl {
+            name: name.to_string(),
+            args: args
+                .iter()
+                .map(|(n, k)| PredicateArgDecl {
+                    name: n.to_string(),
+                    kind: *k,
+                })
+                .collect(),
+        }
+    }
+
+    fn empty_program() -> Program {
+        Program {
+            name: "test".to_string(),
+            predicates: vec![],
+            invariants: vec![],
+            transformations: vec![],
+            derived_claims: vec![],
+        }
+    }
+
+    #[test]
+    fn clean_programme_returns_no_kind_errors() {
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Policy",
+            &[
+                ("policy_id", PredicateArgKind::Subject),
+                ("limit", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.invariants = vec![Invariant {
+            name: "any_policy_has_positive_limit".to_string(),
+            version: 1,
+            body: claim("Policy", vec![var("p"), var("l")]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "clean programme should report no errors; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn decimal_literal_in_subject_slot_is_flagged() {
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Policy", &[("policy_id", PredicateArgKind::Subject)])];
+        p.invariants = vec![Invariant {
+            name: "bad".to_string(),
+            version: 1,
+            body: claim("Policy", vec![dec("123")]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1, "expected one kind error; got {errs:?}");
+        match &errs[0] {
+            ValidationError::PredicateArgKindMismatch {
+                predicate,
+                position,
+                expected,
+                actual,
+                ..
+            } => {
+                assert_eq!(predicate, "Policy");
+                assert_eq!(*position, 0);
+                assert_eq!(*expected, PredicateArgKind::Subject);
+                assert_eq!(*actual, PredicateArgKind::Decimal);
+            }
+            other => panic!("expected PredicateArgKindMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variable_kind_refined_across_claim_uses() {
+        // Pattern: bind variable `x` from a Decimal-slot Claim,
+        // then use it in another Decimal-slot Claim. Should pass.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Decimal)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "refine".to_string(),
+            version: 1,
+            body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "consistent refinement should pass; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn variable_kind_conflict_across_claim_uses_is_flagged() {
+        // Pattern: bind `x` from a Decimal slot, then use in a
+        // Subject slot. Conflict.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Subject)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "conflict".to_string(),
+            version: 1,
+            body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1, "expected one conflict; got {errs:?}");
+        match &errs[0] {
+            ValidationError::VariableKindConflict {
+                variable,
+                previous,
+                new,
+                ..
+            } => {
+                assert_eq!(variable, "x");
+                assert_eq!(*previous, PredicateArgKind::Decimal);
+                assert_eq!(*new, PredicateArgKind::Subject);
+            }
+            other => panic!("expected VariableKindConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn any_slot_observes_variable_without_constraining_it() {
+        // `A` declares its slot as `Any`. Variable `x` should
+        // not be pinned to Any; later use in a Decimal slot
+        // should refine it cleanly.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Any)]),
+            pdecl("B", &[("v", PredicateArgKind::Decimal)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "refines_through_any".to_string(),
+            version: 1,
+            body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "Any-then-Decimal should refine; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn actor_term_carries_subject_kind() {
+        // `actor` flowing into a Decimal slot is a kind mismatch.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Limit", &[("amount", PredicateArgKind::Decimal)])];
+        p.invariants = vec![Invariant {
+            name: "actor_in_decimal_slot".to_string(),
+            version: 1,
+            body: claim("Limit", vec![actor()]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(
+            errs.len(),
+            1,
+            "actor-in-decimal-slot must flag; got {errs:?}"
+        );
+        match &errs[0] {
+            ValidationError::PredicateArgKindMismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(*expected, PredicateArgKind::Decimal);
+                assert_eq!(*actual, PredicateArgKind::Subject);
+            }
+            other => panic!("expected PredicateArgKindMismatch, got {other:?}"),
+        }
+    }
+
+    // ----- Statement flow (require / bind_one / let / assert) -----
+
+    #[test]
+    fn bind_one_extends_env_for_subsequent_statements() {
+        // bind_one A(x) (x: Decimal); assert B(x) (B's slot: Decimal). Clean.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Decimal)]),
+        ];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("A", vec![var("x")])),
+                assert_("B", vec![var("x")]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "bind_one then matching assert should pass; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn bind_one_then_conflicting_assert_flags_variable_conflict() {
+        // bind_one binds x: Decimal; then assert pushes x into Subject slot.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Subject)]),
+        ];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("A", vec![var("x")])),
+                assert_("B", vec![var("x")]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1, "expected conflict; got {errs:?}");
+        assert!(matches!(
+            errs[0],
+            ValidationError::VariableKindConflict {
+                variable: ref v,
+                previous: PredicateArgKind::Decimal,
+                new: PredicateArgKind::Subject,
+                ..
+            } if v == "x"
+        ));
+    }
+
+    #[test]
+    fn require_does_not_export_bindings_to_subsequent_statements() {
+        // require A(x) sees x as Decimal but should NOT export it.
+        // Then assert B(x) (Subject) should not conflict because x
+        // is fresh again at the assert.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Subject)]),
+        ];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                require(claim("A", vec![var("x")])),
+                assert_("B", vec![var("x")]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "require must not export bindings; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn let_new_subject_binds_name_as_subject() {
+        // let_new_subject names a fresh subject; using it in a
+        // Decimal slot must flag.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Amt", &[("v", PredicateArgKind::Decimal)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![let_new_subject("fresh"), assert_("Amt", vec![var("fresh")])],
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(
+            errs.len(),
+            1,
+            "subject-into-decimal must flag; got {errs:?}"
+        );
+        assert!(matches!(
+            errs[0],
+            ValidationError::VariableKindConflict {
+                previous: PredicateArgKind::Subject,
+                new: PredicateArgKind::Decimal,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn retract_args_are_kind_checked() {
+        // Retract is the read side of the assert pair; same kind rules apply.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("P", &[("id", PredicateArgKind::Subject)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![retract("P", vec![dec("99")])],
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(
+            errs[0],
+            ValidationError::PredicateArgKindMismatch { .. }
+        ));
     }
 }
