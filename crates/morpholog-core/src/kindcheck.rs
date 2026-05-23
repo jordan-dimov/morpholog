@@ -114,27 +114,6 @@ impl KindEnv {
         self.bindings.insert(name.to_string(), refined);
         Ok(())
     }
-
-    /// Run `body` with `name` shadowed in scope. The binding's
-    /// pre-`body` value (if any) is restored on exit regardless of
-    /// what the body did. Refinements to *other* variables made
-    /// inside `body` leak through normally - mirrors the runtime
-    /// semantics where a quantifier binding (`forall x in ...`,
-    /// `exists x: ...`, `sum(_ | x ...)`) introduces a fresh `x`
-    /// scoped to the body while still seeing the outer context.
-    pub(crate) fn with_shadow<R>(&mut self, name: &str, body: impl FnOnce(&mut Self) -> R) -> R {
-        let saved = self.bindings.remove(name);
-        let result = body(self);
-        match saved {
-            Some(prev) => {
-                self.bindings.insert(name.to_string(), prev);
-            }
-            None => {
-                self.bindings.remove(name);
-            }
-        }
-        result
-    }
 }
 
 /// Run the kind checker over the whole programme. Returns the
@@ -227,25 +206,29 @@ fn walk_predicate_expr(
             walk_predicate_expr(left, env, predicate_decls, ctx, errors);
             walk_predicate_expr(right, env, predicate_decls, ctx, errors);
         }
-        Expr::Exists { binding, body } => {
-            env.with_shadow(binding, |env| {
-                walk_predicate_expr(body, env, predicate_decls, ctx, errors);
-            });
+        Expr::Exists { binding: _, body } => {
+            // No shadowing: the runtime evaluator (`find_matches`
+            // for Exists) walks the body against the same bindings
+            // it was called with, so an outer variable of the same
+            // name as `binding` acts as a unification constraint
+            // - not a shadow. Refinements flow through.
+            walk_predicate_expr(body, env, predicate_decls, ctx, errors);
         }
         Expr::Forall {
-            binding,
+            binding: _,
             source,
             body,
         } => {
-            // The binding is defined by `source` and consumed by
-            // `body` - both run under the shadow so the loop-local
-            // x cannot collide with an outer x of a different
-            // kind. (The runtime's forall introduces a fresh x
-            // before evaluating source's matches.)
-            env.with_shadow(binding, |env| {
-                walk_predicate_expr(source, env, predicate_decls, ctx, errors);
-                walk_predicate_expr(body, env, predicate_decls, ctx, errors);
-            });
+            // No shadowing: `find_matches` for Forall evaluates
+            // `source` against the caller's bindings (via
+            // `unify_args`, which treats existing bindings as
+            // constraints), then evaluates `body` against each
+            // source-match. An outer variable of the same name as
+            // `binding` constrains the loop rather than being
+            // shadowed; the kindcheck mirrors that by letting
+            // refinements flow through both source and body.
+            walk_predicate_expr(source, env, predicate_decls, ctx, errors);
+            walk_predicate_expr(body, env, predicate_decls, ctx, errors);
         }
         Expr::Le(left, right) => {
             check_operand_kind(
@@ -591,33 +574,29 @@ fn infer_value_expr(
         }
         Expr::Sum {
             value,
-            binding,
+            binding: _,
             body,
         } => {
-            // Body-first inference under a shadowed binding: walk
-            // body so any kind observed there for `binding` (or
-            // other body-bound variables) refines, then check
-            // `value` (a Term) against the refined env. Sum's
-            // outer result is always Decimal regardless of body.
-            //
-            // Shadow scopes the iteration variable only; refining
-            // an outer variable used inside the body still leaks
-            // through, mirroring the runtime where body sees the
-            // same outer state.
-            env.with_shadow(binding, |env| {
-                walk_predicate_expr(body, env, predicate_decls, ctx, errors);
-                let resolved = resolved_term_kind(value, env);
-                if let InferredKind::Known(actual) = resolved
-                    && !kinds_compatible(PredicateArgKind::Decimal, actual)
-                {
-                    errors.push(ValidationError::OperandKindMismatch {
-                        operator: "sum",
-                        expected: PredicateArgKind::Decimal,
-                        actual,
-                        context: ctx.clone(),
-                    });
-                }
-            });
+            // Body-first inference on a cloned env so body-bound
+            // names (the iteration `binding`, plus any others the
+            // body introduces) do not leak into the surrounding
+            // expression. Outer variables are visible inside body
+            // via the clone, matching how the runtime evaluator
+            // sees them as unification constraints. Sum's outer
+            // result is always Decimal regardless of body.
+            let mut scoped = env.clone();
+            walk_predicate_expr(body, &mut scoped, predicate_decls, ctx, errors);
+            let resolved = resolved_term_kind(value, &scoped);
+            if let InferredKind::Known(actual) = resolved
+                && !kinds_compatible(PredicateArgKind::Decimal, actual)
+            {
+                errors.push(ValidationError::OperandKindMismatch {
+                    operator: "sum",
+                    expected: PredicateArgKind::Decimal,
+                    actual,
+                    context: ctx.clone(),
+                });
+            }
             InferredKind::Known(PredicateArgKind::Decimal)
         }
         Expr::ValueOf {
@@ -1683,15 +1662,19 @@ mod tests {
     }
 
     // ============================================================
-    // Binding scoping for quantifiers (Forall, Exists, Sum)
+    // Quantifier bindings unify with outer (no shadowing)
     // ============================================================
+    //
+    // The runtime evaluator (`find_matches`) does not shadow
+    // quantifier bindings - `unify_args` treats existing bindings
+    // as constraints. An outer `x` reused as a forall / exists /
+    // sum binding constrains the source/body rather than being
+    // shadowed; a kind mismatch between the outer and inner uses
+    // is what the runtime would surface as a unification failure,
+    // so the kindcheck flags it as `VariableKindConflict`.
 
     #[test]
-    fn forall_binding_shadows_outer_variable_of_the_same_name() {
-        // Outer `x` is Subject (via S(x)). The `forall x in P(x): C(x)`
-        // re-uses `x` as a loop-local binding over P (Decimal). After
-        // the forall, the outer `x` must still be Subject - using
-        // it in a Subject slot again must NOT conflict.
+    fn forall_with_kind_conflicting_outer_variable_flags_conflict() {
         let mut p = empty_program();
         p.predicates = vec![
             pdecl("S", &[("v", PredicateArgKind::Subject)]),
@@ -1699,71 +1682,55 @@ mod tests {
             pdecl("C", &[("v", PredicateArgKind::Decimal)]),
         ];
         p.invariants = vec![Invariant {
-            name: "forall_shadowing".to_string(),
+            name: "forall_unify".to_string(),
             version: 1,
             body: and(vec![
                 claim("S", vec![var("x")]),
                 forall("x", claim("P", vec![var("x")]), claim("C", vec![var("x")])),
-                claim("S", vec![var("x")]),
             ]),
         }];
         let errs = kindcheck_program(&p);
         assert!(
-            errs.is_empty(),
-            "forall binding must shadow outer x; got {errs:?}"
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Subject,
+                    new: PredicateArgKind::Decimal,
+                    ..
+                } if v == "x"
+            )),
+            "outer x:Subject must conflict with forall source P(x:Decimal); got {errs:?}"
         );
     }
 
     #[test]
-    fn exists_binding_shadows_outer_variable_of_the_same_name() {
-        // Same pattern as forall but with exists.
+    fn exists_with_kind_conflicting_outer_variable_flags_conflict() {
         let mut p = empty_program();
         p.predicates = vec![
             pdecl("S", &[("v", PredicateArgKind::Subject)]),
             pdecl("D", &[("v", PredicateArgKind::Decimal)]),
         ];
         p.invariants = vec![Invariant {
-            name: "exists_shadowing".to_string(),
+            name: "exists_unify".to_string(),
             version: 1,
             body: and(vec![
                 claim("S", vec![var("x")]),
                 exists("x", claim("D", vec![var("x")])),
-                claim("S", vec![var("x")]),
             ]),
         }];
         let errs = kindcheck_program(&p);
         assert!(
-            errs.is_empty(),
-            "exists binding must shadow outer x; got {errs:?}"
-        );
-    }
-
-    #[test]
-    fn sum_binding_shadows_outer_variable_of_the_same_name() {
-        // The Sum scoping test we already have proves body
-        // bindings don't leak, but didn't pin shadowing of an
-        // outer variable of the same name. Pin it.
-        let mut p = empty_program();
-        p.predicates = vec![
-            pdecl("S", &[("v", PredicateArgKind::Subject)]),
-            pdecl("P", &[("v", PredicateArgKind::Decimal)]),
-        ];
-        p.invariants = vec![Invariant {
-            name: "sum_shadowing".to_string(),
-            version: 1,
-            body: and(vec![
-                claim("S", vec![var("amount")]),
-                le(
-                    sum(var("amount"), "amount", claim("P", vec![var("amount")])),
-                    term(dec("100")),
-                ),
-                claim("S", vec![var("amount")]),
-            ]),
-        }];
-        let errs = kindcheck_program(&p);
-        assert!(
-            errs.is_empty(),
-            "sum binding must shadow outer amount; got {errs:?}"
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Subject,
+                    new: PredicateArgKind::Decimal,
+                    ..
+                } if v == "x"
+            )),
+            "outer x:Subject must conflict with exists body D(x:Decimal); got {errs:?}"
         );
     }
 
