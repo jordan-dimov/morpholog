@@ -82,6 +82,14 @@ enum Command {
     /// this program well-formed?", with uniform output regardless of
     /// which layer raised the issue.
     Check(SourceFileArgs),
+
+    /// Propose a transformation defined in a user-supplied `.morph`
+    /// source file against a Morpholog PostgreSQL database. The
+    /// non-built-in counterpart of `propose`: parses and validates
+    /// the source file, then proposes the named transformation with
+    /// the supplied actor and JSON args. Same JSON output and same
+    /// exit-code semantics as `propose`.
+    Run(RunArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -238,6 +246,45 @@ pub(crate) struct ProposeArgs {
     pub(crate) trace: bool,
 }
 
+/// Arguments for the `run` subcommand. The `propose`-shaped fields
+/// (`transformation`, `args`, `actor`, `database_url`, `trace`)
+/// match `propose` exactly; the difference is `file` (a path to a
+/// user-supplied `.morph` source) in place of `propose`'s `program`
+/// (a built-in registry name).
+#[derive(clap::Args, Debug)]
+pub(crate) struct RunArgs {
+    /// Path to a `.morph` source file containing the programme.
+    pub(crate) file: PathBuf,
+
+    /// Transformation name within the parsed programme.
+    pub(crate) transformation: String,
+
+    /// JSON array of arguments matching the transformation's parameter
+    /// list. Each element must be an `EvalValue` in the codec's tagged
+    /// form: `{"type":"subject","value":"..."}`, `{"type":"decimal",
+    /// "value":"100"}`, `{"type":"bool","value":true}`, or
+    /// `{"type":"collection","value":[...]}`.
+    #[arg(long)]
+    pub(crate) args: String,
+
+    /// Subject value identifying the actor under whose authority this
+    /// transition is being proposed. Free-form subject string; the
+    /// CLI wraps it as an `EvalValue::Subject` and persists it to
+    /// `morpholog.audit.actor`.
+    #[arg(long)]
+    pub(crate) actor: String,
+
+    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
+    /// environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+
+    /// When set, emit a structured per-statement trace alongside the
+    /// outcome. Same shape as `propose --trace`.
+    #[arg(long)]
+    pub(crate) trace: bool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -246,6 +293,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Propose(args) => commands::propose::run(args).await,
         Command::Parse(args) => commands::parse::run(args),
         Command::Check(args) => commands::check::run(args),
+        Command::Run(args) => commands::run::run(args).await,
     }
 }
 
