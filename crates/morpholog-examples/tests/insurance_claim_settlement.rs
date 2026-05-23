@@ -207,8 +207,9 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
     // ("require")`, which proved a require failed but not *which*
     // one. The trace assertion below proves:
     //
-    //   1. Both bind_ones succeeded (claim_001's policy_id was
-    //      bound, and policy_001's aggregate_limit was bound).
+    //   1. All three bind_ones succeeded (claim_001's policy_id,
+    //      policy_001's aggregate_limit, and policy_001's
+    //      current PolicyHeadroom were all bound).
     //   2. The subsequent require - the SettlementAuthority + Le
     //      gate - is the one that rejected.
     //
@@ -251,8 +252,8 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         })
         .count();
     assert_eq!(
-        bound_count, 2,
-        "expected both bind_ones to succeed before the require fails; trace: {trace:#?}"
+        bound_count, 3,
+        "expected all three bind_ones (ClaimReported, Policy, PolicyHeadroom) to succeed before the require fails; trace: {trace:#?}"
     );
 
     // Step 2: the require that rejected has SettlementAuthority in
@@ -602,4 +603,150 @@ fn policy_limit_usage_empty_when_no_settlements_paid() {
     let rows = enumerate_derived(&insurance_claim_settlement::policy_limit_usage(), &s)
         .expect("enumerate_derived should not error");
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+}
+
+// ============================================================
+// PolicyHeadroom conservation
+//
+// PR #70's payoff: every payment must consume exactly its amount
+// of headroom, enforced by the `headroom_consumed_by_payment`
+// transition invariant. The require gate ("is there enough?") and
+// the invariant ("did the payment actually consume?") answer
+// different questions; both are kept and both are tested here.
+// ============================================================
+
+/// Happy path: an authorised settlement reduces PolicyHeadroom by
+/// exactly the payment amount. Pre-state headroom for `policy_001`
+/// is 100k (the aggregate at issuance); a 30k payment leaves 70k.
+#[test]
+fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
+    let pre = happy_pre();
+    let post = must_accept_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
+        subj("alex"),
+        pre,
+        &invariants(),
+    );
+    assert!(
+        has_claim(&post, "PolicyHeadroom", &[subj("policy_001"), dec(70_000)]),
+        "PolicyHeadroom must reflect aggregate - amount after settlement"
+    );
+    // And the pre-state headroom claim is gone.
+    assert!(
+        !has_claim(&post, "PolicyHeadroom", &[subj("policy_001"), dec(100_000)]),
+        "pre-state PolicyHeadroom must be retracted"
+    );
+}
+
+/// Load-bearing test: the transition invariant catches a payment
+/// that did not properly consume headroom. Constructs a buggy
+/// transformation that admits SettlementPaid without touching
+/// PolicyHeadroom - the aggregate-limit require still passes
+/// (there's been no spending yet) but the conservation invariant
+/// fails because pre-headroom and post-headroom are identical
+/// while a new SettlementPaid was admitted.
+///
+/// This is the kind of bug a state invariant alone could not catch.
+/// Both PolicyHeadroom(p, 100_000) and SettlementPaid(p, ..., 30_000)
+/// are perfectly admissible singly; only the relationship between
+/// the pre-state and post-state falsifies the rule.
+#[test]
+fn conservation_invariant_catches_payment_that_skips_headroom_update() {
+    use morpholog_core::Transformation;
+    use morpholog_core::dsl;
+
+    let pre = happy_pre();
+
+    // A buggy authorise_settlement that does everything the real
+    // one does EXCEPT retract+assert PolicyHeadroom. The require
+    // gates still hold (alex has 50k authority; 30k <= 100k
+    // aggregate); the conservation invariant must reject.
+    let buggy = Transformation {
+        name: "buggy_authorise_settlement".to_string(),
+        parameters: dsl::params(&["claim_id", "settlement_id", "amount"]),
+        body: vec![
+            dsl::bind_one(dsl::claim(
+                "ClaimReported",
+                vec![dsl::var("claim_id"), dsl::var("policy_id"), dsl::wildcard()],
+            )),
+            dsl::bind_one(dsl::claim(
+                "Policy",
+                vec![dsl::var("policy_id"), dsl::var("aggregate_limit")],
+            )),
+            dsl::require(dsl::and(vec![
+                dsl::claim(
+                    "SettlementAuthority",
+                    vec![dsl::actor(), dsl::var("actor_limit")],
+                ),
+                dsl::le(
+                    dsl::term(dsl::var("amount")),
+                    dsl::term(dsl::var("actor_limit")),
+                ),
+            ])),
+            dsl::require(dsl::le(
+                dsl::add(
+                    dsl::sum(
+                        dsl::var("paid"),
+                        "paid",
+                        dsl::claim(
+                            "SettlementPaid",
+                            vec![
+                                dsl::var("policy_id"),
+                                dsl::wildcard(),
+                                dsl::wildcard(),
+                                dsl::var("paid"),
+                            ],
+                        ),
+                    ),
+                    dsl::term(dsl::var("amount")),
+                ),
+                dsl::term(dsl::var("aggregate_limit")),
+            )),
+            // Conspicuously missing: the let/retract/assert chain
+            // that maintains PolicyHeadroom.
+            dsl::assert_(
+                "SettlementAuthorised",
+                vec![
+                    dsl::var("claim_id"),
+                    dsl::var("settlement_id"),
+                    dsl::var("amount"),
+                    dsl::actor(),
+                ],
+            ),
+            dsl::assert_(
+                "SettlementPaid",
+                vec![
+                    dsl::var("policy_id"),
+                    dsl::var("claim_id"),
+                    dsl::var("settlement_id"),
+                    dsl::var("amount"),
+                ],
+            ),
+        ],
+    };
+
+    let outcome = propose_as(
+        &buggy,
+        vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
+        subj("alex"),
+        &pre,
+        &invariants(),
+    )
+    .expect("kernel must not error");
+
+    match outcome {
+        Outcome::Rejected { reason } => {
+            assert!(
+                reason.contains("headroom_consumed_by_payment"),
+                "expected rejection to name the conservation invariant, got: {reason}"
+            );
+        }
+        Outcome::Accepted { .. } => {
+            panic!(
+                "a buggy authorise_settlement that admits SettlementPaid \
+                 without consuming PolicyHeadroom must be rejected"
+            )
+        }
+    }
 }

@@ -109,6 +109,64 @@ pub fn at_most_one_headroom_per_policy() -> Invariant {
     }
 }
 
+/// Transition invariant: each newly-admitted `SettlementPaid` claim
+/// for a policy must consume the corresponding decrement from that
+/// policy's `PolicyHeadroom`. Reads as: "if a `PolicyHeadroom`
+/// exists both before and after, AND a new `SettlementPaid` was
+/// admitted in this transition for that policy with amount `amt`,
+/// then the post-state remaining = pre-state remaining - `amt`."
+///
+/// This is the conservation rule the `aggregate_limit` `require`
+/// gate alone could not enforce. The `require` is an admission
+/// gate ("is there enough headroom for this payment?"); this
+/// invariant is the conservation law ("did the payment actually
+/// consume exactly its amount of headroom?"). Both are kept: a
+/// buggy transformation that admitted `SettlementPaid` without
+/// retracting and re-asserting `PolicyHeadroom` would pass the
+/// require but fail this invariant, surfacing the bug at admission.
+///
+/// Genesis behaviour: `issue_policy` admits the initial
+/// `PolicyHeadroom` against an empty pre-state. The `pre(PolicyHeadroom
+/// (p, before))` conjunct matches nothing, the whole `and` is
+/// empty, and the rule is vacuously true under `implies`. Once the
+/// policy exists, every subsequent settlement is constrained.
+///
+/// Quantifier composition note: the body uses `and` to thread `p`
+/// across the post-state `PolicyHeadroom`, pre-state
+/// `PolicyHeadroom`, and the newly-admitted `SettlementPaid`. There
+/// is no `forall`; the binding-extension semantics of `And` produce
+/// one binding set per (p, after, before, s, amt) tuple and the
+/// `implies` must hold for each. Multiple newly-admitted settlements
+/// for the same policy in a single transition (if a buggy
+/// transformation ever produced them) would each be constrained
+/// against the same `(before, after)` pair, which would only
+/// succeed if every amount were identical - effectively forbidding
+/// multi-settlement transitions per policy.
+pub fn headroom_consumed_by_payment() -> Invariant {
+    Invariant {
+        name: "headroom_consumed_by_payment".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim("PolicyHeadroom", vec![var("p"), var("after")]),
+                pre(claim("PolicyHeadroom", vec![var("p"), var("before")])),
+                claim(
+                    "SettlementPaid",
+                    vec![var("p"), wildcard(), var("s"), var("amt")],
+                ),
+                not(pre(claim(
+                    "SettlementPaid",
+                    vec![var("p"), wildcard(), var("s"), var("amt")],
+                ))),
+            ]),
+            eq(
+                term(var("after")),
+                sub(term(var("before")), term(var("amt"))),
+            ),
+        ),
+    }
+}
+
 /// `settlement_id` is globally unique across admitted payments. Two
 /// `SettlementPaid` claims sharing a `settlement_id` must agree on
 /// every other field. Without this, an audit log could carry two
@@ -242,13 +300,14 @@ pub fn authorise_settlement() -> Transformation {
         name: "authorise_settlement".to_string(),
         parameters: params(&["claim_id", "settlement_id", "amount"]),
         body: vec![
-            // Unique-lookup pair: pull `policy_id` from the claim
-            // report, then `aggregate_limit` from the policy. Each
+            // Unique-lookup chain: pull `policy_id` from the claim
+            // report, then `aggregate_limit` from the policy, then
+            // `current_headroom` from the operational counter. Each
             // bind_one rejects if zero matches (no such claim
-            // reported / no such policy) and surfaces a kernel
-            // error if multiple matches (programme bug -
-            // structural-uniqueness invariants exist precisely to
-            // prevent this).
+            // reported / no such policy / no headroom on file) and
+            // surfaces a kernel error if multiple matches (programme
+            // bug - structural-uniqueness invariants exist precisely
+            // to prevent this).
             bind_one(claim(
                 "ClaimReported",
                 vec![var("claim_id"), var("policy_id"), wildcard()],
@@ -257,10 +316,22 @@ pub fn authorise_settlement() -> Transformation {
                 "Policy",
                 vec![var("policy_id"), var("aggregate_limit")],
             )),
+            bind_one(claim(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("current_headroom")],
+            )),
             require(and(vec![
                 claim("SettlementAuthority", vec![actor(), var("actor_limit")]),
                 le(term(var("amount")), term(var("actor_limit"))),
             ])),
+            // Admission-gate cumulative-cap rule. Kept alongside the
+            // post-state `headroom_consumed_by_payment` invariant:
+            // one is an authorisation gate ("is there enough headroom
+            // for this payment?"), the other is conservation ("did
+            // the payment actually consume exactly its amount?"). A
+            // buggy transformation that staged SettlementPaid without
+            // touching PolicyHeadroom would pass this require and
+            // fail the invariant.
             require(le(
                 add(
                     sum(
@@ -275,6 +346,25 @@ pub fn authorise_settlement() -> Transformation {
                 ),
                 term(var("aggregate_limit")),
             )),
+            // Compute the new headroom and stage the retract+assert
+            // pair that conservation requires. The order matters
+            // structurally only: retract before assert keeps the
+            // intermediate state coherent under
+            // at_most_one_headroom_per_policy if a future trace
+            // ever inspects it; the kernel commits the whole staged
+            // set atomically.
+            let_(
+                "new_headroom",
+                sub(term(var("current_headroom")), term(var("amount"))),
+            ),
+            retract(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("current_headroom")],
+            ),
+            assert_(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("new_headroom")],
+            ),
             assert_(
                 "SettlementAuthorised",
                 vec![
@@ -346,6 +436,7 @@ pub fn all_invariants() -> Vec<Invariant> {
         at_most_one_claim_report_per_id(),
         at_most_one_headroom_per_policy(),
         settlement_id_uniquely_identifies_payment(),
+        headroom_consumed_by_payment(),
     ]
 }
 

@@ -58,6 +58,33 @@ invariant at_most_one_headroom_per_policy:
     PolicyHeadroom(policy, a) and PolicyHeadroom(policy, b) implies a = b
 
 
+-- ============================================================
+-- Transition invariant: conservation of policy headroom.
+--
+-- Each newly-admitted SettlementPaid for a policy must consume the
+-- corresponding decrement from that policy's PolicyHeadroom. The
+-- `pre(...)` wrapper opts subtree evaluation into the
+-- pre-transition state; the body compares pre-state and post-state
+-- headroom against the newly-admitted payment amount.
+--
+-- The aggregate-limit require in authorise_settlement is the
+-- admission gate ("is there enough headroom?"); this invariant is
+-- the conservation law ("did the payment actually consume exactly
+-- its amount?"). Both kept: a buggy transformation that staged
+-- SettlementPaid without retracting and re-asserting
+-- PolicyHeadroom would pass the require but fail this invariant.
+--
+-- Genesis: issue_policy admits initial PolicyHeadroom against an
+-- empty pre-state; `pre(PolicyHeadroom(...))` matches nothing, the
+-- implies is vacuously true. Once the policy exists, every
+-- subsequent settlement is constrained.
+-- ============================================================
+invariant headroom_consumed_by_payment:
+    PolicyHeadroom(p, after) and pre(PolicyHeadroom(p, before))
+    and SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt))
+    implies after = before - amt
+
+
 
 -- ============================================================
 -- Open a policy with an aggregate limit.
@@ -108,17 +135,30 @@ transformation grant_settlement_authority(actor, limit):
 -- ============================================================
 transformation authorise_settlement(claim_id, settlement_id, amount):
     -- Pull policy_id from the reported claim, then aggregate_limit
-    -- from the policy. Zero matches reject lawfully; multiple
-    -- matches surface a kernel error (the at_most_one_*
-    -- structural-uniqueness invariants exist to prevent this).
+    -- from the policy, then current_headroom from the operational
+    -- counter. Zero matches reject lawfully; multiple matches
+    -- surface a kernel error (the at_most_one_* structural-
+    -- uniqueness invariants exist to prevent this).
     bind ClaimReported(claim_id, policy_id, _)
     bind Policy(policy_id, aggregate_limit)
+    bind PolicyHeadroom(policy_id, current_headroom)
 
     -- actor authority gate
     require SettlementAuthority(actor, actor_limit) and amount <= actor_limit
 
-    -- cumulative-cap gate (the Expr::Add shape)
+    -- cumulative-cap admission gate (the Expr::Add shape). Kept
+    -- alongside the headroom_consumed_by_payment transition
+    -- invariant: this is the "is there enough?" check; the
+    -- invariant is the "did the payment actually consume?" check.
     require sum(paid | SettlementPaid(policy_id, _, _, paid)) + amount <= aggregate_limit
+
+    -- Conservation: compute the new headroom, retract the old
+    -- claim, assert the new. The transition invariant
+    -- headroom_consumed_by_payment verifies this pair landed
+    -- correctly post-commit.
+    let new_headroom = current_headroom - amount
+    retract PolicyHeadroom(policy_id, current_headroom)
+    admit PolicyHeadroom(policy_id, new_headroom)
 
     admit SettlementAuthorised(claim_id, settlement_id, amount, actor)
     admit SettlementPaid(policy_id, claim_id, settlement_id, amount)
