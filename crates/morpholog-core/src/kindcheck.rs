@@ -294,19 +294,36 @@ fn walk_predicate_expr(
             check_equality_terms(left, right, "!=", env, ctx, errors);
         }
         Expr::In(_element, collection) => {
-            // The collection side must be Collection-kinded; refining
-            // a variable there is the only correlation we can do.
+            // The collection side must be Collection-kinded.
+            // Variables refine; literals and `actor` carry a
+            // concrete kind that the runtime would reject as
+            // "In expects a collection" - surface that statically.
+            match collection {
+                Term::Var(name) => {
+                    observe_or_report(
+                        env,
+                        name,
+                        InferredKind::Known(PredicateArgKind::Collection),
+                        ctx,
+                        errors,
+                    );
+                }
+                Term::Wildcard => {}
+                other => {
+                    if let InferredKind::Known(actual) = term_kind(other)
+                        && !kinds_compatible(PredicateArgKind::Collection, actual)
+                    {
+                        errors.push(ValidationError::OperandKindMismatch {
+                            operator: "in",
+                            expected: PredicateArgKind::Collection,
+                            actual,
+                            context: ctx.clone(),
+                        });
+                    }
+                }
+            }
             // Element vs collection-element-kind correlation lands
             // when a worked example forces it.
-            if let Term::Var(name) = collection {
-                observe_or_report(
-                    env,
-                    name,
-                    InferredKind::Known(PredicateArgKind::Collection),
-                    ctx,
-                    errors,
-                );
-            }
         }
         // Value-shaped expressions cannot appear at a predicate
         // position; the runtime raises NotPredicate. A symmetric
@@ -393,9 +410,22 @@ fn walk_stmt(
         }
         Stmt::For {
             binding,
-            collection: _,
+            collection,
             body,
         } => {
+            // The collection expression must produce a Collection
+            // value; runtime raises TypeMismatch otherwise. Check
+            // it against the live env so refinements (e.g. a
+            // variable here pinned to Collection) flow forward.
+            check_operand_kind(
+                collection,
+                PredicateArgKind::Collection,
+                "for",
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
             // Body runs under a scoped env clone so loop-introduced
             // bindings do not leak across iterations or beyond the
             // loop. The iteration variable's element kind is
@@ -1675,6 +1705,94 @@ mod tests {
                 }
             )),
             "expected Le LHS to flag Subject vs Decimal; got {errs:?}"
+        );
+    }
+
+    // ============================================================
+    // For collection + In non-Collection literal
+    // ============================================================
+
+    #[test]
+    fn for_with_non_collection_variable_flags_operand_mismatch() {
+        // `bind_one Q(x); for x in ...` - x is bound at Decimal
+        // (Q's slot). The `for` collection slot demands Collection.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Q", &[("v", PredicateArgKind::Decimal)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("Q", vec![var("x")])),
+                for_("e", term(var("x")), vec![]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Decimal,
+                    new: PredicateArgKind::Collection,
+                    ..
+                } if v == "x"
+            )),
+            "for on a Decimal variable must flag conflict; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn for_collection_variable_refines_to_collection() {
+        // `for e in xs: assert P(xs)` where P expects Decimal
+        // should conflict on `xs` - the for refined xs to
+        // Collection, then assert tries Decimal.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("P", &[("v", PredicateArgKind::Decimal)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec!["xs".to_string()],
+            body: vec![
+                for_("e", term(var("xs")), vec![]),
+                assert_("P", vec![var("xs")]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Collection,
+                    new: PredicateArgKind::Decimal,
+                    ..
+                } if v == "xs"
+            )),
+            "for must refine xs to Collection; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn in_with_non_collection_literal_flags_operand_mismatch() {
+        // `x in 100` - the collection side is a decimal literal,
+        // which runtime would reject as "In expects a collection".
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "in_lit".to_string(),
+            version: 1,
+            body: Expr::In(Term::Var("x".to_string()), dec("100")),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    operator: "in",
+                    expected: PredicateArgKind::Collection,
+                    actual: PredicateArgKind::Decimal,
+                    ..
+                }
+            )),
+            "non-collection literal in `in` must flag; got {errs:?}"
         );
     }
 
