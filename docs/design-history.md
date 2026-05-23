@@ -517,110 +517,33 @@ derived TrialBalanceRow(account):
 
 ### `Expr::Or` predicate-shaped disjunction
 
-**Forced ahead of an example.** The honest second ahead-of-example deviation in the codebase, after [`Transition.actor`](#transition-value-object-and-auditactor). The next worked example - per-account delta conservation on the double-entry ledger - will use `Or` to express the creation-or-update split that pre-state lookups force ("either this account already had a balance and the delta equals the posting sum, or this is the first balance and the postings net to the opening value"). Landing `Or` first keeps that example's PR focused on the load-bearing primitive (`Expr::Pre`); bundling both would conflate two design moves that warrant separate scrutiny.
+**Forced ahead of an example.** Second ahead-of-example deviation in the codebase, after [`Transition.actor`](#transition-value-object-and-auditactor). The chess transition-invariants example landed in the next PR uses `Or` for `SingleCapturePerMove` (`after = before or after = before - 1`); landing it standalone kept that PR's design conversation focused on `Pre`. Independent rationale: every other predicate-shaped composer (`And`, `Not`, `Implies`, `Exists`, `Forall`) is first-class. De Morgan's `not (not A and not B)` works but punishes the natural surface form for a minimalism that was never the point.
 
-Standing rationale for the kernel addition independent of the example: every other predicate-shaped composer (`And`, `Not`, `Implies`, `Exists`, `Forall`) is first-class. Desugaring disjunction via De Morgan (`not (not A and not B)`) is technically equivalent but aesthetically wrong - it punishes the natural surface form to preserve a minimalism that was never the point. Minimalism is the absence of accidental ceremony, not the absence of primitives.
-
-**Landed:**
-
-- `Expr::Or(Vec<Expr>)` mirroring `Expr::And`'s flattened shape. A parser-level `a or b or c` lowers to a single `Or` node, not nested binary `Or`s.
-- `find_disjunction` evaluator: concatenation of each branch's binding extensions against the same base context. No deduplication - multiplicity is preserved, matching `find_conjunction`'s convention. Downstream uses that care only about non-emptiness (`require`, invariants) are unaffected; `Forall` over an `Or` source iterates duplicates, which is the documented behaviour.
-- `find_failing_subexpr` returns `None` for `Or`. When a disjunction fails, every branch failed - picking one to blame would mislead. Same rationale as `Not` and `Exists`.
-- Surface keyword `or`, precedence layer between `and` and `implies`. Standard logical precedence: `a and b or c` parses as `(a and b) or c`; `a or b implies c` parses as `(a or b) implies c`; `not a or b` parses as `(not a) or b`.
-- `or()` DSL constructor for Rust-authored programmes, alongside `and()`, `not()`, `implies()`.
-- Walkers extended: `predicates_referenced_by_expr`, `validate_expr`, `format_expr_inline` all gain `Or` arms parallel to `And`.
-
-**Considered and rejected:**
-
-- *Deduplicating binding extensions across branches.* Adds cost on every `Or` evaluation; the existing `And` does not deduplicate either; downstream consumers that need it can apply dedup themselves. Documented in the `Or` IR variant's doc comment.
-- *A two-branch `Or { left, right }` shape.* Symmetry with `Implies` was considered; the flattened `Vec<Expr>` won because `or` chains are common and the flattening already exists for `And`.
-
-**What stays out:**
-
-- Short-circuit evaluation. The current `find_disjunction` walks every branch and accumulates. A worked example with a measurable hot path would force a short-circuit optimisation; until then the simple shape is correct and clear.
+**Landed:** `Expr::Or(Vec<Expr>)` mirroring `Expr::And`'s flattened shape. `find_disjunction` concatenates each branch's binding extensions, no deduplication (matches `find_conjunction`'s convention). Surface keyword `or` between `and` and `implies` (standard precedence). `find_failing_subexpr` returns `None` for `Or` - when a disjunction fails, every branch failed; picking one to blame would mislead.
 
 
 ### `Expr::Pre` transition-invariant primitive
 
-**Forced by:** the chess transition-invariants worked example. Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) blog post splits a system's safety rules into state invariants (predicates over a single state) and transition invariants (predicates over a `<state, next-state>` pair). The kernel before this PR could express only the first kind; an invariant that wants to say "the move count advanced by exactly one" or "the trial's piece count decreased by zero or one" cannot be a predicate over one state.
+**Forced by:** the chess transition-invariants example, after Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post. State invariants (over one state) and transition invariants (over a pre/post pair) are distinct kinds; the kernel could only express the first. "MoveCount advanced by one" or "PieceCount fell by zero or one" needs both states.
 
-**The forcing example is chess on purpose, and the canonical case is not.** The original framing - which ChatGPT pushed hard for and is right about as documentary doctrine - is that Morpholog's soul is the ledger; the canonical transition-invariant case is per-account-delta conservation ("`pre(AccountBalance(a, before)) and AccountBalance(a, after) implies after = before + posted_delta`"). When I went to retrofit that onto example 03, however, the existing ledger has no admitted `AccountBalance` predicate - balances live only as a derived claim (`TrialBalanceRow`), and derived claims are not visible to invariants per the v0 locked decision. The honest options were (α) a per-journal conservation invariant that nearly duplicates `balanced_posted_entry`, (β) reshaping example 03 with new admitted-balance state plus retract+assert in every posting transformation, or (γ) a new minimal example specifically for transition invariants. Jordan's call: chess as the forcing example, with the doctrinal case still framed in terms of ledger conservation in the README and runtime-semantics doc. That keeps the kernel-change PR scoped and the next retrofit (whichever case earns it) honestly evaluated on its own.
+Chess was chosen as forcing example over a business retrofit: the ledger has no admitted balance predicate (only the `TrialBalanceRow` derived claim, which invariants can't see); a per-journal conservation rule would duplicate `balanced_posted_entry`; a clean retrofit needed admitted operational state, which is its own design move. Insurance retrofit followed in the next PR.
 
-**The wrapper shape, not TLA+-style `x'`.** `Expr::Pre(Box<Expr>)` opts a subtree into pre-state evaluation; the default outside the wrapper remains the candidate state. The TLA+ style of priming the variable (`moveCount' = moveCount + 1`) assumes the body has two free state variables. Morpholog has one, by design, and the wrapper inverts that: post is default, pre is opt-in. Three knock-on benefits:
+**Landed:** `Expr::Pre(Box<Expr>)` - a wrapper that opts a subtree into pre-state evaluation; the default outside remains the candidate state. Chosen over TLA+'s primed-variable style because Morpholog has only one state at a time by design; the wrapper inverts that: post is default, pre is opt-in. Three knock-on benefits: zero migration (existing invariants unchanged), composes with `Sum` / `ValueOf` / quantifiers without IR surgery on them, and preserves the deliberate non-commutativity of `pre(forall ...)` vs `forall ... pre(...)`.
 
-- Zero migration. Every existing invariant typechecks and evaluates unchanged. `eval_invariant`'s signature grew `pre_state: Option<&State>` and call sites pass `None` everywhere except the propose-path invariant check; state-only callers (tests, derived-claim evaluation, the PostgreSQL adapter's standalone checks) keep working without touching their invariants.
-- Composes with what was already there. `pre(PieceCount(after))`, `pre(IsEmpty(sq))`, `pre(sum(amount | Posting(j, _, amount)))` all work without IR surgery on `Sum`, `ValueOf`, or quantifiers - the wrapper changes which state the leaves resolve against; the structural machinery is identical.
-- Preserves the binding-statement quartet semantics for quantifiers. `pre(forall x in S: ...)` and `forall x in S: pre(...)` differ exactly where they should: when the iteration domain itself shifts between pre and post. That distinction matters for business cases (accounts created, claims retired) and is documented in [`runtime-semantics.md`](runtime-semantics.md).
+`EvalError::PreStateUnavailable` is the diagnostic when `Pre` is reached without a pre-state in scope (derived-claim body, transformation `require`, standalone evaluator call, inner of nested `pre`). Phrased about evaluation context rather than AST position so future contexts that carry both states (transformation postconditions, trace assertions) can share the primitive without IR change. No new invariant kind in the IR - state vs transition is descriptive, derivable from the body.
 
-**No new invariant kind.** The classification of an invariant as "state" or "transition" is descriptive, derivable by walking the body for `Expr::Pre`. The IR carries only `Invariant`; the kernel treats both kinds uniformly through the evaluator.
-
-**Semantic, not syntactic, restriction.** `Pre` raises `EvalError::PreStateUnavailable` when reached in a context without a pre-state in scope, rather than being syntactically restricted to invariant bodies. The error is phrased about evaluation context, so future contexts that legitimately carry both states (transformation postconditions, trace assertions) can share the primitive with no IR change. Nested `pre(pre(...))` is also unavailable by construction: the inner subtree's pre slot is cleared on entry, so a second `Pre` finds nothing to swap into.
-
-**Considered and rejected:**
-
-- *An `EvalContext` struct refactor before adding `Pre`.* ChatGPT's strongest design point in the planning phase. The argument was that threading a fifth parameter onto `find_matches` is "boltage" and the cleaner path is to make state view a first-class evaluator concern. Rejected on subtraction grounds: one new context value is three away from the abstraction earning itself. The current `find_matches(expr, state, pre_state, bindings, actor)` is one more parameter than before; it is not a design smell. When a second feature wants to thread something through the evaluator, that is the point at which to refactor.
-- *A new top-level invariant kind (`StateInvariant` vs `TransitionInvariant`).* Tempting because the distinction is real, but a flag-set or wrapper-walk over the body classifies cleanly without IR surgery. Authors do not need a separate construct to write a transition invariant; they just use `pre(...)`.
-- *A per-Term lookup primitive (`Term::PreValue(predicate, args)`).* More constrained but does not compose with `Sum` or quantifiers as cleanly. The wrapper makes "old value of an aggregation" trivially expressible.
-- *Aggregated delta primitives (`was_admitted(predicate, args)`, `delta_count(predicate)`).* Useful only inside transition invariants and a strict subset of what `pre(...)` covers (`P(x) and not pre(P(x))` already expresses "newly admitted"). Not added until a worked example forces a measurable hot path.
-
-**Locked-decision adjacent:**
-
-- `EvalError::PreStateUnavailable` is a distinct variant. `UnboundActor` and `PreStateUnavailable` describe two different capabilities the evaluator might lack, and the diagnostic stays honest about which is missing.
-- Derived-claim bodies cannot reach for `pre(...)`: they evaluate against admitted state as a function of one state, no transition in scope. Same status as `Term::Actor` inside derived-claim bodies.
-
-**What landed:**
-
-- `Expr::Pre(Box<Expr>)` in the IR.
-- `EvalError::PreStateUnavailable` plus its `Display` impl.
-- `find_matches`, `eval_value`, `find_conjunction`, `find_disjunction`, and `find_failing_subexpr` all grew `pre_state: Option<&State>` parameters; the `Expr::Pre` arm in `find_matches` swaps `state` <- `pre_state` and clears the pre slot for the recursive call.
-- `eval_invariant` signature change to `(inv, state, pre_state: Option<&State>)`; the propose-path call passes `Some(pre_state)`, every other call passes `None`.
-- DSL constructor `pre(inner)`.
-- Surface keyword `pre`, parsed as a function-call-shape primary alongside `sum_expr` and `value_expr` (mandatory parens).
-- Walkers (validate, analysis, format, find_failing_subexpr) extended.
-- `examples/07_chess_transition_invariants/` worked example with three transition invariants (`move_count_strictly_increases`, `turn_alternates`, `single_capture_per_move`) and a load-bearing integration test that constructs a hand-built broken transformation and verifies the transition invariant catches it.
-- `runtime-semantics.md` updated with the state-vs-transition section and the quantifier-composition note.
-
-**What stays out:**
-
-- Aggregated delta primitives (`was_admitted`, `was_retracted`, `delta_count`). Waiting on a worked example that forces them.
-- Short-circuit evaluation of nested `Pre` (none today - the recursive call clears pre).
-- Transformation postconditions and trace assertions as additional `Pre`-bearing contexts. The error variant is named for the evaluator's missing capability, so adding those contexts later requires no IR change.
+**Considered and rejected:** an `EvalContext` struct refactor before adding `Pre`. ChatGPT pushed for it; rejected on subtraction grounds (one new context value is three away from the abstraction earning itself). The next PR added a second contextual arg and the refactor became honestly forced.
 
 
 ### Insurance retrofit: `PolicyHeadroom` conservation via `pre(...)`
 
-**Forced by:** closing the loop on PR #69. `Expr::Pre` landed with chess as the forcing example, deliberately deferring the canonical business case to keep the kernel-change PR scoped. With the kernel primitive in place, the retrofit takes a real audit shape ("a payment must consume its entitlement") onto an existing example without further IR change. ChatGPT's review of the planning conversation pushed hard for insurance over ledger as the cleaner target - smaller scope, the example already lives around aggregate-cap discipline, no derived-claim entanglement.
+**Forced by:** closing the loop on the `Expr::Pre` PR's deferred business case. Insurance was chosen over ledger (ChatGPT's call): the example already lives around aggregate-cap discipline, `Policy` is a natural sibling to a new operational counter, and the ledger retrofit would need a wider remodel.
 
-**`EvalContext` evaluator refactor (same PR, prior commit).** With `Pre` landed in PR #69 the evaluator carried two contextual args (`pre_state`, `actor`); the call sites were getting wide. Bundled `EvalContext<'a> { state, pre_state, bindings, actor }` plus `with_bindings` and `enter_pre` helpers as the first commit of this PR (not its own PR) since the insurance work would otherwise have multiplied the awkwardness. The "enter a Pre subtree" pattern collapses from an inline match + reshuffled args to one method call; `find_conjunction`/`find_failing_subexpr` recurse via `with_bindings` instead of threading state/pre/actor through every conjunct. Net effect at test sites: ~80 lines of `state, None, &Bindings, None` boilerplate gone, with two test-local helpers (`ctx`, `ctx_with_pre`) covering the common standalone and pre/post cases. No behaviour change; preserved on both sync and PG test surfaces.
+**Landed:** new admitted predicate `PolicyHeadroom(policy_id, remaining)` paired with `at_most_one_headroom_per_policy` for structural uniqueness and `paid_implies_headroom` for existence (the latter added in response to Copilot's review - the conservation invariant's pre/post guard is vacuously true when no headroom claim exists for a policy). `issue_policy` admits initial headroom = aggregate_limit alongside `Policy`. `authorise_settlement` reads current headroom via `bind_one`, retracts it, and asserts the decremented one; the existing aggregate-limit `require` is kept (admission gate, distinct role from conservation).
 
-**Sequencing.** Split the example work into a commit sequence inside the bundled PR so each step is independently reviewable:
+Transition invariant `headroom_consumed_by_payment`: per-policy delta conservation, `after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))`. An earlier per-row draft (`after = before - amt`, one binding tuple per new payment) was caught as too weak in ChatGPT's review: a multi-payment transition admitting two same-amount settlements while decrementing headroom once would pass each per-row equation while consuming twice the headroom it credits. The sum form catches that and the rest of the delta-conservation bug family.
 
-- `EvalContext` refactor (kernel-only, no behaviour change).
-- Add admitted `PolicyHeadroom(policy_id, remaining)` to insurance, with `issue_policy` admitting initial headroom = aggregate_limit, plus `at_most_one_headroom_per_policy` structural uniqueness. No `pre()` usage yet. Answers "what is the thing whose transition we will conserve?"
-- Wire `authorise_settlement` to retract+assert `PolicyHeadroom` and add the `headroom_consumed_by_payment` transition invariant. Answers "how do we conserve it?"
-- Cross-doc sweep and review-driven strengthening followed.
-
-The two-step retrofit (prep then conservation) is ChatGPT's suggested PR split, kept within one PR as commit granularity. Reviewing each commit independently keeps each story sharp.
-
-**The doctrinal point in business terms.** The pre-existing aggregate-limit `require` (`Le(Add(Sum(paid), amount), aggregate_limit)`) is an *admission gate*: does this payment fit inside the remaining cap? It runs against pre-state and recomputes the cumulative sum every call. It cannot say anything about the relationship between pre-state and post-state. If a buggy transformation admitted `SettlementPaid` without retracting and re-asserting `PolicyHeadroom`, the require would pass on the next call (it just re-sums). The transition invariant closes the gap: "for every newly-admitted `SettlementPaid` with amount `amt`, post-`PolicyHeadroom` = pre-`PolicyHeadroom` - `amt`." Both kept; they answer different questions, and the chess pattern of "outer-side verification regardless of how state was changed" carries straight into business.
-
-**Considered and rejected:**
-
-- *Removing the aggregate-limit require once conservation lands.* The conservation invariant constrains the delta but does not gate on it being positive. You could in principle write a payment that consumes more than available headroom by also retracting and re-asserting headroom going negative. Adding `PolicyHeadroom(p, r) implies r >= 0` would close that gap as a separate state invariant, but then the rule is "two invariants do the work of one require" - subtraction principle says keep the require.
-- *Ledger over insurance.* Doctrinally correct but bigger: the ledger would need an admitted `AccountBalance` predicate, retract+assert in every posting transformation, and would deprecate the `TrialBalanceRow` derived claim. Insurance had `Policy` already as the admittable contractual cap and a natural place for `PolicyHeadroom` as its operational sibling. The ledger retrofit, if it ever earns its place, is now strictly smaller-scope follow-up work.
-
-**What landed:**
-
-- `EvalContext<'a>` in `morpholog-core::eval` with `with_bindings` / `enter_pre`.
-- `find_matches`, `eval_value`, `find_conjunction`, `find_disjunction`, `find_claim_matches`, `find_in_matches`, `find_failing_subexpr` all signature-changed to two-arg `(expr, ctx)`.
-- `eval_invariant(inv, state, pre_state: Option<&State>)` and the propose-path call passing `Some(pre_state)`.
-- New admitted predicate `PolicyHeadroom(policy_id, remaining)` and the structural-uniqueness invariant `at_most_one_headroom_per_policy`.
-- Existence-pairing invariant `paid_implies_headroom` (added in response to Copilot's PR review): every `SettlementPaid(p, ...)` must have a current `PolicyHeadroom(p, _)`. Closes the gap where the conservation invariant's pre/post guard is vacuously true when no headroom claim exists for the policy.
-- `issue_policy` admits initial `PolicyHeadroom(policy_id, aggregate_limit)` alongside `Policy`.
-- `authorise_settlement` adds a third `bind_one` for current headroom, then `let new_headroom = current - amount`, `retract` the old headroom claim, `assert` the new one. Existing cumulative-cap require retained.
-- Transition invariant `headroom_consumed_by_payment`: per-policy delta conservation, `after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))`. The Sum body enumerates newly-admitted settlements (post minus pre); the implies asserts the total consumes exactly the headroom delta.
-- The sum-based form replaces an earlier per-row draft (`after = before - amt`, one binding tuple per new settlement). ChatGPT's PR review flagged the draft as too weak: a hypothetical multi-payment transition admitting two same-amount settlements while decrementing headroom only once would pass each per-row equation while consuming twice the headroom it credits. The sum form is the actual conservation law and catches that edge plus the rest of the delta-conservation bug family (headroom mutation without payment, payment without headroom mutation, wrong decrement). Two load-bearing tests pin this: `conservation_invariant_catches_payment_that_skips_headroom_update` and `conservation_invariant_catches_multi_payment_with_single_decrement`.
-- Example 05 README updated with the new predicate, invariant, transformation behaviour, and a design-note section on what `Expr::Pre` earned its place for in this domain.
+**`EvalContext` evaluator refactor (bundled, first commit).** With `Pre` landed the evaluator had two contextual args (`pre_state`, `actor`) plus state and bindings; `find_matches` carried five parameters. `EvalContext<'a> { state, pre_state, bindings, actor }` with `with_bindings` and `enter_pre` helpers collapses recursive call shape and folds the "enter a Pre subtree" pattern into one method. No behaviour change; preserved across sync and PG test surfaces.
 
 **What stays out:**
 

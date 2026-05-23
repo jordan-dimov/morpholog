@@ -1,24 +1,18 @@
--- Insurance claim settlement (v0).
+-- Insurance claim settlement.
 --
--- An insurer authorises claim settlements against a policy. Every
--- settlement consumes from the policy's aggregate limit; once the
--- aggregate is exhausted, no further settlements admit. The audit log
--- records who decided each payment, when, against which policy, and
--- under what authority.
+-- An insurer authorises claim settlements against a policy aggregate
+-- limit. The audit log records who decided each payment, when,
+-- against which policy, and under what authority.
 --
--- The load-bearing rule is the cumulative-cap shape:
+-- Two load-bearing rules: the cumulative-cap admission gate
+-- (`sum(paid) + amount <= aggregate_limit`, the shape Expr::Add was
+-- added for) and the headroom-conservation transition invariant
+-- (each payment consumes its amount of PolicyHeadroom, the shape
+-- Expr::Pre was added for).
 --
---   sum(already_paid_on_policy) + proposed_settlement <= aggregate_limit
---
--- This is the IR shape Expr::Add was added for. Without Add the rule
--- would have to be written as `proposed <= aggregate - already_paid`,
--- which works but contorts the natural business statement.
---
--- The proposing actor is *transition context*, not a transformation
--- parameter. authorise_settlement declares no `actor` parameter; the
--- proposing actor is consulted via the reserved term `actor` inside
--- the require for authority and stamped onto the SettlementAuthorised
--- record.
+-- authorise_settlement declares no `actor` parameter; the proposing
+-- actor flows through transition context as the reserved term
+-- `actor`.
 
 program insurance_claim_settlement
 
@@ -31,155 +25,62 @@ predicate PolicyHeadroom(policy_id: Subject, remaining: Decimal)
 predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
 
 
--- ============================================================
--- Invariant: payment must have authorisation.
---
--- An eternal consistency rule. The transformation never asserts a
--- SettlementPaid without an authorisation, but the runtime contract
--- holds against candidate state regardless of how it arrived. An
--- orphan payment is rejected by this invariant; a real corruption
--- scenario surfaces immediately rather than persisting silently.
--- ============================================================
+-- Every payment must be backed by an authorisation.
 invariant paid_implies_authorised:
     SettlementPaid(_, claim, settlement, amount) implies SettlementAuthorised(claim, settlement, amount, _)
 
-
--- ============================================================
--- Invariant: every payment must have a current headroom claim.
---
--- Pairs with the conservation invariant below. The conservation
--- rule constrains the *delta* in PolicyHeadroom against
--- newly-admitted payments, but says nothing when no
--- PolicyHeadroom exists for the policy (the pre/post guard fails
--- and the implies is vacuously true). Without this existence
--- pairing, a candidate state with SettlementPaid but no
--- PolicyHeadroom would slip through both rules.
--- ============================================================
+-- Every payment must have a current headroom claim. Closes a gap
+-- in the conservation invariant (vacuously true when no headroom).
 invariant paid_implies_headroom:
     SettlementPaid(p, _, _, _) implies (exists r: PolicyHeadroom(p, r))
 
-
--- ============================================================
--- Invariant: at most one PolicyHeadroom per policy.
---
--- PolicyHeadroom is the operational remaining-capacity counter -
--- distinct from Policy (the immutable contractual cap) and from
--- PolicyLimitUsage (the read-side reporting view). Two competing
--- headroom claims for the same policy would mean two answers to
--- "how much capacity remains?" - the kind of ambiguity a governed
--- model exists to forbid.
--- ============================================================
+-- Operational uniqueness for PolicyHeadroom (the
+-- remaining-capacity counter).
 invariant at_most_one_headroom_per_policy:
     PolicyHeadroom(policy, a) and PolicyHeadroom(policy, b) implies a = b
 
-
--- ============================================================
--- Transition invariant: per-policy headroom delta conservation.
---
--- For every policy whose PolicyHeadroom exists both before and
--- after the transition, the change in remaining capacity must
--- equal the total amount of newly-admitted SettlementPaid claims
--- for that policy. The Sum body enumerates settlements that exist
--- in post-state but not in pre-state - the newly-admitted set.
---
--- The aggregate-limit require in authorise_settlement is the
--- admission gate ("is there enough headroom?"); this invariant is
--- the conservation law ("does the headroom delta equal the total
--- new payments?"). Both kept: a buggy transformation that staged
--- SettlementPaid without retracting and re-asserting
--- PolicyHeadroom would pass the require and fail the invariant.
---
--- Sum-based rather than per-row: an earlier draft compared each
--- newly-admitted payment individually to the headroom delta. That
--- collapses to the same check for the current one-payment
--- transformation but is too weak as a general conservation rule -
--- a hypothetical multi-payment transition that admitted two
--- same-amount settlements while decrementing headroom only once
--- would pass each per-row check while consuming twice the
--- headroom it credits. The sum form catches that and every
--- related delta-conservation bug class.
---
--- Genesis: issue_policy admits initial PolicyHeadroom against an
--- empty pre-state; `pre(PolicyHeadroom(...))` matches nothing, the
--- implies is vacuously true. Once the policy exists, every
--- subsequent transition touching headroom is constrained.
--- ============================================================
+-- Per-policy headroom delta conservation: the change in
+-- PolicyHeadroom must equal the total of newly-admitted
+-- SettlementPaid amounts for that policy. Pairs with the
+-- aggregate-cap require in authorise_settlement (admission gate vs
+-- conservation law).
 invariant headroom_consumed_by_payment:
     PolicyHeadroom(p, after) and pre(PolicyHeadroom(p, before))
     implies after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))
 
 
 
--- ============================================================
--- Open a policy with an aggregate limit.
---
--- Admits two claims: the immutable Policy(policy_id,
--- aggregate_limit) contractual cap, and an initial
--- PolicyHeadroom(policy_id, aggregate_limit) operational
--- remaining-capacity counter. At issuance the two coincide; no
--- settlement has yet consumed any headroom.
--- ============================================================
+-- Open a policy. Admits the contractual cap and the initial
+-- operational headroom (= aggregate_limit, no spend yet).
 transformation issue_policy(policy_id, aggregate_limit):
     admit Policy(policy_id, aggregate_limit)
     admit PolicyHeadroom(policy_id, aggregate_limit)
     emit PolicyIssued(policy_id)
 
--- ============================================================
--- Record a reported loss against a policy. The policy must exist;
--- the claimed amount is informational - cumulative-cap reads from
--- SettlementPaid, not from this claim.
--- ============================================================
+-- Record a reported loss. claimed_amount is informational; the
+-- aggregate-cap rule reads from SettlementPaid.
 transformation report_claim(claim_id, policy_id, claimed_amount):
     require Policy(policy_id, _)
     admit ClaimReported(claim_id, policy_id, claimed_amount)
     emit ClaimReported(claim_id)
 
--- ============================================================
--- Grant settlement authority. Ungated in v0; administrative
--- authority for granting is out of scope.
--- ============================================================
+-- Grant settlement authority. Ungated in v0.
 transformation grant_settlement_authority(actor, limit):
     admit SettlementAuthority(actor, limit)
     emit SettlementAuthorityGranted(actor, limit)
 
--- ============================================================
--- The load-bearing transformation. Authorises a settlement against
--- a reported claim, subject to:
---
---   1. The proposing actor's settlement authority covers the
---      proposed amount.
---   2. The cumulative-cap rule holds against the policy aggregate.
---
--- bind pulls policy_id and aggregate_limit into scope from their
--- uniquely-matching claims. Where require is a yes/no existence
--- gate that does not export bindings, bind is a deterministic
--- unique lookup that does. Together with let (for value-producing
--- expressions like sum) and for (for iteration), this is the
--- statement-level binding doctrine.
--- ============================================================
+-- Authorise a settlement against a reported claim. Gates: actor
+-- authority covers the amount; cumulative spend stays under the
+-- aggregate. Stages the headroom retract+assert pair; the
+-- conservation invariant verifies it post-commit.
 transformation authorise_settlement(claim_id, settlement_id, amount):
-    -- Pull policy_id from the reported claim, then aggregate_limit
-    -- from the policy, then current_headroom from the operational
-    -- counter. Zero matches reject lawfully; multiple matches
-    -- surface a kernel error (the at_most_one_* structural-
-    -- uniqueness invariants exist to prevent this).
     bind ClaimReported(claim_id, policy_id, _)
     bind Policy(policy_id, aggregate_limit)
     bind PolicyHeadroom(policy_id, current_headroom)
 
-    -- actor authority gate
     require SettlementAuthority(actor, actor_limit) and amount <= actor_limit
-
-    -- cumulative-cap admission gate (the Expr::Add shape). Kept
-    -- alongside the headroom_consumed_by_payment transition
-    -- invariant: this is the "is there enough?" check; the
-    -- invariant is the "did the payment actually consume?" check.
     require sum(paid | SettlementPaid(policy_id, _, _, paid)) + amount <= aggregate_limit
 
-    -- Conservation: compute the new headroom, retract the old
-    -- claim, assert the new. The transition invariant
-    -- headroom_consumed_by_payment verifies this pair landed
-    -- correctly post-commit.
     let new_headroom = current_headroom - amount
     retract PolicyHeadroom(policy_id, current_headroom)
     admit PolicyHeadroom(policy_id, new_headroom)
@@ -189,9 +90,9 @@ transformation authorise_settlement(claim_id, settlement_id, amount):
     emit ClaimPaymentRequested(settlement_id, amount, actor)
 
 
--- Derived claim. Enumerated on demand via
--- `morpholog inspect derived insurance_claim_settlement PolicyLimitUsage`.
--- As-of replay reconstructs usage as it stood at any prior transition.
+-- Read-side reporting view: cumulative paid per policy.
+-- Distinct from PolicyHeadroom (admitted operational state);
+-- enumerated on demand, replayable as-of.
 derived PolicyLimitUsage(policy_id):
     over SettlementPaid(policy_id, _, _, _)
     value used = sum(paid | SettlementPaid(policy_id, _, _, paid))

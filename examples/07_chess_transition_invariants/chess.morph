@@ -1,26 +1,10 @@
 -- Chess transition invariants - the forcing example for `pre(...)`.
---
--- The chess paper at
+-- Inspired by Murat Demirbas's Chess invariants post:
 -- https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html
--- frames a system's safety rules as two families: state invariants
--- (predicates over a single state) and transition invariants
--- (predicates over a <state, next-state> pair). Morpholog evaluates
--- invariants against a candidate state by default; this programme
--- adds `pre(...)` for the second family.
 --
--- The chess domain is deliberate. It makes the conservation rules
--- textbook-clean (`move_count_strictly_increases`,
--- `turn_alternates`, `single_capture_per_move`) without the cross-
--- cutting concerns of a business example. The same `pre(...)`
--- primitive is what the insurance example's
--- `headroom_consumed_by_payment` invariant uses to enforce
--- per-policy entitlement consumption (see
--- `examples/05_insurance_claim_settlement/`) - identical kernel
--- mechanism, different domain narrative.
---
--- This file mirrors the IR in `crates/morpholog-examples/src/
--- chess_transition_invariants.rs`; the `every_worked_example_round_trips`
--- property test ties them together.
+-- The canonical business use of `pre(...)` lives in
+-- examples/05_insurance_claim_settlement (per-policy headroom
+-- conservation); chess is the small clean teaching domain.
 
 program chess_transition_invariants
 

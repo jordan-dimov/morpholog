@@ -54,18 +54,12 @@ pub enum EvalError {
     /// belong in `require`, not in invariants; this error makes that
     /// doctrine enforceable rather than convention.
     UnboundActor,
-    /// `Expr::Pre` was reached in an evaluation context that has no
-    /// pre-state in scope. The common cases are derived-claim
-    /// enumeration (one state, the present), transformation `require`
-    /// bodies (which read pre-state as the *only* state - there is no
-    /// post to flip back to), standalone `find_matches` callers, and
-    /// the inner subtree of an outer `Pre` (no "pre-pre-state").
-    /// Distinct from `UnboundActor` so the diagnostic is honest about
-    /// which capability the context lacks. Phrased about evaluation
-    /// context rather than AST position so future contexts that
-    /// legitimately carry both states (transformation
-    /// postconditions, trace assertions) can share the primitive
-    /// without IR change.
+    /// `Expr::Pre` was reached in a context with no pre-state in
+    /// scope: derived-claim bodies, transformation `require`s,
+    /// standalone evaluator calls, or the inner of nested `pre`.
+    /// Phrased about evaluation context rather than AST position so
+    /// future contexts that carry both states can share the
+    /// primitive without IR change.
     PreStateUnavailable,
 }
 
@@ -88,7 +82,7 @@ impl std::fmt::Display for EvalError {
             ),
             EvalError::PreStateUnavailable => write!(
                 f,
-                "Expr::Pre evaluated in a context with no pre-state in scope (likely a derived-claim body, a transformation `require`, a standalone evaluator call, or the inner subtree of an outer `pre(...)` - there is no pre-pre-state)"
+                "Expr::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, a standalone call, or the inner of nested `pre`)"
             ),
         }
     }
@@ -96,55 +90,31 @@ impl std::fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
-/// Bundled evaluator context: the state(s) lookups resolve against,
-/// the active binding context, and the proposing actor when one is
-/// in scope. Threaded through `find_matches`, `eval_value`, and the
-/// helpers that recurse into expression bodies.
-///
-/// Why a struct rather than a fistful of parameters: until
-/// [`Expr::Pre`] landed there were only `state` and `bindings` plus
-/// an optional `actor`. With `pre_state` now also a threaded
-/// concern, every recursive call carries four things, and the
-/// "enter a `Pre` subtree" operation became "swap two of them and
-/// clear one." `EvalContext::enter_pre` makes that one method call;
-/// `with_bindings` makes binding extension the only thing the
-/// matcher needs to remember when recursing into a conjunct or a
-/// quantifier body.
-///
-/// The struct holds references for `'a`; nothing inside owns
-/// state. Recursive calls construct cheap new contexts via the
-/// builder-style methods rather than mutating in place.
+/// Evaluator context: state(s), bindings, optional actor. Threaded
+/// through `find_matches`, `eval_value`, and helpers that recurse
+/// into expression bodies. The two builder methods
+/// ([`EvalContext::with_bindings`], [`EvalContext::enter_pre`])
+/// cover the only mutations the matcher needs.
 #[derive(Clone, Copy)]
 pub(crate) struct EvalContext<'a> {
-    /// The "current" state predicate lookups resolve against.
-    /// Outside any `Expr::Pre`, this is the candidate (post-
-    /// transition) state during proposal-path invariant evaluation,
-    /// or the only state in derived-claim / standalone contexts.
-    /// Inside `pre(...)`, this is the pre-transition state - the
-    /// flip happens via [`EvalContext::enter_pre`].
+    /// The state predicate lookups resolve against. Outside any
+    /// `Expr::Pre` this is the candidate (post) state during
+    /// proposal-path invariant evaluation, or the only state in
+    /// derived-claim / standalone contexts. Inside `pre(...)` this
+    /// is the pre-transition state.
     pub(crate) state: &'a State,
     /// Pre-transition state when both states are in scope; `None`
-    /// otherwise. `Expr::Pre` consumes this and clears it for the
-    /// recursive call, so nested `pre(pre(...))` surfaces
-    /// `EvalError::PreStateUnavailable`.
+    /// otherwise. Cleared inside a `Pre` subtree so nested
+    /// `pre(pre(...))` surfaces `PreStateUnavailable`.
     pub(crate) pre_state: Option<&'a State>,
-    /// Active binding context. Extended on each recursive call that
-    /// produces a new binding set (claim unification, `bind`, `let`,
-    /// `for`). Statement-level binding management lives in
-    /// `propose.rs`; within an expression body the matcher swaps
-    /// in extended contexts via [`EvalContext::with_bindings`].
     pub(crate) bindings: &'a Bindings,
-    /// The proposing transition's actor when one is in scope.
-    /// `None` for invariant bodies, derived-claim bodies, and any
-    /// standalone evaluator call. `Term::Actor` reached with
-    /// `actor: None` surfaces `EvalError::UnboundActor`.
+    /// The proposing transition's actor; `None` in invariant /
+    /// derived-claim / standalone contexts. `Term::Actor` reached
+    /// with `actor: None` surfaces `UnboundActor`.
     pub(crate) actor: Option<&'a EvalValue>,
 }
 
 impl<'a> EvalContext<'a> {
-    /// Construct a new context. The common shape: a proposal-path
-    /// invariant check passes `Some(pre_state)` and the proposing
-    /// actor; a standalone evaluator call passes `None` for both.
     pub(crate) fn new(
         state: &'a State,
         pre_state: Option<&'a State>,
@@ -159,11 +129,8 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    /// Return a context identical to this one except with a different
-    /// active binding context. Used when descending into a conjunct
-    /// of `And`, a body of `Forall` / `Implies`, etc. - the recursive
-    /// call sees the extended bindings without the caller having to
-    /// re-thread the other fields.
+    /// Swap in extended bindings; used when descending into a
+    /// conjunct, an `Implies` right side, or a quantifier body.
     pub(crate) fn with_bindings(&self, bindings: &'a Bindings) -> Self {
         Self {
             state: self.state,
@@ -174,12 +141,8 @@ impl<'a> EvalContext<'a> {
     }
 
     /// Enter an `Expr::Pre` subtree: state becomes the previous
-    /// pre-state, pre-state is cleared. Returns `None` if no
-    /// pre-state was in scope - the caller surfaces
-    /// `EvalError::PreStateUnavailable`. Bindings and actor flow
-    /// through unchanged: a `pre(...)` subtree sees the same
-    /// bindings the outer context did, and the proposing actor is
-    /// not pre/post sensitive.
+    /// pre-state, pre-state is cleared. `None` if no pre-state was
+    /// in scope; caller surfaces `PreStateUnavailable`.
     pub(crate) fn enter_pre(&self) -> Option<Self> {
         Some(Self {
             state: self.pre_state?,

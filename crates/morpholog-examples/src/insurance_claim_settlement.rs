@@ -86,18 +86,10 @@ pub fn at_most_one_claim_report_per_id() -> Invariant {
     }
 }
 
-/// Every admitted `SettlementPaid` for a policy must be backed by
-/// a current `PolicyHeadroom` claim for that policy. Pairs with
-/// `headroom_consumed_by_payment`: the conservation invariant
-/// constrains the *delta* in PolicyHeadroom against newly-admitted
-/// payments, but says nothing when no PolicyHeadroom exists - the
-/// `pre(PolicyHeadroom(p, before)) and PolicyHeadroom(p, after)`
-/// guard fails and the implies is vacuously true. Without this
-/// existence pairing, a hand-built or buggy candidate state with
-/// `SettlementPaid` but no `PolicyHeadroom` for that policy would
-/// pass both rules. The transformation never produces such a
-/// state, but the runtime contract is "candidate state is
-/// admissible regardless of how it got there."
+/// Every `SettlementPaid(p, ...)` needs a current
+/// `PolicyHeadroom(p, _)`. Closes a gap in
+/// `headroom_consumed_by_payment`: the conservation rule is
+/// vacuously true when no headroom claim exists for the policy.
 pub fn paid_implies_headroom() -> Invariant {
     Invariant {
         name: "paid_implies_headroom".to_string(),
@@ -112,15 +104,9 @@ pub fn paid_implies_headroom() -> Invariant {
     }
 }
 
-/// At most one `PolicyHeadroom` per `policy_id`. Mirrors
-/// `at_most_one_policy_per_id`; pins the structural uniqueness that
-/// the payment transformation's `bind_one PolicyHeadroom(policy_id,
-/// remaining)` (added in the conservation-invariant follow-up) will
-/// rely on. Even before any transformation reads PolicyHeadroom via
-/// `bind_one`, the uniqueness invariant matters: an unexpected
-/// duplicate at admission time would mean two competing answers to
-/// "how much capacity remains?" - exactly the kind of ambiguity a
-/// governed model exists to forbid.
+/// At most one `PolicyHeadroom` per policy. `authorise_settlement`'s
+/// `bind_one` lookup relies on this; two competing headroom claims
+/// would also mean two answers to "how much capacity remains?".
 pub fn at_most_one_headroom_per_policy() -> Invariant {
     Invariant {
         name: "at_most_one_headroom_per_policy".to_string(),
@@ -135,45 +121,20 @@ pub fn at_most_one_headroom_per_policy() -> Invariant {
     }
 }
 
-/// Transition invariant: per-policy headroom delta conservation.
-/// Reads as: "for every policy whose `PolicyHeadroom` exists both
-/// before and after the transition, the change in remaining
-/// capacity must equal the total amount of newly-admitted
-/// `SettlementPaid` claims for that policy."
+/// Per-policy headroom delta conservation: the change in
+/// `PolicyHeadroom` must equal the total of newly-admitted
+/// `SettlementPaid` amounts for that policy. The `aggregate_limit`
+/// require is an admission gate ("is there enough?"); this is the
+/// conservation law ("did the delta match?"). A transformation
+/// that admitted `SettlementPaid` without retracting and
+/// re-asserting `PolicyHeadroom` would pass the require and fail
+/// this invariant.
 ///
-/// Encoded as `after = before - sum(amt | SettlementPaid(p, _, s,
-/// amt) and not pre(SettlementPaid(p, _, s, amt)))`. The `Sum` body
-/// enumerates settlements that exist in post-state but not in
-/// pre-state - the newly-admitted set for this transition.
-///
-/// This is the conservation rule the `aggregate_limit` `require`
-/// gate alone could not enforce. The `require` is an admission
-/// gate ("is there enough headroom for this payment?"); this
-/// invariant is the conservation law ("does the headroom delta
-/// equal the total new payments?"). Both are kept; a buggy
-/// transformation that admitted `SettlementPaid` without retracting
-/// and re-asserting `PolicyHeadroom` would pass the require and
-/// fail the invariant.
-///
-/// Why the sum-based form rather than per-payment equality: an
-/// earlier draft of this invariant compared each newly-admitted
-/// payment individually to the headroom delta (`after = before -
-/// amt`). For the current one-payment transformation that
-/// degenerates to the same check, but as a general conservation
-/// law it is too weak: a hypothetical multi-payment transformation
-/// that admitted two same-amount settlements while decrementing
-/// headroom only once would pass each per-row equation
-/// (`70 = 100 - 30`) while consuming 60 of headroom instead of 30.
-/// The sum-based form catches that bug class and every related one
-/// (headroom mutation without payment, payment without headroom
-/// mutation, wrong decrement amount).
-///
-/// Genesis behaviour: `issue_policy` admits the initial
-/// `PolicyHeadroom` against an empty pre-state. The
-/// `pre(PolicyHeadroom(p, before))` conjunct matches nothing, the
-/// whole `and` is empty, and the rule is vacuously true under
-/// `implies`. Once the policy exists, every subsequent transition
-/// touching its headroom is constrained.
+/// Sum-based rather than per-row (`after = before - amt` for each
+/// new payment) because the per-row form is too weak: a
+/// multi-payment transition admitting two same-amount settlements
+/// while decrementing headroom once would pass each individual
+/// equation while consuming twice the headroom it credits.
 pub fn headroom_consumed_by_payment() -> Invariant {
     Invariant {
         name: "headroom_consumed_by_payment".to_string(),
@@ -242,18 +203,10 @@ pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
 // Transformations
 // ============================================================
 
-/// Open a policy with an aggregate limit. Admits two claims at
-/// once: the immutable `Policy(policy_id, aggregate_limit)` record,
-/// and an initial `PolicyHeadroom(policy_id, aggregate_limit)` -
-/// the operational remaining-capacity counter that settlements
-/// consume. At issuance the headroom equals the aggregate limit; no
-/// settlement has reduced it yet.
-///
-/// The distinction matters: `Policy` is the contractual cap (set
-/// once, never changes), `PolicyHeadroom` is operational state
-/// (decremented per settlement). A duplicate `policy_id` admission
-/// is caught by `at_most_one_policy_per_id` and
-/// `at_most_one_headroom_per_policy` against the candidate state.
+/// Open a policy. Admits the contractual `Policy` and the initial
+/// `PolicyHeadroom` (= aggregate_limit; no settlement has consumed
+/// it yet). The structural-uniqueness invariants catch duplicate
+/// admissions.
 pub fn issue_policy() -> Transformation {
     Transformation {
         name: "issue_policy".to_string(),
@@ -309,45 +262,17 @@ pub fn grant_settlement_authority() -> Transformation {
     }
 }
 
-/// The load-bearing transformation. Pulls the claim's policy_id and
-/// the policy's aggregate_limit into bindings via `Stmt::BindOne`,
-/// then gates settlement authorisation on:
-///
-/// 1. The proposing actor has settlement authority covering the
-///    proposed amount (`actor_limit` bound by the authority claim,
-///    `amount <= actor_limit`).
-/// 2. Cumulative paid settlements on this policy plus the proposed
-///    amount do not exceed the policy aggregate. Encoded as
-///    `Le(Add(Sum(paid), amount), aggregate_limit)` - this is the
-///    `Expr::Add` shape the example forces.
-///
-/// On admission, asserts both `SettlementAuthorised` (who decided
-/// what) and `SettlementPaid` (the payment record the cumulative
-/// running total reads from) and emits a payment-request intent for
-/// the outbox.
-/// No actor parameter on the transformation; the actor flows through
-/// transition context as `actor()`, persisted to the
-/// authorisation record.
-///
-/// Each `bind_one` looks up a uniquely-matching claim and binds its
-/// values into the surrounding context. `at_most_one_claim_report_per_id`
-/// and `at_most_one_policy_per_id` are the structural-uniqueness
-/// invariants that make these lookups safe: without them a duplicate
-/// admission would surface as `bind_one matched 2 candidates`
-/// (kernel error) rather than a lawful business rejection.
+/// The load-bearing transformation. Pulls policy_id, aggregate_limit,
+/// and current_headroom via `bind_one`; gates on actor authority and
+/// the cumulative-cap (`sum(paid) + amount <= aggregate_limit`); then
+/// stages the headroom retract+assert pair and admits the
+/// authorisation and payment claims. The actor flows through
+/// transition context, not as a parameter.
 pub fn authorise_settlement() -> Transformation {
     Transformation {
         name: "authorise_settlement".to_string(),
         parameters: params(&["claim_id", "settlement_id", "amount"]),
         body: vec![
-            // Unique-lookup chain: pull `policy_id` from the claim
-            // report, then `aggregate_limit` from the policy, then
-            // `current_headroom` from the operational counter. Each
-            // bind_one rejects if zero matches (no such claim
-            // reported / no such policy / no headroom on file) and
-            // surfaces a kernel error if multiple matches (programme
-            // bug - structural-uniqueness invariants exist precisely
-            // to prevent this).
             bind_one(claim(
                 "ClaimReported",
                 vec![var("claim_id"), var("policy_id"), wildcard()],
@@ -364,14 +289,9 @@ pub fn authorise_settlement() -> Transformation {
                 claim("SettlementAuthority", vec![actor(), var("actor_limit")]),
                 le(term(var("amount")), term(var("actor_limit"))),
             ])),
-            // Admission-gate cumulative-cap rule. Kept alongside the
-            // post-state `headroom_consumed_by_payment` invariant:
-            // one is an authorisation gate ("is there enough headroom
-            // for this payment?"), the other is conservation ("did
-            // the payment actually consume exactly its amount?"). A
-            // buggy transformation that staged SettlementPaid without
-            // touching PolicyHeadroom would pass this require and
-            // fail the invariant.
+            // Admission gate: is there enough headroom? The
+            // `headroom_consumed_by_payment` invariant separately
+            // verifies that the post-state delta matches the payment.
             require(le(
                 add(
                     sum(
@@ -386,13 +306,6 @@ pub fn authorise_settlement() -> Transformation {
                 ),
                 term(var("aggregate_limit")),
             )),
-            // Compute the new headroom and stage the retract+assert
-            // pair that conservation requires. The order matters
-            // structurally only: retract before assert keeps the
-            // intermediate state coherent under
-            // at_most_one_headroom_per_policy if a future trace
-            // ever inspects it; the kernel commits the whole staged
-            // set atomically.
             let_(
                 "new_headroom",
                 sub(term(var("current_headroom")), term(var("amount"))),

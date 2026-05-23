@@ -196,22 +196,20 @@ is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` co
 
 ## Invariants: state vs transition, and `pre(...)`
 
-An invariant is by default a predicate over **one** state - the candidate state produced after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry," "at most one piece per square," "no policy paid twice." The kernel calls this a *state invariant* even though there is no separate kind in the IR; the term is descriptive, not structural.
-
-`Expr::Pre(inner)` opts a wrapped subtree into evaluation against the **pre-transition** state instead. Predicate-shaped expressions inside the wrapper resolve their `Claim`, `ValueOf`, `Sum.body`, and `Forall.source` against the snapshot the transformation ran against. Everything outside the wrapper still resolves against the candidate. A single invariant can therefore compare pre and post values:
+An invariant is by default a predicate over the candidate (post) state - the world after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry" or "at most one piece per square." `Expr::Pre(inner)` opts a wrapped subtree into pre-transition evaluation, so a single invariant can relate pre and post values:
 
 ```
 invariant move_count_strictly_increases:
   MoveCount(n) and pre(MoveCount(m)) implies n = m + 1
 ```
 
-The kernel calls invariants that contain `Pre` *transition invariants*. There is no IR-level kind; the classification is derivable by walking the body. Both kinds run through the same evaluator.
+Invariants that contain `Pre` are *transition invariants*; the distinction is descriptive (derivable by walking the body) rather than an IR kind. Both run through the same evaluator.
 
-**Where `pre(...)` is legal.** Only in contexts that have both a pre-state and a post-state in scope. Today that is invariant evaluation during a proposal. `Pre` in any other position - inside a transformation `require` body (which already reads pre-state as the only state), inside a derived-claim body (which is a function of one state), inside a standalone `find_matches` call from a test, or inside the inner subtree of an outer `Pre` (no pre-pre-state) - surfaces `EvalError::PreStateUnavailable`. The error is phrased about evaluation context rather than AST position, so future contexts that legitimately carry both states (transformation postconditions, trace assertions) can share the primitive without IR change.
+`pre(...)` is only legal in contexts that have both states in scope - invariant evaluation during a proposal. It surfaces `EvalError::PreStateUnavailable` inside a transformation `require` (pre-state is already the only state), inside a derived-claim body, in a standalone `find_matches` call, or inside the inner subtree of nested `pre`. Phrased about evaluation context rather than AST position so future contexts that carry both states can share the primitive without IR change.
 
-**Genesis vacuity.** When a predicate has never been admitted, `pre(P(...))` matches nothing in pre-state. Under `implies`, the rule is vacuously true. This is the deliberate semantics: `MoveCount(0)` admitted by an initialisation transformation against an empty database satisfies `move_count_strictly_increases` because there is no `pre(MoveCount(m))` to constrain it. Authors who need a different genesis story write the cases as disjuncts.
+Genesis falls out of `implies` vacuity: when a predicate has never been admitted, `pre(P(...))` matches nothing and any rule predicated on it is vacuously true. Initialisation against an empty database satisfies `move_count_strictly_increases` for free; once `MoveCount(0)` is admitted the rule kicks in. Authors who need a different genesis story write the cases as disjuncts.
 
-**Quantifier composition is intentionally non-commutative.** `pre(forall x in Squares: Empty(x))` and `forall x in Squares: pre(Empty(x))` evaluate to different things when the iteration set itself changes between states. The first reads pre-state's `Squares` and asks whether each one was empty in pre. The second reads post-state's `Squares` and asks, for each such square, whether it was empty in pre. For invariants over a fixed domain (the chess board is always 64 squares) the two coincide; for domains that grow or shrink (accounts created, policies retired, claims registered) they diverge, and choosing the right order is what makes the invariant honest about whether it is asking a question of the old world or the new one.
+Quantifier composition is non-commutative by design. `pre(forall x in S: body)` reads pre-state for both the iteration domain and the body; `forall x in S: pre(body)` iterates the post-state domain and only flips the body. The two coincide when the iteration set is fixed (a chess board always has 64 squares); they diverge for domains that grow or shrink between states (accounts, policies, claims). Choosing the right order is what makes a transition invariant honest about whether it is asking a question of the old world or the new.
 
 ## Tracing proposals
 

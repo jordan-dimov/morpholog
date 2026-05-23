@@ -1,38 +1,25 @@
 //! Chess transition invariants - the forcing example for
-//! [`morpholog_core::Expr::Pre`].
-//!
-//! The chess paper at <https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html>
-//! frames a system's safety rules as two families: state invariants
-//! (predicates over a single state) and transition invariants
-//! (predicates over a `<<state, next-state>>` pair). The kernel
-//! evaluates invariants against a candidate state by default; this
-//! example forces the second family by adding `pre(...)` - a wrapper
-//! that flips the wrapped subtree to evaluate against pre-state.
-//!
-//! The chess domain is deliberate. It makes the conservation rules
-//! textbook-clean (`MoveCountStrictlyIncreases`, `TurnAlternates`,
-//! `SingleCapturePerMove`) without the cross-cutting concerns of a
-//! business example, and avoids the genesis-vs-update awkwardness
-//! that would force `or` into the conceptual centre. The same
-//! `Expr::Pre` primitive that powers these chess invariants is what
-//! the insurance example's `headroom_consumed_by_payment` invariant
-//! uses to enforce per-policy entitlement consumption (see
-//! [`crate::insurance_claim_settlement`]) - identical kernel
-//! mechanism, different domain narrative.
+//! [`morpholog_core::Expr::Pre`]. Inspired by Murat Demirbas's
+//! [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html)
+//! post, which splits safety rules into state invariants (over one
+//! state) and transition invariants (over a pre/post pair). The
+//! kernel could only express the first kind; this example forces
+//! the second.
 //!
 //! Surface form: `examples/07_chess_transition_invariants/chess.morph`.
-//! Business framing: see the example README.
+//! Business framing: the README, plus
+//! [`crate::insurance_claim_settlement`] for the canonical business
+//! use of `pre()`.
 
 use morpholog_core::dsl::*;
 use morpholog_core::{Invariant, Transformation};
 
 // ============================================================
-// State invariants - admissible-state shape, no transition needed.
+// State invariants
 // ============================================================
 
-/// At most one piece may occupy a square. Two `PieceAt` claims for
-/// the same square must agree on type and colour - in practice they
-/// must be the same claim.
+/// At most one piece per square: two `PieceAt` claims for the same
+/// square must agree on type and colour.
 pub fn at_most_one_piece_per_square() -> Invariant {
     Invariant {
         name: "at_most_one_piece_per_square".to_string(),
@@ -50,10 +37,8 @@ pub fn at_most_one_piece_per_square() -> Invariant {
     }
 }
 
-/// Each colour has at most one king. Two `PieceAt` claims for kings
-/// of the same colour must be at the same square. Pairs with
-/// [`at_most_one_piece_per_square`]: together they say "at most one
-/// king per colour at most one square."
+/// At most one king per colour: two same-colour king claims must
+/// be at the same square.
 pub fn one_king_per_color() -> Invariant {
     Invariant {
         name: "one_king_per_color".to_string(),
@@ -69,22 +54,11 @@ pub fn one_king_per_color() -> Invariant {
 }
 
 // ============================================================
-// Transition invariants - the `pre(...)` family.
-//
-// Each compares a value in the candidate (post) state to its
-// counterpart in pre-state, expressing a delta rule that a single-
-// state invariant cannot.
+// Transition invariants - the pre()/post comparison family.
 // ============================================================
 
-/// The move counter advances by exactly one per transition. From the
-/// chess paper: `MoveCountStrictlyIncreases ==
-/// moveCount' = moveCount + 1`.
-///
-/// Genesis behaviour: before any `MoveCount` is admitted (the very
-/// first move from an uninitialised state would be the only case),
-/// `pre(MoveCount(m))` matches nothing and the `implies` is
-/// vacuously true. After `start_game` admits `MoveCount(0)`, the
-/// rule kicks in.
+/// `moveCount' = moveCount + 1` per transition. Vacuously true
+/// against an empty pre-state (no `MoveCount` to constrain).
 pub fn move_count_strictly_increases() -> Invariant {
     Invariant {
         name: "move_count_strictly_increases".to_string(),
@@ -99,10 +73,8 @@ pub fn move_count_strictly_increases() -> Invariant {
     }
 }
 
-/// The turn flips every transition. From the chess paper:
-/// `TurnAlternates == turn' = Opponent(turn)`. Expressed here
-/// without naming the opponent function: post-state turn must
-/// differ from pre-state turn.
+/// The turn flips every transition: post-turn must differ from
+/// pre-turn (without naming the opponent function).
 pub fn turn_alternates() -> Invariant {
     Invariant {
         name: "turn_alternates".to_string(),
@@ -117,11 +89,9 @@ pub fn turn_alternates() -> Invariant {
     }
 }
 
-/// Each transition captures at most one piece. From the chess
-/// paper: `SingleCapturePerMove == PieceCount' = PieceCount or
-/// PieceCount' = PieceCount - 1`. The disjunction is the load-
-/// bearing reason `Or` was added as a kernel primitive ahead of
-/// this PR.
+/// At most one capture per transition: `PieceCount' = PieceCount
+/// or PieceCount' = PieceCount - 1`. The disjunction is what `Or`
+/// earns its place for.
 pub fn single_capture_per_move() -> Invariant {
     Invariant {
         name: "single_capture_per_move".to_string(),
@@ -143,17 +113,9 @@ pub fn single_capture_per_move() -> Invariant {
 // Transformations
 // ============================================================
 
-/// Initialise the game: 32 pieces in the standard opening
-/// position, `MoveCount(0)`, `PieceCount(32)`, white to move.
-/// Idempotent only on the empty pre-state; a second call against
-/// any populated board would violate the structural invariants and
-/// be rejected.
-///
-/// The initial position is verbose by design: a worked example
-/// should look like the domain. A future generator over a
-/// rank/file enumeration would compress it, but `forall` over
-/// surface-level subject sets is not in v0 - and the verbosity
-/// makes the actual board readable in the diff.
+/// Initialise the opening position: 32 pieces, `MoveCount(0)`,
+/// `PieceCount(32)`, white to move. Rejected by the structural
+/// invariants against any non-empty pre-state.
 pub fn start_game() -> Transformation {
     // Helper: build an assert for one piece at one square.
     fn piece_at(square: &str, piece_type: &str, color: &str) -> morpholog_core::Stmt {
@@ -208,39 +170,22 @@ pub fn start_game() -> Transformation {
     }
 }
 
-/// A non-capturing move. Reads the moving piece at `src`, requires
-/// `dst` is empty and the moving piece belongs to the player whose
-/// turn it is, then retracts and re-asserts to relocate the piece.
-/// `PieceCount` is unchanged; `MoveCount` advances; `CurrentTurn`
-/// flips.
-///
-/// The transition invariants verify the contract from the outside:
-/// even if a future programmer wrote a quiet_move that forgot to
-/// bump `MoveCount`, the `move_count_strictly_increases` invariant
-/// would reject the transition.
+/// Non-capturing move: relocate the piece from `src` to `dst`
+/// (which must be empty), bump `MoveCount`, flip `CurrentTurn`,
+/// leave `PieceCount` alone.
 pub fn quiet_move() -> Transformation {
     Transformation {
         name: "quiet_move".to_string(),
         parameters: params(&["src", "dst", "new_turn"]),
         body: vec![
-            // Read pre-state: which piece is at src, who is current
-            // turn, what is the move counter.
             bind_one(claim(
                 "PieceAt",
                 vec![var("src"), var("piece_type"), var("piece_color")],
             )),
             bind_one(claim("CurrentTurn", vec![var("current_turn")])),
             bind_one(claim("MoveCount", vec![var("m")])),
-            // The moving piece must belong to the player whose turn
-            // it is. Foundational chess rule; without this any
-            // colour could move on any turn.
             require(eq(term(var("piece_color")), term(var("current_turn")))),
-            // The new turn must differ from the current; the
-            // `turn_alternates` invariant would catch this anyway
-            // but a `require` reports it lawfully rather than as an
-            // invariant violation.
             require(neq(var("new_turn"), var("current_turn"))),
-            // dst must be empty.
             require(not(exists(
                 "anything",
                 claim(
@@ -248,10 +193,7 @@ pub fn quiet_move() -> Transformation {
                     vec![var("dst"), var("any_type"), var("any_color")],
                 ),
             ))),
-            // Compute the next move count.
             let_("next_m", add(term(var("m")), term(dec("1")))),
-            // Stage the transition: piece relocates, counters
-            // advance, turn flips.
             retract(
                 "PieceAt",
                 vec![var("src"), var("piece_type"), var("piece_color")],
@@ -269,18 +211,13 @@ pub fn quiet_move() -> Transformation {
     }
 }
 
-/// A capturing move. Like [`quiet_move`] but `dst` is occupied by
-/// an enemy piece; the captured piece is retracted and
-/// `PieceCount` decrements by one. The
-/// `single_capture_per_move` invariant verifies the count moves
-/// by exactly one.
+/// Capturing move: as [`quiet_move`] but `dst` holds an enemy
+/// piece that gets retracted, and `PieceCount` decrements.
 pub fn capturing_move() -> Transformation {
     Transformation {
         name: "capturing_move".to_string(),
         parameters: params(&["src", "dst", "new_turn"]),
         body: vec![
-            // Read pre-state: moving piece, captured piece, current
-            // turn, counters.
             bind_one(claim(
                 "PieceAt",
                 vec![var("src"), var("piece_type"), var("piece_color")],
@@ -292,16 +229,12 @@ pub fn capturing_move() -> Transformation {
             bind_one(claim("CurrentTurn", vec![var("current_turn")])),
             bind_one(claim("MoveCount", vec![var("m")])),
             bind_one(claim("PieceCount", vec![var("p")])),
-            // Same colour gates as quiet_move.
             require(eq(term(var("piece_color")), term(var("current_turn")))),
             require(neq(var("new_turn"), var("current_turn"))),
             // A capture must be of an enemy piece.
             require(neq(var("captured_color"), var("current_turn"))),
-            // Compute next counters.
             let_("next_m", add(term(var("m")), term(dec("1")))),
             let_("next_p", sub(term(var("p")), term(dec("1")))),
-            // Stage: the moving piece replaces the captured one;
-            // counters update; turn flips.
             retract(
                 "PieceAt",
                 vec![var("src"), var("piece_type"), var("piece_color")],
@@ -351,12 +284,8 @@ pub fn all_invariants() -> Vec<Invariant> {
     ]
 }
 
-/// The chess transition-invariants example as a
-/// [`morpholog_core::Program`]: three transformations
-/// (`start_game`, `quiet_move`, `capturing_move`), two state
-/// invariants, and three transition invariants that exercise
-/// [`morpholog_core::Expr::Pre`]. Stable identifier:
-/// `"chess_transition_invariants"`.
+/// The chess example as a [`morpholog_core::Program`]. Stable
+/// identifier: `"chess_transition_invariants"`.
 pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "chess_transition_invariants".to_string(),
