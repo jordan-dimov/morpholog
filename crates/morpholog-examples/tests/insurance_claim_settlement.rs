@@ -77,6 +77,19 @@ fn issue_policy_admits_policy_claim_with_aggregate_limit() {
     ));
 }
 
+/// `issue_policy` also admits initial `PolicyHeadroom(policy_id,
+/// aggregate_limit)` - the operational remaining-capacity counter
+/// that the conservation invariant (added in the next commit) will
+/// constrain. At issuance, remaining equals the aggregate limit.
+#[test]
+fn issue_policy_admits_initial_headroom_equal_to_aggregate_limit() {
+    let post = issue(State::default(), "policy_001", 100_000);
+    assert!(
+        has_claim(&post, "PolicyHeadroom", &[subj("policy_001"), dec(100_000)]),
+        "issue_policy must admit initial PolicyHeadroom equal to aggregate_limit"
+    );
+}
+
 #[test]
 fn duplicate_policy_id_violates_uniqueness_invariant() {
     let pre = issue(State::default(), "policy_001", 100_000);

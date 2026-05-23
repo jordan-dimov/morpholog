@@ -86,6 +86,29 @@ pub fn at_most_one_claim_report_per_id() -> Invariant {
     }
 }
 
+/// At most one `PolicyHeadroom` per `policy_id`. Mirrors
+/// `at_most_one_policy_per_id`; pins the structural uniqueness that
+/// the payment transformation's `bind_one PolicyHeadroom(policy_id,
+/// remaining)` (added in the conservation-invariant follow-up) will
+/// rely on. Even before any transformation reads PolicyHeadroom via
+/// `bind_one`, the uniqueness invariant matters: an unexpected
+/// duplicate at admission time would mean two competing answers to
+/// "how much capacity remains?" - exactly the kind of ambiguity a
+/// governed model exists to forbid.
+pub fn at_most_one_headroom_per_policy() -> Invariant {
+    Invariant {
+        name: "at_most_one_headroom_per_policy".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim("PolicyHeadroom", vec![var("policy"), var("a")]),
+                claim("PolicyHeadroom", vec![var("policy"), var("b")]),
+            ]),
+            eq(term(var("a")), term(var("b"))),
+        ),
+    }
+}
+
 /// `settlement_id` is globally unique across admitted payments. Two
 /// `SettlementPaid` claims sharing a `settlement_id` must agree on
 /// every other field. Without this, an audit log could carry two
@@ -121,18 +144,28 @@ pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
 // Transformations
 // ============================================================
 
-/// Open a policy with an aggregate limit. The aggregate limit is the
-/// cumulative cap across every settlement on this policy. A
-/// duplicate `policy_id` admission is caught by
-/// `at_most_one_policy_per_id` against the candidate state -
-/// `authorise_settlement` later relies on this uniqueness through
-/// `bind_one Policy(policy_id, aggregate_limit)`.
+/// Open a policy with an aggregate limit. Admits two claims at
+/// once: the immutable `Policy(policy_id, aggregate_limit)` record,
+/// and an initial `PolicyHeadroom(policy_id, aggregate_limit)` -
+/// the operational remaining-capacity counter that settlements
+/// consume. At issuance the headroom equals the aggregate limit; no
+/// settlement has reduced it yet.
+///
+/// The distinction matters: `Policy` is the contractual cap (set
+/// once, never changes), `PolicyHeadroom` is operational state
+/// (decremented per settlement). A duplicate `policy_id` admission
+/// is caught by `at_most_one_policy_per_id` and
+/// `at_most_one_headroom_per_policy` against the candidate state.
 pub fn issue_policy() -> Transformation {
     Transformation {
         name: "issue_policy".to_string(),
         parameters: params(&["policy_id", "aggregate_limit"]),
         body: vec![
             assert_("Policy", vec![var("policy_id"), var("aggregate_limit")]),
+            assert_(
+                "PolicyHeadroom",
+                vec![var("policy_id"), var("aggregate_limit")],
+            ),
             emit("PolicyIssued", vec![var("policy_id")]),
         ],
     }
@@ -295,6 +328,10 @@ pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
             .subject("settlement_id")
             .decimal("amount")
             .build(),
+        predicate("PolicyHeadroom")
+            .subject("policy_id")
+            .decimal("remaining")
+            .build(),
         predicate("PolicyLimitUsage")
             .subject("policy_id")
             .decimal("used")
@@ -307,13 +344,23 @@ pub fn all_invariants() -> Vec<Invariant> {
         paid_implies_authorised(),
         at_most_one_policy_per_id(),
         at_most_one_claim_report_per_id(),
+        at_most_one_headroom_per_policy(),
         settlement_id_uniquely_identifies_payment(),
     ]
 }
 
-/// Read-side projection: cumulative paid per policy. Enumerated on
-/// demand via `enumerate_derived`; not added to admitted state, not
-/// visible to invariants or transformations, not persisted.
+/// Read-side reporting projection: cumulative paid per policy as a
+/// sum over `SettlementPaid` claims. Enumerated on demand via
+/// `enumerate_derived`; not added to admitted state, not visible to
+/// invariants or transformations, not persisted.
+///
+/// Distinct in role from the admitted `PolicyHeadroom(policy_id,
+/// remaining)` predicate: `PolicyLimitUsage` is a recomputed-from-
+/// history view (how much has been spent), `PolicyHeadroom` is
+/// operational admitted state (how much remains). Both are derivable
+/// from each other (`used = aggregate_limit - remaining`), but they
+/// serve different consumers - one for reporting, one for the
+/// conservation invariant a later step will enforce.
 pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
     morpholog_core::DerivedClaim {
         predicate: "PolicyLimitUsage".to_string(),

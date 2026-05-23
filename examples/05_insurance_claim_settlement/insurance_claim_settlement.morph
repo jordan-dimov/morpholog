@@ -27,6 +27,7 @@ predicate ClaimReported(claim_id: Subject, policy_id: Subject, claimed_amount: D
 predicate SettlementAuthority(actor: Subject, limit: Decimal)
 predicate SettlementAuthorised(claim_id: Subject, settlement_id: Subject, amount: Decimal, actor: Subject)
 predicate SettlementPaid(policy_id: Subject, claim_id: Subject, settlement_id: Subject, amount: Decimal)
+predicate PolicyHeadroom(policy_id: Subject, remaining: Decimal)
 predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
 
 
@@ -43,12 +44,33 @@ invariant paid_implies_authorised:
     SettlementPaid(_, claim, settlement, amount) implies SettlementAuthorised(claim, settlement, amount, _)
 
 
+-- ============================================================
+-- Invariant: at most one PolicyHeadroom per policy.
+--
+-- PolicyHeadroom is the operational remaining-capacity counter -
+-- distinct from Policy (the immutable contractual cap) and from
+-- PolicyLimitUsage (the read-side reporting view). Two competing
+-- headroom claims for the same policy would mean two answers to
+-- "how much capacity remains?" - the kind of ambiguity a governed
+-- model exists to forbid.
+-- ============================================================
+invariant at_most_one_headroom_per_policy:
+    PolicyHeadroom(policy, a) and PolicyHeadroom(policy, b) implies a = b
+
+
 
 -- ============================================================
 -- Open a policy with an aggregate limit.
+--
+-- Admits two claims: the immutable Policy(policy_id,
+-- aggregate_limit) contractual cap, and an initial
+-- PolicyHeadroom(policy_id, aggregate_limit) operational
+-- remaining-capacity counter. At issuance the two coincide; no
+-- settlement has yet consumed any headroom.
 -- ============================================================
 transformation issue_policy(policy_id, aggregate_limit):
     admit Policy(policy_id, aggregate_limit)
+    admit PolicyHeadroom(policy_id, aggregate_limit)
     emit PolicyIssued(policy_id)
 
 -- ============================================================
