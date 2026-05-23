@@ -412,18 +412,9 @@ async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn run_rejects_unbalanced_entry_via_invariant() {
+async fn run_errors_with_available_list_on_unknown_transformation() {
     reset_db().await;
     let path = write_temp_ledger_morph();
-    // Asking the parameterised post_simple_entry to produce an
-    // unbalanced entry requires bypassing the transformation. The
-    // happier path: post a balanced entry first, then hand-craft a
-    // second one that violates balance. Simplest in-CLI is to call
-    // `post_simple_entry` with an amount; that always balances by
-    // construction. To test the invariant rejection path we'd need a
-    // transformation that doesn't enforce balance internally - this
-    // minimal programme doesn't expose one. Instead, this test asserts
-    // an unknown-transformation rejection.
     let args_json = r#"[]"#;
     let (status, _stdout, stderr) = run_cli(&[
         "run",
@@ -445,6 +436,77 @@ async fn run_rejects_unbalanced_entry_via_invariant() {
     assert!(
         stderr.contains("post_simple_entry"),
         "stderr should list the available transformations; got: {stderr}"
+    );
+}
+
+/// Write a temp .morph whose programme intentionally exposes a
+/// `post_unbalanced_entry` transformation that can produce an
+/// invariant-violating candidate state. Lets us prove that `run`
+/// preserves the same committed-vs-rejected semantics as `propose`
+/// when a kernel invariant rejects the candidate.
+fn write_temp_ledger_morph_with_unbalanced_path() -> std::path::PathBuf {
+    let body = r#"
+program temp_ledger_unbalanced
+
+predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
+predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
+
+invariant balanced_posted_entry:
+    JournalEntry(entry, _, _) implies (sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c)))
+
+transformation post_unbalanced_entry(entry_id, posting_date, period, debit_account, debit_amount, credit_account, credit_amount):
+    admit JournalEntry(entry_id, posting_date, period)
+    admit JournalLine(entry_id, debit_account, debit_amount, 0)
+    admit JournalLine(entry_id, credit_account, 0, credit_amount)
+    emit JournalEntryPosted(entry_id)
+"#;
+    let dir =
+        std::env::temp_dir().join(format!("morpholog_run_unbalanced_{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("ledger.morph");
+    std::fs::write(&path, body).expect("write temp .morph");
+    path
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_rejects_unbalanced_entry_via_invariant() {
+    reset_db().await;
+    let path = write_temp_ledger_morph_with_unbalanced_path();
+    // 100 debit, 90 credit - the candidate state has an unbalanced
+    // JournalEntry, so balanced_posted_entry must reject it.
+    let args_json = r#"[
+        {"type":"subject","value":"unbal_001"},
+        {"type":"subject","value":"2026-04-15"},
+        {"type":"subject","value":"q1_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"decimal","value":"100"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"90"}
+    ]"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_unbalanced_entry",
+        "--actor",
+        "alex",
+        "--args",
+        args_json,
+    ]);
+    // Same exit-code semantics as `propose`: rejected business
+    // outcome is exit 1 with the receipt on stdout, not stderr.
+    assert!(
+        !status.success(),
+        "unbalanced entry must be rejected; stderr: {stderr}"
+    );
+    let receipt: Value = serde_json::from_str(&stdout).expect("rejection receipt is JSON");
+    assert_eq!(receipt["status"], "rejected");
+    assert!(
+        receipt["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("balanced_posted_entry"),
+        "rejection reason should name the failing invariant; got: {}",
+        receipt["reason"]
     );
 }
 
@@ -602,7 +664,7 @@ async fn outbox_complete_delivered_marks_row_delivered() {
         "delivered complete should exit 0; stderr: {stderr}"
     );
     let json: Value = serde_json::from_str(&stdout).expect("complete output is JSON");
-    assert_eq!(json, serde_json::json!("Applied"));
+    assert_eq!(json, serde_json::json!({"status": "applied"}));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -701,7 +763,7 @@ async fn outbox_complete_with_wrong_worker_id_exits_one_with_lease_lost() {
     ]);
     assert!(!status.success(), "wrong worker_id must exit non-zero");
     let json: Value = serde_json::from_str(&stdout).expect("LeaseLost output is JSON");
-    assert_eq!(json, serde_json::json!("LeaseLost"));
+    assert_eq!(json, serde_json::json!({"status": "lease_lost"}));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -718,7 +780,7 @@ async fn outbox_release_puts_a_claimed_row_back_to_pending() {
         run_cli(&["outbox", "release", &intent_id, "--worker-id", &worker_id]);
     assert!(status.success(), "release should exit 0; stderr: {stderr}");
     let json: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(json, serde_json::json!("Applied"));
+    assert_eq!(json, serde_json::json!({"status": "applied"}));
 
     // And the row is claimable again.
     let (status, stdout, _stderr) = run_cli(&["outbox", "claim", "--intent-type", intent_type]);
@@ -930,7 +992,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
         "complete should succeed; stderr: {stderr}"
     );
     let upd: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(upd, serde_json::json!("Applied"));
+    assert_eq!(upd, serde_json::json!({"status": "applied"}));
 
     // 5. INSPECT: the same consumer (or an auditor) verifies the row
     //    is in the delivered slice.

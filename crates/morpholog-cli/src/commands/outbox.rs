@@ -14,9 +14,10 @@
 //!
 //! Output is always JSON. `claim` wraps the row as
 //! `{"row": <OutboxRow>}` (or `{"row": null}` when nothing is
-//! claimable); `complete` and `release` emit the result of the
-//! lease-gated helper as JSON so a script can distinguish
-//! `LeaseLost` from `Updated`.
+//! claimable); `complete` and `release` emit `{"status": "applied"}`
+//! on success or `{"status": "lease_lost"}` when the worker no
+//! longer holds the lease, so scripts can consistently read
+//! `result["status"]`.
 //!
 //! Compensation is deliberately out of scope at the CLI: if a
 //! deployment needs the failed-then-compensate flow, it uses the
@@ -41,8 +42,9 @@ use crate::{OutboxClaimArgs, OutboxCompleteArgs, OutboxCompleteOutcome, OutboxRe
 /// returns it inside the row's `locked_by` field so the caller can
 /// pass it back to `complete` or `release`.
 ///
-/// Exit codes: 0 always. Empty output (`{"row": null}`) means no
-/// claimable row right now, which is normal and not an error.
+/// Exit codes: 0 on success (including when no row is available -
+/// `{"row": null}` is not an error). Non-zero on operational error
+/// (database connection failure, SQL error).
 pub(crate) async fn claim(args: OutboxClaimArgs) -> anyhow::Result<()> {
     let worker_id = args
         .worker_id
@@ -67,7 +69,8 @@ pub(crate) async fn claim(args: OutboxClaimArgs) -> anyhow::Result<()> {
 ///
 /// All three paths are lease-gated: if the worker no longer holds
 /// the lease (because it expired and another worker reclaimed the
-/// row), the helper returns `LeaseLost` and the CLI exits 1.
+/// row), the underlying helper returns `Applied = false` and the
+/// CLI emits `{"status": "lease_lost"}` then exits 1.
 pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
     // Reject contradictory flag combinations up front so the
     // caller's mistake is visible without a database round trip.
@@ -85,10 +88,15 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
             "--retry-after-seconds is only meaningful with --outcome transient"
         ));
     }
-    if matches!(args.outcome, OutboxCompleteOutcome::Delivered) && args.reason.is_some() {
-        return Err(anyhow!(
-            "--reason is only meaningful with --outcome transient or failed"
-        ));
+    // `--reason` is only meaningful with `--outcome failed`. Earlier
+    // drafts accepted it for `transient` and silently dropped it
+    // (the underlying `mark_outbox_transient_attempt` does not
+    // persist per-attempt narrative). Silent discard is not a
+    // governance-tool shape - reject it. A future enhancement
+    // could add transient-reason persistence; until then,
+    // `--reason` belongs to `failed` only.
+    if !matches!(args.outcome, OutboxCompleteOutcome::Failed) && args.reason.is_some() {
+        return Err(anyhow!("--reason is only meaningful with --outcome failed"));
     }
 
     let pool = connect(&args.database_url).await?;
@@ -110,12 +118,6 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
             let next_attempt_at: DateTime<Utc> = Utc::now()
                 + chrono::Duration::from_std(retry_after)
                     .context("retry-after-seconds overflowed chrono::Duration")?;
-            // `mark_outbox_transient_attempt` does not persist a
-            // reason today (the helper records the next attempt
-            // schedule, not a per-attempt narrative). If the caller
-            // supplied --reason we accept it and silently drop it;
-            // a future enhancement to the helper would carry it
-            // through. Tracked in the CLI docstring.
             mark_outbox_transient_attempt(&pool, args.intent_id, &args.worker_id, next_attempt_at)
                 .await
                 .context("mark_outbox_transient_attempt failed")?
@@ -144,12 +146,22 @@ pub(crate) async fn release(args: OutboxReleaseArgs) -> anyhow::Result<()> {
     emit_update_and_exit(&update)
 }
 
-/// Emit the `OutboxUpdate` as JSON and translate the variant into
-/// an exit code. `Updated` is the happy path (exit 0); `LeaseLost`
+/// Emit the `OutboxUpdate` as `{"status": "applied"}` or
+/// `{"status": "lease_lost"}` and translate the variant into an
+/// exit code. `Applied` is the happy path (exit 0); `LeaseLost`
 /// is exit 1 - not a bug in the CLI, but the caller's lease was
 /// stolen and the state change did not apply.
+///
+/// Snake-case `status` value follows the existing CLI JSON
+/// convention (e.g. `{"status":"committed"}` from `propose`). The
+/// wrapping object lets scripts consistently read `result["status"]`
+/// rather than parsing bare enum strings.
 fn emit_update_and_exit(update: &OutboxUpdate) -> anyhow::Result<()> {
-    print_json(update)?;
+    let status = match update {
+        OutboxUpdate::Applied => "applied",
+        OutboxUpdate::LeaseLost => "lease_lost",
+    };
+    print_json(&serde_json::json!({ "status": status }))?;
     match update {
         OutboxUpdate::Applied => Ok(()),
         OutboxUpdate::LeaseLost => std::process::exit(1),

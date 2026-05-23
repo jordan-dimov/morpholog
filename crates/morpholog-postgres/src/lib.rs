@@ -757,9 +757,8 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 /// pattern used elsewhere. This is the natural "what does the worker
 /// have to deliver?" query.
 ///
-/// Delivered and failed rows are excluded; a future `list_all_outbox`
-/// or status-filtered helper would surface them. v0 only exposes the
-/// in-flight queue.
+/// For status-filtered reads (delivered, failed, in-flight, or
+/// every-status historical), use [`list_outbox_rows`].
 pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
     let rows: Vec<OutboxRowRaw> = sqlx::query_as(OUTBOX_SELECT_ALL_COLUMNS)
         .bind("pending")
@@ -770,9 +769,11 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
 }
 
 /// Return outbox rows filtered by status and/or intent type. Both
-/// filters are optional: `status_filter = None` returns rows of every
-/// status (pending, in_progress, delivered, failed); `intent_type_filter
-/// = None` returns rows of every intent type. Order is `(enqueued_at,
+/// filters are optional: `status_filter = None` drops the status
+/// predicate entirely (returning rows of any status the schema
+/// admits, including the compensation-state variants that the
+/// worker maintains internally); `intent_type_filter = None`
+/// returns rows of every intent type. Order is `(enqueued_at,
 /// intent_id)` - the same chronological-with-tie-break order
 /// `list_pending_outbox` uses.
 ///
