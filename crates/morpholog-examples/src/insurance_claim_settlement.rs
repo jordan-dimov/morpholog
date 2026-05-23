@@ -109,39 +109,45 @@ pub fn at_most_one_headroom_per_policy() -> Invariant {
     }
 }
 
-/// Transition invariant: each newly-admitted `SettlementPaid` claim
-/// for a policy must consume the corresponding decrement from that
-/// policy's `PolicyHeadroom`. Reads as: "if a `PolicyHeadroom`
-/// exists both before and after, AND a new `SettlementPaid` was
-/// admitted in this transition for that policy with amount `amt`,
-/// then the post-state remaining = pre-state remaining - `amt`."
+/// Transition invariant: per-policy headroom delta conservation.
+/// Reads as: "for every policy whose `PolicyHeadroom` exists both
+/// before and after the transition, the change in remaining
+/// capacity must equal the total amount of newly-admitted
+/// `SettlementPaid` claims for that policy."
+///
+/// Encoded as `after = before - sum(amt | SettlementPaid(p, _, s,
+/// amt) and not pre(SettlementPaid(p, _, s, amt)))`. The `Sum` body
+/// enumerates settlements that exist in post-state but not in
+/// pre-state - the newly-admitted set for this transition.
 ///
 /// This is the conservation rule the `aggregate_limit` `require`
 /// gate alone could not enforce. The `require` is an admission
 /// gate ("is there enough headroom for this payment?"); this
-/// invariant is the conservation law ("did the payment actually
-/// consume exactly its amount of headroom?"). Both are kept: a
-/// buggy transformation that admitted `SettlementPaid` without
-/// retracting and re-asserting `PolicyHeadroom` would pass the
-/// require but fail this invariant, surfacing the bug at admission.
+/// invariant is the conservation law ("does the headroom delta
+/// equal the total new payments?"). Both are kept; a buggy
+/// transformation that admitted `SettlementPaid` without retracting
+/// and re-asserting `PolicyHeadroom` would pass the require and
+/// fail the invariant.
+///
+/// Why the sum-based form rather than per-payment equality: an
+/// earlier draft of this invariant compared each newly-admitted
+/// payment individually to the headroom delta (`after = before -
+/// amt`). For the current one-payment transformation that
+/// degenerates to the same check, but as a general conservation
+/// law it is too weak: a hypothetical multi-payment transformation
+/// that admitted two same-amount settlements while decrementing
+/// headroom only once would pass each per-row equation
+/// (`70 = 100 - 30`) while consuming 60 of headroom instead of 30.
+/// The sum-based form catches that bug class and every related one
+/// (headroom mutation without payment, payment without headroom
+/// mutation, wrong decrement amount).
 ///
 /// Genesis behaviour: `issue_policy` admits the initial
-/// `PolicyHeadroom` against an empty pre-state. The `pre(PolicyHeadroom
-/// (p, before))` conjunct matches nothing, the whole `and` is
-/// empty, and the rule is vacuously true under `implies`. Once the
-/// policy exists, every subsequent settlement is constrained.
-///
-/// Quantifier composition note: the body uses `and` to thread `p`
-/// across the post-state `PolicyHeadroom`, pre-state
-/// `PolicyHeadroom`, and the newly-admitted `SettlementPaid`. There
-/// is no `forall`; the binding-extension semantics of `And` produce
-/// one binding set per (p, after, before, s, amt) tuple and the
-/// `implies` must hold for each. Multiple newly-admitted settlements
-/// for the same policy in a single transition (if a buggy
-/// transformation ever produced them) would each be constrained
-/// against the same `(before, after)` pair, which would only
-/// succeed if every amount were identical - effectively forbidding
-/// multi-settlement transitions per policy.
+/// `PolicyHeadroom` against an empty pre-state. The
+/// `pre(PolicyHeadroom(p, before))` conjunct matches nothing, the
+/// whole `and` is empty, and the rule is vacuously true under
+/// `implies`. Once the policy exists, every subsequent transition
+/// touching its headroom is constrained.
 pub fn headroom_consumed_by_payment() -> Invariant {
     Invariant {
         name: "headroom_consumed_by_payment".to_string(),
@@ -150,18 +156,26 @@ pub fn headroom_consumed_by_payment() -> Invariant {
             and(vec![
                 claim("PolicyHeadroom", vec![var("p"), var("after")]),
                 pre(claim("PolicyHeadroom", vec![var("p"), var("before")])),
-                claim(
-                    "SettlementPaid",
-                    vec![var("p"), wildcard(), var("s"), var("amt")],
-                ),
-                not(pre(claim(
-                    "SettlementPaid",
-                    vec![var("p"), wildcard(), var("s"), var("amt")],
-                ))),
             ]),
             eq(
                 term(var("after")),
-                sub(term(var("before")), term(var("amt"))),
+                sub(
+                    term(var("before")),
+                    sum(
+                        var("amt"),
+                        "amt",
+                        and(vec![
+                            claim(
+                                "SettlementPaid",
+                                vec![var("p"), wildcard(), var("s"), var("amt")],
+                            ),
+                            not(pre(claim(
+                                "SettlementPaid",
+                                vec![var("p"), wildcard(), var("s"), var("amt")],
+                            ))),
+                        ]),
+                    ),
+                ),
             ),
         ),
     }
@@ -450,8 +464,8 @@ pub fn all_invariants() -> Vec<Invariant> {
 /// history view (how much has been spent), `PolicyHeadroom` is
 /// operational admitted state (how much remains). Both are derivable
 /// from each other (`used = aggregate_limit - remaining`), but they
-/// serve different consumers - one for reporting, one for the
-/// conservation invariant a later step will enforce.
+/// serve different consumers - one for reporting, the other for
+/// the conservation invariant `headroom_consumed_by_payment`.
 pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
     morpholog_core::DerivedClaim {
         predicate: "PolicyLimitUsage".to_string(),

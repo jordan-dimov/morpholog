@@ -750,3 +750,121 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
         }
     }
 }
+
+/// The sum-based form's payoff (ChatGPT review of PR #70): a
+/// hypothetical buggy transformation that admits two same-amount
+/// `SettlementPaid` claims while decrementing `PolicyHeadroom`
+/// only once would pass an earlier draft of this invariant (each
+/// per-row equation `70 = 100 - 30` would hold) but consume
+/// 60 of headroom while only crediting 30. The sum-based
+/// conservation rule rejects it: 70 != 100 - sum(30, 30) = 40.
+#[test]
+fn conservation_invariant_catches_multi_payment_with_single_decrement() {
+    use morpholog_core::Transformation;
+    use morpholog_core::dsl;
+
+    // Pre-state: policy_001 with 100k headroom, two reported
+    // claims (so two payments can be admitted in the buggy
+    // transformation against legitimate claim_ids), and alex's
+    // authority.
+    let pre = {
+        let s = issue(State::default(), "policy_001", 100_000);
+        let s = report(s, "claim_a", "policy_001", 20_000);
+        let s = report(s, "claim_b", "policy_001", 20_000);
+        grant(s, "alex", 50_000)
+    };
+
+    // Buggy: admits two SettlementPaid claims (30k each) but only
+    // decrements PolicyHeadroom once. The aggregate-limit require
+    // would still pass because the sum check (0 + 60 <= 100k) holds
+    // in pre-state at evaluation time. Only the sum-based
+    // conservation invariant catches the discrepancy.
+    let buggy = Transformation {
+        name: "buggy_multi_payment".to_string(),
+        parameters: dsl::params(&["amount"]),
+        body: vec![
+            dsl::bind_one(dsl::claim(
+                "PolicyHeadroom",
+                vec![dsl::subj("policy_001"), dsl::var("current_headroom")],
+            )),
+            dsl::require(dsl::claim(
+                "SettlementAuthority",
+                vec![dsl::actor(), dsl::wildcard()],
+            )),
+            dsl::let_(
+                "new_headroom",
+                dsl::sub(
+                    dsl::term(dsl::var("current_headroom")),
+                    dsl::term(dsl::var("amount")),
+                ),
+            ),
+            dsl::retract(
+                "PolicyHeadroom",
+                vec![dsl::subj("policy_001"), dsl::var("current_headroom")],
+            ),
+            dsl::assert_(
+                "PolicyHeadroom",
+                vec![dsl::subj("policy_001"), dsl::var("new_headroom")],
+            ),
+            // Two SettlementAuthorised + SettlementPaid pairs, both
+            // for `amount`. The authorisations satisfy
+            // paid_implies_authorised; the two SettlementPaid claims
+            // are the structural bug - they total 2*amount but only
+            // 1*amount of headroom is consumed.
+            dsl::assert_(
+                "SettlementAuthorised",
+                vec![
+                    dsl::subj("claim_a"),
+                    dsl::subj("settlement_a"),
+                    dsl::var("amount"),
+                    dsl::actor(),
+                ],
+            ),
+            dsl::assert_(
+                "SettlementPaid",
+                vec![
+                    dsl::subj("policy_001"),
+                    dsl::subj("claim_a"),
+                    dsl::subj("settlement_a"),
+                    dsl::var("amount"),
+                ],
+            ),
+            dsl::assert_(
+                "SettlementAuthorised",
+                vec![
+                    dsl::subj("claim_b"),
+                    dsl::subj("settlement_b"),
+                    dsl::var("amount"),
+                    dsl::actor(),
+                ],
+            ),
+            dsl::assert_(
+                "SettlementPaid",
+                vec![
+                    dsl::subj("policy_001"),
+                    dsl::subj("claim_b"),
+                    dsl::subj("settlement_b"),
+                    dsl::var("amount"),
+                ],
+            ),
+        ],
+    };
+
+    let outcome = propose_as(&buggy, vec![dec(30_000)], subj("alex"), &pre, &invariants())
+        .expect("kernel must not error");
+
+    match outcome {
+        Outcome::Rejected { reason } => {
+            assert!(
+                reason.contains("headroom_consumed_by_payment"),
+                "expected rejection to name the conservation invariant, got: {reason}"
+            );
+        }
+        Outcome::Accepted { .. } => {
+            panic!(
+                "a buggy multi-payment transition that consumes headroom only \
+                 once while admitting two SettlementPaid claims must be rejected"
+            )
+        }
+    }
+}

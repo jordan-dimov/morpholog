@@ -59,30 +59,39 @@ invariant at_most_one_headroom_per_policy:
 
 
 -- ============================================================
--- Transition invariant: conservation of policy headroom.
+-- Transition invariant: per-policy headroom delta conservation.
 --
--- Each newly-admitted SettlementPaid for a policy must consume the
--- corresponding decrement from that policy's PolicyHeadroom. The
--- `pre(...)` wrapper opts subtree evaluation into the
--- pre-transition state; the body compares pre-state and post-state
--- headroom against the newly-admitted payment amount.
+-- For every policy whose PolicyHeadroom exists both before and
+-- after the transition, the change in remaining capacity must
+-- equal the total amount of newly-admitted SettlementPaid claims
+-- for that policy. The Sum body enumerates settlements that exist
+-- in post-state but not in pre-state - the newly-admitted set.
 --
 -- The aggregate-limit require in authorise_settlement is the
 -- admission gate ("is there enough headroom?"); this invariant is
--- the conservation law ("did the payment actually consume exactly
--- its amount?"). Both kept: a buggy transformation that staged
+-- the conservation law ("does the headroom delta equal the total
+-- new payments?"). Both kept: a buggy transformation that staged
 -- SettlementPaid without retracting and re-asserting
--- PolicyHeadroom would pass the require but fail this invariant.
+-- PolicyHeadroom would pass the require and fail the invariant.
+--
+-- Sum-based rather than per-row: an earlier draft compared each
+-- newly-admitted payment individually to the headroom delta. That
+-- collapses to the same check for the current one-payment
+-- transformation but is too weak as a general conservation rule -
+-- a hypothetical multi-payment transition that admitted two
+-- same-amount settlements while decrementing headroom only once
+-- would pass each per-row check while consuming twice the
+-- headroom it credits. The sum form catches that and every
+-- related delta-conservation bug class.
 --
 -- Genesis: issue_policy admits initial PolicyHeadroom against an
 -- empty pre-state; `pre(PolicyHeadroom(...))` matches nothing, the
 -- implies is vacuously true. Once the policy exists, every
--- subsequent settlement is constrained.
+-- subsequent transition touching headroom is constrained.
 -- ============================================================
 invariant headroom_consumed_by_payment:
     PolicyHeadroom(p, after) and pre(PolicyHeadroom(p, before))
-    and SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt))
-    implies after = before - amt
+    implies after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))
 
 
 

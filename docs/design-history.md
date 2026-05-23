@@ -615,8 +615,8 @@ The two-step retrofit is ChatGPT's suggested PR split, kept within one PR as com
 - New admitted predicate `PolicyHeadroom(policy_id, remaining)` and the structural-uniqueness invariant `at_most_one_headroom_per_policy`.
 - `issue_policy` admits initial `PolicyHeadroom(policy_id, aggregate_limit)` alongside `Policy`.
 - `authorise_settlement` adds a third `bind_one` for current headroom, then `let new_headroom = current - amount`, `retract` the old headroom claim, `assert` the new one. Existing cumulative-cap require retained.
-- Transition invariant `headroom_consumed_by_payment` using `pre()` for both PolicyHeadroom and SettlementPaid identity.
-- Load-bearing test (`conservation_invariant_catches_payment_that_skips_headroom_update`) constructs a buggy transformation that admits SettlementPaid without consuming headroom and verifies the rejection.
+- Transition invariant `headroom_consumed_by_payment`: per-policy delta conservation, `after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))`. The Sum body enumerates newly-admitted settlements (post minus pre); the implies asserts the total consumes exactly the headroom delta.
+- The sum-based form replaces an earlier per-row draft (`after = before - amt`, one binding tuple per new settlement). ChatGPT's PR review flagged the draft as too weak: a hypothetical multi-payment transition admitting two same-amount settlements while decrementing headroom only once would pass each per-row equation while consuming twice the headroom it credits. The sum form is the actual conservation law and catches that edge plus the rest of the delta-conservation bug family (headroom mutation without payment, payment without headroom mutation, wrong decrement). Two load-bearing tests pin this: `conservation_invariant_catches_payment_that_skips_headroom_update` and `conservation_invariant_catches_multi_payment_with_single_decrement`.
 - Example 05 README updated with the new predicate, invariant, transformation behaviour, and a design-note section on what `Expr::Pre` earned its place for in this domain.
 
 **What stays out:**
