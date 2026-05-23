@@ -26,7 +26,7 @@ One transformation, `create_net_settlement(party_a, party_b, lines)`. It checks 
 
 The program runs both as Rust IR and as `.morph` source: `examples/01_settlement_netting/netting.morph` parses end-to-end via `morpholog parse` and validates via `morpholog check`. Two layers of tests prove the same example:
 
-### In-memory (sync kernel)
+### In-memory tests
 
 ```bash
 cargo test -p morpholog-core propose_

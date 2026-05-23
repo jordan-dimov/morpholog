@@ -2155,8 +2155,27 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         "ClaimPaymentRequested intent must be staged to the outbox",
     );
 
-    // 5. Second settlement: £40k. Cumulative 60 + 40 = 100 - the
-    // exact aggregate. Boundary equality admits.
+    // 5. PolicyHeadroom now reflects the £60k consumed:
+    // 100k - 60k = 40k remaining. The conservation invariant
+    // enforced this at commit; checking it here pins the durable
+    // outcome through the PG path.
+    let claims_after_first = list_claims(&pool).await.unwrap();
+    assert!(
+        claims_after_first
+            .iter()
+            .any(|c| c.predicate == "PolicyHeadroom"
+                && c.args == vec![subj("policy_001"), dec(40_000)]),
+        "PolicyHeadroom should be 40k after the £60k settlement; \
+         got: {:?}",
+        claims_after_first
+            .iter()
+            .filter(|c| c.predicate == "PolicyHeadroom")
+            .collect::<Vec<_>>()
+    );
+
+    // 6. Second settlement: £40k. Cumulative 60 + 40 = 100 - the
+    // exact aggregate. Boundary equality admits. Headroom should
+    // land at exactly 0.
     let outcome = common::propose_pg_as(
         &pool,
         &insurance_claim_settlement::authorise_settlement(),
@@ -2167,8 +2186,15 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     .await
     .expect("boundary-fill authorise_settlement should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+    let claims_after_second = list_claims(&pool).await.unwrap();
+    assert!(
+        claims_after_second
+            .iter()
+            .any(|c| c.predicate == "PolicyHeadroom" && c.args == vec![subj("policy_001"), dec(0)]),
+        "PolicyHeadroom should be 0 after the policy is exhausted"
+    );
 
-    // 6. Third settlement attempted on a third reported claim:
+    // 7. Third settlement attempted on a third reported claim:
     // would push cumulative past the aggregate. Rejected at admission.
     // Pin that rejection leaves no durable trace.
     let outcome = common::propose_pg_with_test_actor(
@@ -2204,7 +2230,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         "rejected settlement must not enqueue an outbox intent",
     );
 
-    // 7. Derived `PolicyLimitUsage` matches the cumulative paid.
+    // 8. Derived `PolicyLimitUsage` matches the cumulative paid.
     let usage_rows = list_derived(&pool, &insurance_claim_settlement::policy_limit_usage())
         .await
         .unwrap();

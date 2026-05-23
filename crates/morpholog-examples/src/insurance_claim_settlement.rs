@@ -1,9 +1,11 @@
-//! Insurance claim settlement IR: actor authority + cumulative
-//! aggregate policy limit. The load-bearing transformation gates
-//! authorisation on `Le(Add(running_paid, proposed), aggregate_limit)`,
-//! which is the IR shape Expr::Add was added for. See
-//! `examples/05_insurance_claim_settlement/README.md` for the business
-//! framing.
+//! Insurance claim settlement: an insurer authorises payments
+//! against a policy's aggregate limit. Authorisation depends on
+//! both an actor-authority gate and a per-policy spend cap, and
+//! every payment must consume exactly its amount of the policy's
+//! remaining headroom (the conservation invariant).
+//!
+//! See `examples/05_insurance_claim_settlement/README.md` for the
+//! business framing.
 
 use morpholog_core::{Invariant, Transformation};
 
@@ -262,12 +264,11 @@ pub fn grant_settlement_authority() -> Transformation {
     }
 }
 
-/// The load-bearing transformation. Pulls policy_id, aggregate_limit,
-/// and current_headroom via `bind_one`; gates on actor authority and
-/// the cumulative-cap (`sum(paid) + amount <= aggregate_limit`); then
-/// stages the headroom retract+assert pair and admits the
-/// authorisation and payment claims. The actor flows through
-/// transition context, not as a parameter.
+/// The main transformation. Looks up the claim, the policy, and
+/// the current headroom; checks the actor has enough authority and
+/// the policy has enough capacity; then updates the headroom and
+/// admits the authorisation and payment claims. The proposing
+/// actor flows through transition context, not as a parameter.
 pub fn authorise_settlement() -> Transformation {
     Transformation {
         name: "authorise_settlement".to_string(),

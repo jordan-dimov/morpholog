@@ -1,82 +1,102 @@
 # Chess transition invariants
 
-A worked example that exists for one reason: to force [`Expr::Pre`](../../crates/morpholog-core/src/ir.rs) into the kernel. Where the other examples are business shapes that earn their primitives by getting close to a real audit or trading rule, this one is honest about being a teaching demo - the cleanest small domain where transition invariants pay for themselves on their own terms.
+A small chess world that demonstrates one specific Morpholog feature: rules that constrain not just *what state is allowed*, but *how state is allowed to change*.
 
-The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which lays out a TLA+ model of basic chess and splits its safety rules into two families: **state invariants** (predicates over a single state) and **transition invariants** (predicates over a `<state, next-state>` pair). State invariants are what Morpholog already had. Transition invariants are what `pre(...)` makes expressible.
+The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+ and observes that some chess rules are properties of a single board position ("at most one king per colour"), while others are properties of a move ("the move counter goes up by exactly one"). Morpholog already supported the first kind. This example shows the second kind, made possible by a wrapper called `pre(...)` that lets a rule refer to the board *before* the move alongside the board *after*.
 
-## The doctrinal point
+If you already use Morpholog to encode rules about admitted state, this example shows what becomes expressible once `pre(...)` is available. If you are evaluating Morpholog for a business use case (an audit log, a settlement system, an inventory rule), the same kind of "what just changed?" rule is what [`examples/05_insurance_claim_settlement`](../05_insurance_claim_settlement/) demonstrates with a real domain - this one keeps the kernel idea visible with chess as a familiar backdrop.
 
-Before `pre(...)`, an invariant could only say "the world is in an admissible shape." It could not say "the world changed in an admissible way." The two are distinct.
+## Two kinds of rule
 
-The canonical business case is conservation of an admitted balance: "this payment is not merely below the cap; it must consume exactly its amount of the remaining entitlement." Example 05 (`insurance_claim_settlement`) carries that case via `PolicyHeadroom` and the `headroom_consumed_by_payment` transition invariant - that is where `pre(...)` earns its place in a real audit story.
+In Morpholog, an invariant is a rule that must always hold over admitted state. Up to now, every invariant in the worked examples has been a property of a single state:
 
-Chess is the same shape with the business stripped out. `PieceCountNonIncreasing` is conservation of pieces over a single move: pieces do not appear out of thin air, only disappear via capture. `MoveCountStrictlyIncreases` is the chess analogue of "every transaction increments the audit counter by one." `TurnAlternates` is the two-party version of "the next actor is not the same actor." None can be expressed as a predicate over a single state. Each is textbook in the chess paper, and each forces `pre(...)` cleanly.
+- *Every journal entry's debits equal its credits.*
+- *Every paid settlement has a matching authorisation.*
+- *At most one current verification per asset.*
 
-## The scoped domain
+These check the state of the world as a snapshot. They don't say anything about *how* you got there.
 
-Chess is full of features that would force chess-specific kernel changes - castling moves four squares per turn, en passant captures a piece not on the destination, promotion morphs a piece type, the legal-moves clause is a scheduling concern more than a safety one. None of those help Morpholog's audience.
+Some real-world rules are not properties of any single snapshot. They are properties of a step:
 
-This example keeps the chess that maps to general transition rules and drops the rest. It models:
+- *Every move advances the move counter by exactly one.*
+- *Every payment consumes exactly its amount of available capacity.*
+- *Every transition flips whose turn it is.*
 
-- A board, as a set of `PieceAt(square, piece_type, color)` claims.
-- A move counter (`MoveCount`), a piece counter (`PieceCount`), and a turn marker (`CurrentTurn`).
-- The opening position - 32 pieces, white to move, counter at zero.
-- A non-capturing move (`quiet_move`) and a capturing move (`capturing_move`).
+You cannot express these as conditions on one state. The information needed to check them lives in two states: the one before the change and the one after.
 
-It deliberately does not model castling, en passant, promotion, check, checkmate, stalemate, the legal-moves precondition, or any piece-specific movement rules. Those each force their own design call, and none are needed to demonstrate `pre(...)`.
+`pre(some_predicate)` is the Morpholog wrapper that says "evaluate this part against the previous state, not the current one." When an invariant uses `pre(...)`, it can compare values from before and after the proposed change.
+
+## What this example models
+
+A deliberately small slice of chess:
+
+- A board, represented as a set of `PieceAt(square, piece_type, color)` claims.
+- Three counters that track game-level facts: `MoveCount` (how many moves have been played), `PieceCount` (how many pieces are on the board), and `CurrentTurn` (whose move it is).
+- An initial-setup transformation that places the 32 standard opening pieces.
+- Two move transformations: a quiet move (no capture) and a capturing move.
+
+The example does not model castling, en passant, promotion, check, checkmate, stalemate, the threefold-repetition rule, or any piece-specific movement rules. It is not a chess engine; it does not stop you from moving a bishop sideways. Its purpose is to demonstrate transition invariants, and that purpose is served by the simpler subset.
 
 ## The program
 
-See [`chess.morph`](chess.morph) for the surface form.
+The full surface form is in [`chess.morph`](chess.morph). The IR companion is in [`crates/morpholog-examples/src/chess_transition_invariants.rs`](../../crates/morpholog-examples/src/chess_transition_invariants.rs).
 
-### Claims
+### The predicates
 
-| Predicate | Role |
+| Predicate | What it represents |
 | --- | --- |
-| `PieceAt(square, piece_type, color)` | One piece on one square. Append-and-retractable: a move retracts the source claim and asserts a destination one. |
-| `MoveCount(n)` | The running move count. Retracted and re-asserted each move. |
-| `PieceCount(n)` | The running total of pieces on the board. Retracted and re-asserted on captures. |
-| `CurrentTurn(color)` | Whose turn it is. Retracted and re-asserted each move. |
+| `PieceAt(square, piece_type, color)` | A specific piece sits on a specific square. A move retracts the claim at the source square and admits a new one at the destination. |
+| `MoveCount(n)` | How many moves have been played so far. Retracted and re-admitted each move. |
+| `PieceCount(n)` | Total pieces currently on the board. Retracted and re-admitted when a capture happens. |
+| `CurrentTurn(color)` | Whose turn it is. Retracted and re-admitted each move. |
 
-Subjects used as constants: `#white`, `#black`; piece types `#pawn` `#knight` `#bishop` `#rook` `#queen` `#king`; squares `#a1` through `#h8`. None are special-cased by the kernel - they are opaque subject identifiers like every other Morpholog subject.
+Constants used as subjects: `#white`, `#black`; the six piece types (`#pawn`, `#knight`, `#bishop`, `#rook`, `#queen`, `#king`); the 64 squares (`#a1` through `#h8`). Morpholog does not treat these specially - they are just opaque identifiers like any other subject in any other example.
 
-### State invariants
+### Rules about state
 
-| Invariant | Says |
+Two rules that hold over any single board position:
+
+| Invariant | What it says |
 | --- | --- |
-| `at_most_one_piece_per_square` | Two `PieceAt` claims for the same square must agree on type and colour. In practice, they must be the same claim. |
-| `one_king_per_color` | Two `PieceAt` claims for kings of the same colour must be at the same square. Pairs with the above to mean "exactly one king per colour, at most." |
+| `at_most_one_piece_per_square` | A square can hold at most one piece. If two `PieceAt` claims share a square they must describe the same piece. |
+| `one_king_per_color` | Each colour has at most one king. Two king claims for the same colour must point at the same square. |
 
-These do not force any new IR. They are the structural backdrop against which the transition rules become meaningful.
+Both are familiar from chess. Neither needs `pre(...)`.
 
-### Transition invariants
+### Rules about transitions
 
-| Invariant | Says |
+Three rules that require comparing the board before a move with the board after:
+
+| Invariant | What it says |
 | --- | --- |
-| `move_count_strictly_increases` | `MoveCount(n) and pre(MoveCount(m)) implies n = m + 1`. Every transition bumps the counter by exactly one. |
-| `turn_alternates` | `CurrentTurn(t_now) and pre(CurrentTurn(t_prev)) implies t_now != t_prev`. The turn flips every move. |
-| `single_capture_per_move` | `PieceCount(after) and pre(PieceCount(before)) implies (after = before) or (after = before - 1)`. At most one capture per move. This is the rule that pays for the `Or` kernel primitive that landed in the prior PR. |
+| `move_count_strictly_increases` | The move counter must go up by exactly one each move. `MoveCount(n) and pre(MoveCount(m)) implies n = m + 1`. |
+| `turn_alternates` | The next move belongs to the other colour. `CurrentTurn(now) and pre(CurrentTurn(prev)) implies now != prev`. |
+| `single_capture_per_move` | A move either captures one piece or captures none. `PieceCount(after) and pre(PieceCount(before)) implies (after = before) or (after = before - 1)`. |
 
-Each one would be unprovable as a state invariant - none of them is a property of any single state.
+None of these can be expressed as a property of a single board. "The counter went up by one" requires knowing both counter values.
 
-### Transformations
+### The transformations
 
-| Transformation | Purpose |
+| Transformation | What it does |
 | --- | --- |
-| `start_game()` | Initialise the opening position: 32 pieces, `MoveCount(0)`, `PieceCount(32)`, white to move. |
-| `quiet_move(src, dst, new_turn)` | Move a piece from `src` to `dst`; `dst` must be empty; `MoveCount` advances; `PieceCount` is unchanged; `CurrentTurn` flips. |
-| `capturing_move(src, dst, new_turn)` | Move from `src` to `dst` where `dst` is occupied by an enemy piece; the captured piece is retracted; `PieceCount` decrements by one. |
+| `start_game()` | Sets up the opening position: 32 pieces in their starting squares, `MoveCount(0)`, `PieceCount(32)`, white to move. |
+| `quiet_move(src, dst, new_turn)` | Moves a piece from `src` to `dst`. `dst` must be empty. The move counter goes up, the turn flips, the piece count is unchanged. |
+| `capturing_move(src, dst, new_turn)` | Same as a quiet move, but `dst` holds an enemy piece, which is retracted. The piece count goes down by one. |
 
-The transformations carry their own `require` clauses - the moving piece must belong to the player whose turn it is, the new turn must differ from the current. Those are *admission gates*, not invariants. The transition invariants verify the same properties from the outside, so a future programmer who introduced a bug into the transformation body would still be caught.
+The transformations enforce their own preconditions through `require` clauses: the moving piece must belong to the player whose turn it is, and the supplied `new_turn` must differ from the current turn. These are admission gates: they reject illegal moves up front, with a clear "this would violate chess turn order" message rather than a generic invariant failure.
 
-## Genesis behaviour
+The transition invariants check the same properties from the outside. If a future change introduced a bug into one of the move transformations - say, forgetting to increment `MoveCount` - the transition invariant would still catch it on the candidate state, regardless of how the bug got there. This pairing - admission gate in the transformation, conservation rule in the invariant - is a recurring Morpholog pattern.
 
-Before any `MoveCount` is admitted - the state before `start_game()` runs against an empty database - `pre(MoveCount(m))` matches nothing in pre-state. Under `implies`, the rule is vacuously true: there is no `m` to constrain `n` against. After `start_game()` admits `MoveCount(0)`, every subsequent move has both a pre-value and a post-value, and the rule constrains them.
+## Why the first move works
 
-This is the deliberate semantics of the wrapper. Genesis is not a special case in the kernel; it falls out of `implies` vacuity, the same way it would in TLA+. Authors who want a different genesis story write it explicitly with an `or` branch.
+`pre(...)` looks up something in the previous state. What happens on the very first move, when there is no previous state to look in?
 
-## What this example is not
+Morpholog handles this by making any rule that depends on a missing past fact vacuously true. Before `start_game()` runs, there is no `MoveCount` claim at all, so `pre(MoveCount(m))` matches nothing, and `move_count_strictly_increases` cannot fail. After `start_game()` admits `MoveCount(0)`, the next move has both a `pre` value and a current value, and the rule constrains them.
 
-It is not a chess engine. It does not enforce legal moves (a bishop moving sideways is admitted, as long as `at_most_one_piece_per_square` and the transition rules hold). It does not detect check, checkmate, stalemate, threefold repetition, or the fifty-move rule. It does not model castling, en passant, promotion, or the touch-move rule.
+If you ever need to distinguish "this is the very first time" from "this is a normal update", you write the two cases as separate branches of an `or`.
 
-It is the smallest setting in which a runtime's transition invariants become the load-bearing safety mechanism, with chess as a backdrop the reader already knows. The same kernel primitive that makes the chess invariants expressible is what the insurance example's `headroom_consumed_by_payment` invariant uses to enforce per-policy entitlement consumption - identical mechanism, different domain narrative.
+## What this example does not try to do
+
+This is not a chess engine and was never intended to be one. It does not enforce legal moves - a bishop moving sideways is admitted, as long as the basic structural and transition rules hold. It does not detect check, checkmate, stalemate, or any other game-ending condition. It does not model castling, en passant, promotion, or the touch-move rule. It does not handle multiple games at once.
+
+What it does try to do is show, in the smallest space possible, what becomes expressible when invariants can refer to both a before and an after. The mechanism is the same one used by the insurance example to enforce that every payment consumes exactly its amount of policy capacity. The chess setting is just easier to picture.

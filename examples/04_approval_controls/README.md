@@ -54,7 +54,7 @@ DATABASE_URL=postgres:///morpholog_dev \
     approval_controls_full_chain_through_pg
 ```
 
-In-memory tests cover both shapes, the require-vs-invariant doctrine (revocation preserves history), `Expr::Le` boundary equality, scoping (per-actor, per-doc-type), stacked grants, and kernel-level pins on `Term::Actor` and non-decimal limit handling. The PG integration test walks the whole story end to end.
+In-memory tests cover both shapes, the rule that revoking authority preserves the history of decisions made under it, boundary equality on amount limits, scoping (per-actor, per-doc-type), stacked grants, and runtime safety pins on the proposing-actor reference and non-decimal limits. The PG integration test walks the whole story end to end.
 
 ---
 

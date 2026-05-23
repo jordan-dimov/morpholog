@@ -4,11 +4,12 @@
 -- limit. The audit log records who decided each payment, when,
 -- against which policy, and under what authority.
 --
--- Two load-bearing rules: the cumulative-cap admission gate
--- (`sum(paid) + amount <= aggregate_limit`, the shape Expr::Add was
--- added for) and the headroom-conservation transition invariant
--- (each payment consumes its amount of PolicyHeadroom, the shape
--- Expr::Pre was added for).
+-- Two coexisting rules check the policy cap:
+--   * an admission gate (cumulative spend stays under the aggregate),
+--     which refuses payments up front,
+--   * and a conservation invariant (each payment consumes exactly
+--     its amount of the policy's remaining headroom), which
+--     verifies that what was actually staged matches.
 --
 -- authorise_settlement declares no `actor` parameter; the proposing
 -- actor flows through transition context as the reserved term

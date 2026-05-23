@@ -64,7 +64,7 @@ Content claims (figures, grants, revocations, decisions) are append-only. Pointe
 The same scenario is proven at two layers.
 
 ```bash
-# In-memory (sync kernel)
+# In-memory
 cargo test -p morpholog-examples --test verified_revenue
 
 # Durable (PostgreSQL adapter)
