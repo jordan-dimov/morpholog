@@ -82,6 +82,127 @@ enum Command {
     /// this program well-formed?", with uniform output regardless of
     /// which layer raised the issue.
     Check(SourceFileArgs),
+
+    /// Propose a transformation defined in a user-supplied `.morph`
+    /// source file against a Morpholog PostgreSQL database. The
+    /// non-built-in counterpart of `propose`: parses and validates
+    /// the source file, then proposes the named transformation with
+    /// the supplied actor and JSON args. Same JSON output and same
+    /// exit-code semantics as `propose`.
+    Run(RunArgs),
+
+    /// Drive the outbox state machine from outside Rust. Lets a
+    /// shell or Python deliverer participate in the lease protocol
+    /// (`claim` to acquire a row, `complete` to resolve it,
+    /// `release` to abandon it back to pending) without writing a
+    /// `Deliverer` trait impl.
+    Outbox {
+        #[command(subcommand)]
+        what: OutboxCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum OutboxCmd {
+    /// Claim the next pending row of the given intent type, leasing
+    /// it for `--lease-seconds`. Output is `{"row": <OutboxRow>}` if
+    /// claimed, `{"row": null}` if none are available. Exit 0 in
+    /// both cases - empty outbox is normal, not an error.
+    Claim(OutboxClaimArgs),
+
+    /// Resolve a leased row: `delivered` marks it done, `transient`
+    /// schedules another attempt after `--retry-after-seconds`,
+    /// `failed` marks it failed (with optional `--reason`). Output is
+    /// the `OutboxUpdate` JSON. Exit 1 on `LeaseLost`.
+    Complete(OutboxCompleteArgs),
+
+    /// Abandon a leased row, returning it to `pending` for another
+    /// worker to claim. For graceful shutdown of an external
+    /// deliverer that holds claims it can no longer service.
+    Release(OutboxReleaseArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct OutboxClaimArgs {
+    /// Intent type to claim (e.g. `ClaimPaymentRequested`). Matches
+    /// the predicate-style name a transformation emits via `emit X(...)`.
+    #[arg(long)]
+    pub(crate) intent_type: String,
+
+    /// Lease duration in seconds. The claimed row's `lock_expires_at`
+    /// is set to `now() + this`. If the caller does not call
+    /// `complete` or `release` within the window, the row becomes
+    /// reclaimable by another worker.
+    #[arg(long, default_value_t = 30)]
+    pub(crate) lease_seconds: u64,
+
+    /// Worker identity. Defaults to a fresh UUIDv7 if not supplied;
+    /// the generated id appears in the returned row's `locked_by`
+    /// field so the caller can pass it back to `complete` / `release`.
+    #[arg(long)]
+    pub(crate) worker_id: Option<String>,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct OutboxCompleteArgs {
+    /// Intent id of the leased row to resolve.
+    pub(crate) intent_id: uuid::Uuid,
+
+    /// Worker identity that holds the lease (returned by `claim` in
+    /// the row's `locked_by` field).
+    #[arg(long)]
+    pub(crate) worker_id: String,
+
+    /// Outcome to record. `delivered` marks the row done; `transient`
+    /// schedules another attempt (requires `--retry-after-seconds`);
+    /// `failed` marks the row failed (compensation, if configured,
+    /// is the Rust worker's responsibility; the CLI does not invoke it).
+    #[arg(long, value_enum)]
+    pub(crate) outcome: OutboxCompleteOutcome,
+
+    /// Seconds until the next attempt for `--outcome transient`.
+    /// Internally converted to `now() + N seconds` for the row's
+    /// `next_attempt_at`. Required for `transient`; an error for
+    /// other outcomes.
+    #[arg(long)]
+    pub(crate) retry_after_seconds: Option<u64>,
+
+    /// Optional human-readable narrative. Recorded as `failure_reason`
+    /// for `--outcome failed`. For `--outcome transient` it is
+    /// silently accepted but not yet persisted (the helper records
+    /// the schedule, not the per-attempt reason - a future enhancement
+    /// could carry it).
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum OutboxCompleteOutcome {
+    Delivered,
+    Transient,
+    Failed,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct OutboxReleaseArgs {
+    /// Intent id of the leased row to release.
+    pub(crate) intent_id: uuid::Uuid,
+
+    /// Worker identity that holds the lease.
+    #[arg(long)]
+    pub(crate) worker_id: String,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -99,9 +220,12 @@ pub(crate) enum Inspect {
     /// wrong rows when commit order and UUID order diverge under
     /// concurrent commits).
     Audit(InspectArgs),
-    /// List every pending outbox intent, in enqueue order. `--as-of`
+    /// List outbox rows, in enqueue order. Defaults to `--status pending`
+    /// (the in-flight queue, matching the historical behaviour); use
+    /// `--status all` for a full historical view, or any of
+    /// `delivered|failed|in-progress` for a specific slice. `--as-of`
     /// does not apply: outbox is delivery state, not claim state.
-    Outbox(InspectArgs),
+    Outbox(InspectOutboxArgs),
     /// Enumerate a derived claim from a built-in program against the
     /// current state, or against the state at a past `transition_id`
     /// via `--as-of`. Read-only: no claims are written, no audit row
@@ -183,6 +307,52 @@ pub(crate) struct InspectArgs {
     pub(crate) database_url: String,
 }
 
+/// Arguments for `inspect outbox`. Carries the same connection-string
+/// flag as [`InspectArgs`] plus the status and intent-type filters.
+#[derive(clap::Args, Debug)]
+pub(crate) struct InspectOutboxArgs {
+    /// Filter by row status. Default `pending` matches the
+    /// operationally common question "what is waiting?". `all` returns
+    /// every row regardless of status.
+    #[arg(long, value_enum, default_value_t = InspectOutboxStatus::Pending)]
+    pub(crate) status: InspectOutboxStatus,
+
+    /// Filter by intent type. Optional; omitting returns rows of every
+    /// intent type matching the status filter.
+    #[arg(long)]
+    pub(crate) intent_type: Option<String>,
+
+    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
+    /// environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+/// Status filter for `inspect outbox`. The first four map directly to
+/// the database's `status` column; `All` disables the status filter.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum InspectOutboxStatus {
+    Pending,
+    InProgress,
+    Delivered,
+    Failed,
+    All,
+}
+
+impl InspectOutboxStatus {
+    /// Database status string, or `None` for the `All` filter (which
+    /// drops the `WHERE status = ?` clause).
+    pub(crate) fn db_filter(self) -> Option<&'static str> {
+        match self {
+            InspectOutboxStatus::Pending => Some("pending"),
+            InspectOutboxStatus::InProgress => Some("in_progress"),
+            InspectOutboxStatus::Delivered => Some("delivered"),
+            InspectOutboxStatus::Failed => Some("failed"),
+            InspectOutboxStatus::All => None,
+        }
+    }
+}
+
 /// Arguments for any subcommand whose only input is a `.morph` source
 /// file (today: `parse` and `check`). No database connection; these
 /// subcommands are pure source-to-IR pipelines.
@@ -238,6 +408,45 @@ pub(crate) struct ProposeArgs {
     pub(crate) trace: bool,
 }
 
+/// Arguments for the `run` subcommand. The `propose`-shaped fields
+/// (`transformation`, `args`, `actor`, `database_url`, `trace`)
+/// match `propose` exactly; the difference is `file` (a path to a
+/// user-supplied `.morph` source) in place of `propose`'s `program`
+/// (a built-in registry name).
+#[derive(clap::Args, Debug)]
+pub(crate) struct RunArgs {
+    /// Path to a `.morph` source file containing the programme.
+    pub(crate) file: PathBuf,
+
+    /// Transformation name within the parsed programme.
+    pub(crate) transformation: String,
+
+    /// JSON array of arguments matching the transformation's parameter
+    /// list. Each element must be an `EvalValue` in the codec's tagged
+    /// form: `{"type":"subject","value":"..."}`, `{"type":"decimal",
+    /// "value":"100"}`, `{"type":"bool","value":true}`, or
+    /// `{"type":"collection","value":[...]}`.
+    #[arg(long)]
+    pub(crate) args: String,
+
+    /// Subject value identifying the actor under whose authority this
+    /// transition is being proposed. Free-form subject string; the
+    /// CLI wraps it as an `EvalValue::Subject` and persists it to
+    /// `morpholog.audit.actor`.
+    #[arg(long)]
+    pub(crate) actor: String,
+
+    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
+    /// environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+
+    /// When set, emit a structured per-statement trace alongside the
+    /// outcome. Same shape as `propose --trace`.
+    #[arg(long)]
+    pub(crate) trace: bool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -246,6 +455,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Propose(args) => commands::propose::run(args).await,
         Command::Parse(args) => commands::parse::run(args),
         Command::Check(args) => commands::check::run(args),
+        Command::Run(args) => commands::run::run(args).await,
+        Command::Outbox { what } => match what {
+            OutboxCmd::Claim(args) => commands::outbox::claim(args).await,
+            OutboxCmd::Complete(args) => commands::outbox::complete(args).await,
+            OutboxCmd::Release(args) => commands::outbox::release(args).await,
+        },
     }
 }
 
@@ -275,7 +490,8 @@ mod tests {
         };
         match what {
             Inspect::Claims(args) => args.database_url,
-            Inspect::Audit(args) | Inspect::Outbox(args) => args.database_url,
+            Inspect::Audit(args) => args.database_url,
+            Inspect::Outbox(args) => args.database_url,
             Inspect::Derived(_) => {
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
             }

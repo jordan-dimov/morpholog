@@ -26,6 +26,41 @@ The right question for every proposed feature is: *does this need to be governed
 
 A useful sharpening of this line, especially around process-shaped concerns: **workflow orchestration is outside; the legitimacy of each workflow step is inside.** Morpholog does not schedule approvals, route tasks, or own user notifications - that is what message brokers, queues, and workflow engines exist for. But whether a given approval was admitted under the authority and conditions the rules require, whether a step may legitimately follow from the prior admitted state, and what the audit trail says afterwards - those are inside, and they are claims. This distinction protects the project from two opposite mistakes: building Camunda inside Morpholog, and letting workflow middleware bypass Morpholog's legitimacy check.
 
+## Where compute lives
+
+The inside/outside boundary above answers what belongs in Morpholog. The next question is how an external system actually integrates - where heavy computation runs, and how it returns to the governed model. Morpholog answers this with a three-zone split.
+
+| Zone | What runs there | Examples |
+|---|---|---|
+| **Compute** | Anything heavy, non-deterministic, or arbitrary. Outside the database transaction. | Monte Carlo simulations, OU price-process integration, ML inference, merit-order dispatch, optimisation solvers, web scraping, image processing. |
+| **Commit** | Small, bounded, deterministic transformations that propose state changes. Inside the transaction; must satisfy every active invariant to become durable. | Admitting a settlement claim, recording a verified figure, posting a journal entry, registering a payment intent. |
+| **Outbox** | Post-commit intents staged inside the same transaction, delivered at-least-once after commit. | Sending an invoice, posting a webhook, calling a downstream service, triggering a recompute. |
+
+The doctrinal statement, in one sentence:
+
+> **Morpholog does not call out during commit. It emits durable intents after commit. External compute returns through another governed transformation.**
+
+That sentence determines the shape of every integration. There is no synchronous call-out from inside a transformation - it would break the atomicity guarantee and couple the kernel to whatever the called system was doing. There is no "Morpholog drives the simulation" - the simulation lives in the compute zone, in whatever language and framework suits it, and submits its result back as a candidate claim. There is no "external system polls and mutates" - state changes always come through `propose`.
+
+### The input boundary (compute -> commit)
+
+External compute proposes a transformation by name with typed arguments. Three paths today, all equivalent in semantics:
+
+- **`morpholog run <file.morph> <transformation> --actor X --args '[json]'`** for an external programme.
+- **`morpholog propose <built_in> <transformation> --actor X --args '[json]'`** for a built-in.
+- The Rust API `propose_against_pg(...)` for an in-process integration.
+
+The input is deliberately narrow: a transformation name, an actor, and a `Vec<EvalValue>` (the same tagged JSON codec across CLI and library). Morpholog owns the question of whether to admit; the caller owns the question of what to propose.
+
+### The output boundary (commit -> compute)
+
+Once a transformation commits, any intents it emitted land in the outbox. Two delivery paths, each suited to a different deployment shape:
+
+- **In-process Rust deliverer.** Implement the `Deliverer` trait in `morpholog-outbox`, run the polling worker. Right for HTTP-with-custom-retry-policy, Kafka, SQS, anything where the delivery code naturally lives in Rust.
+- **Out-of-process via the `morpholog outbox` CLI.** A non-Rust deliverer claims rows with `morpholog outbox claim --intent-type X`, does the work in any language, and resolves the row with `morpholog outbox complete --outcome delivered|transient|failed`. The lease protocol is the same one the in-process worker uses; the CLI is a thin shell around it.
+
+The pattern that emerges from this split - request transformation, outbox intent, external compute, result transformation - is the *round-trip compute pattern*. The next section in [`outbox-sketch.md`](outbox-sketch.md) walks through it concretely.
+
 ## The expansion principle
 
 > **Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.**

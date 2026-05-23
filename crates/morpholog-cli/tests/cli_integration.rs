@@ -343,3 +343,673 @@ async fn inspect_derived_unknown_derived_name_errors_to_stderr() {
         "stderr should name the unknown derived claim: {stderr}"
     );
 }
+
+// ============================================================
+// `morpholog run` subcommand
+//
+// Parses a user-supplied `.morph` file and proposes a transformation
+// from it. Same JSON output and exit-code semantics as `propose`;
+// the only difference is that the programme comes from a file path
+// rather than the built-in registry.
+// ============================================================
+
+/// Write a minimal balanced-ledger programme to a temp .morph file
+/// and return the path. The programme is deliberately a subset of
+/// the built-in double-entry ledger - one transformation, one
+/// invariant - so the run subcommand has something simple to admit
+/// against and the test does not depend on the full example's
+/// invariant suite.
+fn write_temp_ledger_morph() -> std::path::PathBuf {
+    let body = r#"
+program temp_ledger
+
+predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
+predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
+
+invariant balanced_posted_entry:
+    JournalEntry(entry, _, _) implies (sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c)))
+
+transformation post_simple_entry(entry_id, posting_date, period, debit_account, credit_account, amount):
+    admit JournalEntry(entry_id, posting_date, period)
+    admit JournalLine(entry_id, debit_account, amount, 0)
+    admit JournalLine(entry_id, credit_account, 0, amount)
+    emit JournalEntryPosted(entry_id)
+"#;
+    let dir = std::env::temp_dir().join(format!("morpholog_run_test_{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("ledger.morph");
+    std::fs::write(&path, body).expect("write temp .morph");
+    path
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_json = r#"[
+        {"type":"subject","value":"entry_001"},
+        {"type":"subject","value":"2026-04-15"},
+        {"type":"subject","value":"q1_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"100"}
+    ]"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        args_json,
+    ]);
+    assert!(
+        status.success(),
+        "run should succeed; stderr: {stderr}; stdout: {stdout}"
+    );
+    let receipt: Value = serde_json::from_str(&stdout).expect("receipt is JSON");
+    assert_eq!(receipt["status"], "committed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_errors_with_available_list_on_unknown_transformation() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_json = r#"[]"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "no_such_transformation",
+        "--actor",
+        "alex",
+        "--args",
+        args_json,
+    ]);
+    assert!(
+        !status.success(),
+        "unknown transformation must exit non-zero"
+    );
+    assert!(
+        stderr.contains("no_such_transformation"),
+        "stderr should name the missing transformation; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("post_simple_entry"),
+        "stderr should list the available transformations; got: {stderr}"
+    );
+}
+
+/// Write a temp .morph whose programme intentionally exposes a
+/// `post_unbalanced_entry` transformation that can produce an
+/// invariant-violating candidate state. Lets us prove that `run`
+/// preserves the same committed-vs-rejected semantics as `propose`
+/// when a kernel invariant rejects the candidate.
+fn write_temp_ledger_morph_with_unbalanced_path() -> std::path::PathBuf {
+    let body = r#"
+program temp_ledger_unbalanced
+
+predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
+predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
+
+invariant balanced_posted_entry:
+    JournalEntry(entry, _, _) implies (sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c)))
+
+transformation post_unbalanced_entry(entry_id, posting_date, period, debit_account, debit_amount, credit_account, credit_amount):
+    admit JournalEntry(entry_id, posting_date, period)
+    admit JournalLine(entry_id, debit_account, debit_amount, 0)
+    admit JournalLine(entry_id, credit_account, 0, credit_amount)
+    emit JournalEntryPosted(entry_id)
+"#;
+    let dir =
+        std::env::temp_dir().join(format!("morpholog_run_unbalanced_{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("ledger.morph");
+    std::fs::write(&path, body).expect("write temp .morph");
+    path
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_rejects_unbalanced_entry_via_invariant() {
+    reset_db().await;
+    let path = write_temp_ledger_morph_with_unbalanced_path();
+    // 100 debit, 90 credit - the candidate state has an unbalanced
+    // JournalEntry, so balanced_posted_entry must reject it.
+    let args_json = r#"[
+        {"type":"subject","value":"unbal_001"},
+        {"type":"subject","value":"2026-04-15"},
+        {"type":"subject","value":"q1_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"decimal","value":"100"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"90"}
+    ]"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_unbalanced_entry",
+        "--actor",
+        "alex",
+        "--args",
+        args_json,
+    ]);
+    // Same exit-code semantics as `propose`: rejected business
+    // outcome is exit 1 with the receipt on stdout, not stderr.
+    assert!(
+        !status.success(),
+        "unbalanced entry must be rejected; stderr: {stderr}"
+    );
+    let receipt: Value = serde_json::from_str(&stdout).expect("rejection receipt is JSON");
+    assert_eq!(receipt["status"], "rejected");
+    assert!(
+        receipt["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("balanced_posted_entry"),
+        "rejection reason should name the failing invariant; got: {}",
+        receipt["reason"]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_rejects_parse_failure_in_user_morph() {
+    reset_db().await;
+    // Write a deliberately malformed .morph.
+    let dir = std::env::temp_dir().join(format!("morpholog_run_bad_{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("bad.morph");
+    std::fs::write(&path, "program is_invalid syntax here\n").expect("write bad .morph");
+
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "anything",
+        "--actor",
+        "alex",
+        "--args",
+        "[]",
+    ]);
+    assert!(!status.success(), "parse failure must exit non-zero");
+    assert!(
+        !stderr.is_empty(),
+        "parse failure should write diagnostics to stderr"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_with_trace_emits_structured_trace_alongside_outcome() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_json = r#"[
+        {"type":"subject","value":"entry_002"},
+        {"type":"subject","value":"2026-04-15"},
+        {"type":"subject","value":"q1_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"50"}
+    ]"#;
+    let (status, stdout, _stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        args_json,
+        "--trace",
+    ]);
+    assert!(status.success(), "trace happy path should succeed");
+    let json: Value = serde_json::from_str(&stdout).expect("trace output is JSON");
+    assert!(
+        json["result"].is_object(),
+        "trace output must wrap the result"
+    );
+    assert!(
+        json["trace"].is_array(),
+        "trace output must carry a trace array"
+    );
+    assert_eq!(json["result"]["status"], "committed");
+}
+
+// ============================================================
+// `morpholog outbox` subcommands (claim / complete / release)
+//
+// These exercise the lease protocol end-to-end against a real
+// outbox row created by `propose post_simple_entry`. Each test
+// resets the database and admits one journal entry so that a
+// JournalEntryPosted intent lands in the outbox.
+// ============================================================
+
+/// Seed: propose one balanced entry so the outbox has a row to claim.
+/// Returns the intent_type that the worked example emits.
+fn seed_one_outbox_row() -> &'static str {
+    let _tid = post_balanced_entry("seed_entry", 1_000);
+    "JournalEntryPosted"
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_claim_returns_null_when_outbox_is_empty() {
+    reset_db().await;
+    let (status, stdout, stderr) =
+        run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]);
+    assert!(
+        status.success(),
+        "empty-outbox claim must exit 0; stderr: {stderr}"
+    );
+    let json: Value = serde_json::from_str(&stdout).expect("claim output is JSON");
+    assert!(
+        json["row"].is_null(),
+        "empty outbox should return {{\"row\": null}}; got: {json}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_claim_claims_a_pending_row_and_reports_worker_id() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let (status, stdout, stderr) = run_cli(&["outbox", "claim", "--intent-type", intent_type]);
+    assert!(status.success(), "claim should succeed; stderr: {stderr}");
+    let json: Value = serde_json::from_str(&stdout).expect("claim output is JSON");
+    let row = &json["row"];
+    assert!(!row.is_null(), "outbox had a row; claim should not be null");
+    assert_eq!(row["intent_type"], intent_type);
+    assert_eq!(row["status"], "in_progress");
+    assert!(
+        row["locked_by"].is_string(),
+        "locked_by should carry the generated worker_id"
+    );
+    assert!(
+        row["lock_expires_at"].is_string(),
+        "lock_expires_at should be set on a claimed row"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_claim_with_supplied_worker_id_uses_that_id() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let (status, stdout, _stderr) = run_cli(&[
+        "outbox",
+        "claim",
+        "--intent-type",
+        intent_type,
+        "--worker-id",
+        "my-python-worker-7",
+    ]);
+    assert!(status.success());
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["row"]["locked_by"], "my-python-worker-7");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_delivered_marks_row_delivered() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(
+        status.success(),
+        "delivered complete should exit 0; stderr: {stderr}"
+    );
+    let json: Value = serde_json::from_str(&stdout).expect("complete output is JSON");
+    assert_eq!(json, serde_json::json!({"status": "applied"}));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_transient_reschedules_row_to_pending() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, _stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "transient",
+        "--retry-after-seconds",
+        "60",
+    ]);
+    assert!(
+        status.success(),
+        "transient complete should exit 0; stderr: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_transient_requires_retry_after_seconds() {
+    reset_db().await;
+    let (status, _stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &uuid::Uuid::now_v7().to_string(),
+        "--worker-id",
+        "any",
+        "--outcome",
+        "transient",
+    ]);
+    assert!(
+        !status.success(),
+        "missing --retry-after-seconds must error"
+    );
+    assert!(
+        stderr.contains("retry-after-seconds"),
+        "error should name the missing flag; got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_failed_records_reason() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, _stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "failed",
+        "--reason",
+        "downstream returned 4xx",
+    ]);
+    assert!(
+        status.success(),
+        "failed complete should exit 0; stderr: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_with_wrong_worker_id_exits_one_with_lease_lost() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+
+    let (status, stdout, _stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        "not-the-lease-holder",
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(!status.success(), "wrong worker_id must exit non-zero");
+    let json: Value = serde_json::from_str(&stdout).expect("LeaseLost output is JSON");
+    assert_eq!(json, serde_json::json!({"status": "lease_lost"}));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_release_puts_a_claimed_row_back_to_pending() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, stdout, stderr) =
+        run_cli(&["outbox", "release", &intent_id, "--worker-id", &worker_id]);
+    assert!(status.success(), "release should exit 0; stderr: {stderr}");
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json, serde_json::json!({"status": "applied"}));
+
+    // And the row is claimable again.
+    let (status, stdout, _stderr) = run_cli(&["outbox", "claim", "--intent-type", intent_type]);
+    assert!(status.success());
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        !json["row"].is_null(),
+        "released row should be reclaimable; got: {json}"
+    );
+}
+
+// ============================================================
+// `inspect outbox` filters
+//
+// `--status pending` is the default (matches the operational
+// "what is waiting" question); the new filters expose the rest.
+// ============================================================
+
+/// Helper for the filter tests: seed the outbox with two pending
+/// rows so the filter assertions can distinguish "all" from
+/// "delivered" / "failed".
+fn seed_two_pending_outbox_rows() {
+    let _ = post_balanced_entry("filter_seed_a", 100);
+    let _ = post_balanced_entry("filter_seed_b", 200);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_defaults_to_pending() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    // Drive one row through to `delivered` so we can confirm it
+    // does NOT appear in the default (pending) listing.
+    let claim_out: Value = serde_json::from_str(
+        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
+    )
+    .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+    let (s, _, _) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(s.success());
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = rows.as_array().expect("inspect outbox emits a JSON array");
+    assert_eq!(
+        arr.len(),
+        1,
+        "default should show the remaining pending row only"
+    );
+    assert_eq!(arr[0]["status"], "pending");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_status_all_shows_every_row() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    // Drive one row to `delivered`.
+    let claim_out: Value = serde_json::from_str(
+        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
+    )
+    .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+    run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "all"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = rows.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "all should show both rows; got {arr:?}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_status_delivered_shows_only_delivered_rows() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    let claim_out: Value = serde_json::from_str(
+        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
+    )
+    .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+    run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "delivered"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = rows.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["status"], "delivered");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_outbox_intent_type_filter_narrows_results() {
+    reset_db().await;
+    seed_two_pending_outbox_rows();
+    let (status, stdout, _stderr) = run_cli(&[
+        "inspect",
+        "outbox",
+        "--status",
+        "all",
+        "--intent-type",
+        "DoesNotExist",
+    ]);
+    assert!(status.success(), "unknown intent_type is not an error");
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 0);
+
+    let (status, stdout, _stderr) =
+        run_cli(&["inspect", "outbox", "--intent-type", "JournalEntryPosted"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+}
+
+// ============================================================
+// End-to-end compute loop
+//
+// The product test: prove that a non-Rust consumer can drive the
+// whole input/commit/outbox loop using only the `morpholog` binary.
+// This pins the contract the docs describe as "round-trip compute".
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_loop_end_to_end_via_cli_binary_only() {
+    reset_db().await;
+
+    // 1. INPUT BOUNDARY: a Python-shaped consumer writes its own
+    //    `.morph` file and invokes `morpholog run` to admit a
+    //    transformation against PostgreSQL. The same shape would
+    //    work with `morpholog propose` for built-in programmes.
+    let path = write_temp_ledger_morph();
+    let args_json = r#"[
+        {"type":"subject","value":"e2e_entry"},
+        {"type":"subject","value":"2026-05-01"},
+        {"type":"subject","value":"q2_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"500"}
+    ]"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "python_worker",
+        "--args",
+        args_json,
+    ]);
+    assert!(status.success(), "run should succeed; stderr: {stderr}");
+    let receipt: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(receipt["status"], "committed");
+
+    // 2. OUTPUT BOUNDARY: the consumer claims the resulting outbox
+    //    row. The intent type matches what the transformation emits.
+    let (status, stdout, _stderr) =
+        run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]);
+    assert!(status.success());
+    let claim: Value = serde_json::from_str(&stdout).unwrap();
+    let row = &claim["row"];
+    assert!(!row.is_null(), "the run above should have enqueued one row");
+    let intent_id = row["intent_id"].as_str().unwrap().to_string();
+    let worker_id = row["locked_by"].as_str().unwrap().to_string();
+    assert_eq!(row["intent_type"], "JournalEntryPosted");
+    assert_eq!(row["status"], "in_progress");
+
+    // 3. COMPUTE PHASE: the consumer does whatever external work
+    //    the intent represents (here a no-op stand-in - the test's
+    //    point is that the kernel does not care what happens
+    //    between claim and complete).
+
+    // 4. CONSUMER MARKS DELIVERED.
+    let (status, stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(
+        status.success(),
+        "complete should succeed; stderr: {stderr}"
+    );
+    let upd: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(upd, serde_json::json!({"status": "applied"}));
+
+    // 5. INSPECT: the same consumer (or an auditor) verifies the row
+    //    is in the delivered slice.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "delivered"]);
+    assert!(status.success());
+    let delivered: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = delivered.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "exactly one delivered row");
+    assert_eq!(arr[0]["intent_id"], intent_id);
+
+    // 6. AND IT IS NO LONGER PENDING.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox"]);
+    assert!(status.success());
+    let pending: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        pending.as_array().unwrap().len(),
+        0,
+        "no rows should remain pending"
+    );
+}

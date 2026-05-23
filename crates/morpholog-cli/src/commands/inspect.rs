@@ -4,8 +4,7 @@
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
-    list_audit_rows, list_claims, list_claims_at, list_derived, list_derived_at,
-    list_pending_outbox,
+    list_audit_rows, list_claims, list_claims_at, list_derived, list_derived_at, list_outbox_rows,
 };
 
 use crate::Inspect;
@@ -35,9 +34,10 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         }
         Inspect::Outbox(args) => {
             let pool = connect(&args.database_url).await?;
-            let rows = list_pending_outbox(&pool)
-                .await
-                .context("list_pending_outbox failed")?;
+            let rows =
+                list_outbox_rows(&pool, args.status.db_filter(), args.intent_type.as_deref())
+                    .await
+                    .context("list_outbox_rows failed")?;
             print_json(&rows)
         }
         Inspect::Derived(args) => inspect_derived(args).await,

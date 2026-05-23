@@ -45,3 +45,90 @@ The doctrine that keeps the runtime narrow:
 ## Doctrinal tension worth naming
 
 What shipped puts compensation idempotency in *runtime state-machine columns* (`compensation_in_progress`, `compensation_failed`, `compensation_transition_id`) on `morpholog.outbox`. That is operationally fine, but it sits awkwardly against the project thesis - "only invariants and transformations are first-class" - which would prefer compensation idempotency expressed as a `CompensationApplied(original_intent_id)` claim, governed by an invariant the kernel checks at admission time. The shipped shape is convenient because no worked example yet forces compensation; the substrate was built against a doctrine sketch. When a worked example actually drives compensation end to end (a wire-dispatch programme with a real reversal transformation, say), it will be the right moment to revisit whether the lease-machinery scaffolding earns its keep or whether the invariant-driven shape replaces it. Until then, the columns stay; the tension is noted.
+
+## The round-trip compute pattern
+
+Some integrations are not best-effort delivery to an external endpoint. They are *call-and-response*: Morpholog hands off a piece of work, an external system does the work in its own time, and the result must come back as a governed claim - because the result is itself something the model needs to admit and the audit log needs to record. Monte Carlo simulations, optimisation solvers, ML predictions, recompute-on-demand, batch reports - all of these fit this shape.
+
+The pattern is **the** way to integrate heavy compute with Morpholog. It has four phases:
+
+1. **Request transformation.** A small, deterministic transformation freezes the input parameters and stages an outbox intent that names the computation to be done. The transformation commits in milliseconds; the heavy work has not started.
+2. **Outbox emission.** The intent lands in `morpholog.outbox` with the input parameters as its arguments. From here a Rust `Deliverer` or the `morpholog outbox` CLI surface can pick it up.
+3. **External compute.** The deliverer claims the row, runs the actual work in whatever language and framework suits it, produces a result. The kernel is not in the loop here - the database transaction long since closed.
+4. **Result transformation.** The deliverer proposes a *new* transformation whose arguments include the computed result, then marks the original outbox row delivered. The result transformation goes through every invariant check on the way in; the result becomes a governed claim with full audit standing.
+
+Nothing about this loop is special-cased in the kernel. The request and result transformations are ordinary transformations. The outbox intent is an ordinary intent. The compute phase is whatever the deployment chooses. The pattern emerges from composing the primitives Morpholog already exposes.
+
+### A Python sketch using only the CLI
+
+The whole loop runs from any language that can shell out to `morpholog`:
+
+```python
+import json, subprocess, time
+
+def run(*args):
+    return json.loads(subprocess.check_output(["morpholog", *args]))
+
+while True:
+    claimed = run("outbox", "claim",
+                  "--intent-type", "ComputeRequested",
+                  "--lease-seconds", "120")
+    if claimed["row"] is None:
+        time.sleep(5)
+        continue
+
+    row = claimed["row"]
+    intent_id = row["intent_id"]
+    worker_id = row["locked_by"]
+
+    try:
+        # Phase 3: do the actual compute. This block has no
+        # transaction held against PostgreSQL; it can take minutes
+        # or hours and burn CPU as needed.
+        result = run_simulation(row["arguments"])
+
+        # Phase 4a: admit the result through a governed
+        # transformation. The invariants on `record_result` decide
+        # whether the result is legitimate.
+        admit = run("run", "simulator.morph", "record_result",
+                    "--actor", "compute-worker-7",
+                    "--args", json.dumps(result_args(result)))
+        if admit["status"] != "committed":
+            run("outbox", "complete", intent_id,
+                "--worker-id", worker_id,
+                "--outcome", "failed",
+                "--reason", f"result rejected: {admit.get('reason', '')}")
+            continue
+
+        # Phase 4b: tell the outbox the original intent is done.
+        run("outbox", "complete", intent_id,
+            "--worker-id", worker_id,
+            "--outcome", "delivered")
+
+    except TransientError:
+        run("outbox", "complete", intent_id,
+            "--worker-id", worker_id,
+            "--outcome", "transient",
+            "--retry-after-seconds", "60")
+    except Exception as e:
+        run("outbox", "complete", intent_id,
+            "--worker-id", worker_id,
+            "--outcome", "failed",
+            "--reason", str(e))
+```
+
+That is the contract: the kernel does not call out, the kernel does not pause, the kernel does not learn about Python. The external system reads from the outbox, does work, writes back through `morpholog run`. Both sides of the round trip are governed transformations; everything in between is the compute zone's business.
+
+### Why a *new* transformation for the result
+
+The result of the compute does not get "patched in" to the original intent's audit row. It comes back through a fresh transformation - `record_result` in the sketch above - because the result is its own admission and deserves its own invariant gates:
+
+- *Was the result produced by an authorised compute worker?* An invariant referencing the proposing actor.
+- *Does the result reference an original request that is still in flight?* An invariant pairing the result with a pending `ComputeRequested` claim.
+- *Is the numerical result within plausible bounds?* A regulated decision (`PriceMustBePositive`, `HeadroomCannotGoNegative`) baked into the invariant set.
+
+The original transformation cannot have anticipated these checks - it ran before the compute did. The result transformation runs after, with the result in hand, and admits it under the same invariant-governed regime as any other state change.
+
+### What this leaves open
+
+One real doctrinal gap remains in the round-trip story: **intents are stringly-typed.** Predicates declare their vocabulary (`PredicateDecl`); intents do not. A misspelled intent name silently creates a new outbox partition with zero consumers. A future `IntentDecl` would mirror `PredicateDecl` and let `morpholog check` validate intent emissions, plus let the outbox CLI surface a schema for the row arguments. This has not been pursued yet - it deserves its own PR, forced by a worked example or by tooling that genuinely needs intent schemas. The compute-zone interface ships without it; the gap is named.
