@@ -307,17 +307,11 @@ fn walk_predicate_expr(
         Expr::Neq(left, right) => {
             check_equality_terms(left, right, "!=", env, ctx, errors);
         }
-        Expr::In(element, collection) => {
-            // `In` checks element membership in a collection-shaped
-            // term. The element side just contributes its inherent
-            // kind; the collection side is `Collection` by
-            // construction (only `Term::Var` resolves to one in v0,
-            // and the variable's element-kind is not yet tracked).
-            // Element-kind/collection-element-kind correlation lands
-            // when a worked example forces it. For now: observe the
-            // element-side variable at UnknownOrAny (no-op) and
-            // require the collection-side variable refines to
-            // Collection.
+        Expr::In(_element, collection) => {
+            // The collection side must be Collection-kinded; refining
+            // a variable there is the only correlation we can do.
+            // Element vs collection-element-kind correlation lands
+            // when a worked example forces it.
             if let Term::Var(name) = collection {
                 observe_or_report(
                     env,
@@ -327,10 +321,6 @@ fn walk_predicate_expr(
                     errors,
                 );
             }
-            // Element-side: literals carry their kind harmlessly;
-            // a variable's kind is refined by the surrounding
-            // context, not by `In`.
-            let _ = element;
         }
         // Value-shaped expressions cannot appear at a predicate
         // position; the runtime raises NotPredicate. A symmetric
@@ -447,10 +437,13 @@ fn walk_stmt(
 
 /// Check that a value-shaped operand evaluates to a value of the
 /// expected kind. Used by `Le` (Decimal), `DateLe` (Date), and
-/// arithmetic (`Add`/`Sub`, both Decimal). Threads variable
-/// refinement through `env` and emits `OperandKindMismatch` (for
-/// literals or actor) or `VariableKindConflict` (for variables
-/// that already had an incompatible kind).
+/// arithmetic (`Add`/`Sub`, both Decimal).
+///
+/// Two paths to avoid double-emission: a bare variable observes
+/// directly (any conflict surfaces as `VariableKindConflict`,
+/// which names the variable); anything else infers its kind and
+/// emits `OperandKindMismatch` on disagreement (which names the
+/// operator and the kinds).
 fn check_operand_kind(
     operand: &Expr,
     expected: PredicateArgKind,
@@ -460,39 +453,68 @@ fn check_operand_kind(
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
+    if let Expr::Term(Term::Var(name)) = operand {
+        observe_or_report(env, name, InferredKind::Known(expected), ctx, errors);
+        return;
+    }
     let inferred = infer_value_expr(operand, env, predicate_decls, ctx, errors);
     if let InferredKind::Known(actual) = inferred
         && !kinds_compatible(expected, actual)
     {
-        // Variable refinement already emits VariableKindConflict
-        // via the env observation path inside infer_value_expr;
-        // emit OperandKindMismatch only when the bad kind came
-        // from a literal or `actor`.
-        if !operand_is_variable(operand) {
-            errors.push(ValidationError::OperandKindMismatch {
-                operator,
-                expected,
-                actual,
-                context: ctx.clone(),
-            });
-        }
-    }
-    // For variables, additionally refine the env at the expected
-    // kind so subsequent uses get the strict kind, not the
-    // unconstrained one. The conflict path inside infer_value_expr
-    // only fires when the variable already held an incompatible
-    // kind; an UnknownOrAny needs an explicit observation here.
-    if let Expr::Term(Term::Var(name)) = operand {
-        observe_or_report(env, name, InferredKind::Known(expected), ctx, errors);
+        errors.push(ValidationError::OperandKindMismatch {
+            operator,
+            expected,
+            actual,
+            context: ctx.clone(),
+        });
     }
 }
 
-/// Check the two operands of `Eq`. Both sides infer their kinds;
-/// if both produce a `Known`, the kinds must be compatible. When
-/// one side is a variable and the other contributes a concrete
-/// kind, the variable refines to that kind (mirrors comparator
-/// behaviour). Strict equality: `Subject == Decimal` is a kind
-/// error, never a silent coercion.
+/// One side of an equality check: the inferred kind, plus the
+/// variable name if the operand was a bare variable (so a refined
+/// kind can be written back to the env). Constructed by
+/// `expr_operand` for `Eq` and `term_operand` for `Neq`.
+type EqualityOperand<'a> = (InferredKind, Option<&'a str>);
+
+/// Strict equality between two value operands. If both sides
+/// produce a `Known` kind they must be compatible; when one is a
+/// bare variable and the other contributes a concrete kind, the
+/// variable refines to that kind. `Subject == Decimal` is a kind
+/// error, never a silent coercion. Backs both `Eq` (Expr
+/// operands) and `Neq` (Term operands).
+fn check_equality(
+    left: EqualityOperand<'_>,
+    right: EqualityOperand<'_>,
+    operator: &'static str,
+    env: &mut KindEnv,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let combined = match (left.0, right.0) {
+        (InferredKind::Known(l), InferredKind::Known(r)) => {
+            if !kinds_compatible(l, r) {
+                errors.push(ValidationError::OperandKindMismatch {
+                    operator,
+                    expected: l,
+                    actual: r,
+                    context: ctx.clone(),
+                });
+                None
+            } else {
+                Some(InferredKind::Known(more_specific(l, r)))
+            }
+        }
+        (k @ InferredKind::Known(_), InferredKind::UnknownOrAny)
+        | (InferredKind::UnknownOrAny, k @ InferredKind::Known(_)) => Some(k),
+        (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => None,
+    };
+    if let Some(refined) = combined {
+        for name in [left.1, right.1].into_iter().flatten() {
+            observe_or_report(env, name, refined, ctx, errors);
+        }
+    }
+}
+
 fn check_equality_operands(
     left: &Expr,
     right: &Expr,
@@ -502,39 +524,17 @@ fn check_equality_operands(
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
-    let left_kind = infer_value_expr(left, env, predicate_decls, ctx, errors);
-    let right_kind = infer_value_expr(right, env, predicate_decls, ctx, errors);
-    let combined = match (left_kind, right_kind) {
-        (InferredKind::Known(l), InferredKind::Known(r)) => {
-            if !kinds_compatible(l, r) {
-                errors.push(ValidationError::OperandKindMismatch {
-                    operator,
-                    expected: l,
-                    actual: r,
-                    context: ctx.clone(),
-                });
-                None
-            } else {
-                Some(InferredKind::Known(more_specific(l, r)))
-            }
-        }
-        (InferredKind::Known(k), InferredKind::UnknownOrAny)
-        | (InferredKind::UnknownOrAny, InferredKind::Known(k)) => Some(InferredKind::Known(k)),
-        (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => None,
-    };
-    if let Some(refined) = combined {
-        if let Expr::Term(Term::Var(name)) = left {
-            observe_or_report(env, name, refined, ctx, errors);
-        }
-        if let Expr::Term(Term::Var(name)) = right {
-            observe_or_report(env, name, refined, ctx, errors);
-        }
-    }
+    let left_op = (
+        infer_value_expr(left, env, predicate_decls, ctx, errors),
+        expr_var_name(left),
+    );
+    let right_op = (
+        infer_value_expr(right, env, predicate_decls, ctx, errors),
+        expr_var_name(right),
+    );
+    check_equality(left_op, right_op, operator, env, ctx, errors);
 }
 
-/// `Neq` is term-shaped (operands are `Term`, not `Expr`). Same
-/// strict-equality contract: if both sides have a Known kind,
-/// they must be compatible; variables refine.
 fn check_equality_terms(
     left: &Term,
     right: &Term,
@@ -543,33 +543,27 @@ fn check_equality_terms(
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
-    let left_kind = resolved_term_kind(left, env);
-    let right_kind = resolved_term_kind(right, env);
-    let combined = match (left_kind, right_kind) {
-        (InferredKind::Known(l), InferredKind::Known(r)) => {
-            if !kinds_compatible(l, r) {
-                errors.push(ValidationError::OperandKindMismatch {
-                    operator,
-                    expected: l,
-                    actual: r,
-                    context: ctx.clone(),
-                });
-                None
-            } else {
-                Some(InferredKind::Known(more_specific(l, r)))
-            }
-        }
-        (InferredKind::Known(k), InferredKind::UnknownOrAny)
-        | (InferredKind::UnknownOrAny, InferredKind::Known(k)) => Some(InferredKind::Known(k)),
-        (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => None,
-    };
-    if let Some(refined) = combined {
-        if let Term::Var(name) = left {
-            observe_or_report(env, name, refined, ctx, errors);
-        }
-        if let Term::Var(name) = right {
-            observe_or_report(env, name, refined, ctx, errors);
-        }
+    check_equality(
+        (resolved_term_kind(left, env), term_var_name(left)),
+        (resolved_term_kind(right, env), term_var_name(right)),
+        operator,
+        env,
+        ctx,
+        errors,
+    );
+}
+
+fn expr_var_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Term(Term::Var(name)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn term_var_name(term: &Term) -> Option<&str> {
+    match term {
+        Term::Var(name) => Some(name.as_str()),
+        _ => None,
     }
 }
 
@@ -702,13 +696,6 @@ fn infer_value_expr(
             InferredKind::UnknownOrAny
         }
     }
-}
-
-/// True when `operand` is a bare variable. Used to suppress a
-/// double-emission of OperandKindMismatch when the env already
-/// emitted VariableKindConflict.
-fn operand_is_variable(operand: &Expr) -> bool {
-    matches!(operand, Expr::Term(Term::Var(_)))
 }
 
 /// Resolve a `Term`'s kind through the env: variables look up
@@ -857,8 +844,7 @@ fn check_one_claim_arg(
 /// callers that want the env-resolved kind look it up separately.
 fn term_kind(term: &Term) -> InferredKind {
     match term {
-        Term::Var(_) => InferredKind::UnknownOrAny,
-        Term::Wildcard => InferredKind::UnknownOrAny,
+        Term::Var(_) | Term::Wildcard => InferredKind::UnknownOrAny,
         Term::Actor => InferredKind::Known(PredicateArgKind::Subject),
         Term::Literal(Value::Subject(_)) => InferredKind::Known(PredicateArgKind::Subject),
         Term::Literal(Value::Decimal(_)) => InferredKind::Known(PredicateArgKind::Decimal),
