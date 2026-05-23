@@ -808,7 +808,8 @@ mod tests {
             "Counter(2) and pre(Counter(1)) implies 2 = 1 + 1 should hold"
         );
 
-        // Now post has Counter(3): the rule should fail (2 + 1 = 3 holds; let me pick mismatched)
+        // Now post has Counter(5): with pre still Counter(1), the
+        // rule `n = m + 1` reduces to `5 = 2`, which must reject.
         let bad_post = State::from_claims(vec![ClaimInstance {
             predicate: "Counter".to_string(),
             args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(5))],

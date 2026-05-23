@@ -50,9 +50,10 @@ fn program_has_expected_invariant_set() {
 // Full-chain propose: start_game and a legal move.
 // ============================================================
 
-/// `start_game` on an empty pre-state admits 36 claims and clears
-/// every invariant. The transition invariants are vacuously true on
-/// the first transition (no pre-state `MoveCount` exists).
+/// `start_game` on an empty pre-state admits 35 claims (32 pieces
+/// plus `MoveCount`, `PieceCount`, `CurrentTurn`) and clears every
+/// invariant. The transition invariants are vacuously true on the
+/// first transition (no pre-state `MoveCount` exists).
 #[test]
 fn start_game_admits_opening_position() {
     let program = chess_transition_invariants::program();
