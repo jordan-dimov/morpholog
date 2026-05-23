@@ -524,7 +524,7 @@ fn paid_without_authorised_violates_invariant() {
     };
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_authorised();
-    let holds = eval_invariant(&inv, &state).expect("eval should not error");
+    let holds = eval_invariant(&inv, &state, None).expect("eval should not error");
     assert!(
         !holds,
         "paid_implies_authorised should not hold when an orphan payment is admitted"

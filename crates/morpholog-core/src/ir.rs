@@ -33,7 +33,7 @@ pub struct Invariant {
 /// as a predicate) or a value (when used in value position).
 ///
 /// The variants are deliberately narrow: predicate composition (`And`,
-/// `Or`, `Not`, `Implies`, `Exists`, `Forall`), claim and (in)equality matching
+/// `Or`, `Not`, `Implies`, `Exists`, `Forall`, `Pre`), claim and (in)equality matching
 /// (`Claim`, `Neq`, `Eq`), one decimal-comparison primitive (`Le`), one
 /// civil-date-comparison primitive (`DateLe`), one bounded aggregation
 /// (`Sum`), one decimal-arithmetic primitive (`Sub`), one collection
@@ -73,6 +73,62 @@ pub enum Expr {
     /// source would iterate duplicates, which is the documented
     /// behaviour.
     Or(Vec<Expr>),
+    /// Evaluates the wrapped subtree against the *pre-transition*
+    /// state instead of the candidate (post-transition) state.
+    /// Predicate-shaped: the result is whatever the inner expression
+    /// produces (binding extensions, truth-witness), but every claim
+    /// lookup, `Sum` aggregation, `Forall` source, and `ValueOf`
+    /// inside resolves against pre-state.
+    ///
+    /// The default state for an invariant body is the candidate
+    /// state (the world after the proposed transition's staged
+    /// assertions and retractions). `Pre` is the **opt-in escape
+    /// hatch** that flips the lookup for one subtree. Together with
+    /// the default, this lets an invariant compare a pre-state value
+    /// to a post-state value in a single body:
+    ///
+    /// ```text
+    /// MoveCount(n) and pre(MoveCount(m)) implies n = m + 1
+    /// ```
+    ///
+    /// Evaluation contract: `Pre(inner)` is legal only in contexts
+    /// that have both a pre-state and a post-state in scope - today,
+    /// that is invariant evaluation during `propose`. Derived-claim
+    /// enumeration, standalone `find_matches` calls, transformation
+    /// `require` bodies (which already see pre-state by default), and
+    /// any other one-state context surface
+    /// [`crate::EvalError::PreStateUnavailable`] when they hit a
+    /// `Pre` node. The error is about evaluation context, not AST
+    /// position, so future contexts that legitimately carry both
+    /// states (transformation post-conditions, trace assertions) can
+    /// share the same primitive without IR change.
+    ///
+    /// Nested `Pre` is also `PreStateUnavailable`: there is no
+    /// "pre-pre-state" to flip into. The evaluator enforces this by
+    /// clearing the pre-state slot when descending into a `Pre`
+    /// subtree.
+    ///
+    /// Quantifier composition is intentional and non-commutative:
+    ///
+    /// - `pre(forall x in Squares: Empty(x))` reads "in pre-state,
+    ///   every square was empty" - both the iteration domain and
+    ///   the body resolve against pre.
+    /// - `forall x in Squares: pre(Empty(x))` reads "for each square
+    ///   (chosen in post-state), it was empty in pre-state" - the
+    ///   iteration domain is post-state, only the body is pre.
+    ///
+    /// The two differ when the iteration set itself changes between
+    /// states (accounts created or removed, board squares always
+    /// fixed). This distinction is what makes `Pre` more honest than
+    /// a per-Term lookup primitive.
+    ///
+    /// Genesis behaviour falls out of `Implies` vacuity: an
+    /// invariant like `pre(MoveCount(m)) implies ...` is vacuously
+    /// true before the very first admission of `MoveCount`, because
+    /// `pre(MoveCount(m))` produces no bindings. Authors who need to
+    /// distinguish "creation" from "update" write the two cases as
+    /// disjuncts.
+    Pre(Box<Expr>),
     Not(Box<Expr>),
     Neq(Term, Term),
     Term(Term),

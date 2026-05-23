@@ -18,13 +18,26 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
 /// holds, false if it fails.
-pub fn eval_invariant(inv: &Invariant, state: &State) -> Result<bool, EvalError> {
+///
+/// `pre_state` is the pre-transition snapshot when the caller has one in
+/// scope (the proposal path, after staging assertions / retractions and
+/// before commit); pass `None` for state-only contexts (the read-side
+/// `enumerate_derived` consumers, the PostgreSQL adapter's standalone
+/// checks, tests that exercise an invariant against a hand-built state).
+/// Invariants that do not contain [`crate::Expr::Pre`] behave identically
+/// in both modes. Invariants that *do* reach for `Pre` in a `None`
+/// context surface [`EvalError::PreStateUnavailable`].
+pub fn eval_invariant(
+    inv: &Invariant,
+    state: &State,
+    pre_state: Option<&State>,
+) -> Result<bool, EvalError> {
     let bindings = Bindings::new();
-    // Invariants evaluate against admitted state with no transition in
+    // Invariants evaluate against admitted state with no actor in
     // scope. `Term::Actor` inside an invariant body surfaces as
     // `EvalError::UnboundActor`, enforcing the doctrine that authority
     // checks live in `require`, not in invariants.
-    let matches = find_matches(&inv.body, state, &bindings, None)?;
+    let matches = find_matches(&inv.body, state, pre_state, &bindings, None)?;
     Ok(!matches.is_empty())
 }
 
@@ -54,10 +67,12 @@ pub fn enumerate_derived(
     derived: &DerivedClaim,
     state: &State,
 ) -> Result<Vec<ClaimInstance>, EvalError> {
-    // Derived claims, like invariants, evaluate against admitted state
-    // with no transition in scope. `Term::Actor` in a derived claim body
-    // surfaces as `EvalError::UnboundActor`.
-    let raw_bindings = find_matches(&derived.domain, state, &Bindings::new(), None)?;
+    // Derived claims, like invariants in non-proposal contexts, evaluate
+    // against admitted state with no transition in scope. `Term::Actor`
+    // in a derived-claim body surfaces as `EvalError::UnboundActor`;
+    // `Expr::Pre` surfaces as `EvalError::PreStateUnavailable` (derived
+    // claims are a function of one state).
+    let raw_bindings = find_matches(&derived.domain, state, None, &Bindings::new(), None)?;
 
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
     for b in &raw_bindings {
@@ -82,7 +97,7 @@ pub fn enumerate_derived(
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
         for value_def in &derived.values {
-            let v = eval_value(&value_def.expr, state, &per_key, None)?;
+            let v = eval_value(&value_def.expr, state, None, &per_key, None)?;
             args.push(v);
         }
         out.push(ClaimInstance {

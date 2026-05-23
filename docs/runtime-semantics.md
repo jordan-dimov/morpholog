@@ -194,6 +194,25 @@ is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` co
 
 `Term::Actor` is reachable from inside any transformation-body statement that evaluates a `Term` (`require`, `let`, `assert`, `retract`, `emit`, `for`). It is **not** reachable from inside an invariant body or a derived claim's domain - both raise `EvalError::UnboundActor` at evaluation, because invariants evaluate against admitted state without a proposing transition in scope. This is the require-vs-invariant distinction made enforceable: authority checks belong in `require`, not in invariants.
 
+## Invariants: state vs transition, and `pre(...)`
+
+An invariant is by default a predicate over **one** state - the candidate state produced after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry," "at most one piece per square," "no policy paid twice." The kernel calls this a *state invariant* even though there is no separate kind in the IR; the term is descriptive, not structural.
+
+`Expr::Pre(inner)` opts a wrapped subtree into evaluation against the **pre-transition** state instead. Predicate-shaped expressions inside the wrapper resolve their `Claim`, `ValueOf`, `Sum.body`, and `Forall.source` against the snapshot the transformation ran against. Everything outside the wrapper still resolves against the candidate. A single invariant can therefore compare pre and post values:
+
+```
+invariant move_count_strictly_increases:
+  MoveCount(n) and pre(MoveCount(m)) implies n = m + 1
+```
+
+The kernel calls invariants that contain `Pre` *transition invariants*. There is no IR-level kind; the classification is derivable by walking the body. Both kinds run through the same evaluator.
+
+**Where `pre(...)` is legal.** Only in contexts that have both a pre-state and a post-state in scope. Today that is invariant evaluation during a proposal. `Pre` in any other position - inside a transformation `require` body (which already reads pre-state as the only state), inside a derived-claim body (which is a function of one state), inside a standalone `find_matches` call from a test, or inside the inner subtree of an outer `Pre` (no pre-pre-state) - surfaces `EvalError::PreStateUnavailable`. The error is phrased about evaluation context rather than AST position, so future contexts that legitimately carry both states (transformation postconditions, trace assertions) can share the primitive without IR change.
+
+**Genesis vacuity.** When a predicate has never been admitted, `pre(P(...))` matches nothing in pre-state. Under `implies`, the rule is vacuously true. This is the deliberate semantics: `MoveCount(0)` admitted by an initialisation transformation against an empty database satisfies `move_count_strictly_increases` because there is no `pre(MoveCount(m))` to constrain it. Authors who need a different genesis story write the cases as disjuncts.
+
+**Quantifier composition is intentionally non-commutative.** `pre(forall x in Squares: Empty(x))` and `forall x in Squares: pre(Empty(x))` evaluate to different things when the iteration set itself changes between states. The first reads pre-state's `Squares` and asks whether each one was empty in pre. The second reads post-state's `Squares` and asks, for each such square, whether it was empty in pre. For invariants over a fixed domain (the chess board is always 64 squares) the two coincide; for domains that grow or shrink (accounts created, policies retired, claims registered) they diverge, and choosing the right order is what makes the invariant honest about whether it is asking a question of the old world or the new one.
+
 ## Tracing proposals
 
 `propose_with_trace` is `propose`'s diagnostic twin. It returns a `TracedProposal` that carries a structured `Vec<TraceEntry>` on **both** the success path (`Completed { outcome, trace }`) and the kernel-error path (`Errored { error, trace }`). The error path matters most: a multi-match `bind_one`, a type-mismatch `DateLe`, an unbound `Term::Actor` - each surfaces as an `EvalError`, and `propose`'s `Result<Outcome, EvalError>` shape would discard the run-up that led to the failure. `propose_with_trace` does not.

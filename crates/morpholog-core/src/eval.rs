@@ -54,6 +54,19 @@ pub enum EvalError {
     /// belong in `require`, not in invariants; this error makes that
     /// doctrine enforceable rather than convention.
     UnboundActor,
+    /// `Expr::Pre` was reached in an evaluation context that has no
+    /// pre-state in scope. The common cases are derived-claim
+    /// enumeration (one state, the present), transformation `require`
+    /// bodies (which read pre-state as the *only* state - there is no
+    /// post to flip back to), standalone `find_matches` callers, and
+    /// the inner subtree of an outer `Pre` (no "pre-pre-state").
+    /// Distinct from `UnboundActor` so the diagnostic is honest about
+    /// which capability the context lacks. Phrased about evaluation
+    /// context rather than AST position so future contexts that
+    /// legitimately carry both states (transformation
+    /// postconditions, trace assertions) can share the primitive
+    /// without IR change.
+    PreStateUnavailable,
 }
 
 impl std::fmt::Display for EvalError {
@@ -73,6 +86,10 @@ impl std::fmt::Display for EvalError {
                 f,
                 "Term::Actor referenced with no transition in scope (likely used outside a transformation body - e.g., inside an invariant or derived-claim body; authority checks belong in `require`)"
             ),
+            EvalError::PreStateUnavailable => write!(
+                f,
+                "Expr::Pre evaluated in a context with no pre-state in scope (likely a derived-claim body, a transformation `require`, a standalone evaluator call, or the inner subtree of an outer `pre(...)` - there is no pre-pre-state)"
+            ),
         }
     }
 }
@@ -81,32 +98,43 @@ impl std::error::Error for EvalError {}
 pub(crate) fn find_matches(
     e: &Expr,
     state: &State,
+    pre_state: Option<&State>,
     base: &Bindings,
     actor: Option<&EvalValue>,
 ) -> Result<Vec<Bindings>, EvalError> {
     match e {
         Expr::Claim { predicate, args } => find_claim_matches(predicate, args, state, base, actor),
-        Expr::And(exprs) => find_conjunction(exprs, state, base, actor),
-        Expr::Or(exprs) => find_disjunction(exprs, state, base, actor),
+        Expr::And(exprs) => find_conjunction(exprs, state, pre_state, base, actor),
+        Expr::Or(exprs) => find_disjunction(exprs, state, pre_state, base, actor),
         Expr::Not(inner) => {
-            let m = find_matches(inner, state, base, actor)?;
+            let m = find_matches(inner, state, pre_state, base, actor)?;
             Ok(if m.is_empty() {
                 vec![base.clone()]
             } else {
                 vec![]
             })
         }
+        Expr::Pre(inner) => {
+            // The opt-in flip: evaluate `inner` against pre-state.
+            // Pre-state is cleared in the recursive call so that a
+            // nested `pre(pre(...))` surfaces PreStateUnavailable -
+            // there is no pre-pre-state to swap into.
+            let Some(pre) = pre_state else {
+                return Err(EvalError::PreStateUnavailable);
+            };
+            find_matches(inner, pre, None, base, actor)
+        }
         Expr::Implies { left, right } => {
-            let lm = find_matches(left, state, base, actor)?;
+            let lm = find_matches(left, state, pre_state, base, actor)?;
             for m in lm {
-                if find_matches(right, state, &m, actor)?.is_empty() {
+                if find_matches(right, state, pre_state, &m, actor)?.is_empty() {
                     return Ok(vec![]);
                 }
             }
             Ok(vec![base.clone()])
         }
         Expr::Exists { binding: _, body } => {
-            let m = find_matches(body, state, base, actor)?;
+            let m = find_matches(body, state, pre_state, base, actor)?;
             Ok(if m.is_empty() {
                 vec![]
             } else {
@@ -118,22 +146,22 @@ pub(crate) fn find_matches(
             source,
             body,
         } => {
-            let sm = find_matches(source, state, base, actor)?;
+            let sm = find_matches(source, state, pre_state, base, actor)?;
             for m in sm {
-                if find_matches(body, state, &m, actor)?.is_empty() {
+                if find_matches(body, state, pre_state, &m, actor)?.is_empty() {
                     return Ok(vec![]);
                 }
             }
             Ok(vec![base.clone()])
         }
         Expr::Eq(lhs, rhs) => {
-            let l = eval_value(lhs, state, base, actor)?;
-            let r = eval_value(rhs, state, base, actor)?;
+            let l = eval_value(lhs, state, pre_state, base, actor)?;
+            let r = eval_value(rhs, state, pre_state, base, actor)?;
             Ok(if l == r { vec![base.clone()] } else { vec![] })
         }
         Expr::Le(lhs, rhs) => {
-            let l = eval_value(lhs, state, base, actor)?;
-            let r = eval_value(rhs, state, base, actor)?;
+            let l = eval_value(lhs, state, pre_state, base, actor)?;
+            let r = eval_value(rhs, state, pre_state, base, actor)?;
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => {
                     Ok(if a <= b { vec![base.clone()] } else { vec![] })
@@ -144,8 +172,8 @@ pub(crate) fn find_matches(
             }
         }
         Expr::DateLe(lhs, rhs) => {
-            let l = eval_value(lhs, state, base, actor)?;
-            let r = eval_value(rhs, state, base, actor)?;
+            let l = eval_value(lhs, state, pre_state, base, actor)?;
+            let r = eval_value(rhs, state, pre_state, base, actor)?;
             match (l, r) {
                 (EvalValue::Date(a), EvalValue::Date(b)) => {
                     Ok(if a <= b { vec![base.clone()] } else { vec![] })
@@ -317,6 +345,7 @@ pub(crate) fn unify_args(
 pub(crate) fn find_conjunction(
     exprs: &[Expr],
     state: &State,
+    pre_state: Option<&State>,
     base: &Bindings,
     actor: Option<&EvalValue>,
 ) -> Result<Vec<Bindings>, EvalError> {
@@ -324,7 +353,7 @@ pub(crate) fn find_conjunction(
     for expr in exprs {
         let mut next = vec![];
         for b in &current {
-            next.extend(find_matches(expr, state, b, actor)?);
+            next.extend(find_matches(expr, state, pre_state, b, actor)?);
         }
         if next.is_empty() {
             return Ok(vec![]);
@@ -342,12 +371,13 @@ pub(crate) fn find_conjunction(
 pub(crate) fn find_disjunction(
     exprs: &[Expr],
     state: &State,
+    pre_state: Option<&State>,
     base: &Bindings,
     actor: Option<&EvalValue>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut out = vec![];
     for expr in exprs {
-        out.extend(find_matches(expr, state, base, actor)?);
+        out.extend(find_matches(expr, state, pre_state, base, actor)?);
     }
     Ok(out)
 }
@@ -397,14 +427,15 @@ pub(crate) fn find_in_matches(
 pub(crate) fn eval_value(
     e: &Expr,
     state: &State,
+    pre_state: Option<&State>,
     bindings: &Bindings,
     actor: Option<&EvalValue>,
 ) -> Result<EvalValue, EvalError> {
     match e {
         Expr::Term(t) => resolve_term(t, bindings, actor),
         Expr::Sub(lhs, rhs) => {
-            let l = eval_value(lhs, state, bindings, actor)?;
-            let r = eval_value(rhs, state, bindings, actor)?;
+            let l = eval_value(lhs, state, pre_state, bindings, actor)?;
+            let r = eval_value(rhs, state, pre_state, bindings, actor)?;
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a - b)),
                 _ => Err(EvalError::TypeMismatch(
@@ -413,8 +444,8 @@ pub(crate) fn eval_value(
             }
         }
         Expr::Add(lhs, rhs) => {
-            let l = eval_value(lhs, state, bindings, actor)?;
-            let r = eval_value(rhs, state, bindings, actor)?;
+            let l = eval_value(lhs, state, pre_state, bindings, actor)?;
+            let r = eval_value(rhs, state, pre_state, bindings, actor)?;
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a + b)),
                 _ => Err(EvalError::TypeMismatch(
@@ -427,7 +458,7 @@ pub(crate) fn eval_value(
             binding: _,
             body,
         } => {
-            let matches = find_matches(body, state, bindings, actor)?;
+            let matches = find_matches(body, state, pre_state, bindings, actor)?;
             let mut total = Decimal::ZERO;
             for m in matches {
                 match resolve_term(value, &m, actor)? {
@@ -461,7 +492,7 @@ pub(crate) fn eval_value(
                     Ok(claim.args[pos].clone())
                 }
                 0 => match default {
-                    Some(d) => eval_value(d, state, bindings, actor),
+                    Some(d) => eval_value(d, state, pre_state, bindings, actor),
                     None => Err(EvalError::ValueOfZeroMatches(predicate.clone())),
                 },
                 _ => Err(EvalError::ValueOfMultipleMatches(predicate.clone())),
@@ -539,6 +570,7 @@ pub(crate) fn resolve_term(
 pub(crate) fn find_failing_subexpr(
     expr: &Expr,
     state: &State,
+    pre_state: Option<&State>,
     bindings: &Bindings,
     actor: Option<&EvalValue>,
 ) -> Option<String> {
@@ -556,7 +588,7 @@ pub(crate) fn find_failing_subexpr(
             for c in conjuncts {
                 let mut next: Vec<Bindings> = Vec::new();
                 for ctx in &current {
-                    next.extend(find_matches(c, state, ctx, actor).ok()?);
+                    next.extend(find_matches(c, state, pre_state, ctx, actor).ok()?);
                 }
                 if next.is_empty() {
                     // This conjunct kills the chain. Diagnose under
@@ -564,7 +596,7 @@ pub(crate) fn find_failing_subexpr(
                     // this point; the first is fine.
                     let failing_ctx = current.first().unwrap_or(bindings);
                     return Some(
-                        find_failing_subexpr(c, state, failing_ctx, actor)
+                        find_failing_subexpr(c, state, pre_state, failing_ctx, actor)
                             .unwrap_or_else(|| crate::format::format_expr_inline(c)),
                     );
                 }
@@ -573,7 +605,7 @@ pub(crate) fn find_failing_subexpr(
             None
         }
         Expr::Implies { left, right } => {
-            let left_matches = find_matches(left, state, bindings, actor).ok()?;
+            let left_matches = find_matches(left, state, pre_state, bindings, actor).ok()?;
             if left_matches.is_empty() {
                 // Implies is vacuously true when left fails; caller
                 // shouldn't have invoked us. Safety: return None.
@@ -584,10 +616,10 @@ pub(crate) fn find_failing_subexpr(
             // extension so the drill-down sees the same context the
             // evaluator did.
             for ext in &left_matches {
-                let right_matches = find_matches(right, state, ext, actor).ok()?;
+                let right_matches = find_matches(right, state, pre_state, ext, actor).ok()?;
                 if right_matches.is_empty() {
                     return Some(
-                        find_failing_subexpr(right, state, ext, actor)
+                        find_failing_subexpr(right, state, pre_state, ext, actor)
                             .unwrap_or_else(|| crate::format::format_expr_inline(right)),
                     );
                 }
@@ -606,12 +638,12 @@ pub(crate) fn find_failing_subexpr(
             // diverged from the evaluator's iteration order could
             // identify a "failing" iteration the evaluator never
             // tried.
-            let source_matches = find_matches(source, state, bindings, actor).ok()?;
+            let source_matches = find_matches(source, state, pre_state, bindings, actor).ok()?;
             for ext in &source_matches {
-                let body_matches = find_matches(body, state, ext, actor).ok()?;
+                let body_matches = find_matches(body, state, pre_state, ext, actor).ok()?;
                 if body_matches.is_empty() {
                     return Some(
-                        find_failing_subexpr(body, state, ext, actor)
+                        find_failing_subexpr(body, state, pre_state, ext, actor)
                             .unwrap_or_else(|| crate::format::format_expr_inline(body)),
                     );
                 }
@@ -621,6 +653,7 @@ pub(crate) fn find_failing_subexpr(
         // No useful drill-down for these:
         Expr::Not(_)
         | Expr::Or(_)
+        | Expr::Pre(_)
         | Expr::Exists { .. }
         | Expr::Claim { .. }
         | Expr::Le(..)

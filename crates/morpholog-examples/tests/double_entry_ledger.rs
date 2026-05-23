@@ -302,7 +302,7 @@ fn lone_journal_entry_without_lines_violates_invariant() {
         args: vec![subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
     }]);
     let inv = double_entry_ledger::journal_entry_has_lines();
-    let holds = eval_invariant(&inv, &state).expect("evaluation should not error");
+    let holds = eval_invariant(&inv, &state, None).expect("evaluation should not error");
     assert!(
         !holds,
         "a JournalEntry with no matching JournalLine must violate journal_entry_has_lines"

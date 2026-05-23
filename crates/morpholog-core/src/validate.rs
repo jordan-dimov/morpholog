@@ -237,7 +237,7 @@ pub(crate) fn validate_expr(
                 validate_expr(e, arities, ctx, errors);
             }
         }
-        Expr::Not(e) | Expr::Exists { body: e, .. } => {
+        Expr::Not(e) | Expr::Exists { body: e, .. } | Expr::Pre(e) => {
             validate_expr(e, arities, ctx, errors);
         }
         Expr::Eq(l, r)
