@@ -57,15 +57,27 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
-    /// An operator (comparator, arithmetic, equality) received an
-    /// operand of the wrong kind. `Le(date, decimal)`, `Add(subject,
-    /// decimal)`, `Eq(decimal, subject)` - the kernel raises these
-    /// as `EvalError::TypeMismatch` at runtime; this validator
+    /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
+    /// `value default`) received an operand of the wrong kind.
+    /// `Le(date, decimal)`, `Add(subject, decimal)`,
+    /// `For` over a Decimal value - the kernel raises these as
+    /// `EvalError::TypeMismatch` at runtime; this validator
     /// surfaces them at authoring time.
     OperandKindMismatch {
         operator: &'static str,
         expected: PredicateArgKind,
         actual: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// An equality (`==` or `!=`) had two operands of distinct,
+    /// incompatible kinds. Symmetric by nature: there is no
+    /// "expected" side - both kinds are equally constrained by the
+    /// other. `Subject == Decimal` is a kind error, not a silent
+    /// coercion to false.
+    EqualityKindMismatch {
+        operator: &'static str,
+        left: PredicateArgKind,
+        right: PredicateArgKind,
         context: ValidationContext,
     },
     /// A variable was bound at one kind and then used at a different
@@ -141,6 +153,15 @@ impl std::fmt::Display for ValidationError {
             } => write!(
                 f,
                 "{operator} expects {expected:?} operand(s) but received {actual:?} in {context}"
+            ),
+            ValidationError::EqualityKindMismatch {
+                operator,
+                left,
+                right,
+                context,
+            } => write!(
+                f,
+                "{operator} operands must have the same kind; got {left:?} vs {right:?} in {context}"
             ),
             ValidationError::VariableKindConflict {
                 variable,

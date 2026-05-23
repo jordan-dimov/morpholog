@@ -382,9 +382,13 @@ fn walk_predicate_expr(
 ///   `name` at that kind.
 /// - `LetNewSubject { name }` observes `name` at `Subject`.
 /// - `Assert` and `Retract` check args against declared kinds,
-///   same as `Expr::Claim`. Assert does not export bindings.
-/// - `For { binding, body }` runs the body under a scoped env
-///   clone; loop-introduced bindings do not leak.
+///   same as `Expr::Claim`. Variable observations may refine
+///   parameter kinds in the env; binding-availability checks
+///   (whether the variable was actually bound earlier) are
+///   Layer 2 (unbound-variable detection), not this layer.
+/// - `For` requires its collection expression to be Collection-
+///   kinded; the body runs under a scoped env clone so loop-
+///   introduced bindings do not leak.
 /// - `Emit` is a no-op until `IntentDecl` lands.
 fn walk_stmt(
     stmt: &Stmt,
@@ -534,10 +538,10 @@ fn check_equality(
     let combined = match (left.0, right.0) {
         (InferredKind::Known(l), InferredKind::Known(r)) => {
             if !kinds_compatible(l, r) {
-                errors.push(ValidationError::OperandKindMismatch {
+                errors.push(ValidationError::EqualityKindMismatch {
                     operator,
-                    expected: l,
-                    actual: r,
+                    left: l,
+                    right: r,
                     context: ctx.clone(),
                 });
                 None
@@ -1431,7 +1435,7 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
-            ValidationError::OperandKindMismatch { operator: "==", .. }
+            ValidationError::EqualityKindMismatch { operator: "==", .. }
         ));
     }
 
@@ -1448,7 +1452,7 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
-            ValidationError::OperandKindMismatch { operator: "!=", .. }
+            ValidationError::EqualityKindMismatch { operator: "!=", .. }
         ));
     }
 
