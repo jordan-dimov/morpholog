@@ -8,7 +8,7 @@ Each item below either has a concrete forcing scenario or is explicitly held unt
 
 The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are all in good shape. Programmes are declared-vocabulary objects. Execution is structurally inspectable through `propose_with_trace` and the CLI's `--trace` flag, including expression-internal failure-walk that identifies which sub-expression of a rejected `require` or `bind` was responsible. Predicate-scoped loading runs on both read and write paths.
 
-The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`).
+The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` now runs both the structural pass (arity, declarations, duplicates) and the kind/type compatibility pass that catches authoring mistakes the kernel would otherwise raise as `TypeMismatch` at runtime.
 
 The compute-zone interface for non-Rust integrations is in place. `morpholog run` closes the input boundary; `morpholog outbox claim` / `complete` / `release` let a shell or Python deliverer participate in the lease protocol without a Rust `Deliverer` impl. The three-zone doctrine (compute / commit / outbox) is documented in [`scope-and-ambition.md`](scope-and-ambition.md); the round-trip compute pattern in [`outbox-sketch.md`](outbox-sketch.md).
 
@@ -16,11 +16,10 @@ The CLI is split by subcommand under `crates/morpholog-cli/src/commands/`. Addin
 
 ## Imminent
 
-With the input/output boundaries in place, the next investment is making `.morph` programmes *trustworthy to author*. The check layer is currently arity + declaration-only; the leverage is in adding the static checks that catch bugs before they surface as runtime `EvalError`s.
+With the input/output boundaries and the kind/type-compatibility layer in place, `.morph` authoring is materially more trustworthy than before. The remaining layers of enriched check are the next investment.
 
-- **Enriched `morpholog check`.** Today's check is "parse + `Program::validate()`": strict arity, duplicate predicates, undeclared-predicate references. A richer check would add four layers, each independently testable:
-    - **Kind/type compatibility** (highest leverage; in progress). Predicate declarations carry kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`); today they are documentation. A static pass catches `amount on_or_before limit` against decimal-typed args, or arithmetic on subject literals - the same `TypeMismatch` the kernel raises at runtime, surfaced at authoring time. This is what predicate declarations were *designed for*. Diagnostics ship without source spans for v0 (matching the existing `Program::validate()` shape); spans are a separate enhancement when the IR question of how to carry them is resolved.
-    - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced.
+- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates) and Layer 1 (kind/type compatibility) both ship today. Three layers remain, each independently testable:
+    - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced. The natural home for a symmetric "value-shaped expression at predicate position" check the kind layer deliberately left out.
     - **Actor-in-wrong-context.** `Term::Actor` resolves only inside transformation bodies; the kernel raises `UnboundActor` if an invariant or derived claim mentions `actor`. Catch it statically with a clear "actor is not available in invariant bodies - authority belongs in `require`" message.
     - **Lint-grade hints under `--strict`.** Unused predicate declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on UndeclaredPredicate.
 
