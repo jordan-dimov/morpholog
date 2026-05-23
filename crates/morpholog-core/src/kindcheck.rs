@@ -22,9 +22,9 @@
 //! specific slot refines it to that specific kind. This keeps `Any`
 //! as an honest escape hatch without making it a kind-eraser.
 
-// Layer 1 lands in stages: scaffolding + predicate-claim walk in
-// commits 2-3, value-expression inference (Add/Sub/Le/DateLe/
-// Eq/Neq) in commit 4, Sum + ValueOf in commit 5, then wiring
+// Layer 1 lands in stages: scaffolding + predicate-claim walk +
+// value-expression inference + comparators/arithmetic in commits
+// 2-4; Sum + ValueOf body-first inference in commit 5; wiring
 // into `validate_program` in commit 6.
 #![allow(dead_code)]
 
@@ -194,10 +194,9 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
         // Transformation parameters arrive untyped from the caller;
         // each gets observed at `UnknownOrAny` so subsequent uses
         // refine. First-observation against `UnknownOrAny` never
-        // conflicts, so the `expect` cannot fire.
+        // conflicts, so the result is discarded.
         for param in &transformation.parameters {
-            env.observe(param, InferredKind::UnknownOrAny)
-                .expect("first observation never conflicts");
+            let _ = env.observe(param, InferredKind::UnknownOrAny);
         }
         for stmt in &transformation.body {
             walk_stmt(stmt, &mut env, &predicate_decls, &ctx, &mut errors);
@@ -248,13 +247,83 @@ fn walk_predicate_expr(
             walk_predicate_expr(source, env, predicate_decls, ctx, errors);
             walk_predicate_expr(body, env, predicate_decls, ctx, errors);
         }
-        // Comparators land in commit 4. Stub: do nothing today.
-        Expr::Le(_, _) | Expr::DateLe(_, _) | Expr::Eq(_, _) => {}
-        // Neq's operands are Terms; full check lands in commit 4.
-        Expr::Neq(_, _) | Expr::In(_, _) => {}
+        Expr::Le(left, right) => {
+            check_operand_kind(
+                left,
+                PredicateArgKind::Decimal,
+                "<=",
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+            check_operand_kind(
+                right,
+                PredicateArgKind::Decimal,
+                "<=",
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+        }
+        Expr::DateLe(left, right) => {
+            check_operand_kind(
+                left,
+                PredicateArgKind::Date,
+                "on_or_before",
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+            check_operand_kind(
+                right,
+                PredicateArgKind::Date,
+                "on_or_before",
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+        }
+        Expr::Eq(left, right) => {
+            check_equality_operands(left, right, "==", env, predicate_decls, ctx, errors)
+        }
+        Expr::Neq(left, right) => {
+            check_equality_terms(left, right, "!=", env, ctx, errors);
+        }
+        Expr::In(element, collection) => {
+            // `In` checks element membership in a collection-shaped
+            // term. The element side just contributes its inherent
+            // kind; the collection side is `Collection` by
+            // construction (only `Term::Var` resolves to one in v0,
+            // and the variable's element-kind is not yet tracked).
+            // Element-kind/collection-element-kind correlation lands
+            // when a worked example forces it. For now: observe the
+            // element-side variable at UnknownOrAny (no-op) and
+            // require the collection-side variable refines to
+            // Collection.
+            if let Term::Var(name) = collection {
+                observe_or_report(
+                    env,
+                    name,
+                    InferredKind::Known(PredicateArgKind::Collection),
+                    ctx,
+                    errors,
+                );
+            }
+            // Element-side: literals carry their kind harmlessly;
+            // a variable's kind is refined by the surrounding
+            // context, not by `In`.
+            let _ = element;
+        }
         // Value-shaped expressions cannot appear at a predicate
-        // position; the runtime raises NotPredicate. Static
-        // surfacing lives with value inference in commit 4.
+        // position; the runtime raises NotPredicate. A symmetric
+        // static check would need an ExpectedPredicateExpression
+        // variant; deferred until a worked example surfaces the
+        // case (Layer 2 unbound-variable detection is a more
+        // natural home for it).
         Expr::Term(_)
         | Expr::Add(_, _)
         | Expr::Sub(_, _)
@@ -305,11 +374,12 @@ fn walk_stmt(
             // binding set. Refinements observed here flow forward.
             walk_predicate_expr(expr, env, predicate_decls, ctx, errors);
         }
-        Stmt::Let { name, value: _ } => {
-            // Value inference lands in commit 4; observing `name`
-            // as `UnknownOrAny` today means subsequent uses of the
-            // bound name simply refine on demand.
-            let _ = env.observe(name, InferredKind::UnknownOrAny);
+        Stmt::Let { name, value } => {
+            // Infer the value-expression's kind and bind `name`
+            // at it. Variable refinements observed while walking
+            // `value` flow forward via the live env.
+            let value_kind = infer_value_expr(value, env, predicate_decls, ctx, errors);
+            observe_or_report(env, name, value_kind, ctx, errors);
         }
         Stmt::LetNewSubject { name } => {
             // `new Subject()` mints a fresh subject id; the
@@ -358,6 +428,310 @@ fn walk_stmt(
             // `IntentDecl` would gate this. Until then, nothing
             // to check at the kind layer.
         }
+    }
+}
+
+/// Check that a value-shaped operand evaluates to a value of the
+/// expected kind. Used by `Le` (Decimal), `DateLe` (Date), and
+/// arithmetic (`Add`/`Sub`, both Decimal). Threads variable
+/// refinement through `env` and emits `OperandKindMismatch` (for
+/// literals or actor) or `VariableKindConflict` (for variables
+/// that already had an incompatible kind).
+fn check_operand_kind(
+    operand: &Expr,
+    expected: PredicateArgKind,
+    operator: &'static str,
+    env: &mut KindEnv,
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let inferred = infer_value_expr(operand, env, predicate_decls, ctx, errors);
+    if let InferredKind::Known(actual) = inferred
+        && !kinds_compatible(expected, actual)
+    {
+        // Variable refinement already emits VariableKindConflict
+        // via the env observation path inside infer_value_expr;
+        // emit OperandKindMismatch only when the bad kind came
+        // from a literal or `actor`.
+        if !operand_is_variable(operand) {
+            errors.push(ValidationError::OperandKindMismatch {
+                operator,
+                expected,
+                actual,
+                context: ctx.clone(),
+            });
+        }
+    }
+    // For variables, additionally refine the env at the expected
+    // kind so subsequent uses get the strict kind, not the
+    // unconstrained one. The conflict path inside infer_value_expr
+    // only fires when the variable already held an incompatible
+    // kind; an UnknownOrAny needs an explicit observation here.
+    if let Expr::Term(Term::Var(name)) = operand {
+        observe_or_report(env, name, InferredKind::Known(expected), ctx, errors);
+    }
+}
+
+/// Check the two operands of `Eq`. Both sides infer their kinds;
+/// if both produce a `Known`, the kinds must be compatible. When
+/// one side is a variable and the other contributes a concrete
+/// kind, the variable refines to that kind (mirrors comparator
+/// behaviour). Strict equality: `Subject == Decimal` is a kind
+/// error, never a silent coercion.
+fn check_equality_operands(
+    left: &Expr,
+    right: &Expr,
+    operator: &'static str,
+    env: &mut KindEnv,
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let left_kind = infer_value_expr(left, env, predicate_decls, ctx, errors);
+    let right_kind = infer_value_expr(right, env, predicate_decls, ctx, errors);
+    let combined = match (left_kind, right_kind) {
+        (InferredKind::Known(l), InferredKind::Known(r)) => {
+            if !kinds_compatible(l, r) {
+                errors.push(ValidationError::OperandKindMismatch {
+                    operator,
+                    expected: l,
+                    actual: r,
+                    context: ctx.clone(),
+                });
+                None
+            } else {
+                Some(InferredKind::Known(more_specific(l, r)))
+            }
+        }
+        (InferredKind::Known(k), InferredKind::UnknownOrAny)
+        | (InferredKind::UnknownOrAny, InferredKind::Known(k)) => Some(InferredKind::Known(k)),
+        (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => None,
+    };
+    if let Some(refined) = combined {
+        if let Expr::Term(Term::Var(name)) = left {
+            observe_or_report(env, name, refined, ctx, errors);
+        }
+        if let Expr::Term(Term::Var(name)) = right {
+            observe_or_report(env, name, refined, ctx, errors);
+        }
+    }
+}
+
+/// `Neq` is term-shaped (operands are `Term`, not `Expr`). Same
+/// strict-equality contract: if both sides have a Known kind,
+/// they must be compatible; variables refine.
+fn check_equality_terms(
+    left: &Term,
+    right: &Term,
+    operator: &'static str,
+    env: &mut KindEnv,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let left_kind = resolved_term_kind(left, env);
+    let right_kind = resolved_term_kind(right, env);
+    let combined = match (left_kind, right_kind) {
+        (InferredKind::Known(l), InferredKind::Known(r)) => {
+            if !kinds_compatible(l, r) {
+                errors.push(ValidationError::OperandKindMismatch {
+                    operator,
+                    expected: l,
+                    actual: r,
+                    context: ctx.clone(),
+                });
+                None
+            } else {
+                Some(InferredKind::Known(more_specific(l, r)))
+            }
+        }
+        (InferredKind::Known(k), InferredKind::UnknownOrAny)
+        | (InferredKind::UnknownOrAny, InferredKind::Known(k)) => Some(InferredKind::Known(k)),
+        (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => None,
+    };
+    if let Some(refined) = combined {
+        if let Term::Var(name) = left {
+            observe_or_report(env, name, refined, ctx, errors);
+        }
+        if let Term::Var(name) = right {
+            observe_or_report(env, name, refined, ctx, errors);
+        }
+    }
+}
+
+/// Infer the kind of a value-producing expression. Variables are
+/// looked up in `env`; literals carry their kind directly; `Add`/
+/// `Sub` recursively check Decimal operands; `Sum`/`ValueOf` are
+/// stubbed at this commit (commit 5 lands body-first inference)
+/// and predicate-shaped expressions surface as
+/// `ExpectedValueExpression`.
+fn infer_value_expr(
+    expr: &Expr,
+    env: &mut KindEnv,
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) -> InferredKind {
+    match expr {
+        Expr::Term(term) => resolved_term_kind(term, env),
+        Expr::Add(left, right) | Expr::Sub(left, right) => {
+            let operator = if matches!(expr, Expr::Add(_, _)) {
+                "+"
+            } else {
+                "-"
+            };
+            check_operand_kind(
+                left,
+                PredicateArgKind::Decimal,
+                operator,
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+            check_operand_kind(
+                right,
+                PredicateArgKind::Decimal,
+                operator,
+                env,
+                predicate_decls,
+                ctx,
+                errors,
+            );
+            InferredKind::Known(PredicateArgKind::Decimal)
+        }
+        Expr::Sum {
+            value: _,
+            binding,
+            body,
+        } => {
+            // Sum is body-shaped; full inference (body bindings
+            // flow to value-term kind) lands in commit 5. For now
+            // walk the body for claim-arg checks under a scoped
+            // env (binding does not leak), and return Decimal -
+            // Sum's result is always Decimal regardless of body.
+            let mut scoped = env.clone();
+            let _ = scoped.observe(binding, InferredKind::UnknownOrAny);
+            walk_predicate_expr(body, &mut scoped, predicate_decls, ctx, errors);
+            InferredKind::Known(PredicateArgKind::Decimal)
+        }
+        Expr::ValueOf {
+            predicate,
+            args,
+            default,
+        } => {
+            // Walk args as a predicate-call so kind mismatches in
+            // the lookup pattern surface. Refinement of the
+            // wildcard-position kind lands in commit 5 along with
+            // Sum.
+            check_claim_args(predicate, args, env, predicate_decls, ctx, errors);
+            if let Some(default_expr) = default {
+                infer_value_expr(default_expr, env, predicate_decls, ctx, errors);
+            }
+            // Best-effort kind from the declaration's first
+            // wildcard slot. Returns UnknownOrAny if the predicate
+            // is undeclared (caught by the existing arity pass)
+            // or has no wildcard.
+            value_of_result_kind(predicate, args, predicate_decls)
+        }
+        // Predicate-shaped expression appearing in a value-
+        // demanding position. Runtime raises `NotValue`; surface
+        // it earlier. The shape string is short and structural -
+        // a full pretty-print would need IR-aware formatting that
+        // does not yet exist outside `morpholog_core::format`.
+        Expr::Claim { .. }
+        | Expr::Implies { .. }
+        | Expr::Exists { .. }
+        | Expr::Forall { .. }
+        | Expr::And(_)
+        | Expr::Or(_)
+        | Expr::Not(_)
+        | Expr::Pre(_)
+        | Expr::Eq(_, _)
+        | Expr::Le(_, _)
+        | Expr::DateLe(_, _)
+        | Expr::Neq(_, _)
+        | Expr::In(_, _) => {
+            errors.push(ValidationError::ExpectedValueExpression {
+                context: ctx.clone(),
+                expression: short_expr_shape(expr),
+            });
+            InferredKind::UnknownOrAny
+        }
+    }
+}
+
+/// True when `operand` is a bare variable. Used to suppress a
+/// double-emission of OperandKindMismatch when the env already
+/// emitted VariableKindConflict.
+fn operand_is_variable(operand: &Expr) -> bool {
+    matches!(operand, Expr::Term(Term::Var(_)))
+}
+
+/// Resolve a `Term`'s kind through the env: variables look up
+/// their current inferred kind; literals and `actor` return
+/// their inherent kind. Wildcard stays UnknownOrAny.
+fn resolved_term_kind(term: &Term, env: &KindEnv) -> InferredKind {
+    match term {
+        Term::Var(name) => env.lookup(name),
+        other => term_kind(other),
+    }
+}
+
+/// Prefer the more specific of two compatible kinds. `Any` loses
+/// to a concrete kind; otherwise the kinds are equal and either
+/// is fine.
+fn more_specific(a: PredicateArgKind, b: PredicateArgKind) -> PredicateArgKind {
+    if matches!(a, PredicateArgKind::Any) {
+        b
+    } else {
+        a
+    }
+}
+
+/// Look up the kind of the value position in a `ValueOf` lookup.
+/// The wildcard position(s) in `args` mark the value slot(s);
+/// returns the first wildcard's declared kind, or UnknownOrAny
+/// when the predicate is undeclared or has no wildcard.
+fn value_of_result_kind(
+    predicate: &str,
+    args: &[Term],
+    predicate_decls: &HashMap<&str, &PredicateDecl>,
+) -> InferredKind {
+    let Some(decl) = predicate_decls.get(predicate) else {
+        return InferredKind::UnknownOrAny;
+    };
+    args.iter()
+        .position(|a| matches!(a, Term::Wildcard))
+        .and_then(|p| decl.args.get(p))
+        .map(|a| InferredKind::Known(a.kind))
+        .unwrap_or(InferredKind::UnknownOrAny)
+}
+
+/// Short structural label for an expression used in
+/// `ExpectedValueExpression`. Not a full pretty-print; just the
+/// outermost constructor so the diagnostic identifies the shape
+/// without committing to the formatter's exact output.
+fn short_expr_shape(expr: &Expr) -> String {
+    match expr {
+        Expr::Claim { predicate, .. } => format!("claim {predicate}(...)"),
+        Expr::Implies { .. } => "_ implies _".to_string(),
+        Expr::Exists { .. } => "exists _: _".to_string(),
+        Expr::Forall { .. } => "forall _ in _: _".to_string(),
+        Expr::And(_) => "_ and _".to_string(),
+        Expr::Or(_) => "_ or _".to_string(),
+        Expr::Not(_) => "not _".to_string(),
+        Expr::Pre(_) => "pre(_)".to_string(),
+        Expr::Eq(_, _) => "_ == _".to_string(),
+        Expr::Le(_, _) => "_ <= _".to_string(),
+        Expr::DateLe(_, _) => "_ on_or_before _".to_string(),
+        Expr::Neq(_, _) => "_ != _".to_string(),
+        Expr::In(_, _) => "_ in _".to_string(),
+        Expr::Term(_) => "term".to_string(),
+        Expr::Add(_, _) => "_ + _".to_string(),
+        Expr::Sub(_, _) => "_ - _".to_string(),
+        Expr::Sum { .. } => "sum(...)".to_string(),
+        Expr::ValueOf { predicate, .. } => format!("value {predicate}(...)"),
     }
 }
 
@@ -470,6 +844,7 @@ fn observe_or_report(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -891,5 +1266,242 @@ mod tests {
             errs[0],
             ValidationError::PredicateArgKindMismatch { .. }
         ));
+    }
+
+    // ============================================================
+    // Value-expression inference + comparators / arithmetic
+    // ============================================================
+
+    #[test]
+    fn le_with_date_literal_left_operand_flags_operand_mismatch() {
+        // `<=` is the decimal comparator. A date literal on either
+        // side is the canonical "wrong comparator" mistake the
+        // kernel surfaces as TypeMismatch at runtime.
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "bad_le".to_string(),
+            version: 1,
+            body: le(term(date("2026-01-01")), term(dec("100"))),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1, "expected one operand error; got {errs:?}");
+        match &errs[0] {
+            ValidationError::OperandKindMismatch {
+                operator,
+                expected,
+                actual,
+                ..
+            } => {
+                assert_eq!(*operator, "<=");
+                assert_eq!(*expected, PredicateArgKind::Decimal);
+                assert_eq!(*actual, PredicateArgKind::Date);
+            }
+            other => panic!("expected OperandKindMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn date_le_with_decimal_literal_flags_operand_mismatch() {
+        // `on_or_before` is the date comparator; decimal here is wrong.
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "bad_date_le".to_string(),
+            version: 1,
+            body: date_le(term(date("2026-01-01")), term(dec("100"))),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1);
+        match &errs[0] {
+            ValidationError::OperandKindMismatch {
+                operator,
+                expected,
+                actual,
+                ..
+            } => {
+                assert_eq!(*operator, "on_or_before");
+                assert_eq!(*expected, PredicateArgKind::Date);
+                assert_eq!(*actual, PredicateArgKind::Decimal);
+            }
+            other => panic!("expected OperandKindMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_with_subject_literal_operand_flags_operand_mismatch() {
+        // Arithmetic on a subject literal is the unambiguous bug.
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "bad_add".to_string(),
+            version: 1,
+            body: le(
+                add(term(dec("10")), term(subj("not_a_number"))),
+                term(dec("100")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    operator: "+",
+                    expected: PredicateArgKind::Decimal,
+                    actual: PredicateArgKind::Subject,
+                    ..
+                }
+            )),
+            "expected OperandKindMismatch on `+`, got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn comparator_refines_variable_for_subsequent_uses() {
+        // `require A(x) and x <= 100` should refine `x` from
+        // unconstrained (via A's Any slot) to Decimal. A later use
+        // of `x` in a Subject slot must conflict.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Any)]),
+            pdecl("B", &[("v", PredicateArgKind::Subject)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "refine_via_le".to_string(),
+            version: 1,
+            body: and(vec![
+                claim("A", vec![var("x")]),
+                le(term(var("x")), term(dec("100"))),
+                claim("B", vec![var("x")]),
+            ]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Decimal,
+                    new: PredicateArgKind::Subject,
+                    ..
+                } if v == "x"
+            )),
+            "expected x to refine to Decimal via Le then conflict on Subject use; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn eq_with_distinct_known_kinds_flags_operand_mismatch() {
+        // Eq is strict: Decimal == Subject must surface as a kind
+        // mismatch, not be silently coerced.
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "bad_eq".to_string(),
+            version: 1,
+            body: eq(term(dec("100")), term(subj("S"))),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(
+            errs[0],
+            ValidationError::OperandKindMismatch { operator: "==", .. }
+        ));
+    }
+
+    #[test]
+    fn neq_with_distinct_known_kinds_flags_operand_mismatch() {
+        // Neq's operands are Terms; strict-equality rules still apply.
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "bad_neq".to_string(),
+            version: 1,
+            body: neq(dec("100"), subj("S")),
+        }];
+        let errs = kindcheck_program(&p);
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(
+            errs[0],
+            ValidationError::OperandKindMismatch { operator: "!=", .. }
+        ));
+    }
+
+    #[test]
+    fn eq_refines_variable_to_concrete_kind_for_subsequent_uses() {
+        // `x == 100` against an otherwise unconstrained `x` should
+        // pin `x` to Decimal; a later Subject-slot use conflicts.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("B", &[("v", PredicateArgKind::Subject)])];
+        p.invariants = vec![Invariant {
+            name: "refine_via_eq".to_string(),
+            version: 1,
+            body: and(vec![
+                eq(term(var("x")), term(dec("100"))),
+                claim("B", vec![var("x")]),
+            ]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    previous: PredicateArgKind::Decimal,
+                    new: PredicateArgKind::Subject,
+                    ..
+                }
+            )),
+            "expected refinement via Eq then conflict; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn let_binds_name_at_inferred_value_kind() {
+        // `let y = x - 1` where `x` was already Decimal binds `y`
+        // as Decimal; using `y` in a Subject slot must conflict.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("S", &[("id", PredicateArgKind::Subject)]),
+        ];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("A", vec![var("x")])),
+                let_("y", sub(term(var("x")), term(dec("1")))),
+                assert_("S", vec![var("y")]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Decimal,
+                    new: PredicateArgKind::Subject,
+                    ..
+                } if v == "y"
+            )),
+            "expected y to inherit Decimal from let-expression; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn comparator_clean_when_operands_match_expected_kind() {
+        // The happy path: amount <= limit, both bound from
+        // Decimal slots. No errors expected.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("L", &[("v", PredicateArgKind::Decimal)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "ok".to_string(),
+            version: 1,
+            body: and(vec![
+                claim("A", vec![var("amount")]),
+                claim("L", vec![var("limit")]),
+                le(term(var("amount")), term(var("limit"))),
+            ]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(errs.is_empty(), "happy path should pass; got {errs:?}");
     }
 }
