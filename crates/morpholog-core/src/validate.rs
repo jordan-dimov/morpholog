@@ -166,8 +166,29 @@ impl std::fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Strict arity validation for a [`Program`]. See [`Program::validate`].
+/// Strict programme validation. Merges the structural pass below
+/// with [`crate::kindcheck::kindcheck_program`] into a single
+/// `Vec<ValidationError>`. Called via [`Program::validate`].
+///
+/// Both layers contribute to the same error list; a faulty
+/// programme sees the full work list rather than fixing one layer
+/// and re-running to discover the next. The kind checker is
+/// defensive against arity-mismatched sites (walks `min(args, decl)`)
+/// so an arity error and a kind error in the same expression both
+/// surface in one run.
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
+    let mut errors = collect_structural_errors(p);
+    errors.extend(crate::kindcheck::kindcheck_program(p));
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// The original arity-and-declaration pass: undeclared predicate
+/// references, arity mismatches, duplicate declarations.
+fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // 1. Duplicate predicate declarations. Counts must be collected
@@ -248,11 +269,7 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    errors
 }
 
 /// Walk a statement and collect arity/declaration errors.

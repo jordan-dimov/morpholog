@@ -411,25 +411,8 @@ impl Program {
     /// adding a programme validation pass to every proposal would
     /// muddle that distinction and add overhead. Tests on the
     /// built-in registry call `validate` explicitly.
-    ///
-    /// The pass merges two layers: the structural arity-and-
-    /// declaration check (`validate_program`) and the kind/type
-    /// compatibility check (`kindcheck_program`). Both contribute
-    /// to the same `Vec<ValidationError>` so a faulty programme
-    /// sees the full work list. Kind errors run regardless of
-    /// arity outcomes; the kind checker is defensive against
-    /// arity-mismatched sites (it walks min(args, decl)).
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
-        let mut errors = match validate_program(self) {
-            Ok(()) => Vec::new(),
-            Err(errs) => errs,
-        };
-        errors.extend(crate::kindcheck::kindcheck_program(self));
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        validate_program(self)
     }
 }
 
