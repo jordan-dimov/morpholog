@@ -194,9 +194,26 @@ fn walk_predicate_expr(
         Expr::Claim { predicate, args } => {
             check_claim_args(predicate, args, env, predicate_decls, ctx, errors);
         }
-        Expr::And(items) | Expr::Or(items) => {
+        Expr::And(items) => {
+            // Conjuncts thread bindings forward: each branch sees
+            // refinements made by earlier conjuncts (mirrors
+            // `find_conjunction`'s sequential binding extension).
             for item in items {
                 walk_predicate_expr(item, env, predicate_decls, ctx, errors);
+            }
+        }
+        Expr::Or(items) => {
+            // Disjuncts evaluate against the same base context
+            // (mirrors `find_disjunction`: each branch starts
+            // from the caller's bindings, results concatenate).
+            // Each branch gets a fresh clone of the env so a
+            // refinement in one branch does not conflict with a
+            // refinement in another. Branch-local refinements do
+            // not leak out; a smarter merge (refinements all
+            // branches agree on) is deferred until forced.
+            for item in items {
+                let mut branch = env.clone();
+                walk_predicate_expr(item, &mut branch, predicate_decls, ctx, errors);
             }
         }
         Expr::Not(inner) | Expr::Pre(inner) => {
@@ -1658,6 +1675,93 @@ mod tests {
                 }
             )),
             "expected Le LHS to flag Subject vs Decimal; got {errs:?}"
+        );
+    }
+
+    // ============================================================
+    // Or branch independence
+    // ============================================================
+    //
+    // `Or` evaluates each branch against the same base context
+    // and concatenates the results. The kindcheck mirrors this:
+    // each branch sees the env at the call site; refinements
+    // inside one branch are not visible to other branches and do
+    // not leak out of the `Or`.
+
+    #[test]
+    fn or_branches_with_disjoint_kind_constraints_do_not_conflict() {
+        // `A(x) or B(x)` with A:Decimal, B:Subject - each branch
+        // observes x at its own kind independently. Conjunctive
+        // logic would flag a conflict; disjunctive logic must not.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Subject)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "or_disjoint".to_string(),
+            version: 1,
+            body: or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "Or branches must check independently; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn or_branch_refinements_do_not_leak_after_or() {
+        // `(A(x) or B(x)) and C(x)` - A refines x to Decimal in
+        // one branch, B to Subject in the other; the trailing
+        // `C(x)` (Subject) must NOT conflict because Or did not
+        // export either branch's refinement. (Conservative v0:
+        // no per-variable intersection across branches.)
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("A", &[("v", PredicateArgKind::Decimal)]),
+            pdecl("B", &[("v", PredicateArgKind::Subject)]),
+            pdecl("C", &[("v", PredicateArgKind::Subject)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "or_no_leak".to_string(),
+            version: 1,
+            body: and(vec![
+                or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+                claim("C", vec![var("x")]),
+            ]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "Or branch refinements must not leak; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn or_still_walks_branches_for_in_branch_kind_errors() {
+        // A literal-vs-slot mismatch inside a branch must still
+        // surface even though branches are independent of each
+        // other. Pin the regression: independence is per-variable,
+        // not per-error-emission.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("A", &[("v", PredicateArgKind::Subject)])];
+        p.invariants = vec![Invariant {
+            name: "or_inner_error".to_string(),
+            version: 1,
+            body: or(vec![claim("A", vec![dec("100")])]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::PredicateArgKindMismatch {
+                    expected: PredicateArgKind::Subject,
+                    actual: PredicateArgKind::Decimal,
+                    ..
+                }
+            )),
+            "in-branch literal mismatch must still surface; got {errs:?}"
         );
     }
 
