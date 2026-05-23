@@ -55,8 +55,9 @@ pub enum EvalError {
     /// doctrine enforceable rather than convention.
     UnboundActor,
     /// `Expr::Pre` was reached in a context with no pre-state in
-    /// scope: derived-claim bodies, transformation `require`s,
-    /// standalone evaluator calls, or the inner of nested `pre`.
+    /// scope: derived-claim bodies, transformation `require`s, the
+    /// inner of nested `pre`, or an evaluator call whose
+    /// `EvalContext` was constructed with `pre_state: None`.
     /// Phrased about evaluation context rather than AST position so
     /// future contexts that carry both states can share the
     /// primitive without IR change.
@@ -82,7 +83,7 @@ impl std::fmt::Display for EvalError {
             ),
             EvalError::PreStateUnavailable => write!(
                 f,
-                "Expr::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, a standalone call, or the inner of nested `pre`)"
+                "Expr::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
             ),
         }
     }
@@ -100,7 +101,7 @@ pub(crate) struct EvalContext<'a> {
     /// The state predicate lookups resolve against. Outside any
     /// `Expr::Pre` this is the candidate (post) state during
     /// proposal-path invariant evaluation, or the only state in
-    /// derived-claim / standalone contexts. Inside `pre(...)` this
+    /// derived-claim or other one-state contexts. Inside `pre(...)` this
     /// is the pre-transition state.
     pub(crate) state: &'a State,
     /// Pre-transition state when both states are in scope; `None`
@@ -109,7 +110,7 @@ pub(crate) struct EvalContext<'a> {
     pub(crate) pre_state: Option<&'a State>,
     pub(crate) bindings: &'a Bindings,
     /// The proposing transition's actor; `None` in invariant /
-    /// derived-claim / standalone contexts. `Term::Actor` reached
+    /// derived-claim or other one-state contexts. `Term::Actor` reached
     /// with `actor: None` surfaces `UnboundActor`.
     pub(crate) actor: Option<&'a EvalValue>,
 }

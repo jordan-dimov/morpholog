@@ -65,10 +65,11 @@ pub enum Expr {
     /// invariant body is post; `Pre` flips the lookup for one subtree
     /// so a single invariant can relate pre and post values.
     ///
-    /// Raises [`crate::EvalError::PreStateUnavailable`] in contexts
-    /// without both states in scope (derived-claim bodies,
-    /// transformation `require`s, standalone evaluator calls, the
-    /// inner of a nested `Pre`).
+    /// Raises [`crate::EvalError::PreStateUnavailable`] when the
+    /// evaluation context has no pre-state in scope: derived-claim
+    /// bodies, transformation `require`s, evaluator calls whose
+    /// `EvalContext` was constructed with `pre_state: None`, and the
+    /// inner of a nested `Pre`.
     ///
     /// Quantifier composition is non-commutative: `pre(forall x in
     /// Squares: ...)` resolves both the iteration domain and the body

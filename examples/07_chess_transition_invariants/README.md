@@ -31,9 +31,9 @@ You cannot express these as conditions on one state. The information needed to c
 A deliberately small slice of chess:
 
 - A board, represented as a set of `PieceAt(square, piece_type, color)` claims.
-- Three counters that track game-level facts: `MoveCount` (how many moves have been played), `PieceCount` (how many pieces are on the board), and `CurrentTurn` (whose move it is).
-- An initial-setup transformation that places the 32 standard opening pieces.
-- Two move transformations: a quiet move (no capture) and a capturing move.
+- Counters that track game-level claims: `MoveCount` (how many moves have been played), `PieceCount` (how many pieces are on the board), and `CurrentTurn` (whose move it is).
+- An initial-setup transformation that places the standard opening pieces.
+- A quiet move (no capture) and a capturing move.
 
 The example does not model castling, en passant, promotion, check, checkmate, stalemate, the threefold-repetition rule, or any piece-specific movement rules. It is not a chess engine; it does not stop you from moving a bishop sideways. Its purpose is to demonstrate transition invariants, and that purpose is served by the simpler subset.
 
@@ -65,7 +65,7 @@ Both are familiar from chess. Neither needs `pre(...)`.
 
 ### Rules about transitions
 
-Three rules that require comparing the board before a move with the board after:
+Rules that require comparing the board before a move with the board after:
 
 | Invariant | What it says |
 | --- | --- |
@@ -91,7 +91,7 @@ The transition invariants check the same properties from the outside. If a futur
 
 `pre(...)` looks up something in the previous state. What happens on the very first move, when there is no previous state to look in?
 
-Morpholog handles this by making any rule that depends on a missing past fact vacuously true. Before `start_game()` runs, there is no `MoveCount` claim at all, so `pre(MoveCount(m))` matches nothing, and `move_count_strictly_increases` cannot fail. After `start_game()` admits `MoveCount(0)`, the next move has both a `pre` value and a current value, and the rule constrains them.
+Morpholog handles this by making any rule that depends on a missing past claim vacuously true. Before `start_game()` runs, there is no `MoveCount` claim at all, so `pre(MoveCount(m))` matches nothing, and `move_count_strictly_increases` cannot fail. After `start_game()` admits `MoveCount(0)`, the next move has both a `pre` value and a current value, and the rule constrains them.
 
 If you ever need to distinguish "this is the very first time" from "this is a normal update", you write the two cases as separate branches of an `or`.
 
