@@ -20,6 +20,7 @@ use std::path::Path;
 
 pub(crate) mod check;
 pub(crate) mod inspect;
+pub(crate) mod outbox;
 pub(crate) mod parse;
 pub(crate) mod propose;
 pub(crate) mod run;

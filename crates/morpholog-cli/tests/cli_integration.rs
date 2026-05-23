@@ -507,3 +507,225 @@ async fn run_with_trace_emits_structured_trace_alongside_outcome() {
     );
     assert_eq!(json["result"]["status"], "committed");
 }
+
+// ============================================================
+// `morpholog outbox` subcommands (claim / complete / release)
+//
+// These exercise the lease protocol end-to-end against a real
+// outbox row created by `propose post_simple_entry`. Each test
+// resets the database and admits one journal entry so that a
+// JournalEntryPosted intent lands in the outbox.
+// ============================================================
+
+/// Seed: propose one balanced entry so the outbox has a row to claim.
+/// Returns the intent_type that the worked example emits.
+fn seed_one_outbox_row() -> &'static str {
+    let _tid = post_balanced_entry("seed_entry", 1_000);
+    "JournalEntryPosted"
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_claim_returns_null_when_outbox_is_empty() {
+    reset_db().await;
+    let (status, stdout, stderr) =
+        run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]);
+    assert!(
+        status.success(),
+        "empty-outbox claim must exit 0; stderr: {stderr}"
+    );
+    let json: Value = serde_json::from_str(&stdout).expect("claim output is JSON");
+    assert!(
+        json["row"].is_null(),
+        "empty outbox should return {{\"row\": null}}; got: {json}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_claim_claims_a_pending_row_and_reports_worker_id() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let (status, stdout, stderr) = run_cli(&["outbox", "claim", "--intent-type", intent_type]);
+    assert!(status.success(), "claim should succeed; stderr: {stderr}");
+    let json: Value = serde_json::from_str(&stdout).expect("claim output is JSON");
+    let row = &json["row"];
+    assert!(!row.is_null(), "outbox had a row; claim should not be null");
+    assert_eq!(row["intent_type"], intent_type);
+    assert_eq!(row["status"], "in_progress");
+    assert!(
+        row["locked_by"].is_string(),
+        "locked_by should carry the generated worker_id"
+    );
+    assert!(
+        row["lock_expires_at"].is_string(),
+        "lock_expires_at should be set on a claimed row"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_claim_with_supplied_worker_id_uses_that_id() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let (status, stdout, _stderr) = run_cli(&[
+        "outbox",
+        "claim",
+        "--intent-type",
+        intent_type,
+        "--worker-id",
+        "my-python-worker-7",
+    ]);
+    assert!(status.success());
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["row"]["locked_by"], "my-python-worker-7");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_delivered_marks_row_delivered() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(
+        status.success(),
+        "delivered complete should exit 0; stderr: {stderr}"
+    );
+    let json: Value = serde_json::from_str(&stdout).expect("complete output is JSON");
+    assert_eq!(json, serde_json::json!("Applied"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_transient_reschedules_row_to_pending() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, _stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "transient",
+        "--retry-after-seconds",
+        "60",
+    ]);
+    assert!(
+        status.success(),
+        "transient complete should exit 0; stderr: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_transient_requires_retry_after_seconds() {
+    reset_db().await;
+    let (status, _stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &uuid::Uuid::now_v7().to_string(),
+        "--worker-id",
+        "any",
+        "--outcome",
+        "transient",
+    ]);
+    assert!(
+        !status.success(),
+        "missing --retry-after-seconds must error"
+    );
+    assert!(
+        stderr.contains("retry-after-seconds"),
+        "error should name the missing flag; got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_failed_records_reason() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, _stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "failed",
+        "--reason",
+        "downstream returned 4xx",
+    ]);
+    assert!(
+        status.success(),
+        "failed complete should exit 0; stderr: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_complete_with_wrong_worker_id_exits_one_with_lease_lost() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+
+    let (status, stdout, _stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        "not-the-lease-holder",
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(!status.success(), "wrong worker_id must exit non-zero");
+    let json: Value = serde_json::from_str(&stdout).expect("LeaseLost output is JSON");
+    assert_eq!(json, serde_json::json!("LeaseLost"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbox_release_puts_a_claimed_row_back_to_pending() {
+    reset_db().await;
+    let intent_type = seed_one_outbox_row();
+    let claim_out: Value =
+        serde_json::from_str(&run_cli(&["outbox", "claim", "--intent-type", intent_type]).1)
+            .unwrap();
+    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
+    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
+
+    let (status, stdout, stderr) =
+        run_cli(&["outbox", "release", &intent_id, "--worker-id", &worker_id]);
+    assert!(status.success(), "release should exit 0; stderr: {stderr}");
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json, serde_json::json!("Applied"));
+
+    // And the row is claimable again.
+    let (status, stdout, _stderr) = run_cli(&["outbox", "claim", "--intent-type", intent_type]);
+    assert!(status.success());
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        !json["row"].is_null(),
+        "released row should be reclaimable; got: {json}"
+    );
+}

@@ -90,6 +90,119 @@ enum Command {
     /// the supplied actor and JSON args. Same JSON output and same
     /// exit-code semantics as `propose`.
     Run(RunArgs),
+
+    /// Drive the outbox state machine from outside Rust. Lets a
+    /// shell or Python deliverer participate in the lease protocol
+    /// (`claim` to acquire a row, `complete` to resolve it,
+    /// `release` to abandon it back to pending) without writing a
+    /// `Deliverer` trait impl.
+    Outbox {
+        #[command(subcommand)]
+        what: OutboxCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum OutboxCmd {
+    /// Claim the next pending row of the given intent type, leasing
+    /// it for `--lease-seconds`. Output is `{"row": <OutboxRow>}` if
+    /// claimed, `{"row": null}` if none are available. Exit 0 in
+    /// both cases - empty outbox is normal, not an error.
+    Claim(OutboxClaimArgs),
+
+    /// Resolve a leased row: `delivered` marks it done, `transient`
+    /// schedules another attempt after `--retry-after-seconds`,
+    /// `failed` marks it failed (with optional `--reason`). Output is
+    /// the `OutboxUpdate` JSON. Exit 1 on `LeaseLost`.
+    Complete(OutboxCompleteArgs),
+
+    /// Abandon a leased row, returning it to `pending` for another
+    /// worker to claim. For graceful shutdown of an external
+    /// deliverer that holds claims it can no longer service.
+    Release(OutboxReleaseArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct OutboxClaimArgs {
+    /// Intent type to claim (e.g. `ClaimPaymentRequested`). Matches
+    /// the predicate-style name a transformation emits via `emit X(...)`.
+    #[arg(long)]
+    pub(crate) intent_type: String,
+
+    /// Lease duration in seconds. The claimed row's `lock_expires_at`
+    /// is set to `now() + this`. If the caller does not call
+    /// `complete` or `release` within the window, the row becomes
+    /// reclaimable by another worker.
+    #[arg(long, default_value_t = 30)]
+    pub(crate) lease_seconds: u64,
+
+    /// Worker identity. Defaults to a fresh UUIDv7 if not supplied;
+    /// the generated id appears in the returned row's `locked_by`
+    /// field so the caller can pass it back to `complete` / `release`.
+    #[arg(long)]
+    pub(crate) worker_id: Option<String>,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct OutboxCompleteArgs {
+    /// Intent id of the leased row to resolve.
+    pub(crate) intent_id: uuid::Uuid,
+
+    /// Worker identity that holds the lease (returned by `claim` in
+    /// the row's `locked_by` field).
+    #[arg(long)]
+    pub(crate) worker_id: String,
+
+    /// Outcome to record. `delivered` marks the row done; `transient`
+    /// schedules another attempt (requires `--retry-after-seconds`);
+    /// `failed` marks the row failed (compensation, if configured,
+    /// is the Rust worker's responsibility; the CLI does not invoke it).
+    #[arg(long, value_enum)]
+    pub(crate) outcome: OutboxCompleteOutcome,
+
+    /// Seconds until the next attempt for `--outcome transient`.
+    /// Internally converted to `now() + N seconds` for the row's
+    /// `next_attempt_at`. Required for `transient`; an error for
+    /// other outcomes.
+    #[arg(long)]
+    pub(crate) retry_after_seconds: Option<u64>,
+
+    /// Optional human-readable narrative. Recorded as `failure_reason`
+    /// for `--outcome failed`. For `--outcome transient` it is
+    /// silently accepted but not yet persisted (the helper records
+    /// the schedule, not the per-attempt reason - a future enhancement
+    /// could carry it).
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum OutboxCompleteOutcome {
+    Delivered,
+    Transient,
+    Failed,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct OutboxReleaseArgs {
+    /// Intent id of the leased row to release.
+    pub(crate) intent_id: uuid::Uuid,
+
+    /// Worker identity that holds the lease.
+    #[arg(long)]
+    pub(crate) worker_id: String,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -294,6 +407,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Parse(args) => commands::parse::run(args),
         Command::Check(args) => commands::check::run(args),
         Command::Run(args) => commands::run::run(args).await,
+        Command::Outbox { what } => match what {
+            OutboxCmd::Claim(args) => commands::outbox::claim(args).await,
+            OutboxCmd::Complete(args) => commands::outbox::complete(args).await,
+            OutboxCmd::Release(args) => commands::outbox::release(args).await,
+        },
     }
 }
 
