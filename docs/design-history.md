@@ -553,28 +553,20 @@ Transition invariant `headroom_consumed_by_payment`: per-policy delta conservati
 
 ### Enriched `morpholog check`: kind/type compatibility (Layer 1 of four)
 
-**Forced by:** the input/output boundary work (parser arc and the compute-zone CLI surface) shifted the leverage. Once a non-Rust integrator can hand Morpholog a `.morph` file and a JSON args blob and get a deterministic outcome back, the next investment is making `.morph` programmes trustworthy to *author* before they reach `propose`. The existing `check` was arity-and-declaration only; the canonical authoring mistakes (decimal literal in a Subject slot, `<=` against a date variable, arithmetic on a subject literal, `Eq` between incompatible kinds, a variable inferred at one kind and used at another) only surfaced at runtime as `EvalError::TypeMismatch`. Authoring-time errors with the same diagnostic clarity were the next forcing pressure.
+**Forced by:** the input/output boundary work shifted the leverage. With non-Rust integrators able to hand Morpholog a `.morph` file and get a deterministic outcome back, authoring trustworthiness became the bottleneck. Decimal-in-Subject-slot, `<=` against a date, arithmetic on a subject literal, `Eq` between incompatible kinds - all only surfaced at runtime as `EvalError::TypeMismatch`.
 
-**Landed:** `morpholog_core::kindcheck` module, a separate pass that `Program::validate` now merges with `validate_program`'s output into a single `Vec<ValidationError>`. Four new variants - `PredicateArgKindMismatch`, `OperandKindMismatch`, `VariableKindConflict`, `ExpectedValueExpression` - join the existing arity errors with one shared shape and one shared CLI emission path. The CLI's `check` subcommand needed no edit; calling `Program::validate` now runs both layers automatically.
+**Landed:** `morpholog_core::kindcheck` module; `validate_program` now merges its output with the structural pass into a single `Vec<ValidationError>`. Four new variants (`PredicateArgKindMismatch`, `OperandKindMismatch`, `VariableKindConflict`, `ExpectedValueExpression`) share the existing CLI emission path. Inference: `InferredKind { UnknownOrAny, Known(PredicateArgKind) }` with refine-on-observation. `Any` stays unconstrained (a variable seen first through `Any` refines on its next concrete use); the alternative ("`Any` everywhere lets later uses slip through") was rejected for losing the most valuable refinement pattern.
 
-The walker shape mirrors the runtime quartet doctrine deliberately: `Require` runs against a cloned env so refinements observed inside the gate do not leak forward (matching the runtime "yes/no gate that returns the original binding context unchanged" semantics); `BindOne` extends the live env; `Let` infers the value expression's kind and binds the name at that kind; `LetNewSubject` pins to `Subject`; `For`'s body runs under a scoped env. Without this fidelity the kind checker would pass programmes the runtime rejects, defeating the point. A dedicated regression test (`require_does_not_export_bindings_to_subsequent_statements`) pins the most subtle case.
-
-Inference uses `InferredKind { UnknownOrAny, Known(PredicateArgKind) }`. `UnknownOrAny` is "either declared `Any` or never observed yet"; first specific observation refines a variable to that specific kind. `Any` is an honest declaration-side escape hatch but is *not* a kind-eraser for variables - a variable seen only through an `Any` slot stays open and can still refine at its next concrete use. The alternative ("Any everywhere lets every later use slip through") was considered and rejected; it would have left the most valuable refinement pattern (`bind` from an `Any` claim, then `<=` against decimal) unchecked.
-
-`Sum` does body-first inference: walk the body in a scoped env so the iteration variable's claim-slot observations refine it locally, then check the value term against the refined env (it must resolve to Decimal). The scoping prevents `let x = sum(amount | P(_, amount))` from leaking `amount`'s body-local Decimal kind into the outer env. `ValueOf` reads the wildcard slot's declared kind as its result kind and (when a default is supplied) requires the default's kind to agree.
-
-Comparators and arithmetic enforce fixed expected kinds (`<=` Decimal, `on_or_before` Date, `+`/`-` Decimal). `Eq` and `Neq` are strict: two known-distinct kinds always flag, never silently coerce.
-
-Diagnostics carry no source spans for v0, matching the existing `ValidationError` shape. The IR drops parser spans on lowering; threading them through is a separate design conversation rather than a same-PR detour.
+The walker mirrors the runtime quartet: `Require` against a cloned env (no export), `BindOne`/`Let` against the live env. `Sum`, `Forall`, `Exists` shadow their binding via `KindEnv::with_shadow` so the loop-local name cannot collide with an outer variable of the same name; refinements to *other* variables in the body leak through normally. Without that fidelity the kind checker would either reject correct shadowing or pass programmes the runtime rejects.
 
 **Considered and rejected:**
 
-- *Symmetric `ExpectedPredicateExpression` for the value-shaped-at-predicate-position case.* The existing `ExpectedValueExpression` is one-direction; adding the mirror would need a new variant. Deferred without a forcing example - the runtime still catches it as `NotPredicate`, and Layer 2 (unbound-variable detection) is the natural home if it becomes routine.
-- *Sum/ValueOf landed in the same commit as comparators.* The two were close enough to merge but the binding-flow story for Sum is its own slice; separating them kept each commit reviewable.
-- *A `morpholog check --strict` flag for hint-grade output (unused declarations, sum-binding-not-in-body, fuzzy "did you mean" on UndeclaredPredicate).* That is Layer 4; out of scope here. Layer 1's job is to catch what `EvalError::TypeMismatch` would catch at runtime, no more.
+- A symmetric `ExpectedPredicateExpression` variant for value-shaped-at-predicate-position. Deferred without a forcing example; the runtime still catches it as `NotPredicate`, and Layer 2 (unbound-variable detection) is the natural home.
+- Bundling Sum/ValueOf with comparators. Sum's binding-flow story is its own slice.
+- A `--strict` flag for hint-grade output (unused declarations, sum-binding-not-in-body, fuzzy suggestions). That is Layer 4; Layer 1's job is the runtime-error mirror, no more.
 
 **What stays out:**
 
-- Source spans on `ValidationError`. Their absence is honest about the IR-lowering gap; pretending otherwise would inflate the diagnostic shape without making it more useful.
-- IntentDecl kind-checking. Intent emissions are still stringly-typed in the outbox; the same authoring-mistake leverage exists, but the design (separate vocabulary from claims? same?) deserves its own decision.
-- Inferring element-kind for `Collection`-typed variables in `For` bodies. The element-kind/source-element correlation needs a worked example - the current `In` check pins the source to `Collection` but does not yet propagate element kinds to body bindings.
+- Source spans on `ValidationError`. The IR drops parser spans on lowering; threading them through is its own design conversation.
+- `IntentDecl` kind-checking. Intents are still stringly-typed in the outbox.
+- Element-kind correlation for `Collection`-typed variables. The current `In` check pins the source side to `Collection` but does not yet propagate element kinds to body bindings.

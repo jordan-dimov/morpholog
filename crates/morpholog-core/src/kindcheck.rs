@@ -1,26 +1,17 @@
-//! Layer 1 of enriched `morpholog check`: kind/type compatibility.
+//! Kind/type compatibility check. Walks every expression in every
+//! invariant, transformation, and derived claim; emits the kind
+//! errors the runtime would otherwise raise as
+//! `EvalError::TypeMismatch`. Predicate declarations carry the
+//! expected kind per arg position; comparators, arithmetic, and
+//! aggregators have fixed expected kinds; variables are inferred
+//! and refined.
 //!
-//! Walks every expression in every invariant, transformation, and
-//! derived claim, checking that each value flows into a slot of a
-//! compatible kind. Predicate declarations carry the expected kind
-//! per arg position; comparators, arithmetic, and aggregators have
-//! fixed expected kinds; variables are inferred-and-refined.
+//! `Any` is unconstrained, not a kind-eraser: a variable seen
+//! first through an `Any` slot stays open and refines to a
+//! specific kind on its next concrete use.
 //!
-//! The kernel raises these problems at runtime as
-//! `EvalError::TypeMismatch`; this layer surfaces them at
-//! authoring time so a faulty `.morph` file fails `morpholog check`
-//! before any state is touched.
-//!
-//! Diagnostics ship without source spans for v0. The IR drops
-//! parser spans on lowering today; threading spans through the IR
-//! is its own design conversation. The existing `ValidationError`
-//! shape (no spans, just a `ValidationContext`) is matched here.
-//!
-//! `Any` is treated as **unconstrained**, not as "compatible with
-//! everything forever once attached to a variable." First use in an
-//! `Any` slot leaves a variable `UnknownOrAny`; later use in a
-//! specific slot refines it to that specific kind. This keeps `Any`
-//! as an honest escape hatch without making it a kind-eraser.
+//! Diagnostics ship without source spans in v0; the IR drops
+//! parser spans on lowering.
 
 use std::collections::HashMap;
 
@@ -146,11 +137,12 @@ impl KindEnv {
     }
 }
 
-/// Run the kind checker over the whole programme. Returns the full
-/// list of detected mismatches; the caller (today
-/// [`crate::validate::validate_program`] in a later commit) merges
-/// these into the existing arity-and-declaration error list. An
-/// empty `Vec` means the programme is kind-consistent.
+/// Run the kind checker over the whole programme. Returns the
+/// full list of detected mismatches; an empty `Vec` means the
+/// programme is kind-consistent. Traversal order matches the
+/// structural pass (invariants, then transformations, then
+/// derived claims) so merged diagnostics come out in a
+/// predictable shape.
 pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let predicate_decls: HashMap<&str, &PredicateDecl> = program
@@ -167,6 +159,22 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
         walk_predicate_expr(&inv.body, &mut env, &predicate_decls, &ctx, &mut errors);
     }
 
+    for transformation in &program.transformations {
+        let ctx = ValidationContext::Transformation {
+            name: transformation.name.clone(),
+        };
+        let mut env = KindEnv::new();
+        // Parameters arrive untyped; observe each at UnknownOrAny
+        // so the statement walk can refine them on use. The first
+        // observation against UnknownOrAny never conflicts.
+        for param in &transformation.parameters {
+            let _ = env.observe(param, InferredKind::UnknownOrAny);
+        }
+        for stmt in &transformation.body {
+            walk_stmt(stmt, &mut env, &predicate_decls, &ctx, &mut errors);
+        }
+    }
+
     for derived in &program.derived_claims {
         let mut env = KindEnv::new();
         let ctx = ValidationContext::DerivedClaim {
@@ -179,32 +187,11 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
             &ctx,
             &mut errors,
         );
-        // Each `value <name> = <expr>` is value-producing.
-        // Infer the expression's kind under the derived-claim's
-        // env (built up by walking `domain` above). The result
-        // could be checked against the derived-claim's declared
-        // value-position kind once that wiring exists; for now
-        // we surface in-expression kind errors (operand
-        // mismatches, variable conflicts, etc.).
+        // Each `value <name> = <expr>` is value-producing; infer
+        // under the env built by `domain`, surfacing in-expression
+        // kind errors (operand mismatches, variable conflicts).
         for value in &derived.values {
             infer_value_expr(&value.expr, &mut env, &predicate_decls, &ctx, &mut errors);
-        }
-    }
-
-    for transformation in &program.transformations {
-        let ctx = ValidationContext::Transformation {
-            name: transformation.name.clone(),
-        };
-        let mut env = KindEnv::new();
-        // Transformation parameters arrive untyped from the caller;
-        // each gets observed at `UnknownOrAny` so subsequent uses
-        // refine. First-observation against `UnknownOrAny` never
-        // conflicts, so the result is discarded.
-        for param in &transformation.parameters {
-            let _ = env.observe(param, InferredKind::UnknownOrAny);
-        }
-        for stmt in &transformation.body {
-            walk_stmt(stmt, &mut env, &predicate_decls, &ctx, &mut errors);
         }
     }
 
@@ -213,11 +200,10 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
 
 /// Walk a predicate-shaped expression and emit any claim-arg or
 /// variable-conflict errors. Threads bindings through `env` for
-/// composition (`And`, `Or`, `Implies`, `Pre`, etc.) and across
-/// the iteration domain of `Forall`. Does not currently descend
-/// into value-shaped subtrees (`Add`, `Sub`, `Sum`, `ValueOf`,
-/// `Term`) - that arrives with value-expression inference in a
-/// following commit.
+/// composition (`And`, `Or`, `Implies`, `Pre`, etc.); `Forall`,
+/// `Exists`, and `Sum` shadow their binding via `with_shadow`.
+/// Comparator and arithmetic operands delegate to
+/// `check_operand_kind`, which infers via `infer_value_expr`.
 fn walk_predicate_expr(
     expr: &Expr,
     env: &mut KindEnv,
@@ -340,22 +326,18 @@ fn walk_predicate_expr(
 /// according to the runtime quartet doctrine. The semantics must
 /// match what `propose.rs` does at runtime:
 ///
-/// - `Require(expr)` - checks against the current env but does
-///   **not** export new bindings to subsequent statements. Mirrors
-///   `Stmt::Require`'s "yes/no gate" role.
-/// - `BindOne(expr)` - unique-lookup binding statement. Extends
-///   the env with any new variables observed in the expression.
-/// - `Let { name, value }` - infer the value expression's kind
-///   (commit 4) and observe `name` at that kind. For commit 3
-///   `name` is observed as `UnknownOrAny`; commit 4 refines.
-/// - `For { binding, collection, body }` - the body runs against
-///   a scoped env (bindings inside `body` do not leak). The
-///   collection is value-shaped; full check arrives in commit 4.
-/// - `Assert(claim)` / `Retract { predicate, args }` - check
-///   args against declared kinds, same as `Expr::Claim`. Assert
-///   does not export bindings (statement-level write only).
-/// - `Emit` - no checks today; awaits `IntentDecl`.
-/// - `LetNewSubject { name }` - observe `name` at `Subject` kind.
+/// - `Require` checks against a cloned env: refinements observed
+///   inside do NOT export to later statements (mirrors the runtime
+///   yes/no gate).
+/// - `BindOne` walks against the live env; refinements flow forward.
+/// - `Let { name, value }` infers `value`'s kind and observes
+///   `name` at that kind.
+/// - `LetNewSubject { name }` observes `name` at `Subject`.
+/// - `Assert` and `Retract` check args against declared kinds,
+///   same as `Expr::Claim`. Assert does not export bindings.
+/// - `For { binding, body }` runs the body under a scoped env
+///   clone; loop-introduced bindings do not leak.
+/// - `Emit` is a no-op until `IntentDecl` lands.
 fn walk_stmt(
     stmt: &Stmt,
     env: &mut KindEnv,
@@ -414,14 +396,12 @@ fn walk_stmt(
             collection: _,
             body,
         } => {
-            // The body runs against a scoped env: bindings inside
-            // the loop do not leak out, matching runtime For
-            // semantics. The collection expression is value-shaped
-            // and gets proper inference in commit 4.
+            // Body runs under a scoped env clone so loop-introduced
+            // bindings do not leak across iterations or beyond the
+            // loop. The iteration variable's element kind is
+            // unknown without collection-element typing; observed
+            // at UnknownOrAny so body uses refine on demand.
             let mut scoped = env.clone();
-            // The iteration variable's element kind is unknown
-            // without collection-element typing; observe at
-            // UnknownOrAny so body uses refine on demand.
             let _ = scoped.observe(binding, InferredKind::UnknownOrAny);
             for inner in body {
                 walk_stmt(inner, &mut scoped, predicate_decls, ctx, errors);
@@ -567,12 +547,13 @@ fn term_var_name(term: &Term) -> Option<&str> {
     }
 }
 
-/// Infer the kind of a value-producing expression. Variables are
-/// looked up in `env`; literals carry their kind directly; `Add`/
-/// `Sub` recursively check Decimal operands; `Sum`/`ValueOf` are
-/// stubbed at this commit (commit 5 lands body-first inference)
-/// and predicate-shaped expressions surface as
-/// `ExpectedValueExpression`.
+/// Infer the kind of a value-producing expression. Variables look
+/// up via `env`; literals carry their kind directly; `Add`/`Sub`
+/// recursively check Decimal operands and return Decimal; `Sum`
+/// returns Decimal after a body-first walk under a shadowed
+/// binding; `ValueOf` returns the declared kind of its wildcard
+/// slot. A predicate-shaped expression at a value position
+/// surfaces as `ExpectedValueExpression`.
 fn infer_value_expr(
     expr: &Expr,
     env: &mut KindEnv,
@@ -852,9 +833,8 @@ fn term_kind(term: &Term) -> InferredKind {
     }
 }
 
-/// Helper used by statement-flow observation paths (`LetNewSubject`,
-/// future `Let` and `For` paths) that wrap `KindEnv::observe`'s
-/// conflict tuple in a `VariableKindConflict` diagnostic.
+/// Observe `name` at `kind`; on a refinement conflict, push a
+/// `VariableKindConflict` carrying both kinds.
 fn observe_or_report(
     env: &mut KindEnv,
     name: &str,
