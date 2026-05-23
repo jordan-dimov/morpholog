@@ -399,11 +399,6 @@ impl Program {
     /// see every missing or mismatched site at once.
     ///
     /// Out of scope for v0:
-    /// - Argument-kind checking against [`PredicateArgKind`]. The
-    ///   metadata is recorded for future use (docs, CLI inspection,
-    ///   future parser diagnostics, eventual kind validation that
-    ///   would require tracking variable kinds through binding
-    ///   contexts).
     /// - Intent arity validation. Intents are outbox vocabulary,
     ///   not claim vocabulary; an `IntentDecl` is conceivable but
     ///   not pursued until a worked example needs it.
@@ -416,8 +411,25 @@ impl Program {
     /// adding a programme validation pass to every proposal would
     /// muddle that distinction and add overhead. Tests on the
     /// built-in registry call `validate` explicitly.
+    ///
+    /// The pass merges two layers: the structural arity-and-
+    /// declaration check (`validate_program`) and the kind/type
+    /// compatibility check (`kindcheck_program`). Both contribute
+    /// to the same `Vec<ValidationError>` so a faulty programme
+    /// sees the full work list. Kind errors run regardless of
+    /// arity outcomes; the kind checker is defensive against
+    /// arity-mismatched sites (it walks min(args, decl)).
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
-        validate_program(self)
+        let mut errors = match validate_program(self) {
+            Ok(()) => Vec::new(),
+            Err(errs) => errs,
+        };
+        errors.extend(crate::kindcheck::kindcheck_program(self));
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 

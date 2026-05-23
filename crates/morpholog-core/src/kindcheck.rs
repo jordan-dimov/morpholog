@@ -22,12 +22,6 @@
 //! specific slot refines it to that specific kind. This keeps `Any`
 //! as an honest escape hatch without making it a kind-eraser.
 
-// Layer 1 lands in stages: scaffolding + predicate-claim walk +
-// value-expression inference + comparators/arithmetic in commits
-// 2-4; Sum + ValueOf body-first inference in commit 5; wiring
-// into `validate_program` in commit 6.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use crate::ir::{Expr, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
@@ -51,19 +45,6 @@ pub(crate) enum InferredKind {
 }
 
 impl InferredKind {
-    /// True when two inferred kinds can co-exist on the same value
-    /// slot. The rules:
-    ///
-    /// - `UnknownOrAny` is compatible with everything.
-    /// - Two `Known` kinds are compatible only if they are equal, or
-    ///   one of them is `Any` (the declaration-side escape hatch).
-    pub(crate) fn compatible(self, other: InferredKind) -> bool {
-        match (self, other) {
-            (InferredKind::UnknownOrAny, _) | (_, InferredKind::UnknownOrAny) => true,
-            (InferredKind::Known(a), InferredKind::Known(b)) => kinds_compatible(a, b),
-        }
-    }
-
     /// Combine an existing inferred kind with a new observation.
     /// Returns `Ok(refined)` when compatible; `Err((prev, new))`
     /// when the two specific kinds genuinely conflict. The refined
@@ -881,42 +862,6 @@ fn observe_or_report(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn unknown_is_compatible_with_everything() {
-        assert!(InferredKind::UnknownOrAny.compatible(InferredKind::UnknownOrAny));
-        assert!(
-            InferredKind::UnknownOrAny.compatible(InferredKind::Known(PredicateArgKind::Decimal))
-        );
-        assert!(
-            InferredKind::Known(PredicateArgKind::Subject).compatible(InferredKind::UnknownOrAny)
-        );
-    }
-
-    #[test]
-    fn same_known_kinds_are_compatible() {
-        let dec = InferredKind::Known(PredicateArgKind::Decimal);
-        assert!(dec.compatible(dec));
-    }
-
-    #[test]
-    fn distinct_known_kinds_conflict() {
-        let dec = InferredKind::Known(PredicateArgKind::Decimal);
-        let sub = InferredKind::Known(PredicateArgKind::Subject);
-        assert!(!dec.compatible(sub));
-        assert!(!sub.compatible(dec));
-    }
-
-    #[test]
-    fn any_is_compatible_with_anything_declared() {
-        let any = InferredKind::Known(PredicateArgKind::Any);
-        let dec = InferredKind::Known(PredicateArgKind::Decimal);
-        let sub = InferredKind::Known(PredicateArgKind::Subject);
-        assert!(any.compatible(dec));
-        assert!(any.compatible(sub));
-        assert!(dec.compatible(any));
-        assert!(sub.compatible(any));
-    }
 
     #[test]
     fn refine_unknown_to_known_yields_known() {
