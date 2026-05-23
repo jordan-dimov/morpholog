@@ -858,3 +858,96 @@ async fn inspect_outbox_intent_type_filter_narrows_results() {
     let rows: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 2);
 }
+
+// ============================================================
+// End-to-end compute loop
+//
+// The product test: prove that a non-Rust consumer can drive the
+// whole input/commit/outbox loop using only the `morpholog` binary.
+// This pins the contract the docs describe as "round-trip compute".
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_loop_end_to_end_via_cli_binary_only() {
+    reset_db().await;
+
+    // 1. INPUT BOUNDARY: a Python-shaped consumer writes its own
+    //    `.morph` file and invokes `morpholog run` to admit a
+    //    transformation against PostgreSQL. The same shape would
+    //    work with `morpholog propose` for built-in programmes.
+    let path = write_temp_ledger_morph();
+    let args_json = r#"[
+        {"type":"subject","value":"e2e_entry"},
+        {"type":"subject","value":"2026-05-01"},
+        {"type":"subject","value":"q2_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"500"}
+    ]"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "python_worker",
+        "--args",
+        args_json,
+    ]);
+    assert!(status.success(), "run should succeed; stderr: {stderr}");
+    let receipt: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(receipt["status"], "committed");
+
+    // 2. OUTPUT BOUNDARY: the consumer claims the resulting outbox
+    //    row. The intent type matches what the transformation emits.
+    let (status, stdout, _stderr) =
+        run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]);
+    assert!(status.success());
+    let claim: Value = serde_json::from_str(&stdout).unwrap();
+    let row = &claim["row"];
+    assert!(!row.is_null(), "the run above should have enqueued one row");
+    let intent_id = row["intent_id"].as_str().unwrap().to_string();
+    let worker_id = row["locked_by"].as_str().unwrap().to_string();
+    assert_eq!(row["intent_type"], "JournalEntryPosted");
+    assert_eq!(row["status"], "in_progress");
+
+    // 3. COMPUTE PHASE: the consumer does whatever external work
+    //    the intent represents (here a no-op stand-in - the test's
+    //    point is that the kernel does not care what happens
+    //    between claim and complete).
+
+    // 4. CONSUMER MARKS DELIVERED.
+    let (status, stdout, stderr) = run_cli(&[
+        "outbox",
+        "complete",
+        &intent_id,
+        "--worker-id",
+        &worker_id,
+        "--outcome",
+        "delivered",
+    ]);
+    assert!(
+        status.success(),
+        "complete should succeed; stderr: {stderr}"
+    );
+    let upd: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(upd, serde_json::json!("Applied"));
+
+    // 5. INSPECT: the same consumer (or an auditor) verifies the row
+    //    is in the delivered slice.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "delivered"]);
+    assert!(status.success());
+    let delivered: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = delivered.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "exactly one delivered row");
+    assert_eq!(arr[0]["intent_id"], intent_id);
+
+    // 6. AND IT IS NO LONGER PENDING.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox"]);
+    assert!(status.success());
+    let pending: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        pending.as_array().unwrap().len(),
+        0,
+        "no rows should remain pending"
+    );
+}
