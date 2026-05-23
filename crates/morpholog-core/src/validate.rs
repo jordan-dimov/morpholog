@@ -1,15 +1,35 @@
 //! Programme-level structural validation: every predicate referenced in
 //! any transformation body, invariant body, or derived-claim shape
-//! must be declared in [`Program::predicates`], and every reference
-//! must match the declared arity.
+//! must be declared in [`Program::predicates`], every intent referenced
+//! in any `emit` statement must be declared in [`Program::intents`], and
+//! every reference must match the declared arity.
 //!
 //! Called via [`crate::Program::validate`]. Strict mode: undeclared
-//! predicates are errors, not passthrough. The validator collects every
-//! error rather than failing on the first; a migration that adds
-//! declarations should see the full work list at once.
+//! predicates and intents are errors, not passthrough. The validator
+//! collects every error rather than failing on the first; a migration
+//! that adds declarations should see the full work list at once.
 
 use crate::ir::{Expr, PredicateArgKind, Program, Stmt};
 use std::collections::HashMap;
+
+/// Which declared vocabulary a validation error refers to. Predicates
+/// and intents share four diagnostic shapes (undeclared reference,
+/// arity mismatch, duplicate declaration, arg-kind mismatch); the
+/// `vocabulary` field disambiguates them in the rendered message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VocabularyKind {
+    Predicate,
+    Intent,
+}
+
+impl std::fmt::Display for VocabularyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VocabularyKind::Predicate => write!(f, "predicate"),
+            VocabularyKind::Intent => write!(f, "intent"),
+        }
+    }
+}
 
 /// Where in a programme a validation error was found. Reported alongside
 /// every [`ValidationError`] so migrations can find the right call site
@@ -27,31 +47,36 @@ pub enum ValidationContext {
 /// than fixing one site, re-running, and discovering the next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    /// A predicate referenced somewhere in the programme is not
-    /// listed in `Program::predicates`. Strict mode: every reference
-    /// must have a declaration.
-    UndeclaredPredicate {
-        predicate: String,
+    /// A predicate or intent referenced somewhere in the programme
+    /// is not declared. Strict mode: every reference must have a
+    /// declaration.
+    Undeclared {
+        vocabulary: VocabularyKind,
+        name: String,
         context: ValidationContext,
     },
-    /// A predicate reference passes a different number of arguments
-    /// than the declaration calls for.
+    /// A predicate or intent reference passes a different number of
+    /// arguments than the declaration calls for.
     ArityMismatch {
-        predicate: String,
+        vocabulary: VocabularyKind,
+        name: String,
         expected: usize,
         actual: usize,
         context: ValidationContext,
     },
-    /// Two `PredicateDecl`s in `Program::predicates` share the same
-    /// name. Even if both declarations agree on arity, the duplicate
-    /// is a modelling bug.
-    DuplicatePredicateDecl { predicate: String },
-    /// A predicate-call argument does not match the kind declared
-    /// for that position. Surfaces things like `Policy(amount, 100)`
-    /// where the first position is declared `Subject`, or a date
-    /// literal flowing into a `Decimal` slot.
-    PredicateArgKindMismatch {
-        predicate: String,
+    /// Two declarations in the same vocabulary share a name. Even
+    /// if both agree on arity, the duplicate is a modelling bug.
+    DuplicateDecl {
+        vocabulary: VocabularyKind,
+        name: String,
+    },
+    /// A predicate-call or intent-emit argument does not match the
+    /// kind declared for that position. Surfaces things like
+    /// `Policy(amount, 100)` where the first position is declared
+    /// `Subject`, or a date literal flowing into a `Decimal` slot.
+    ArgKindMismatch {
+        vocabulary: VocabularyKind,
+        name: String,
         position: usize,
         expected: PredicateArgKind,
         actual: PredicateArgKind,
@@ -117,32 +142,38 @@ impl std::fmt::Display for ValidationContext {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::UndeclaredPredicate { predicate, context } => write!(
+            ValidationError::Undeclared {
+                vocabulary,
+                name,
+                context,
+            } => write!(
                 f,
-                "undeclared predicate `{predicate}` referenced in {context}"
+                "undeclared {vocabulary} `{name}` referenced in {context}"
             ),
             ValidationError::ArityMismatch {
-                predicate,
+                vocabulary,
+                name,
                 expected,
                 actual,
                 context,
             } => write!(
                 f,
-                "predicate `{predicate}` declared with arity {expected} \
+                "{vocabulary} `{name}` declared with arity {expected} \
                  but referenced with {actual} args in {context}"
             ),
-            ValidationError::DuplicatePredicateDecl { predicate } => {
-                write!(f, "duplicate predicate declaration for `{predicate}`")
+            ValidationError::DuplicateDecl { vocabulary, name } => {
+                write!(f, "duplicate {vocabulary} declaration for `{name}`")
             }
-            ValidationError::PredicateArgKindMismatch {
-                predicate,
+            ValidationError::ArgKindMismatch {
+                vocabulary,
+                name,
                 position,
                 expected,
                 actual,
                 context,
             } => write!(
                 f,
-                "predicate `{predicate}` arg #{position} expects {expected:?} but \
+                "{vocabulary} `{name}` arg #{position} expects {expected:?} but \
                  received {actual:?} in {context}"
             ),
             ValidationError::OperandKindMismatch {
@@ -229,8 +260,9 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
         .collect();
     duplicates.sort();
     for name in duplicates {
-        errors.push(ValidationError::DuplicatePredicateDecl {
-            predicate: name.to_string(),
+        errors.push(ValidationError::DuplicateDecl {
+            vocabulary: VocabularyKind::Predicate,
+            name: name.to_string(),
         });
     }
 
@@ -268,15 +300,17 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
             predicate: d.predicate.clone(),
         };
         match arities.get(d.predicate.as_str()) {
-            None => errors.push(ValidationError::UndeclaredPredicate {
-                predicate: d.predicate.clone(),
+            None => errors.push(ValidationError::Undeclared {
+                vocabulary: VocabularyKind::Predicate,
+                name: d.predicate.clone(),
                 context: ctx.clone(),
             }),
             Some(&decl_arity) => {
                 let actual_arity = d.keys.len() + d.values.len();
                 if decl_arity != actual_arity {
                     errors.push(ValidationError::ArityMismatch {
-                        predicate: d.predicate.clone(),
+                        vocabulary: VocabularyKind::Predicate,
+                        name: d.predicate.clone(),
                         expected: decl_arity,
                         actual: actual_arity,
                         context: ctx.clone(),
@@ -305,10 +339,24 @@ pub(crate) fn validate_stmt(
         Stmt::Let { value, .. } => validate_expr(value, arities, ctx, errors),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(c) => {
-            check_predicate(&c.predicate, c.args.len(), arities, ctx, errors);
+            check_declared(
+                VocabularyKind::Predicate,
+                &c.predicate,
+                c.args.len(),
+                arities,
+                ctx,
+                errors,
+            );
         }
         Stmt::Retract { predicate, args } => {
-            check_predicate(predicate, args.len(), arities, ctx, errors);
+            check_declared(
+                VocabularyKind::Predicate,
+                predicate,
+                args.len(),
+                arities,
+                ctx,
+                errors,
+            );
         }
         Stmt::For {
             collection, body, ..
@@ -334,14 +382,28 @@ pub(crate) fn validate_expr(
 ) {
     match expr {
         Expr::Claim { predicate, args } => {
-            check_predicate(predicate, args.len(), arities, ctx, errors);
+            check_declared(
+                VocabularyKind::Predicate,
+                predicate,
+                args.len(),
+                arities,
+                ctx,
+                errors,
+            );
         }
         Expr::ValueOf {
             predicate,
             args,
             default,
         } => {
-            check_predicate(predicate, args.len(), arities, ctx, errors);
+            check_declared(
+                VocabularyKind::Predicate,
+                predicate,
+                args.len(),
+                arities,
+                ctx,
+                errors,
+            );
             if let Some(d) = default {
                 validate_expr(d, arities, ctx, errors);
             }
@@ -379,22 +441,25 @@ pub(crate) fn validate_expr(
     }
 }
 
-/// Helper: emit the right error variant for a predicate call site.
-pub(crate) fn check_predicate(
-    predicate: &str,
+/// Helper: emit the right error variant for a vocabulary call/emit site.
+pub(crate) fn check_declared(
+    vocabulary: VocabularyKind,
+    name: &str,
     actual: usize,
     arities: &HashMap<&str, usize>,
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
-    match arities.get(predicate) {
-        None => errors.push(ValidationError::UndeclaredPredicate {
-            predicate: predicate.to_string(),
+    match arities.get(name) {
+        None => errors.push(ValidationError::Undeclared {
+            vocabulary,
+            name: name.to_string(),
             context: ctx.clone(),
         }),
         Some(&expected) if expected != actual => {
             errors.push(ValidationError::ArityMismatch {
-                predicate: predicate.to_string(),
+                vocabulary,
+                name: name.to_string(),
                 expected,
                 actual,
                 context: ctx.clone(),

@@ -125,7 +125,7 @@ fn check_parse_failure_renders_ariadne_diagnostic() {
 #[test]
 fn check_kind_mismatch_reports_predicate_arg_kind_diagnostic() {
     // A decimal literal in a Subject slot is the canonical
-    // kind-checker catch. Surfaces a PredicateArgKindMismatch
+    // kind-checker catch. Surfaces an ArgKindMismatch
     // diagnostic with the expected vs actual kinds named.
     let tmp = temp_morph(
         "program demo\n\

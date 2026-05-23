@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::ir::{Expr, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
-use crate::validate::{ValidationContext, ValidationError};
+use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
 /// Inferred kind of a value during static analysis. Distinct from
 /// [`PredicateArgKind`] (which is the *declared* kind on a predicate
@@ -193,8 +193,9 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
                 if let InferredKind::Known(actual_kind) = actual
                     && !kinds_compatible(expected, actual_kind)
                 {
-                    errors.push(ValidationError::PredicateArgKindMismatch {
-                        predicate: derived.predicate.clone(),
+                    errors.push(ValidationError::ArgKindMismatch {
+                        vocabulary: VocabularyKind::Predicate,
+                        name: derived.predicate.clone(),
                         position,
                         expected,
                         actual: actual_kind,
@@ -816,8 +817,7 @@ fn short_expr_shape(expr: &Expr) -> String {
 ///
 /// An undeclared predicate is *not* an error here - the existing
 /// arity-and-declaration pass surfaces that earlier with
-/// `UndeclaredPredicate`. We skip silently if the predicate is
-/// unknown.
+/// `Undeclared`. We skip silently if the predicate is unknown.
 fn check_claim_args(
     predicate: &str,
     args: &[Term],
@@ -872,8 +872,9 @@ fn check_one_claim_arg(
     } else if let InferredKind::Known(actual_kind) = actual
         && !kinds_compatible(expected, actual_kind)
     {
-        errors.push(ValidationError::PredicateArgKindMismatch {
-            predicate: predicate.to_string(),
+        errors.push(ValidationError::ArgKindMismatch {
+            vocabulary: VocabularyKind::Predicate,
+            name: predicate.to_string(),
             position,
             expected,
             actual: actual_kind,
@@ -1061,19 +1062,20 @@ mod tests {
         let errs = kindcheck_program(&p);
         assert_eq!(errs.len(), 1, "expected one kind error; got {errs:?}");
         match &errs[0] {
-            ValidationError::PredicateArgKindMismatch {
-                predicate,
+            ValidationError::ArgKindMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                name,
                 position,
                 expected,
                 actual,
                 ..
             } => {
-                assert_eq!(predicate, "Policy");
+                assert_eq!(name, "Policy");
                 assert_eq!(*position, 0);
                 assert_eq!(*expected, PredicateArgKind::Subject);
                 assert_eq!(*actual, PredicateArgKind::Decimal);
             }
-            other => panic!("expected PredicateArgKindMismatch, got {other:?}"),
+            other => panic!("expected ArgKindMismatch, got {other:?}"),
         }
     }
 
@@ -1168,13 +1170,16 @@ mod tests {
             "actor-in-decimal-slot must flag; got {errs:?}"
         );
         match &errs[0] {
-            ValidationError::PredicateArgKindMismatch {
-                expected, actual, ..
+            ValidationError::ArgKindMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                expected,
+                actual,
+                ..
             } => {
                 assert_eq!(*expected, PredicateArgKind::Decimal);
                 assert_eq!(*actual, PredicateArgKind::Subject);
             }
-            other => panic!("expected PredicateArgKindMismatch, got {other:?}"),
+            other => panic!("expected ArgKindMismatch, got {other:?}"),
         }
     }
 
@@ -1298,7 +1303,10 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
-            ValidationError::PredicateArgKindMismatch { .. }
+            ValidationError::ArgKindMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                ..
+            }
         ));
     }
 
@@ -1778,8 +1786,9 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::PredicateArgKindMismatch {
-                    predicate: pn,
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
+                    name: pn,
                     position: 0,
                     expected: PredicateArgKind::Subject,
                     actual: PredicateArgKind::Decimal,
@@ -1828,8 +1837,9 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::PredicateArgKindMismatch {
-                    predicate: pn,
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
+                    name: pn,
                     position: 1,
                     expected: PredicateArgKind::Subject,
                     actual: PredicateArgKind::Decimal,
@@ -2045,7 +2055,8 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::PredicateArgKindMismatch {
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
                     expected: PredicateArgKind::Subject,
                     actual: PredicateArgKind::Decimal,
                     ..
