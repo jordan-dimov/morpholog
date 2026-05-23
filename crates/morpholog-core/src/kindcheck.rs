@@ -168,9 +168,40 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
         );
         // Each `value <name> = <expr>` is value-producing; infer
         // under the env built by `domain`, surfacing in-expression
-        // kind errors (operand mismatches, variable conflicts).
-        for value in &derived.values {
-            infer_value_expr(&value.expr, &mut env, &predicate_decls, &ctx, &mut errors);
+        // kind errors. Keep the inferred kind for the output-arg
+        // check below.
+        let value_kinds: Vec<InferredKind> = derived
+            .values
+            .iter()
+            .map(|v| infer_value_expr(&v.expr, &mut env, &predicate_decls, &ctx, &mut errors))
+            .collect();
+
+        // Output args check: the runtime emits claims of the form
+        // `predicate(key_0, ..., key_K-1, value_0, ..., value_V-1)`,
+        // so each position must match the declared kind. An
+        // undeclared output predicate or an arity mismatch is
+        // already surfaced by the structural pass.
+        if let Some(decl) = predicate_decls.get(derived.predicate.as_str()) {
+            let n = (derived.keys.len() + derived.values.len()).min(decl.args.len());
+            for position in 0..n {
+                let actual = if position < derived.keys.len() {
+                    env.lookup(&derived.keys[position])
+                } else {
+                    value_kinds[position - derived.keys.len()]
+                };
+                let expected = decl.args[position].kind;
+                if let InferredKind::Known(actual_kind) = actual
+                    && !kinds_compatible(expected, actual_kind)
+                {
+                    errors.push(ValidationError::PredicateArgKindMismatch {
+                        predicate: derived.predicate.clone(),
+                        position,
+                        expected,
+                        actual: actual_kind,
+                        context: ctx.clone(),
+                    });
+                }
+            }
         }
     }
 
@@ -1705,6 +1736,143 @@ mod tests {
                 }
             )),
             "expected Le LHS to flag Subject vs Decimal; got {errs:?}"
+        );
+    }
+
+    // ============================================================
+    // Derived-claim output args vs declared kinds
+    // ============================================================
+
+    use crate::ir::{DerivedClaim, DerivedValue};
+
+    #[test]
+    fn derived_claim_key_var_with_wrong_kind_flags_predicate_arg_kind_mismatch() {
+        // Out predicate Row(account: Subject, ...); `over P(account)`
+        // where P binds account at Decimal. Output position 0
+        // expects Subject; actual is Decimal.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl(
+                "Row",
+                &[
+                    ("account", PredicateArgKind::Subject),
+                    ("balance", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl("P", &[("v", PredicateArgKind::Decimal)]),
+        ];
+        p.derived_claims = vec![DerivedClaim {
+            predicate: "Row".to_string(),
+            keys: vec!["account".to_string()],
+            values: vec![DerivedValue {
+                name: "balance".to_string(),
+                expr: term(dec("0")),
+            }],
+            domain: claim("P", vec![var("account")]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::PredicateArgKindMismatch {
+                    predicate: pn,
+                    position: 0,
+                    expected: PredicateArgKind::Subject,
+                    actual: PredicateArgKind::Decimal,
+                    ..
+                } if pn == "Row"
+            )),
+            "derived key vs declared kind mismatch must flag; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn derived_claim_value_expr_with_wrong_kind_flags_predicate_arg_kind_mismatch() {
+        // Out predicate Row(account: Subject, count: Subject);
+        // value expr returns Decimal. Position 1 mismatch.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl(
+                "Row",
+                &[
+                    ("account", PredicateArgKind::Subject),
+                    ("count", PredicateArgKind::Subject),
+                ],
+            ),
+            pdecl(
+                "P",
+                &[
+                    ("acct", PredicateArgKind::Subject),
+                    ("amt", PredicateArgKind::Decimal),
+                ],
+            ),
+        ];
+        p.derived_claims = vec![DerivedClaim {
+            predicate: "Row".to_string(),
+            keys: vec!["account".to_string()],
+            values: vec![DerivedValue {
+                name: "count".to_string(),
+                expr: sum(
+                    var("amt"),
+                    "amt",
+                    claim("P", vec![var("account"), var("amt")]),
+                ),
+            }],
+            domain: claim("P", vec![var("account"), wildcard()]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::PredicateArgKindMismatch {
+                    predicate: pn,
+                    position: 1,
+                    expected: PredicateArgKind::Subject,
+                    actual: PredicateArgKind::Decimal,
+                    ..
+                } if pn == "Row"
+            )),
+            "derived value vs declared kind mismatch must flag; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn derived_claim_clean_when_keys_and_values_match_declared_kinds() {
+        // Mirror of the TrialBalanceRow shape in the ledger example.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl(
+                "Row",
+                &[
+                    ("account", PredicateArgKind::Subject),
+                    ("balance", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl(
+                "Line",
+                &[
+                    ("account", PredicateArgKind::Subject),
+                    ("amount", PredicateArgKind::Decimal),
+                ],
+            ),
+        ];
+        p.derived_claims = vec![DerivedClaim {
+            predicate: "Row".to_string(),
+            keys: vec!["account".to_string()],
+            values: vec![DerivedValue {
+                name: "balance".to_string(),
+                expr: sum(
+                    var("amt"),
+                    "amt",
+                    claim("Line", vec![var("account"), var("amt")]),
+                ),
+            }],
+            domain: claim("Line", vec![var("account"), wildcard()]),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "well-typed derived claim should pass; got {errs:?}"
         );
     }
 
