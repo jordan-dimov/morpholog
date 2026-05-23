@@ -8,7 +8,7 @@
 //! error rather than failing on the first; a migration that adds
 //! declarations should see the full work list at once.
 
-use crate::ir::{Expr, Program, Stmt};
+use crate::ir::{Expr, PredicateArgKind, Program, Stmt};
 use std::collections::HashMap;
 
 /// Where in a programme a validation error was found. Reported alongside
@@ -46,6 +46,48 @@ pub enum ValidationError {
     /// name. Even if both declarations agree on arity, the duplicate
     /// is a modelling bug.
     DuplicatePredicateDecl { predicate: String },
+    /// A predicate-call argument does not match the kind declared
+    /// for that position. Surfaces things like `Policy(amount, 100)`
+    /// where the first position is declared `Subject`, or a date
+    /// literal flowing into a `Decimal` slot.
+    PredicateArgKindMismatch {
+        predicate: String,
+        position: usize,
+        expected: PredicateArgKind,
+        actual: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// An operator (comparator, arithmetic, equality) received an
+    /// operand of the wrong kind. `Le(date, decimal)`, `Add(subject,
+    /// decimal)`, `Eq(decimal, subject)` - the kernel raises these
+    /// as `EvalError::TypeMismatch` at runtime; this validator
+    /// surfaces them at authoring time.
+    OperandKindMismatch {
+        operator: &'static str,
+        expected: PredicateArgKind,
+        actual: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// A variable was bound at one kind and then used at a different
+    /// kind that is not compatible with the first. `amount` bound
+    /// from a `Decimal` slot and then used in a `Subject` slot is
+    /// the canonical case.
+    VariableKindConflict {
+        variable: String,
+        previous: PredicateArgKind,
+        new: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// An expression that the kind-checker treats as value-producing
+    /// (operand of arithmetic, comparator right-hand side, `Sum`'s
+    /// target term) appeared as a predicate-shaped expression - one
+    /// that produces binding witnesses rather than a value. The
+    /// runtime would surface this as `EvalError::NotValue`; kind-
+    /// check surfaces it earlier.
+    ExpectedValueExpression {
+        context: ValidationContext,
+        expression: String,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -80,6 +122,44 @@ impl std::fmt::Display for ValidationError {
             ValidationError::DuplicatePredicateDecl { predicate } => {
                 write!(f, "duplicate predicate declaration for `{predicate}`")
             }
+            ValidationError::PredicateArgKindMismatch {
+                predicate,
+                position,
+                expected,
+                actual,
+                context,
+            } => write!(
+                f,
+                "predicate `{predicate}` arg #{position} expects {expected:?} but \
+                 received {actual:?} in {context}"
+            ),
+            ValidationError::OperandKindMismatch {
+                operator,
+                expected,
+                actual,
+                context,
+            } => write!(
+                f,
+                "{operator} expects {expected:?} operand(s) but received {actual:?} in {context}"
+            ),
+            ValidationError::VariableKindConflict {
+                variable,
+                previous,
+                new,
+                context,
+            } => write!(
+                f,
+                "variable `{variable}` was first constrained to {previous:?} but later \
+                 used as {new:?} in {context}"
+            ),
+            ValidationError::ExpectedValueExpression {
+                context,
+                expression,
+            } => write!(
+                f,
+                "expected a value-producing expression but found predicate-shaped \
+                 `{expression}` in {context}"
+            ),
         }
     }
 }
