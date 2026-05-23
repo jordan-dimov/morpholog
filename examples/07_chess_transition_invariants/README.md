@@ -6,9 +6,9 @@ The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blog
 
 ## The doctrinal point
 
-Up to this PR, an invariant could only say "the world is in an admissible shape." It could not say "the world changed in an admissible way." The two are distinct.
+Up to PR #69, an invariant could only say "the world is in an admissible shape." It could not say "the world changed in an admissible way." The two are distinct.
 
-A double-entry ledger illustrates the distinction better than chess does, which is why the next iteration of this work will retrofit the gap onto example 03. "The book balances at every moment" is a state invariant - it would still hold even if a posting created cash out of thin air, as long as the trial balance happened to net to zero against another error. "*This* posting preserved balance" is a transition invariant: the rule applies to the delta, not the cumulative state. A regulator's actual GAAP rule is the second one.
+The canonical business case is conservation of an admitted balance: "this payment is not merely below the cap; it must consume exactly its amount of the remaining entitlement." Example 05 (`insurance_claim_settlement`) carries that case via `PolicyHeadroom` and the `headroom_consumed_by_payment` transition invariant - that is where `pre(...)` earns its place in a real audit story.
 
 Chess is the same shape with the business stripped out. `PieceCountNonIncreasing` is conservation of pieces over a single move: pieces do not appear out of thin air, only disappear via capture. `MoveCountStrictlyIncreases` is the chess analogue of "every transaction increments the audit counter by one." `TurnAlternates` is the two-party version of "the next actor is not the same actor." None of these can be expressed as a predicate over a single state. All three are textbook in the chess paper, and all three force `pre(...)` cleanly.
 
@@ -79,4 +79,4 @@ This is the deliberate semantics of the wrapper. Genesis is not a special case i
 
 It is not a chess engine. It does not enforce legal moves (a bishop moving sideways is admitted, as long as `at_most_one_piece_per_square` and the transition rules hold). It does not detect check, checkmate, stalemate, threefold repetition, or the fifty-move rule. It does not model castling, en passant, promotion, or the touch-move rule.
 
-It is the smallest setting in which a runtime's transition invariants become the load-bearing safety mechanism, with chess as a backdrop the reader already knows. The same kernel primitive that makes the chess invariants expressible is what a per-account-delta ledger invariant or a per-policy headroom-consumption rule will reach for next.
+It is the smallest setting in which a runtime's transition invariants become the load-bearing safety mechanism, with chess as a backdrop the reader already knows. The same kernel primitive that makes the chess invariants expressible is what the insurance example's `headroom_consumed_by_payment` invariant uses to enforce per-policy entitlement consumption - identical mechanism, different domain narrative.

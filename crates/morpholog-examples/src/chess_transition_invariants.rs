@@ -15,9 +15,10 @@
 //! business example, and avoids the genesis-vs-update awkwardness
 //! that would force `or` into the conceptual centre. The same
 //! `Expr::Pre` primitive that powers these chess invariants is what
-//! a future per-account-delta ledger invariant (`pre(AccountBalance)
-//! and AccountBalance implies after = before + posted_delta`) will
-//! reach for - identical kernel mechanism, different domain narrative.
+//! the insurance example's `headroom_consumed_by_payment` invariant
+//! uses to enforce per-policy entitlement consumption (see
+//! [`crate::insurance_claim_settlement`]) - identical kernel
+//! mechanism, different domain narrative.
 //!
 //! Surface form: `examples/07_chess_transition_invariants/chess.morph`.
 //! Business framing: see the example README.

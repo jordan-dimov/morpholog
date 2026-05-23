@@ -35,6 +35,7 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | Predicate | Role |
 | --- | --- |
 | `Policy(policy_id, aggregate_limit)` | The policy and its cumulative cap across all settlements. Append-only. |
+| `PolicyHeadroom(policy_id, remaining)` | Operational remaining-capacity counter. Distinct from `Policy` (the immutable contractual cap) and from `PolicyLimitUsage` (the read-side reporting view). Retract-and-reassert per settlement; the only retractable claim family in this example. |
 | `SettlementAuthority(actor, limit)` | An actor's per-settlement authority ceiling. The runtime supports `Stmt::Retract`, so revocation is expressible; this example deliberately does not include a revoke transformation - the approval-controls example already pins that pattern. |
 | `ClaimReported(claim_id, policy_id, claimed_amount)` | A reported loss against a policy. Append-only. The claimed amount is informational; the binding constraint is the aggregate limit. |
 | `SettlementAuthorised(claim_id, settlement_id, amount, actor)` | The audit-grade record of an authorising decision. Append-only. Fourth arg is the proposing actor; the audit row carries the same identity. |
@@ -47,7 +48,9 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | `paid_implies_authorised` | Every `SettlementPaid` must be backed by a matching `SettlementAuthorised`. The transformation never asserts one without the other, but the runtime contract is "candidate state is admissible under invariants regardless of how it got there." A hand-constructed orphan payment is refused. |
 | `at_most_one_policy_per_id` | A `policy_id` admits at most one `Policy` claim. Pins the structural uniqueness `authorise_settlement`'s `ValueOf(Policy(policy_id, _))` depends on. |
 | `at_most_one_claim_report_per_id` | Same shape for `ClaimReported`: duplicate reports against one `claim_id` are refused. Pins the structural uniqueness `authorise_settlement`'s `ValueOf(ClaimReported(claim_id, _, _))` depends on. |
+| `at_most_one_headroom_per_policy` | A `policy_id` admits at most one `PolicyHeadroom` at any moment. Two competing headroom claims would mean two answers to "how much capacity remains?" - exactly the ambiguity a governed model exists to forbid. |
 | `settlement_id_uniquely_identifies_payment` | A `settlement_id` identifies at most one payment. Two `SettlementPaid` claims sharing a `settlement_id` must agree on every other field. Identity-side guarantee for audit-grade settlement evidence. |
+| `headroom_consumed_by_payment` | **Transition invariant.** Each newly-admitted `SettlementPaid(p, _, _, amt)` must consume exactly `amt` of `PolicyHeadroom(p, _)`. Uses `pre(...)` to reference the pre-transition state; the runtime evaluates `pre(PolicyHeadroom(p, before)) and PolicyHeadroom(p, after) and SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)) implies after = before - amt`. Distinct from the aggregate-limit `require` gate: the require asks "is there enough headroom?", the invariant asks "did the payment actually consume exactly its amount?". A buggy transformation that staged `SettlementPaid` without retracting and re-asserting `PolicyHeadroom` would pass the require and fail the invariant. |
 
 The absence of an invariant tying `SettlementAuthority` to historical `SettlementAuthorised` is deliberate. Future revocation of authority must not invalidate the historical record - same require-vs-invariant doctrine as the verified-revenue and approval-controls examples. Authority is checked at admission; the record stands.
 
@@ -55,10 +58,10 @@ The absence of an invariant tying `SettlementAuthority` to historical `Settlemen
 
 | Transformation | Effect |
 | --- | --- |
-| `issue_policy(policy_id, aggregate_limit)` | Opens a policy with its aggregate cap. |
+| `issue_policy(policy_id, aggregate_limit)` | Opens a policy with its aggregate cap. Admits two claims: `Policy(policy_id, aggregate_limit)` (immutable contract) and an initial `PolicyHeadroom(policy_id, aggregate_limit)` (operational counter, starts equal to the aggregate). |
 | `report_claim(claim_id, policy_id, claimed_amount)` | Records a reported loss. Requires the policy to exist. |
 | `grant_settlement_authority(actor, limit)` | Asserts `SettlementAuthority`. Ungated in v0 - administrative authority for granting is out of scope. |
-| `authorise_settlement(claim_id, settlement_id, amount)` | The load-bearing transformation. **Declares no `actor` parameter.** The proposing actor flows through transition context as `$actor`. Gates admission on three conditions: the claim was reported, the proposing actor has authority covering the proposed amount, and the cumulative `Le(Add(Sum(paid), amount), aggregate_limit)` rule holds against the policy. |
+| `authorise_settlement(claim_id, settlement_id, amount)` | The load-bearing transformation. **Declares no `actor` parameter.** The proposing actor flows through transition context as `$actor`. Gates admission on three conditions: the claim was reported, the proposing actor has authority covering the proposed amount, and the cumulative `Le(Add(Sum(paid), amount), aggregate_limit)` rule holds against the policy. On admission, retracts the current `PolicyHeadroom` and asserts a new one with `amount` consumed; the `headroom_consumed_by_payment` transition invariant verifies the delta. |
 
 ### Derived claims
 
@@ -78,11 +81,19 @@ DATABASE_URL=postgres:///morpholog_dev \
     insurance_claim_settlement_full_chain_through_pg
 ```
 
-In-memory tests pin: policy issuance and claim reporting; actor authority gate (no authority, above limit, exact boundary); cumulative aggregate gate (under cap, exact-fill boundary, over cap, per-policy scoping); `PolicyLimitUsage` enumeration; and the `paid_implies_authorised` invariant against a hand-constructed orphan payment. The PG integration test walks the same story end to end through `propose_against_pg`.
+In-memory tests pin: policy issuance and claim reporting; actor authority gate (no authority, above limit, exact boundary); cumulative aggregate gate (under cap, exact-fill boundary, over cap, per-policy scoping); `PolicyLimitUsage` enumeration; the `paid_implies_authorised` invariant against a hand-constructed orphan payment; the conservation invariant on a hand-constructed buggy transformation that admits a payment without consuming headroom. The PG integration test walks the same story end to end through `propose_against_pg`.
 
 ---
 
 ## Design notes
+
+### What `Expr::Pre` earned its place for
+
+The aggregate-limit `require` rule (`Le(Add(Sum(paid), amount), aggregate_limit)`) is an *admission gate*: it asks whether the proposed payment fits inside the remaining cap. It runs against pre-state. It cannot say anything about the relationship between the pre-state and the post-state - if a buggy transformation admitted `SettlementPaid` without retracting and re-asserting `PolicyHeadroom`, the require would still pass on the next call, because the require recomputes the sum every time.
+
+`headroom_consumed_by_payment` closes that gap. It is a *transition invariant*: it asks whether the post-state stands in the right relationship to the pre-state. Expressed using `pre(...)` - the wrapper that opts a subtree into pre-transition evaluation - the rule says "for every new `SettlementPaid` with amount `amt`, the post-state `PolicyHeadroom` must equal the pre-state `PolicyHeadroom` minus `amt`." A state invariant could not say this: both `PolicyHeadroom(p, 100k)` and `SettlementPaid(p, ..., 30k)` are perfectly admissible singly; only the pre-vs-post relationship between them falsifies the rule.
+
+The two checks coexist by design. The require is the lawful business-outcome gate ("not enough headroom"); the invariant is the kernel-error trap ("the transformation lied about what it did"). A regulator's view is that this kind of conservation rule - "a payment is not merely below the cap; it must actually consume the entitlement it claims to" - is the difference between a system that adds up correctly today and a system whose audit trail you can stand behind in five years.
 
 ### What `Expr::Add` earned its place for
 

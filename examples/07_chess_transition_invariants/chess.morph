@@ -12,10 +12,11 @@
 -- textbook-clean (`move_count_strictly_increases`,
 -- `turn_alternates`, `single_capture_per_move`) without the cross-
 -- cutting concerns of a business example. The same `pre(...)`
--- primitive is what a future per-account-delta ledger invariant
--- (`pre(AccountBalance) and AccountBalance implies after = before
--- + posted_delta`) will reach for - identical kernel mechanism,
--- different domain narrative.
+-- primitive is what the insurance example's
+-- `headroom_consumed_by_payment` invariant uses to enforce
+-- per-policy entitlement consumption (see
+-- `examples/05_insurance_claim_settlement/`) - identical kernel
+-- mechanism, different domain narrative.
 --
 -- This file mirrors the IR in `crates/morpholog-examples/src/
 -- chess_transition_invariants.rs`; the `every_worked_example_round_trips`

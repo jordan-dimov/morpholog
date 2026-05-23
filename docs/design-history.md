@@ -585,4 +585,41 @@ Standing rationale for the kernel addition independent of the example: every oth
 - Aggregated delta primitives (`was_admitted`, `was_retracted`, `delta_count`). Waiting on a worked example that forces them.
 - Short-circuit evaluation of nested `Pre` (none today - the recursive call clears pre).
 - Transformation postconditions and trace assertions as additional `Pre`-bearing contexts. The error variant is named for the evaluator's missing capability, so adding those contexts later requires no IR change.
-- A retrofit of `pre(...)` onto an existing example (ledger or insurance). The next move is to choose which case earns its place and land it in a follow-up that adds no new IR.
+
+
+### Insurance retrofit: `PolicyHeadroom` conservation via `pre(...)`
+
+**Forced by:** closing the loop on PR #69. `Expr::Pre` landed with chess as the forcing example, deliberately deferring the canonical business case to keep the kernel-change PR scoped. With the kernel primitive in place, the retrofit takes a real audit shape ("a payment must consume its entitlement") onto an existing example without further IR change. ChatGPT's review of the planning conversation pushed hard for insurance over ledger as the cleaner target - smaller scope, the example already lives around aggregate-cap discipline, no derived-claim entanglement.
+
+**`EvalContext` evaluator refactor (same PR, prior commit).** With `Pre` landed in PR #69 the evaluator carried two contextual args (`pre_state`, `actor`); the call sites were getting wide. Bundled `EvalContext<'a> { state, pre_state, bindings, actor }` plus `with_bindings` and `enter_pre` helpers as the first commit of this PR (not its own PR) since the insurance work would otherwise have multiplied the awkwardness. The "enter a Pre subtree" pattern collapses from an inline match + reshuffled args to one method call; `find_conjunction`/`find_failing_subexpr` recurse via `with_bindings` instead of threading state/pre/actor through every conjunct. Net effect at test sites: ~80 lines of `state, None, &Bindings, None` boilerplate gone, with two test-local helpers (`ctx`, `ctx_with_pre`) covering the common standalone and pre/post cases. No behaviour change; preserved on both sync and PG test surfaces.
+
+**Sequencing.** Split the example work into three commits inside the bundled PR:
+1. `EvalContext` refactor (kernel-only, no behaviour change).
+2. Add admitted `PolicyHeadroom(policy_id, remaining)` to insurance, with `issue_policy` admitting initial headroom = aggregate_limit, plus `at_most_one_headroom_per_policy` structural uniqueness. No `pre()` usage yet. Answers "what is the thing whose transition we will conserve?"
+3. Wire `authorise_settlement` to retract+assert `PolicyHeadroom` and add the `headroom_consumed_by_payment` transition invariant. Answers "how do we conserve it?"
+
+The two-step retrofit is ChatGPT's suggested PR split, kept within one PR as commit granularity. Reviewing each commit independently keeps each story sharp.
+
+**The doctrinal point in business terms.** The pre-existing aggregate-limit `require` (`Le(Add(Sum(paid), amount), aggregate_limit)`) is an *admission gate*: does this payment fit inside the remaining cap? It runs against pre-state and recomputes the cumulative sum every call. It cannot say anything about the relationship between pre-state and post-state. If a buggy transformation admitted `SettlementPaid` without retracting and re-asserting `PolicyHeadroom`, the require would pass on the next call (it just re-sums). The transition invariant closes the gap: "for every newly-admitted `SettlementPaid` with amount `amt`, post-`PolicyHeadroom` = pre-`PolicyHeadroom` - `amt`." Both kept; they answer different questions, and the chess pattern of "outer-side verification regardless of how state was changed" carries straight into business.
+
+**Considered and rejected:**
+
+- *Removing the aggregate-limit require once conservation lands.* The conservation invariant constrains the delta but does not gate on it being positive. You could in principle write a payment that consumes more than available headroom by also retracting and re-asserting headroom going negative. Adding `PolicyHeadroom(p, r) implies r >= 0` would close that gap as a separate state invariant, but then the rule is "two invariants do the work of one require" - subtraction principle says keep the require.
+- *Ledger over insurance.* Doctrinally correct but bigger: the ledger would need an admitted `AccountBalance` predicate, retract+assert in every posting transformation, and would deprecate the `TrialBalanceRow` derived claim. Insurance had `Policy` already as the admittable contractual cap and a natural place for `PolicyHeadroom` as its operational sibling. The ledger retrofit, if it ever earns its place, is now strictly smaller-scope follow-up work.
+
+**What landed:**
+
+- `EvalContext<'a>` in `morpholog-core::eval` with `with_bindings` / `enter_pre`.
+- `find_matches`, `eval_value`, `find_conjunction`, `find_disjunction`, `find_claim_matches`, `find_in_matches`, `find_failing_subexpr` all signature-changed to two-arg `(expr, ctx)`.
+- `eval_invariant(inv, state, pre_state: Option<&State>)` and the propose-path call passing `Some(pre_state)`.
+- New admitted predicate `PolicyHeadroom(policy_id, remaining)` and the structural-uniqueness invariant `at_most_one_headroom_per_policy`.
+- `issue_policy` admits initial `PolicyHeadroom(policy_id, aggregate_limit)` alongside `Policy`.
+- `authorise_settlement` adds a third `bind_one` for current headroom, then `let new_headroom = current - amount`, `retract` the old headroom claim, `assert` the new one. Existing cumulative-cap require retained.
+- Transition invariant `headroom_consumed_by_payment` using `pre()` for both PolicyHeadroom and SettlementPaid identity.
+- Load-bearing test (`conservation_invariant_catches_payment_that_skips_headroom_update`) constructs a buggy transformation that admits SettlementPaid without consuming headroom and verifies the rejection.
+- Example 05 README updated with the new predicate, invariant, transformation behaviour, and a design-note section on what `Expr::Pre` earned its place for in this domain.
+
+**What stays out:**
+
+- A `PolicyHeadroom(p, r) implies r >= 0` state invariant. Not added; the existing require's admission gate plus the conservation invariant cover the business case. Would land if a worked example forces a non-require path to headroom mutation.
+- A retrofit onto the ledger. The structural reshape would be wider; deferred until a worked example actively needs it.
