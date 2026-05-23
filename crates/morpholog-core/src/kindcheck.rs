@@ -177,12 +177,15 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
             &ctx,
             &mut errors,
         );
-        // Each `value <name> = <expr>` is a value-producing
-        // expression, fully type-checked in commit 5 when value-
-        // inference lands. For now, recurse into any predicate
-        // subexpressions so claim-call arg kinds are still checked.
+        // Each `value <name> = <expr>` is value-producing.
+        // Infer the expression's kind under the derived-claim's
+        // env (built up by walking `domain` above). The result
+        // could be checked against the derived-claim's declared
+        // value-position kind once that wiring exists; for now
+        // we surface in-expression kind errors (operand
+        // mismatches, variable conflicts, etc.).
         for value in &derived.values {
-            walk_predicate_expr(&value.expr, &mut env, &predicate_decls, &ctx, &mut errors);
+            infer_value_expr(&value.expr, &mut env, &predicate_decls, &ctx, &mut errors);
         }
     }
 
@@ -601,18 +604,36 @@ fn infer_value_expr(
             InferredKind::Known(PredicateArgKind::Decimal)
         }
         Expr::Sum {
-            value: _,
+            value,
             binding,
             body,
         } => {
-            // Sum is body-shaped; full inference (body bindings
-            // flow to value-term kind) lands in commit 5. For now
-            // walk the body for claim-arg checks under a scoped
-            // env (binding does not leak), and return Decimal -
-            // Sum's result is always Decimal regardless of body.
+            // Body-first inference. Walk `body` in a scoped env
+            // so any kind observed there for `binding` (or other
+            // body-bound variables) refines locally. Then check
+            // `value` (a Term) against the refined env: it must
+            // resolve to Decimal. Sum's outer result is always
+            // Decimal regardless of body shape.
+            //
+            // Scoped on purpose - body bindings (including the
+            // iteration variable) must not leak to the
+            // surrounding context. The surrounding `let x =
+            // sum(...)` binds the outer `x` to Sum's result
+            // kind, not to whatever `binding` resolved to inside.
             let mut scoped = env.clone();
             let _ = scoped.observe(binding, InferredKind::UnknownOrAny);
             walk_predicate_expr(body, &mut scoped, predicate_decls, ctx, errors);
+            let resolved = resolved_term_kind(value, &scoped);
+            if let InferredKind::Known(actual) = resolved
+                && !kinds_compatible(PredicateArgKind::Decimal, actual)
+            {
+                errors.push(ValidationError::OperandKindMismatch {
+                    operator: "sum",
+                    expected: PredicateArgKind::Decimal,
+                    actual,
+                    context: ctx.clone(),
+                });
+            }
             InferredKind::Known(PredicateArgKind::Decimal)
         }
         Expr::ValueOf {
@@ -621,18 +642,31 @@ fn infer_value_expr(
             default,
         } => {
             // Walk args as a predicate-call so kind mismatches in
-            // the lookup pattern surface. Refinement of the
-            // wildcard-position kind lands in commit 5 along with
-            // Sum.
+            // the lookup pattern surface (subject literal in
+            // decimal slot, variable conflict, etc.).
             check_claim_args(predicate, args, env, predicate_decls, ctx, errors);
+            let result_kind = value_of_result_kind(predicate, args, predicate_decls);
             if let Some(default_expr) = default {
-                infer_value_expr(default_expr, env, predicate_decls, ctx, errors);
+                let default_kind =
+                    infer_value_expr(default_expr, env, predicate_decls, ctx, errors);
+                // The runtime returns either the looked-up value
+                // or the default, so a kind mismatch between them
+                // is the same class of error as a comparator
+                // mismatch - one branch would produce a kind the
+                // caller cannot consume.
+                if let (InferredKind::Known(expected), InferredKind::Known(actual)) =
+                    (result_kind, default_kind)
+                    && !kinds_compatible(expected, actual)
+                {
+                    errors.push(ValidationError::OperandKindMismatch {
+                        operator: "value default",
+                        expected,
+                        actual,
+                        context: ctx.clone(),
+                    });
+                }
             }
-            // Best-effort kind from the declaration's first
-            // wildcard slot. Returns UnknownOrAny if the predicate
-            // is undeclared (caught by the existing arity pass)
-            // or has no wildcard.
-            value_of_result_kind(predicate, args, predicate_decls)
+            result_kind
         }
         // Predicate-shaped expression appearing in a value-
         // demanding position. Runtime raises `NotValue`; surface
@@ -1503,5 +1537,250 @@ mod tests {
         }];
         let errs = kindcheck_program(&p);
         assert!(errs.is_empty(), "happy path should pass; got {errs:?}");
+    }
+
+    // ============================================================
+    // Sum + ValueOf
+    // ============================================================
+
+    #[test]
+    fn sum_with_body_refined_value_term_passes() {
+        // The canonical aggregation shape: `sum(amount | P(_, amount))`
+        // where P's value slot is Decimal. Sum's body refines
+        // `amount` to Decimal; the value term resolves to Decimal;
+        // Sum is happy.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Payment",
+            &[
+                ("policy", PredicateArgKind::Subject),
+                ("amount", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.invariants = vec![Invariant {
+            name: "ok_sum".to_string(),
+            version: 1,
+            body: le(
+                sum(
+                    var("amount"),
+                    "amount",
+                    claim("Payment", vec![wildcard(), var("amount")]),
+                ),
+                term(dec("1000")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(errs.is_empty(), "well-typed Sum should pass; got {errs:?}");
+    }
+
+    #[test]
+    fn sum_with_subject_value_term_flags_operand_mismatch() {
+        // `sum(p | Payment(p, _))` - the value term is a Subject
+        // (refined from P's first slot), but Sum demands Decimal.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Payment",
+            &[
+                ("policy", PredicateArgKind::Subject),
+                ("amount", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.invariants = vec![Invariant {
+            name: "bad_sum".to_string(),
+            version: 1,
+            body: le(
+                sum(var("p"), "p", claim("Payment", vec![var("p"), wildcard()])),
+                term(dec("1000")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    operator: "sum",
+                    expected: PredicateArgKind::Decimal,
+                    actual: PredicateArgKind::Subject,
+                    ..
+                }
+            )),
+            "expected sum's value term to flag Subject vs Decimal; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn sum_with_date_literal_value_term_flags_operand_mismatch() {
+        // A literal in the value position that is not Decimal.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("X", &[("v", PredicateArgKind::Subject)])];
+        p.invariants = vec![Invariant {
+            name: "bad_sum_lit".to_string(),
+            version: 1,
+            body: le(
+                sum(date("2026-01-01"), "x", claim("X", vec![var("x")])),
+                term(dec("100")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    operator: "sum",
+                    expected: PredicateArgKind::Decimal,
+                    actual: PredicateArgKind::Date,
+                    ..
+                }
+            )),
+            "expected sum's date literal to flag; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn sum_body_bindings_do_not_leak_to_surrounding_env() {
+        // `bind_one Q(x); require x <= sum(amount | P(_, amount))`
+        // - the outer x is Decimal (Q's slot). The Sum's body
+        // binds an inner `amount` at Decimal; after the Sum, the
+        // outer env should still see `amount` as unconstrained.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("Q", &[("v", PredicateArgKind::Decimal)]),
+            pdecl(
+                "P",
+                &[
+                    ("policy", PredicateArgKind::Subject),
+                    ("amount", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl("S", &[("id", PredicateArgKind::Subject)]),
+        ];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("Q", vec![var("x")])),
+                require(le(
+                    term(var("x")),
+                    sum(
+                        var("amount"),
+                        "amount",
+                        claim("P", vec![wildcard(), var("amount")]),
+                    ),
+                )),
+                // If Sum had leaked `amount` as Decimal into the
+                // outer env, this assert would flag a conflict.
+                // It must NOT - amount is fresh again here.
+                assert_("S", vec![var("amount")]),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "Sum's body bindings must not leak; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn value_of_resolves_to_wildcard_slot_kind() {
+        // `value Policy(p, _) <= 100` - the wildcard marks
+        // Policy's second slot (Decimal); Le's RHS is Decimal;
+        // no error.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Policy",
+            &[
+                ("policy", PredicateArgKind::Subject),
+                ("limit", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.invariants = vec![Invariant {
+            name: "ok_value_of".to_string(),
+            version: 1,
+            body: le(
+                value_of("Policy", vec![var("p"), wildcard()]),
+                term(dec("100")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.is_empty(),
+            "ValueOf at decimal slot should be Decimal; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn value_of_with_subject_slot_in_comparator_flags_operand_mismatch() {
+        // `value Owner(p, _) <= 100` - wildcard is Owner's
+        // Subject slot; Le's LHS is Subject, not Decimal.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Owner",
+            &[
+                ("policy", PredicateArgKind::Subject),
+                ("owner", PredicateArgKind::Subject),
+            ],
+        )];
+        p.invariants = vec![Invariant {
+            name: "bad_value_of".to_string(),
+            version: 1,
+            body: le(
+                value_of("Owner", vec![var("p"), wildcard()]),
+                term(dec("100")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    operator: "<=",
+                    expected: PredicateArgKind::Decimal,
+                    actual: PredicateArgKind::Subject,
+                    ..
+                }
+            )),
+            "expected Le LHS to flag Subject vs Decimal; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn value_of_default_kind_mismatch_flags_operand_mismatch() {
+        // ValueOf's default must match the wildcard slot's kind.
+        // Here the slot is Decimal but the default is a Subject -
+        // the runtime would return either, so the caller cannot
+        // safely consume the result.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Policy",
+            &[
+                ("policy", PredicateArgKind::Subject),
+                ("limit", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.invariants = vec![Invariant {
+            name: "bad_default".to_string(),
+            version: 1,
+            body: le(
+                value_of_with_default(
+                    "Policy",
+                    vec![var("p"), wildcard()],
+                    term(subj("UNLIMITED")),
+                ),
+                term(dec("100")),
+            ),
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    operator: "value default",
+                    expected: PredicateArgKind::Decimal,
+                    actual: PredicateArgKind::Subject,
+                    ..
+                }
+            )),
+            "expected value-default mismatch; got {errs:?}"
+        );
     }
 }
