@@ -8,7 +8,7 @@
 //! error rather than failing on the first; a migration that adds
 //! declarations should see the full work list at once.
 
-use crate::ir::{Expr, Program, Stmt};
+use crate::ir::{Expr, PredicateArgKind, Program, Stmt};
 use std::collections::HashMap;
 
 /// Where in a programme a validation error was found. Reported alongside
@@ -46,6 +46,60 @@ pub enum ValidationError {
     /// name. Even if both declarations agree on arity, the duplicate
     /// is a modelling bug.
     DuplicatePredicateDecl { predicate: String },
+    /// A predicate-call argument does not match the kind declared
+    /// for that position. Surfaces things like `Policy(amount, 100)`
+    /// where the first position is declared `Subject`, or a date
+    /// literal flowing into a `Decimal` slot.
+    PredicateArgKindMismatch {
+        predicate: String,
+        position: usize,
+        expected: PredicateArgKind,
+        actual: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
+    /// `value default`) received an operand of the wrong kind.
+    /// `Le(date, decimal)`, `Add(subject, decimal)`,
+    /// `For` over a Decimal value - the kernel raises these as
+    /// `EvalError::TypeMismatch` at runtime; this validator
+    /// surfaces them at authoring time.
+    OperandKindMismatch {
+        operator: &'static str,
+        expected: PredicateArgKind,
+        actual: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// An equality (`==` or `!=`) had two operands of distinct,
+    /// incompatible kinds. Symmetric by nature: there is no
+    /// "expected" side - both kinds are equally constrained by the
+    /// other. `Subject == Decimal` is a kind error, not a silent
+    /// coercion to false.
+    EqualityKindMismatch {
+        operator: &'static str,
+        left: PredicateArgKind,
+        right: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// A variable was bound at one kind and then used at a different
+    /// kind that is not compatible with the first. `amount` bound
+    /// from a `Decimal` slot and then used in a `Subject` slot is
+    /// the canonical case.
+    VariableKindConflict {
+        variable: String,
+        previous: PredicateArgKind,
+        new: PredicateArgKind,
+        context: ValidationContext,
+    },
+    /// An expression that the kind-checker treats as value-producing
+    /// (operand of arithmetic, comparator right-hand side, `Sum`'s
+    /// target term) appeared as a predicate-shaped expression - one
+    /// that produces binding witnesses rather than a value. The
+    /// runtime would surface this as `EvalError::NotValue`; kind-
+    /// check surfaces it earlier.
+    ExpectedValueExpression {
+        context: ValidationContext,
+        expression: String,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -80,14 +134,82 @@ impl std::fmt::Display for ValidationError {
             ValidationError::DuplicatePredicateDecl { predicate } => {
                 write!(f, "duplicate predicate declaration for `{predicate}`")
             }
+            ValidationError::PredicateArgKindMismatch {
+                predicate,
+                position,
+                expected,
+                actual,
+                context,
+            } => write!(
+                f,
+                "predicate `{predicate}` arg #{position} expects {expected:?} but \
+                 received {actual:?} in {context}"
+            ),
+            ValidationError::OperandKindMismatch {
+                operator,
+                expected,
+                actual,
+                context,
+            } => write!(
+                f,
+                "{operator} expects {expected:?} operand(s) but received {actual:?} in {context}"
+            ),
+            ValidationError::EqualityKindMismatch {
+                operator,
+                left,
+                right,
+                context,
+            } => write!(
+                f,
+                "{operator} operands must have the same kind; got {left:?} vs {right:?} in {context}"
+            ),
+            ValidationError::VariableKindConflict {
+                variable,
+                previous,
+                new,
+                context,
+            } => write!(
+                f,
+                "variable `{variable}` was first constrained to {previous:?} but later \
+                 used as {new:?} in {context}"
+            ),
+            ValidationError::ExpectedValueExpression {
+                context,
+                expression,
+            } => write!(
+                f,
+                "expected a value-producing expression but found predicate-shaped \
+                 `{expression}` in {context}"
+            ),
         }
     }
 }
 
 impl std::error::Error for ValidationError {}
 
-/// Strict arity validation for a [`Program`]. See [`Program::validate`].
+/// Strict programme validation. Merges the structural pass below
+/// with [`crate::kindcheck::kindcheck_program`] into a single
+/// `Vec<ValidationError>`. Called via [`Program::validate`].
+///
+/// Both layers contribute to the same error list; a faulty
+/// programme sees the full work list rather than fixing one layer
+/// and re-running to discover the next. The kind checker is
+/// defensive against arity-mismatched sites (walks `min(args, decl)`)
+/// so an arity error and a kind error in the same expression both
+/// surface in one run.
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
+    let mut errors = collect_structural_errors(p);
+    errors.extend(crate::kindcheck::kindcheck_program(p));
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// The original arity-and-declaration pass: undeclared predicate
+/// references, arity mismatches, duplicate declarations.
+fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // 1. Duplicate predicate declarations. Counts must be collected
@@ -168,11 +290,7 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    errors
 }
 
 /// Walk a statement and collect arity/declaration errors.

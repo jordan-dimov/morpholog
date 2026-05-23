@@ -549,3 +549,24 @@ Transition invariant `headroom_consumed_by_payment`: per-policy delta conservati
 
 - A `PolicyHeadroom(p, r) implies r >= 0` state invariant. Not added; the existing require's admission gate plus the conservation invariant cover the business case. Would land if a worked example forces a non-require path to headroom mutation.
 - A retrofit onto the ledger. The structural reshape would be wider; deferred until a worked example actively needs it.
+
+
+### Enriched `morpholog check`: kind/type compatibility (Layer 1 of four)
+
+**Forced by:** the input/output boundary work shifted the leverage. With non-Rust integrators able to hand Morpholog a `.morph` file and get a deterministic outcome back, authoring trustworthiness became the bottleneck. Decimal-in-Subject-slot, `<=` against a date, arithmetic on a subject literal, `Eq` between incompatible kinds - all only surfaced at runtime as `EvalError::TypeMismatch`.
+
+**Landed:** `morpholog_core::kindcheck` module; `validate_program` now merges its output with the structural pass into a single `Vec<ValidationError>`. Four new variants (`PredicateArgKindMismatch`, `OperandKindMismatch`, `VariableKindConflict`, `ExpectedValueExpression`) share the existing CLI emission path. Inference: `InferredKind { UnknownOrAny, Known(PredicateArgKind) }` with refine-on-observation. `Any` stays unconstrained (a variable seen first through `Any` refines on its next concrete use); the alternative ("`Any` everywhere lets later uses slip through") was rejected for losing the most valuable refinement pattern.
+
+The walker mirrors the runtime quartet: `Require` against a cloned env (no export), `BindOne`/`Let` against the live env. `Sum`, `Forall`, `Exists` shadow their binding via `KindEnv::with_shadow` so the loop-local name cannot collide with an outer variable of the same name; refinements to *other* variables in the body leak through normally. Without that fidelity the kind checker would either reject correct shadowing or pass programmes the runtime rejects.
+
+**Considered and rejected:**
+
+- A symmetric `ExpectedPredicateExpression` variant for value-shaped-at-predicate-position. Deferred without a forcing example; the runtime still catches it as `NotPredicate`, and Layer 2 (unbound-variable detection) is the natural home.
+- Bundling Sum/ValueOf with comparators. Sum's binding-flow story is its own slice.
+- A `--strict` flag for hint-grade output (unused declarations, sum-binding-not-in-body, fuzzy suggestions). That is Layer 4; Layer 1's job is the runtime-error mirror, no more.
+
+**What stays out:**
+
+- Source spans on `ValidationError`. The IR drops parser spans on lowering; threading them through is its own design conversation.
+- `IntentDecl` kind-checking. Intents are still stringly-typed in the outbox.
+- Element-kind correlation for `Collection`-typed variables. The current `In` check pins the source side to `Collection` but does not yet propagate element kinds to body bindings.

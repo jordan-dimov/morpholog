@@ -382,40 +382,33 @@ impl Program {
         self.predicates.iter().find(|p| p.name == name)
     }
 
-    /// Structural validation: every predicate referenced in any
-    /// transformation body, invariant body, or derived-claim shape
-    /// must be declared in [`Program::predicates`], and every
-    /// reference must match the declared arity.
+    /// Structural and kind/type validation of the whole programme.
+    /// Two layers run and contribute to a single error list:
     ///
-    /// Strict mode: undeclared predicates are an error, not a
-    /// passthrough. The cost is that every example must enumerate
-    /// its predicates; the benefit is that a programme's vocabulary
-    /// becomes a real self-describing contract and typos surface at
-    /// validation time rather than at runtime.
+    /// - **Structural**: every claim reference targets a declared
+    ///   predicate at the declared arity; no two declarations share
+    ///   a name.
+    /// - **Kind/type**: every value flowing into a slot carries a
+    ///   compatible kind, comparator and arithmetic operands match
+    ///   the expected kind, variables refine-and-conflict across
+    ///   claim and let uses, `Sum`/`Forall`/`Exists` bindings
+    ///   shadow correctly.
     ///
-    /// Returns `Ok(())` when no errors are found. Returns the
-    /// **full** error list on failure (not just the first); a
-    /// programme migration that adds predicate declarations should
-    /// see every missing or mismatched site at once.
+    /// Returns the **full** error list on failure (not just the
+    /// first); a programme migration that adds declarations should
+    /// see every site at once.
     ///
-    /// Out of scope for v0:
-    /// - Argument-kind checking against [`PredicateArgKind`]. The
-    ///   metadata is recorded for future use (docs, CLI inspection,
-    ///   future parser diagnostics, eventual kind validation that
-    ///   would require tracking variable kinds through binding
-    ///   contexts).
-    /// - Intent arity validation. Intents are outbox vocabulary,
-    ///   not claim vocabulary; an `IntentDecl` is conceivable but
-    ///   not pursued until a worked example needs it.
-    /// - Predicate references that name a derived-claim predicate
-    ///   recursively from inside the derived claim's own domain.
-    ///   Recursion through derived claims is on the deferred list.
+    /// Out of scope for v0: intent arity validation (intents are
+    /// outbox vocabulary, awaiting an `IntentDecl`); recursive
+    /// derived-claim references from inside the same derived
+    /// claim's domain; source spans on diagnostics (the IR drops
+    /// parser spans on lowering).
     ///
     /// `validate` is **not** called automatically by `propose`. The
     /// kernel boundary is statement-level, not programme-level;
     /// adding a programme validation pass to every proposal would
-    /// muddle that distinction and add overhead. Tests on the
-    /// built-in registry call `validate` explicitly.
+    /// muddle that distinction. `morpholog check` runs it
+    /// explicitly; tests on the built-in registry do the same.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
         validate_program(self)
     }

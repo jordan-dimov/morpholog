@@ -123,6 +123,54 @@ fn check_parse_failure_renders_ariadne_diagnostic() {
 }
 
 #[test]
+fn check_kind_mismatch_reports_predicate_arg_kind_diagnostic() {
+    // A decimal literal in a Subject slot is the canonical
+    // kind-checker catch. Surfaces a PredicateArgKindMismatch
+    // diagnostic with the expected vs actual kinds named.
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Owner(id: Subject)\n\
+         invariant bad: Owner(100)\n",
+    );
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Owner") && stderr.contains("Subject") && stderr.contains("Decimal"),
+        "expected kind-mismatch diagnostic naming Owner/Subject/Decimal; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn check_date_le_with_decimal_literal_reports_operand_kind_diagnostic() {
+    // `on_or_before` is the date comparator; a decimal literal
+    // on either side is the wrong-kind mistake. Diagnostic
+    // should name the operator and the two kinds.
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Limit(amount: Decimal)\n\
+         invariant bad: 100 on_or_before 200\n",
+    );
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("on_or_before") && stderr.contains("Date") && stderr.contains("Decimal"),
+        "expected operand-kind diagnostic naming on_or_before/Date/Decimal; got:\n{stderr}"
+    );
+}
+
+#[test]
 fn check_all_worked_examples_are_well_formed() {
     // Every worked example .morph must parse and validate cleanly.
     // Any future change that breaks one would fail here loudly.

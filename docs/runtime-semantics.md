@@ -230,6 +230,24 @@ A fuller structural ExprTrace (mirroring `Expr` with success-path drill-downs, e
 
 `propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum. The non-trace path allocates no trace storage and the `On`-vs-`Off` check at each statement is a single-variant enum match the optimiser collapses to nothing meaningful; the trace path opts in by passing `TraceSink::On(&mut Vec<TraceEntry>)`. There is no separate "traced evaluator" that could drift from `propose`.
 
+## Authoring-time checks (`Program::validate`)
+
+`Program::validate` runs before any state is touched and surfaces problems that would otherwise appear as `EvalError`s during a `propose`. It collects *every* error rather than failing on the first; a programme migration that adds predicate declarations should see the full work list at once.
+
+Two layers compose:
+
+1. **Structural**: every claim reference must name a declared predicate, every reference must match the declared arity, no two declarations share a name. A derived claim's output arity must equal `keys.len() + values.len()`.
+
+2. **Kind/type compatibility**: every value flowing into a slot must have a compatible kind. Predicate declarations carry per-argument kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`); comparators and arithmetic have fixed expected kinds (`<=` Decimal, `on_or_before` Date, `+`/`-` Decimal-only, `sum` produces Decimal); equality (`==` / `!=`) is strict (`Subject == Decimal` is a kind error, not a silent coercion); variables are inferred-and-refined as they flow through claim slots, comparators, and let-bindings.
+
+The kind layer respects the require/bind_one/let/for quartet's binding-export rules: a `require` body refines variables under a scoped env that does not leak (mirroring the runtime gate), while `bind_one` and `let` flow forward. `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local; the value term must resolve to a Decimal kind. `ValueOf`'s wildcard slot determines the result kind; its optional default must agree.
+
+`Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable." A variable seen first in an `Any` slot stays open; a later specific use refines it to that specific kind. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
+
+Diagnostics carry no source spans in v0 - the IR drops parser spans on lowering, and threading them through is a separate decision. Each error names the predicate / operator / variable involved and the context (which invariant, which transformation, which derived claim) so the call site is locatable from grep alone.
+
+`Program::validate` is **not** called automatically by `propose`. The kernel boundary is statement-level, not programme-level; revalidating on every proposal would muddle that distinction and add overhead. The `morpholog check` CLI subcommand runs it explicitly; tests on the built-in registry do the same.
+
 ## Atomicity boundary
 
 Steps 1-7 are atomic. Post-commit, outbox intents deliver at-least-once via workers running outside the transaction. External effects are never rolled back - only retried or compensated.

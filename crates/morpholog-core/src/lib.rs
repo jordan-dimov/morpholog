@@ -36,6 +36,7 @@ mod analysis;
 mod derive;
 mod eval;
 mod ir;
+mod kindcheck;
 mod propose;
 mod state;
 mod validate;

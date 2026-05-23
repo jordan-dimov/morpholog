@@ -100,7 +100,7 @@ Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predic
 
 This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
 
-**Status:** landed. Every `Program` carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity: every claim/assert/retract/value_of/derived-claim reference must target a declared predicate. The CLI exposes the declarations via `morpholog inspect predicates <program>`. Kind validation against the values flowing through the binding context is recorded but not yet enforced; it's the highest-leverage layer of the enriched-`morpholog check` work on [`roadmap.md`](roadmap.md).
+**Status:** landed. Every `Program` carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity (every claim/assert/retract/value_of/derived-claim reference must target a declared predicate) and kind/type compatibility (predicate arg slots, comparator and arithmetic operands, equality, variable refinement across claims and let-bindings). The CLI exposes the declarations via `morpholog inspect predicates <program>` and the validator via `morpholog check`.
 
 ### 2. Derived claims
 
