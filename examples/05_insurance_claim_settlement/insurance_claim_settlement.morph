@@ -45,6 +45,21 @@ invariant paid_implies_authorised:
 
 
 -- ============================================================
+-- Invariant: every payment must have a current headroom claim.
+--
+-- Pairs with the conservation invariant below. The conservation
+-- rule constrains the *delta* in PolicyHeadroom against
+-- newly-admitted payments, but says nothing when no
+-- PolicyHeadroom exists for the policy (the pre/post guard fails
+-- and the implies is vacuously true). Without this existence
+-- pairing, a candidate state with SettlementPaid but no
+-- PolicyHeadroom would slip through both rules.
+-- ============================================================
+invariant paid_implies_headroom:
+    SettlementPaid(p, _, _, _) implies (exists r: PolicyHeadroom(p, r))
+
+
+-- ============================================================
 -- Invariant: at most one PolicyHeadroom per policy.
 --
 -- PolicyHeadroom is the operational remaining-capacity counter -

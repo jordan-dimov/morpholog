@@ -86,6 +86,32 @@ pub fn at_most_one_claim_report_per_id() -> Invariant {
     }
 }
 
+/// Every admitted `SettlementPaid` for a policy must be backed by
+/// a current `PolicyHeadroom` claim for that policy. Pairs with
+/// `headroom_consumed_by_payment`: the conservation invariant
+/// constrains the *delta* in PolicyHeadroom against newly-admitted
+/// payments, but says nothing when no PolicyHeadroom exists - the
+/// `pre(PolicyHeadroom(p, before)) and PolicyHeadroom(p, after)`
+/// guard fails and the implies is vacuously true. Without this
+/// existence pairing, a hand-built or buggy candidate state with
+/// `SettlementPaid` but no `PolicyHeadroom` for that policy would
+/// pass both rules. The transformation never produces such a
+/// state, but the runtime contract is "candidate state is
+/// admissible regardless of how it got there."
+pub fn paid_implies_headroom() -> Invariant {
+    Invariant {
+        name: "paid_implies_headroom".to_string(),
+        version: 1,
+        body: implies(
+            claim(
+                "SettlementPaid",
+                vec![var("p"), wildcard(), wildcard(), wildcard()],
+            ),
+            exists("r", claim("PolicyHeadroom", vec![var("p"), var("r")])),
+        ),
+    }
+}
+
 /// At most one `PolicyHeadroom` per `policy_id`. Mirrors
 /// `at_most_one_policy_per_id`; pins the structural uniqueness that
 /// the payment transformation's `bind_one PolicyHeadroom(policy_id,
@@ -446,6 +472,7 @@ pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         paid_implies_authorised(),
+        paid_implies_headroom(),
         at_most_one_policy_per_id(),
         at_most_one_claim_report_per_id(),
         at_most_one_headroom_per_policy(),

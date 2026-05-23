@@ -6,11 +6,11 @@ The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blog
 
 ## The doctrinal point
 
-Up to PR #69, an invariant could only say "the world is in an admissible shape." It could not say "the world changed in an admissible way." The two are distinct.
+Before `pre(...)`, an invariant could only say "the world is in an admissible shape." It could not say "the world changed in an admissible way." The two are distinct.
 
 The canonical business case is conservation of an admitted balance: "this payment is not merely below the cap; it must consume exactly its amount of the remaining entitlement." Example 05 (`insurance_claim_settlement`) carries that case via `PolicyHeadroom` and the `headroom_consumed_by_payment` transition invariant - that is where `pre(...)` earns its place in a real audit story.
 
-Chess is the same shape with the business stripped out. `PieceCountNonIncreasing` is conservation of pieces over a single move: pieces do not appear out of thin air, only disappear via capture. `MoveCountStrictlyIncreases` is the chess analogue of "every transaction increments the audit counter by one." `TurnAlternates` is the two-party version of "the next actor is not the same actor." None of these can be expressed as a predicate over a single state. All three are textbook in the chess paper, and all three force `pre(...)` cleanly.
+Chess is the same shape with the business stripped out. `PieceCountNonIncreasing` is conservation of pieces over a single move: pieces do not appear out of thin air, only disappear via capture. `MoveCountStrictlyIncreases` is the chess analogue of "every transaction increments the audit counter by one." `TurnAlternates` is the two-party version of "the next actor is not the same actor." None can be expressed as a predicate over a single state. Each is textbook in the chess paper, and each forces `pre(...)` cleanly.
 
 ## The scoped domain
 

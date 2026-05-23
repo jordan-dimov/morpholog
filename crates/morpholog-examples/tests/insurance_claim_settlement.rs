@@ -545,6 +545,32 @@ fn paid_without_authorised_violates_invariant() {
     );
 }
 
+#[test]
+fn paid_without_headroom_violates_invariant() {
+    // Pairs with the conservation invariant: without this
+    // existence pairing, a candidate state with SettlementPaid but
+    // no PolicyHeadroom for that policy would slip through
+    // headroom_consumed_by_payment (the conservation rule's
+    // pre/post guard fails, the implies is vacuously true). The
+    // pairing closes the gap.
+    let orphan_payment = ClaimInstance {
+        predicate: "SettlementPaid".to_string(),
+        args: vec![
+            subj("policy_001"),
+            subj("claim_001"),
+            subj("settlement_001"),
+            dec(30_000),
+        ],
+    };
+    let state = State::from_claims(vec![orphan_payment]);
+    let inv = insurance_claim_settlement::paid_implies_headroom();
+    let holds = eval_invariant(&inv, &state, None).expect("eval should not error");
+    assert!(
+        !holds,
+        "paid_implies_headroom should not hold when a payment exists with no PolicyHeadroom for that policy"
+    );
+}
+
 // ============================================================
 // Derived claim: PolicyLimitUsage
 // ============================================================
@@ -608,11 +634,12 @@ fn policy_limit_usage_empty_when_no_settlements_paid() {
 // ============================================================
 // PolicyHeadroom conservation
 //
-// PR #70's payoff: every payment must consume exactly its amount
-// of headroom, enforced by the `headroom_consumed_by_payment`
-// transition invariant. The require gate ("is there enough?") and
-// the invariant ("did the payment actually consume?") answer
-// different questions; both are kept and both are tested here.
+// The transition-invariant payoff: every payment must consume
+// exactly its amount of headroom, enforced by the
+// `headroom_consumed_by_payment` transition invariant. The
+// require gate ("is there enough?") and the invariant ("did the
+// payment actually consume?") answer different questions; both
+// are kept and both are tested here.
 // ============================================================
 
 /// Happy path: an authorised settlement reduces PolicyHeadroom by
@@ -751,13 +778,13 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     }
 }
 
-/// The sum-based form's payoff (ChatGPT review of PR #70): a
-/// hypothetical buggy transformation that admits two same-amount
-/// `SettlementPaid` claims while decrementing `PolicyHeadroom`
-/// only once would pass an earlier draft of this invariant (each
-/// per-row equation `70 = 100 - 30` would hold) but consume
-/// 60 of headroom while only crediting 30. The sum-based
-/// conservation rule rejects it: 70 != 100 - sum(30, 30) = 40.
+/// The sum-based form's payoff: a hypothetical buggy
+/// transformation that admits two same-amount `SettlementPaid`
+/// claims while decrementing `PolicyHeadroom` only once would pass
+/// a per-row equality form of the invariant (each per-row equation
+/// `70 = 100 - 30` would hold) but consume 60 of headroom while
+/// only crediting 30. The sum-based conservation rule rejects it:
+/// 70 != 100 - sum(30, 30) = 40.
 #[test]
 fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     use morpholog_core::Transformation;

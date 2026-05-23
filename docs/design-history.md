@@ -593,12 +593,14 @@ Standing rationale for the kernel addition independent of the example: every oth
 
 **`EvalContext` evaluator refactor (same PR, prior commit).** With `Pre` landed in PR #69 the evaluator carried two contextual args (`pre_state`, `actor`); the call sites were getting wide. Bundled `EvalContext<'a> { state, pre_state, bindings, actor }` plus `with_bindings` and `enter_pre` helpers as the first commit of this PR (not its own PR) since the insurance work would otherwise have multiplied the awkwardness. The "enter a Pre subtree" pattern collapses from an inline match + reshuffled args to one method call; `find_conjunction`/`find_failing_subexpr` recurse via `with_bindings` instead of threading state/pre/actor through every conjunct. Net effect at test sites: ~80 lines of `state, None, &Bindings, None` boilerplate gone, with two test-local helpers (`ctx`, `ctx_with_pre`) covering the common standalone and pre/post cases. No behaviour change; preserved on both sync and PG test surfaces.
 
-**Sequencing.** Split the example work into three commits inside the bundled PR:
-1. `EvalContext` refactor (kernel-only, no behaviour change).
-2. Add admitted `PolicyHeadroom(policy_id, remaining)` to insurance, with `issue_policy` admitting initial headroom = aggregate_limit, plus `at_most_one_headroom_per_policy` structural uniqueness. No `pre()` usage yet. Answers "what is the thing whose transition we will conserve?"
-3. Wire `authorise_settlement` to retract+assert `PolicyHeadroom` and add the `headroom_consumed_by_payment` transition invariant. Answers "how do we conserve it?"
+**Sequencing.** Split the example work into a commit sequence inside the bundled PR so each step is independently reviewable:
 
-The two-step retrofit is ChatGPT's suggested PR split, kept within one PR as commit granularity. Reviewing each commit independently keeps each story sharp.
+- `EvalContext` refactor (kernel-only, no behaviour change).
+- Add admitted `PolicyHeadroom(policy_id, remaining)` to insurance, with `issue_policy` admitting initial headroom = aggregate_limit, plus `at_most_one_headroom_per_policy` structural uniqueness. No `pre()` usage yet. Answers "what is the thing whose transition we will conserve?"
+- Wire `authorise_settlement` to retract+assert `PolicyHeadroom` and add the `headroom_consumed_by_payment` transition invariant. Answers "how do we conserve it?"
+- Cross-doc sweep and review-driven strengthening followed.
+
+The two-step retrofit (prep then conservation) is ChatGPT's suggested PR split, kept within one PR as commit granularity. Reviewing each commit independently keeps each story sharp.
 
 **The doctrinal point in business terms.** The pre-existing aggregate-limit `require` (`Le(Add(Sum(paid), amount), aggregate_limit)`) is an *admission gate*: does this payment fit inside the remaining cap? It runs against pre-state and recomputes the cumulative sum every call. It cannot say anything about the relationship between pre-state and post-state. If a buggy transformation admitted `SettlementPaid` without retracting and re-asserting `PolicyHeadroom`, the require would pass on the next call (it just re-sums). The transition invariant closes the gap: "for every newly-admitted `SettlementPaid` with amount `amt`, post-`PolicyHeadroom` = pre-`PolicyHeadroom` - `amt`." Both kept; they answer different questions, and the chess pattern of "outer-side verification regardless of how state was changed" carries straight into business.
 
@@ -613,6 +615,7 @@ The two-step retrofit is ChatGPT's suggested PR split, kept within one PR as com
 - `find_matches`, `eval_value`, `find_conjunction`, `find_disjunction`, `find_claim_matches`, `find_in_matches`, `find_failing_subexpr` all signature-changed to two-arg `(expr, ctx)`.
 - `eval_invariant(inv, state, pre_state: Option<&State>)` and the propose-path call passing `Some(pre_state)`.
 - New admitted predicate `PolicyHeadroom(policy_id, remaining)` and the structural-uniqueness invariant `at_most_one_headroom_per_policy`.
+- Existence-pairing invariant `paid_implies_headroom` (added in response to Copilot's PR review): every `SettlementPaid(p, ...)` must have a current `PolicyHeadroom(p, _)`. Closes the gap where the conservation invariant's pre/post guard is vacuously true when no headroom claim exists for the policy.
 - `issue_policy` admits initial `PolicyHeadroom(policy_id, aggregate_limit)` alongside `Policy`.
 - `authorise_settlement` adds a third `bind_one` for current headroom, then `let new_headroom = current - amount`, `retract` the old headroom claim, `assert` the new one. Existing cumulative-cap require retained.
 - Transition invariant `headroom_consumed_by_payment`: per-policy delta conservation, `after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))`. The Sum body enumerates newly-admitted settlements (post minus pre); the implies asserts the total consumes exactly the headroom delta.

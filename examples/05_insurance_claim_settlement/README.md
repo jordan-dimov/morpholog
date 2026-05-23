@@ -46,6 +46,7 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | Invariant | What it pins |
 | --- | --- |
 | `paid_implies_authorised` | Every `SettlementPaid` must be backed by a matching `SettlementAuthorised`. The transformation never asserts one without the other, but the runtime contract is "candidate state is admissible under invariants regardless of how it got there." A hand-constructed orphan payment is refused. |
+| `paid_implies_headroom` | Every `SettlementPaid(p, ...)` must be paired with a current `PolicyHeadroom(p, _)` claim. Closes a gap in the conservation invariant: the conservation rule's pre/post guard fails (and the implies is vacuously true) when no PolicyHeadroom exists for the policy. Without this existence pairing, a candidate state with payments but no headroom would slip through. |
 | `at_most_one_policy_per_id` | A `policy_id` admits at most one `Policy` claim. Pins the structural uniqueness `authorise_settlement`'s `ValueOf(Policy(policy_id, _))` depends on. |
 | `at_most_one_claim_report_per_id` | Same shape for `ClaimReported`: duplicate reports against one `claim_id` are refused. Pins the structural uniqueness `authorise_settlement`'s `ValueOf(ClaimReported(claim_id, _, _))` depends on. |
 | `at_most_one_headroom_per_policy` | A `policy_id` admits at most one `PolicyHeadroom` at any moment. Two competing headroom claims would mean two answers to "how much capacity remains?" - exactly the ambiguity a governed model exists to forbid. |
