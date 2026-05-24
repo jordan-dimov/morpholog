@@ -105,6 +105,11 @@ jobs:
       - name: test (examples, parallel)
         run: cargo test -p morpholog-examples --all-targets --locked
 
+      # Parser arc: lexer, layout, parser, formatter round-trip.
+      # No DB; the round-trip property test lives here.
+      - name: test (surface, parallel)
+        run: cargo test -p morpholog-surface -p morpholog-test-support --all-targets --locked
+
       # PG-backed integration tests share one schema; each test
       # truncates it on entry, so they must run serially.
       - name: test (cli, serial)
