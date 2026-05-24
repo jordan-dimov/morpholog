@@ -64,7 +64,7 @@ In-memory tests cover both shapes, the rule that revoking authority preserves th
 
 `Expr::Le` requires both operands to evaluate to `EvalValue::Decimal`. A non-decimal value in the `limit` position of an admitted `ApprovalLimit` makes the require's `Le` raise `TypeMismatch`, not a business rejection. That is correct: a structurally-malformed claim is corruption, not lawful rejection.
 
-The complete fix - rejecting non-decimal limits at admission time on `grant_approval_limit` - is the work of typed predicate declarations, deferred until forced. Until then this example trusts its callers to admit decimal values.
+Typed predicate declarations and `morpholog check` now catch the *static* form of this mistake: a non-decimal literal in the `limit` slot, or a variable whose kind conflicts with the `Decimal` declaration, fails validation before the programme runs. What stays trusted to the caller is the *runtime* argument value - `propose`'s tagged-JSON args are not yet checked against declared kinds, so a caller passing a subject where a decimal belongs still surfaces as `TypeMismatch` at evaluation rather than a pre-admission rejection.
 
 ### Routing policy is conventional, not enforced
 

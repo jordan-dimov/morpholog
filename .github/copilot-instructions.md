@@ -14,9 +14,10 @@ The canonical sources of doctrine are:
 - Per-example `README.md` under `examples/`.
 
 If a change interacts with the IR (`Invariant`, `Transformation`, `Stmt`,
-`Expr`, `Term`, `Value`, `Claim`, `Intent`, `DerivedClaim`, `Transition`),
-the runtime kernel, or the persistence adapter, prefer reading these
-docs over inferring intent from surrounding code.
+`Expr`, `Term`, `Value`, `Claim`, `Intent`, `DerivedClaim`, `Transition`,
+the declaration types `PredicateDecl` / `IntentDecl` / `ArgDecl`), the
+runtime kernel, or the persistence adapter, prefer reading these docs
+over inferring intent from surrounding code.
 
 ## A few rules code review doesn't get from the linter
 
