@@ -19,6 +19,7 @@ pub mod chess_transition_invariants;
 pub mod clinical_trial_enrolment;
 pub mod double_entry_ledger;
 pub mod insurance_claim_settlement;
+pub mod kyc_sanctions_screening;
 pub mod settlement_netting;
 pub mod verified_revenue;
 
@@ -40,5 +41,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         insurance_claim_settlement::program(),
         clinical_trial_enrolment::program(),
         chess_transition_invariants::program(),
+        kyc_sanctions_screening::program(),
     ]
 }

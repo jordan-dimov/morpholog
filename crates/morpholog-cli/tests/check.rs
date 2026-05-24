@@ -181,6 +181,8 @@ fn check_all_worked_examples_are_well_formed() {
         "examples/04_approval_controls/approval_controls.morph",
         "examples/05_insurance_claim_settlement/insurance_claim_settlement.morph",
         "examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph",
+        "examples/07_chess_transition_invariants/chess.morph",
+        "examples/08_kyc_sanctions_screening/kyc.morph",
     ] {
         let path = repo_root().join(rel);
         let out = Command::new(bin())
