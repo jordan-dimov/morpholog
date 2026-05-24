@@ -9,7 +9,7 @@
 //! collects every error rather than failing on the first; a migration
 //! that adds declarations should see the full work list at once.
 
-use crate::ir::{Expr, PredicateArgKind, Program, Stmt};
+use crate::ir::{PredicateArgKind, Program};
 use std::collections::HashMap;
 
 /// Which declared vocabulary a validation error refers to. Predicates
@@ -218,18 +218,19 @@ impl std::fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Strict programme validation. Merges the structural pass below
-/// with [`crate::check::check_program`] into a single
-/// `Vec<ValidationError>`. Called via [`Program::validate`].
+/// Strict programme validation. Two contributions merge into one
+/// `Vec<ValidationError>`: the name-level duplicate-declaration
+/// check below, and the single-traversal static check in
+/// [`crate::check::check_program`] (declared references, arity,
+/// kind compatibility). Called via [`Program::validate`].
 ///
-/// Both layers contribute to the same error list; a faulty
-/// programme sees the full work list rather than fixing one layer
-/// and re-running to discover the next. The kind checker is
-/// defensive against arity-mismatched sites (walks `min(args, decl)`)
-/// so an arity error and a kind error in the same expression both
-/// surface in one run.
+/// Duplicate detection stays here because it is not a tree walk -
+/// it compares declaration names, not references. Everything that
+/// *is* a tree walk (declared/arity/kind at each reference) lives
+/// in the one `check` visitor, so a faulty programme sees the full
+/// work list from a single pass over its bodies.
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
-    let mut errors = collect_structural_errors(p);
+    let mut errors = collect_duplicate_decl_errors(p);
     errors.extend(crate::check::check_program(p));
     if errors.is_empty() {
         Ok(())
@@ -238,9 +239,10 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     }
 }
 
-/// The original arity-and-declaration pass: undeclared predicate
-/// references, arity mismatches, duplicate declarations.
-fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
+/// Name-level duplicate-declaration check across both vocabularies.
+/// Not a tree walk: it compares declaration names, so it has no
+/// place in the reference-visiting `check` pass.
+fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // 1. Duplicate predicate declarations. Counts must be collected
@@ -284,217 +286,5 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
         });
     }
 
-    // Build name -> arity lookups for both vocabularies. Predicate
-    // and intent namespaces are separate; a name appearing in both
-    // is unusual but lawful.
-    let arities: HashMap<&str, usize> = p
-        .predicates
-        .iter()
-        .map(|d| (d.name.as_str(), d.args.len()))
-        .collect();
-    let intent_arities: HashMap<&str, usize> = p
-        .intents
-        .iter()
-        .map(|d| (d.name.as_str(), d.args.len()))
-        .collect();
-
-    // 2. Walk each invariant body.
-    for inv in &p.invariants {
-        let ctx = ValidationContext::Invariant {
-            name: inv.name.clone(),
-        };
-        validate_expr(&inv.body, &arities, &ctx, &mut errors);
-    }
-
-    // 3. Walk each transformation body.
-    for t in &p.transformations {
-        let ctx = ValidationContext::Transformation {
-            name: t.name.clone(),
-        };
-        for stmt in &t.body {
-            validate_stmt(stmt, &arities, &intent_arities, &ctx, &mut errors);
-        }
-    }
-
-    // 4. Walk each derived claim: output predicate declared, output
-    //    arity matches keys + values count, domain references validated.
-    for d in &p.derived_claims {
-        let ctx = ValidationContext::DerivedClaim {
-            predicate: d.predicate.clone(),
-        };
-        match arities.get(d.predicate.as_str()) {
-            None => errors.push(ValidationError::Undeclared {
-                vocabulary: VocabularyKind::Predicate,
-                name: d.predicate.clone(),
-                context: ctx.clone(),
-            }),
-            Some(&decl_arity) => {
-                let actual_arity = d.keys.len() + d.values.len();
-                if decl_arity != actual_arity {
-                    errors.push(ValidationError::ArityMismatch {
-                        vocabulary: VocabularyKind::Predicate,
-                        name: d.predicate.clone(),
-                        expected: decl_arity,
-                        actual: actual_arity,
-                        context: ctx.clone(),
-                    });
-                }
-            }
-        }
-        validate_expr(&d.domain, &arities, &ctx, &mut errors);
-        for v in &d.values {
-            validate_expr(&v.expr, &arities, &ctx, &mut errors);
-        }
-    }
-
     errors
-}
-
-/// Walk a statement and collect arity/declaration errors.
-pub(crate) fn validate_stmt(
-    stmt: &Stmt,
-    arities: &HashMap<&str, usize>,
-    intent_arities: &HashMap<&str, usize>,
-    ctx: &ValidationContext,
-    errors: &mut Vec<ValidationError>,
-) {
-    match stmt {
-        Stmt::Require(e) | Stmt::BindOne(e) => validate_expr(e, arities, ctx, errors),
-        Stmt::Let { value, .. } => validate_expr(value, arities, ctx, errors),
-        Stmt::LetNewSubject { .. } => {}
-        Stmt::Assert(c) => {
-            check_declared(
-                VocabularyKind::Predicate,
-                &c.predicate,
-                c.args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-        }
-        Stmt::Retract { predicate, args } => {
-            check_declared(
-                VocabularyKind::Predicate,
-                predicate,
-                args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-        }
-        Stmt::For {
-            collection, body, ..
-        } => {
-            validate_expr(collection, arities, ctx, errors);
-            for inner in body {
-                validate_stmt(inner, arities, intent_arities, ctx, errors);
-            }
-        }
-        Stmt::Emit(intent) => {
-            check_declared(
-                VocabularyKind::Intent,
-                &intent.name,
-                intent.args.len(),
-                intent_arities,
-                ctx,
-                errors,
-            );
-        }
-    }
-}
-
-/// Walk an expression and collect arity/declaration errors.
-pub(crate) fn validate_expr(
-    expr: &Expr,
-    arities: &HashMap<&str, usize>,
-    ctx: &ValidationContext,
-    errors: &mut Vec<ValidationError>,
-) {
-    match expr {
-        Expr::Claim { predicate, args } => {
-            check_declared(
-                VocabularyKind::Predicate,
-                predicate,
-                args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-        }
-        Expr::ValueOf {
-            predicate,
-            args,
-            default,
-        } => {
-            check_declared(
-                VocabularyKind::Predicate,
-                predicate,
-                args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-            if let Some(d) = default {
-                validate_expr(d, arities, ctx, errors);
-            }
-        }
-        Expr::Implies { left, right } => {
-            validate_expr(left, arities, ctx, errors);
-            validate_expr(right, arities, ctx, errors);
-        }
-        Expr::And(exprs) | Expr::Or(exprs) => {
-            for e in exprs {
-                validate_expr(e, arities, ctx, errors);
-            }
-        }
-        Expr::Not(e) | Expr::Exists { body: e, .. } | Expr::Pre(e) => {
-            validate_expr(e, arities, ctx, errors);
-        }
-        Expr::Eq(l, r)
-        | Expr::Le(l, r)
-        | Expr::DateLe(l, r)
-        | Expr::Sub(l, r)
-        | Expr::Add(l, r) => {
-            validate_expr(l, arities, ctx, errors);
-            validate_expr(r, arities, ctx, errors);
-        }
-        Expr::Sum { body, .. } => {
-            validate_expr(body, arities, ctx, errors);
-        }
-        Expr::Forall { source, body, .. } => {
-            validate_expr(source, arities, ctx, errors);
-            validate_expr(body, arities, ctx, errors);
-        }
-        Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => {
-            // No predicate references; operate on Terms only.
-        }
-    }
-}
-
-/// Helper: emit the right error variant for a vocabulary call/emit site.
-pub(crate) fn check_declared(
-    vocabulary: VocabularyKind,
-    name: &str,
-    actual: usize,
-    arities: &HashMap<&str, usize>,
-    ctx: &ValidationContext,
-    errors: &mut Vec<ValidationError>,
-) {
-    match arities.get(name) {
-        None => errors.push(ValidationError::Undeclared {
-            vocabulary,
-            name: name.to_string(),
-            context: ctx.clone(),
-        }),
-        Some(&expected) if expected != actual => {
-            errors.push(ValidationError::ArityMismatch {
-                vocabulary,
-                name: name.to_string(),
-                expected,
-                actual,
-                context: ctx.clone(),
-            });
-        }
-        Some(_) => {}
-    }
 }

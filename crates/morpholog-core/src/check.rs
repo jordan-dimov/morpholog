@@ -201,30 +201,50 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             .collect();
 
         // Output args check: the runtime emits claims of the form
-        // `predicate(key_0, ..., key_K-1, value_0, ..., value_V-1)`,
-        // so each position must match the declared kind.
-        if let Some(decl) = cx.predicates.get(derived.predicate.as_str()).copied() {
-            let n = (derived.keys.len() + derived.values.len()).min(decl.args.len());
-            for position in 0..n {
-                let actual = if position < derived.keys.len() {
-                    env.lookup(&derived.keys[position])
-                } else {
-                    value_kinds[position - derived.keys.len()]
-                };
-                let expected = decl.args[position].kind;
-                if let InferredKind::Known(actual_kind) = actual
-                    && !kinds_compatible(expected, actual_kind)
-                {
-                    let context = cx.context.clone();
-                    cx.errors.push(ValidationError::ArgKindMismatch {
-                        vocabulary: VocabularyKind::Predicate,
-                        name: derived.predicate.clone(),
-                        position,
-                        expected,
-                        actual: actual_kind,
-                        context,
-                    });
-                }
+        // `predicate(key_0, ..., key_K-1, value_0, ..., value_V-1)`.
+        // The output predicate must be declared, its arity must
+        // equal keys+values, and each position must match the
+        // declared kind.
+        let Some(decl) = cx.predicates.get(derived.predicate.as_str()).copied() else {
+            let context = cx.context.clone();
+            cx.errors.push(ValidationError::Undeclared {
+                vocabulary: VocabularyKind::Predicate,
+                name: derived.predicate.clone(),
+                context,
+            });
+            continue;
+        };
+        let output_arity = derived.keys.len() + derived.values.len();
+        if decl.args.len() != output_arity {
+            let context = cx.context.clone();
+            cx.errors.push(ValidationError::ArityMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                name: derived.predicate.clone(),
+                expected: decl.args.len(),
+                actual: output_arity,
+                context,
+            });
+        }
+        let n = output_arity.min(decl.args.len());
+        for position in 0..n {
+            let actual = if position < derived.keys.len() {
+                env.lookup(&derived.keys[position])
+            } else {
+                value_kinds[position - derived.keys.len()]
+            };
+            let expected = decl.args[position].kind;
+            if let InferredKind::Known(actual_kind) = actual
+                && !kinds_compatible(expected, actual_kind)
+            {
+                let context = cx.context.clone();
+                cx.errors.push(ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
+                    name: derived.predicate.clone(),
+                    position,
+                    expected,
+                    actual: actual_kind,
+                    context,
+                });
             }
         }
     }
@@ -241,7 +261,7 @@ impl CheckCtx<'_> {
     fn walk_predicate_expr(&mut self, expr: &Expr, env: &mut KindEnv) {
         match expr {
             Expr::Claim { predicate, args } => {
-                self.check_claim_args(predicate, args, env);
+                self.check_predicate_ref(predicate, args, env);
             }
             Expr::And(items) => {
                 // Conjuncts thread bindings forward: each branch
@@ -371,10 +391,10 @@ impl CheckCtx<'_> {
                 self.observe_or_report(env, name, InferredKind::Known(PredicateArgKind::Subject));
             }
             Stmt::Assert(claim) => {
-                self.check_claim_args(&claim.predicate, &claim.args, env);
+                self.check_predicate_ref(&claim.predicate, &claim.args, env);
             }
             Stmt::Retract { predicate, args } => {
-                self.check_claim_args(predicate, args, env);
+                self.check_predicate_ref(predicate, args, env);
             }
             Stmt::For {
                 binding,
@@ -392,7 +412,7 @@ impl CheckCtx<'_> {
                 }
             }
             Stmt::Emit(intent) => {
-                self.check_intent_args(&intent.name, &intent.args, env);
+                self.check_intent_ref(&intent.name, &intent.args, env);
             }
         }
     }
@@ -544,7 +564,7 @@ impl CheckCtx<'_> {
                 args,
                 default,
             } => {
-                self.check_claim_args(predicate, args, env);
+                self.check_predicate_ref(predicate, args, env);
                 let result_kind = value_of_result_kind(predicate, args, &self.predicates);
                 if let Some(default_expr) = default {
                     let default_kind = self.infer_value_expr(default_expr, env);
@@ -592,20 +612,54 @@ impl CheckCtx<'_> {
         }
     }
 
-    /// Check a claim-call's arg kinds against the declared
-    /// predicate. An undeclared predicate skips silently here;
-    /// declaration and arity are the structural pass's job.
-    fn check_claim_args(&mut self, predicate: &str, args: &[Term], env: &mut KindEnv) {
-        if let Some(decl) = self.predicates.get(predicate).copied() {
-            self.check_args(VocabularyKind::Predicate, predicate, args, &decl.args, env);
-        }
+    /// Check a predicate reference end to end: declared, right
+    /// arity, then arg kinds. An undeclared predicate emits
+    /// `Undeclared` and stops; a wrong arity emits `ArityMismatch`
+    /// but still kind-checks the positions both sides share.
+    fn check_predicate_ref(&mut self, predicate: &str, args: &[Term], env: &mut KindEnv) {
+        self.check_reference(VocabularyKind::Predicate, predicate, args, env);
     }
 
-    /// Same shape against the intent vocabulary; powers `Stmt::Emit`.
-    fn check_intent_args(&mut self, intent: &str, args: &[Term], env: &mut KindEnv) {
-        if let Some(decl) = self.intents.get(intent).copied() {
-            self.check_args(VocabularyKind::Intent, intent, args, &decl.args, env);
+    /// Same, against the intent vocabulary; powers `Stmt::Emit`.
+    fn check_intent_ref(&mut self, intent: &str, args: &[Term], env: &mut KindEnv) {
+        self.check_reference(VocabularyKind::Intent, intent, args, env);
+    }
+
+    /// Shared declared + arity + arg-kind check for a reference in
+    /// either vocabulary. The `.copied()` detaches the declaration
+    /// from the borrow of `self`, so the subsequent `&mut self`
+    /// arg-kind walk is free of a borrow conflict.
+    fn check_reference(
+        &mut self,
+        vocabulary: VocabularyKind,
+        name: &str,
+        args: &[Term],
+        env: &mut KindEnv,
+    ) {
+        let decl_args = match vocabulary {
+            VocabularyKind::Predicate => self.predicates.get(name).copied().map(|d| &d.args),
+            VocabularyKind::Intent => self.intents.get(name).copied().map(|d| &d.args),
+        };
+        let Some(decl_args) = decl_args else {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::Undeclared {
+                vocabulary,
+                name: name.to_string(),
+                context,
+            });
+            return;
+        };
+        if decl_args.len() != args.len() {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::ArityMismatch {
+                vocabulary,
+                name: name.to_string(),
+                expected: decl_args.len(),
+                actual: args.len(),
+                context,
+            });
         }
+        self.check_args(vocabulary, name, args, decl_args, env);
     }
 
     /// Generic arg-list kind check. A literal contributes its kind;
