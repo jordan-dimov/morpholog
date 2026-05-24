@@ -1827,6 +1827,46 @@ async fn propose_rejects_non_subject_actor() {
     assert!(audit_rows.is_empty(), "rejected proposal must not audit");
 }
 
+/// Emits the identical intent twice, forcing both outbox rows onto the
+/// same deterministic idempotency key.
+fn double_emit_transformation() -> Transformation {
+    use morpholog_core::dsl::{emit, subj as lit_subj};
+    Transformation {
+        name: "double_emit".to_string(),
+        parameters: vec![],
+        body: vec![
+            emit("Ping", vec![lit_subj("p")]),
+            emit("Ping", vec![lit_subj("p")]),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn duplicate_intent_in_one_transformation_surfaces_named_error() {
+    use morpholog_postgres::PgError;
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let err = common::propose_pg_with_test_actor(&pool, &double_emit_transformation(), vec![], &[])
+        .await
+        .expect_err("two identical intents must collide on the idempotency key");
+
+    assert!(
+        matches!(err, PgError::DuplicateIntent),
+        "expected PgError::DuplicateIntent, got {err:?}"
+    );
+
+    assert!(
+        list_audit_rows(&pool).await.unwrap().is_empty(),
+        "the collision must roll back the whole transformation - no audit row"
+    );
+    assert!(
+        list_pending_outbox(&pool).await.unwrap().is_empty(),
+        "no outbox row may survive the rollback"
+    );
+}
+
 // ============================================================
 // Approval controls - durable proof that Term::Actor
 // and Expr::Le flow through propose_against_pg, into the audit log,

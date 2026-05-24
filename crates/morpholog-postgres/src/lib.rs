@@ -75,6 +75,19 @@ pub enum PgError {
     /// rejected with this variant.
     #[error("transition_id {0} not found in morpholog.audit")]
     TransitionNotFound(Uuid),
+    /// A transformation emitted the same intent (same name and args)
+    /// more than once, so two outbox rows collided on the
+    /// deterministic idempotency key (SQLSTATE 23505 on the outbox
+    /// idempotency-key unique constraint). The whole transformation
+    /// rolls back. This is a modelling bug, not a transient condition,
+    /// so it is named distinctly from [`PgError::Database`]: identical
+    /// duplicate intents must not silently produce two outbox rows.
+    /// See [`compute_idempotency_key`].
+    #[error(
+        "transformation emitted a duplicate intent (same name and args); \
+         outbox idempotency keys collided"
+    )]
+    DuplicateIntent,
 }
 
 /// The result of proposing a transformation against PostgreSQL.
@@ -279,13 +292,31 @@ fn is_serialization_failure_code(code: Option<&str>) -> bool {
     code == Some("40001")
 }
 
+/// Predicate: is this SQLSTATE the PostgreSQL `unique_violation` code
+/// (`23505`)? Paired with a constraint-name check so only the outbox
+/// idempotency-key collision - the one a single transformation can
+/// trip by emitting a duplicate intent - is named distinctly.
+fn is_unique_violation_code(code: Option<&str>) -> bool {
+    code == Some("23505")
+}
+
 /// Maps a `sqlx::Error` to a [`PgError`], recognising SQLSTATE 40001
 /// (PostgreSQL SSI serialization failure) as the distinct retryable
-/// variant. All other errors propagate as [`PgError::Database`].
+/// variant and a 23505 on the outbox idempotency-key constraint as
+/// [`PgError::DuplicateIntent`]. All other errors propagate as
+/// [`PgError::Database`].
 fn classify(err: sqlx::Error) -> PgError {
-    let code = err.as_database_error().and_then(|e| e.code());
+    let db = err.as_database_error();
+    let code = db.and_then(|e| e.code());
     if is_serialization_failure_code(code.as_deref()) {
         return PgError::SerializationFailure;
+    }
+    if is_unique_violation_code(code.as_deref())
+        && db
+            .and_then(|e| e.constraint())
+            .is_some_and(|c| c.contains("idempotency_key"))
+    {
+        return PgError::DuplicateIntent;
     }
     PgError::Database(err)
 }
@@ -511,12 +542,12 @@ async fn write_accepted(
 /// emits the same intent (same `name` and `args`) twice, both rows will
 /// share an idempotency key and the second `INSERT` will violate the
 /// `outbox.idempotency_key` UNIQUE constraint - surfacing as a
-/// `PgError::Database` and rolling back the whole transformation. This
-/// is intentional for v0: identical duplicate intents are almost always
-/// a bug and should not silently produce two outbox rows. If genuinely
-/// distinct same-shaped intents are needed later, the `Intent` type
-/// will gain a discriminator field (logical key, purpose, sequence) and
-/// this docstring should be updated.
+/// [`PgError::DuplicateIntent`] and rolling back the whole
+/// transformation. This is intentional for v0: identical duplicate
+/// intents are almost always a bug and should not silently produce two
+/// outbox rows. If genuinely distinct same-shaped intents are needed
+/// later, the `Intent` type will gain a discriminator field (logical
+/// key, purpose, sequence) and this docstring should be updated.
 pub fn compute_idempotency_key(
     transition_id: Uuid,
     intent: &IntentInstance,
