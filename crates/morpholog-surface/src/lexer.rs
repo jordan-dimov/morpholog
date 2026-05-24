@@ -2,7 +2,8 @@
 //!
 //! Recognised tokens:
 //!
-//! - Top-level keywords: `program`, `predicate`, `intent`.
+//! - Declaration keywords: `program`, `predicate`, `intent`,
+//!   `invariant`, `transformation`, `derived`.
 //! - Kind keywords: `Subject`, `Decimal`, `Date`, `Bool`,
 //!   `Collection`, `Any`.
 //! - Boolean keywords: `not`, `and`, `or`, `implies`, `pre`.
@@ -71,10 +72,9 @@ pub enum Token {
     /// parser rather than silently shadowing the keyword).
     KwNew,
 
-    // Reserved at the lexer so `admit Foo(...)` yields a clean
-    // "unexpected token `admit`" diagnostic, not a silent
-    // `Var("admit")`. The statement parser rejects all four; they
-    // become productions when the support lands.
+    // Reserved at the lexer so `admit`, `retract`, `emit`, and `for`
+    // lex as their own keyword tokens for the statement parser to
+    // dispatch on, rather than as `Var("admit")` and friends.
     /// `admit` statement keyword.
     KwAdmit,
     /// `retract` statement keyword.

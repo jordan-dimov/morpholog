@@ -247,10 +247,14 @@ proptest! {
     }
 }
 
-/// Wrap `leaf` in `depth` copies of one single-child recursive node,
-/// selected by `node`. Covers every recursive arm of the expression
-/// depth measure; filler operands are wildcards (the depth guard short-
-/// circuits before any semantic check looks at them).
+/// Wrap `leaf` in `depth` copies of one recursive node, selected by
+/// `node`. Exercises every recursive match arm of the depth measure -
+/// the single-child arm (`Not`/`Pre`/`Exists`), the collection arm
+/// (`And`/`Or`), the two-child arm (`Implies` and the comparators), the
+/// quantifier `Forall` (recurses through both source and body), `Sum`,
+/// and `ValueOf` (recurses only through its `default`). Filler operands
+/// are wildcards; the depth guard short-circuits before any semantic
+/// check looks at them.
 fn nest_expr(node: usize, depth: usize, leaf: Expr) -> Expr {
     let filler = || Box::new(Expr::Term(Term::Wildcard));
     let mut e = leaf;
@@ -273,7 +277,17 @@ fn nest_expr(node: usize, depth: usize, leaf: Expr) -> Expr {
                 binding: "x".to_string(),
                 body: Box::new(e),
             },
-            _ => Expr::Le(Box::new(e), filler()),
+            7 => Expr::Le(Box::new(e), filler()),
+            8 => Expr::Forall {
+                binding: "x".to_string(),
+                source: filler(),
+                body: Box::new(e),
+            },
+            _ => Expr::ValueOf {
+                predicate: "P".to_string(),
+                args: vec![],
+                default: Some(Box::new(e)),
+            },
         };
     }
     e
@@ -286,7 +300,7 @@ fn deeply_nested_expressions_are_rejected_not_overflowed() {
     // not a blown stack. The depth guard runs first and short-circuits,
     // so a pure deep-nest yields NestingTooDeep and nothing downstream.
     const DEPTH: usize = 1024;
-    for node in 0..8 {
+    for node in 0..10 {
         let body = nest_expr(
             node,
             DEPTH,
