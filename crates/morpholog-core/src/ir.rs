@@ -394,27 +394,34 @@ impl Program {
         self.intents.iter().find(|i| i.name == name)
     }
 
-    /// Structural and kind/type validation of the whole programme.
-    /// Two layers run and contribute to a single error list:
+    /// Full static validation of the whole programme. Several checks
+    /// contribute to a single error list:
     ///
-    /// - **Structural**: every claim reference targets a declared
-    ///   predicate at the declared arity; no two declarations share
-    ///   a name.
-    /// - **Kind/type**: every value flowing into a slot carries a
-    ///   compatible kind, comparator and arithmetic operands match
-    ///   the expected kind, variables refine-and-conflict across
-    ///   claim and let uses, `Sum`/`Forall`/`Exists` bindings
-    ///   shadow correctly.
+    /// - **Structural**: every predicate and intent reference targets
+    ///   a declaration at the declared arity; no two declarations in a
+    ///   vocabulary share a name.
+    /// - **Kind/type**: every value flowing into a slot, comparator,
+    ///   or arithmetic operand carries a compatible kind; variables
+    ///   refine-and-conflict across their uses; `Any` is unconstrained,
+    ///   not a kind-eraser.
+    /// - **Binding flow**: a name consumed where a bound value is
+    ///   required must have been bound first, following the runtime
+    ///   quartet's export rules.
+    /// - **Shape**: a value-producing expression at a predicate
+    ///   position, or the reverse.
+    /// - **Actor context**: `Term::Actor` in an invariant or
+    ///   derived-claim body, where no proposing transition is in scope.
+    /// - **Nesting depth**: a body whose expressions or `for`-statements
+    ///   nest past a fixed limit, which the recursive evaluator would
+    ///   otherwise risk exhausting the stack on.
     ///
     /// Returns the **full** error list on failure (not just the
     /// first); a programme migration that adds declarations should
     /// see every site at once.
     ///
-    /// Out of scope for v0: intent arity validation (intents are
-    /// outbox vocabulary, awaiting an `IntentDecl`); recursive
-    /// derived-claim references from inside the same derived
-    /// claim's domain; source spans on diagnostics (the IR drops
-    /// parser spans on lowering).
+    /// Out of scope for v0: recursive derived-claim references from
+    /// inside the same derived claim's domain; source spans on
+    /// diagnostics (the IR drops parser spans on lowering).
     ///
     /// `validate` is **not** called automatically by `propose`. The
     /// kernel boundary is statement-level, not programme-level;
@@ -465,7 +472,7 @@ pub struct ArgDecl {
 /// have the same shape (named, kinded positional args) but live in
 /// distinct vocabularies because they play distinct roles: predicates
 /// describe admitted claim shapes, intents describe outbox-effect
-/// shapes. The kindcheck pass validates `emit` arg kinds against
+/// shapes. The check pass validates `emit` arg kinds against
 /// these declarations the same way it validates `assert` against
 /// [`PredicateDecl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

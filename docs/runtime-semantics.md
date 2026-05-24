@@ -194,6 +194,8 @@ is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` co
 
 `Term::Actor` is reachable from inside any transformation-body statement that evaluates a `Term` (`require`, `let`, `assert`, `retract`, `emit`, `for`). It is **not** reachable from inside an invariant body or a derived claim's domain - both raise `EvalError::UnboundActor` at evaluation, because invariants evaluate against admitted state without a proposing transition in scope. This is the require-vs-invariant distinction made enforceable: authority checks belong in `require`, not in invariants.
 
+**The actor is asserted, not authenticated.** A `Transition` carries the actor as an `EvalValue::Subject`, and the runtime gates that asserted actor against whatever authority claims a `require` consults. It does **not** verify that the caller *is* that subject - authentication is the deployment's job, performed before `propose` is reached (the boundary that mints a `Transition` is where a session, token, or signature is checked). A `require` is the wrong place to reintroduce that: it has no host functions and no I/O, so cryptographic verification cannot and should not live inside one. Morpholog answers "is this actor permitted to do this, given admitted state?"; it trusts that the actor identity handed to it has already been established.
+
 ## Invariants: state vs transition, and `pre(...)`
 
 An invariant is by default a predicate over the candidate (post) state - the world after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry" or "at most one piece per square." `Expr::Pre(inner)` opts a wrapped subtree into pre-transition evaluation, so a single invariant can relate pre and post values:
@@ -234,17 +236,23 @@ A fuller structural ExprTrace (mirroring `Expr` with success-path drill-downs, e
 
 `Program::validate` runs before any state is touched and surfaces problems that would otherwise appear as `EvalError`s during a `propose`. It collects *every* error rather than failing on the first; a programme migration that adds predicate declarations should see the full work list at once.
 
-Two layers compose:
+The check is one traversal of every invariant, transformation, and derived-claim body. It surfaces several classes of problem in a single pass:
 
 1. **Structural**: every claim reference must name a declared predicate, every `emit` reference must name a declared intent, every reference must match the declared arity, and no two declarations in the same vocabulary share a name. A derived claim's output arity must equal `keys.len() + values.len()`. Predicates and intents live in separate namespaces.
 
 2. **Kind/type compatibility**: every value flowing into a slot must have a compatible kind. Declarations carry per-argument kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`); comparators and arithmetic have fixed expected kinds (`<=` Decimal, `on_or_before` Date, `+`/`-` Decimal-only, `sum` produces Decimal); equality (`==` / `!=`) is strict (`Subject == Decimal` is a kind error, not a silent coercion); variables are inferred-and-refined as they flow through claim slots, intent emits, comparators, and let-bindings.
 
-The kind layer respects the require/bind_one/let/for quartet's binding-export rules: a `require` body refines variables under a scoped env that does not leak (mirroring the runtime gate), while `bind_one` and `let` flow forward. `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local; the value term must resolve to a Decimal kind. `ValueOf`'s wildcard slot determines the result kind; its optional default must agree.
+3. **Binding flow**: a variable consumed where a bound value is required - an `admit`/`retract`/`emit` argument, a comparator or arithmetic operand, a `value` lookup key, a `sum` target - must have been bound first. The static walk follows the runtime exactly: parameters, `bind`, `let`, `for`, and claim matches in predicate position bind names; a `require` match does **not** export to later statements; a disjunction exports only the names bound in *every* branch (whichever branch's witness the runtime carries forward); `in` binds its element when it is otherwise unbound. A use of an unbound name is flagged as `UnboundVariable` - the same the kernel would raise.
 
-`Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable." A variable seen first in an `Any` slot stays open; a later specific use refines it to that specific kind. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
+4. **Shape**: a value-producing expression (a bare term, `+`, `-`, `sum`, `value`) at a predicate position, or a predicate-shaped expression where a value is required, is flagged before the kernel raises `NotPredicate` / `NotValue`.
+
+5. **Actor context**: `Term::Actor` referenced in an invariant or derived-claim body - where no proposing transition is in scope - is flagged (the kernel would raise `UnboundActor`). Authority checks belong in a `require`, not an invariant.
+
+The kind and binding-flow walks share the require/bind_one/let/for quartet's export rules over one scoped environment, so a `require` body's refinements and bindings stay local while `bind_one` and `let` flow forward; `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local, and the value term must resolve to Decimal; `ValueOf`'s wildcard slot determines its result kind and its optional default must agree. `Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable": a variable seen first in an `Any` slot stays open, and a later specific use refines it. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
 
 Diagnostics carry no source spans in v0 - the IR drops parser spans on lowering, and threading them through is a separate decision. Each error names the predicate / operator / variable involved and the context (which invariant, which transformation, which derived claim) so the call site is locatable from grep alone.
+
+`Program::validate` also bounds nesting depth: a body whose expressions or `for`-statements nest past a fixed limit is rejected (`NestingTooDeep`) before any recursive walk runs on it. The evaluator and the check itself descend one stack frame per level, so an unbounded body could exhaust the stack during `propose`. This is the teeth behind the rule that **untrusted IR must be validated before it is proposed**: `propose` trusts the IR it is handed and does no programme-level check of its own, so a deployment that accepts IR from outside must run `Program::validate` first.
 
 `Program::validate` is **not** called automatically by `propose`. The kernel boundary is statement-level, not programme-level; revalidating on every proposal would muddle that distinction and add overhead. The `morpholog check` CLI subcommand runs it explicitly; tests on the built-in registry do the same.
 

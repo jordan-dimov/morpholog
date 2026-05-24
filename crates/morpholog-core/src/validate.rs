@@ -1,8 +1,11 @@
-//! Programme-level structural validation: every predicate referenced in
-//! any transformation body, invariant body, or derived-claim shape
-//! must be declared in [`Program::predicates`], every intent referenced
-//! in any `emit` statement must be declared in [`Program::intents`], and
-//! every reference must match the declared arity.
+//! Programme-level validation. Owns the [`ValidationError`] vocabulary
+//! and orchestrates three contributions into one error list: a
+//! nesting-depth guard (run first, so the recursive walks it protects
+//! cannot overflow on the input that would trip it), a name-level
+//! duplicate-declaration pass, and the single static-check traversal in
+//! [`crate::check`] (declarations and arity for both predicate and
+//! intent vocabularies, kind/type compatibility, binding flow, shape,
+//! and actor context).
 //!
 //! Called via [`crate::Program::validate`]. Strict mode: undeclared
 //! predicates and intents are errors, not passthrough. The validator
@@ -125,6 +128,43 @@ pub enum ValidationError {
         context: ValidationContext,
         expression: String,
     },
+    /// The mirror of `ExpectedValueExpression`: a value-producing
+    /// expression (a bare term, `+`, `-`, `sum`, `value`) appeared
+    /// where a predicate-shaped expression was required - a `require`
+    /// body, an invariant, a quantifier body, a comparator that
+    /// matches state. The runtime surfaces this as
+    /// `EvalError::NotPredicate`; the check surfaces it earlier.
+    ExpectedPredicateExpression {
+        context: ValidationContext,
+        expression: String,
+    },
+    /// `actor` was referenced in an invariant or derived-claim
+    /// body, where no proposing transition is in scope. The kernel
+    /// raises `EvalError::UnboundActor` for this at evaluation
+    /// time; the check surfaces it earlier. `actor` resolves only
+    /// inside transformation bodies - authority checks belong in a
+    /// `require`, not an invariant.
+    ActorNotAvailable { context: ValidationContext },
+    /// A body in this context nests deeper than the validator's fixed
+    /// maximum depth. The recursive evaluator and check walk descend
+    /// one stack frame per nesting level, so a pathologically deep
+    /// expression or `for`-statement chain would exhaust the stack
+    /// during `propose`. Validation rejects it first, which is why
+    /// untrusted IR must be validated before it is proposed.
+    NestingTooDeep { context: ValidationContext },
+    /// A variable was used in a position that demands a bound value
+    /// (an `admit`/`retract`/`emit` argument, a comparator or
+    /// arithmetic operand, a `value` lookup key, a `sum` target)
+    /// without anything having bound it first. The binding rules
+    /// follow the runtime: parameters, `bind`, `let`, `for`, and
+    /// claim matches inside a `require`/invariant bind names;
+    /// `require` does not export its matches to later statements.
+    /// The kernel raises `EvalError::UnboundVariable` for this at
+    /// evaluation time.
+    UnboundVariable {
+        variable: String,
+        context: ValidationContext,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -212,25 +252,57 @@ impl std::fmt::Display for ValidationError {
                 "expected a value-producing expression but found predicate-shaped \
                  `{expression}` in {context}"
             ),
+            ValidationError::ExpectedPredicateExpression {
+                context,
+                expression,
+            } => write!(
+                f,
+                "expected a predicate-shaped expression but found value-producing \
+                 `{expression}` in {context}"
+            ),
+            ValidationError::ActorNotAvailable { context } => write!(
+                f,
+                "`actor` is not available in {context}; it resolves only inside \
+                 transformation bodies, so authority checks belong in a `require`"
+            ),
+            ValidationError::NestingTooDeep { context } => write!(
+                f,
+                "nesting in {context} exceeds the maximum depth of {MAX_EXPR_DEPTH}"
+            ),
+            ValidationError::UnboundVariable { variable, context } => write!(
+                f,
+                "variable `{variable}` is used in {context} but nothing binds it; \
+                 a `require` match does not export its bindings to later statements"
+            ),
         }
     }
 }
 
 impl std::error::Error for ValidationError {}
 
-/// Strict programme validation. Merges the structural pass below
-/// with [`crate::kindcheck::kindcheck_program`] into a single
-/// `Vec<ValidationError>`. Called via [`Program::validate`].
+/// Strict programme validation. Two contributions merge into one
+/// `Vec<ValidationError>`: the name-level duplicate-declaration
+/// check below, and the single-traversal static check in
+/// [`crate::check::check_program`] (declared references, arity,
+/// kind compatibility). Called via [`Program::validate`].
 ///
-/// Both layers contribute to the same error list; a faulty
-/// programme sees the full work list rather than fixing one layer
-/// and re-running to discover the next. The kind checker is
-/// defensive against arity-mismatched sites (walks `min(args, decl)`)
-/// so an arity error and a kind error in the same expression both
-/// surface in one run.
+/// Duplicate detection stays here because it is not a tree walk -
+/// it compares declaration names, not references. Everything that
+/// *is* a tree walk (declared/arity/kind at each reference) lives
+/// in the one `check` visitor, so a faulty programme sees the full
+/// work list from a single pass over its bodies.
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
-    let mut errors = collect_structural_errors(p);
-    errors.extend(crate::kindcheck::kindcheck_program(p));
+    // Depth guard runs first and short-circuits. The duplicate pass is
+    // harmless, but `check::check_program` recurses over every body, so
+    // a body deep enough to overflow that walk has to be rejected
+    // before it runs. A programme this malformed gets the depth errors
+    // alone, not a fuller work list - there is nothing useful to add.
+    let depth_errors = collect_depth_errors(p);
+    if !depth_errors.is_empty() {
+        return Err(depth_errors);
+    }
+    let mut errors = collect_duplicate_decl_errors(p);
+    errors.extend(crate::check::check_program(p));
     if errors.is_empty() {
         Ok(())
     } else {
@@ -238,9 +310,115 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     }
 }
 
-/// The original arity-and-declaration pass: undeclared predicate
-/// references, arity mismatches, duplicate declarations.
-fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
+/// Maximum expression / nested-statement depth accepted by
+/// [`Program::validate`]. The recursive evaluator (`find_matches`,
+/// `eval_value`) and the recursive check walk both descend one stack
+/// frame per nesting level; a pathologically deep body would exhaust
+/// the stack before any invariant ran. Validation rejects it first, so
+/// `propose` never recurses on untrusted IR that would overflow.
+/// Generous for hand-authored programmes, far below a default stack's
+/// frame budget.
+pub(crate) const MAX_EXPR_DEPTH: usize = 256;
+
+/// Collect a [`ValidationError::NestingTooDeep`] for every body that
+/// nests past [`MAX_EXPR_DEPTH`]: invariant bodies, transformation
+/// statement bodies (expressions and nested `for`s), and derived-claim
+/// domains and value expressions.
+fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    for inv in &p.invariants {
+        if expr_exceeds_depth(&inv.body, MAX_EXPR_DEPTH) {
+            errors.push(ValidationError::NestingTooDeep {
+                context: ValidationContext::Invariant {
+                    name: inv.name.clone(),
+                },
+            });
+        }
+    }
+    for t in &p.transformations {
+        if t.body.iter().any(|s| stmt_exceeds_depth(s, MAX_EXPR_DEPTH)) {
+            errors.push(ValidationError::NestingTooDeep {
+                context: ValidationContext::Transformation {
+                    name: t.name.clone(),
+                },
+            });
+        }
+    }
+    for d in &p.derived_claims {
+        let too_deep = expr_exceeds_depth(&d.domain, MAX_EXPR_DEPTH)
+            || d.values
+                .iter()
+                .any(|v| expr_exceeds_depth(&v.expr, MAX_EXPR_DEPTH));
+        if too_deep {
+            errors.push(ValidationError::NestingTooDeep {
+                context: ValidationContext::DerivedClaim {
+                    predicate: d.predicate.clone(),
+                },
+            });
+        }
+    }
+    errors
+}
+
+/// True if `expr` nests deeper than `budget` levels. Spends one unit
+/// of budget per level and bails the instant it runs out, so its own
+/// recursion is bounded by `budget` - it cannot overflow on the very
+/// input it exists to reject.
+fn expr_exceeds_depth(expr: &Expr, budget: usize) -> bool {
+    let Some(budget) = budget.checked_sub(1) else {
+        return true;
+    };
+    match expr {
+        Expr::Claim { .. } | Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => false,
+        Expr::And(items) | Expr::Or(items) => items.iter().any(|e| expr_exceeds_depth(e, budget)),
+        Expr::Not(inner) | Expr::Pre(inner) | Expr::Exists { body: inner, .. } => {
+            expr_exceeds_depth(inner, budget)
+        }
+        Expr::Implies { left, right }
+        | Expr::Eq(left, right)
+        | Expr::Le(left, right)
+        | Expr::DateLe(left, right)
+        | Expr::Sub(left, right)
+        | Expr::Add(left, right) => {
+            expr_exceeds_depth(left, budget) || expr_exceeds_depth(right, budget)
+        }
+        Expr::Sum { body, .. } => expr_exceeds_depth(body, budget),
+        Expr::Forall { source, body, .. } => {
+            expr_exceeds_depth(source, budget) || expr_exceeds_depth(body, budget)
+        }
+        Expr::ValueOf { default, .. } => default
+            .as_deref()
+            .is_some_and(|d| expr_exceeds_depth(d, budget)),
+    }
+}
+
+/// True if `stmt` nests deeper than `budget` levels, counting both its
+/// expression bodies and nested `for` statements. Same bailing
+/// discipline as [`expr_exceeds_depth`].
+fn stmt_exceeds_depth(stmt: &Stmt, budget: usize) -> bool {
+    let Some(budget) = budget.checked_sub(1) else {
+        return true;
+    };
+    match stmt {
+        Stmt::Require(e) | Stmt::BindOne(e) | Stmt::Let { value: e, .. } => {
+            expr_exceeds_depth(e, budget)
+        }
+        Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {
+            false
+        }
+        Stmt::For {
+            collection, body, ..
+        } => {
+            expr_exceeds_depth(collection, budget)
+                || body.iter().any(|s| stmt_exceeds_depth(s, budget))
+        }
+    }
+}
+
+/// Name-level duplicate-declaration check across both vocabularies.
+/// Not a tree walk: it compares declaration names, so it has no
+/// place in the reference-visiting `check` pass.
+fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // 1. Duplicate predicate declarations. Counts must be collected
@@ -284,217 +462,100 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
         });
     }
 
-    // Build name -> arity lookups for both vocabularies. Predicate
-    // and intent namespaces are separate; a name appearing in both
-    // is unusual but lawful.
-    let arities: HashMap<&str, usize> = p
-        .predicates
-        .iter()
-        .map(|d| (d.name.as_str(), d.args.len()))
-        .collect();
-    let intent_arities: HashMap<&str, usize> = p
-        .intents
-        .iter()
-        .map(|d| (d.name.as_str(), d.args.len()))
-        .collect();
-
-    // 2. Walk each invariant body.
-    for inv in &p.invariants {
-        let ctx = ValidationContext::Invariant {
-            name: inv.name.clone(),
-        };
-        validate_expr(&inv.body, &arities, &ctx, &mut errors);
-    }
-
-    // 3. Walk each transformation body.
-    for t in &p.transformations {
-        let ctx = ValidationContext::Transformation {
-            name: t.name.clone(),
-        };
-        for stmt in &t.body {
-            validate_stmt(stmt, &arities, &intent_arities, &ctx, &mut errors);
-        }
-    }
-
-    // 4. Walk each derived claim: output predicate declared, output
-    //    arity matches keys + values count, domain references validated.
-    for d in &p.derived_claims {
-        let ctx = ValidationContext::DerivedClaim {
-            predicate: d.predicate.clone(),
-        };
-        match arities.get(d.predicate.as_str()) {
-            None => errors.push(ValidationError::Undeclared {
-                vocabulary: VocabularyKind::Predicate,
-                name: d.predicate.clone(),
-                context: ctx.clone(),
-            }),
-            Some(&decl_arity) => {
-                let actual_arity = d.keys.len() + d.values.len();
-                if decl_arity != actual_arity {
-                    errors.push(ValidationError::ArityMismatch {
-                        vocabulary: VocabularyKind::Predicate,
-                        name: d.predicate.clone(),
-                        expected: decl_arity,
-                        actual: actual_arity,
-                        context: ctx.clone(),
-                    });
-                }
-            }
-        }
-        validate_expr(&d.domain, &arities, &ctx, &mut errors);
-        for v in &d.values {
-            validate_expr(&v.expr, &arities, &ctx, &mut errors);
-        }
-    }
-
     errors
 }
 
-/// Walk a statement and collect arity/declaration errors.
-pub(crate) fn validate_stmt(
-    stmt: &Stmt,
-    arities: &HashMap<&str, usize>,
-    intent_arities: &HashMap<&str, usize>,
-    ctx: &ValidationContext,
-    errors: &mut Vec<ValidationError>,
-) {
-    match stmt {
-        Stmt::Require(e) | Stmt::BindOne(e) => validate_expr(e, arities, ctx, errors),
-        Stmt::Let { value, .. } => validate_expr(value, arities, ctx, errors),
-        Stmt::LetNewSubject { .. } => {}
-        Stmt::Assert(c) => {
-            check_declared(
-                VocabularyKind::Predicate,
-                &c.predicate,
-                c.args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-        }
-        Stmt::Retract { predicate, args } => {
-            check_declared(
-                VocabularyKind::Predicate,
-                predicate,
-                args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-        }
-        Stmt::For {
-            collection, body, ..
-        } => {
-            validate_expr(collection, arities, ctx, errors);
-            for inner in body {
-                validate_stmt(inner, arities, intent_arities, ctx, errors);
-            }
-        }
-        Stmt::Emit(intent) => {
-            check_declared(
-                VocabularyKind::Intent,
-                &intent.name,
-                intent.args.len(),
-                intent_arities,
-                ctx,
-                errors,
-            );
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::dsl::*;
+    use crate::ir::{Invariant, Transformation};
+
+    fn empty_program() -> Program {
+        Program {
+            name: "t".to_string(),
+            predicates: vec![],
+            intents: vec![],
+            invariants: vec![],
+            transformations: vec![],
+            derived_claims: vec![],
         }
     }
-}
 
-/// Walk an expression and collect arity/declaration errors.
-pub(crate) fn validate_expr(
-    expr: &Expr,
-    arities: &HashMap<&str, usize>,
-    ctx: &ValidationContext,
-    errors: &mut Vec<ValidationError>,
-) {
-    match expr {
-        Expr::Claim { predicate, args } => {
-            check_declared(
-                VocabularyKind::Predicate,
-                predicate,
-                args.len(),
-                arities,
-                ctx,
-                errors,
-            );
+    #[test]
+    fn expression_nested_past_the_limit_is_rejected() {
+        // A `not not not ... A()` chain deeper than the limit.
+        // Building and dropping it is heap work, not recursion; only
+        // the bailing depth check walks it, so the test itself cannot
+        // overflow on the input it is asserting gets rejected.
+        let mut body = claim("A", vec![]);
+        for _ in 0..(MAX_EXPR_DEPTH + 50) {
+            body = not(body);
         }
-        Expr::ValueOf {
-            predicate,
-            args,
-            default,
-        } => {
-            check_declared(
-                VocabularyKind::Predicate,
-                predicate,
-                args.len(),
-                arities,
-                ctx,
-                errors,
-            );
-            if let Some(d) = default {
-                validate_expr(d, arities, ctx, errors);
-            }
-        }
-        Expr::Implies { left, right } => {
-            validate_expr(left, arities, ctx, errors);
-            validate_expr(right, arities, ctx, errors);
-        }
-        Expr::And(exprs) | Expr::Or(exprs) => {
-            for e in exprs {
-                validate_expr(e, arities, ctx, errors);
-            }
-        }
-        Expr::Not(e) | Expr::Exists { body: e, .. } | Expr::Pre(e) => {
-            validate_expr(e, arities, ctx, errors);
-        }
-        Expr::Eq(l, r)
-        | Expr::Le(l, r)
-        | Expr::DateLe(l, r)
-        | Expr::Sub(l, r)
-        | Expr::Add(l, r) => {
-            validate_expr(l, arities, ctx, errors);
-            validate_expr(r, arities, ctx, errors);
-        }
-        Expr::Sum { body, .. } => {
-            validate_expr(body, arities, ctx, errors);
-        }
-        Expr::Forall { source, body, .. } => {
-            validate_expr(source, arities, ctx, errors);
-            validate_expr(body, arities, ctx, errors);
-        }
-        Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => {
-            // No predicate references; operate on Terms only.
-        }
+        let mut p = empty_program();
+        p.invariants = vec![Invariant {
+            name: "deep".to_string(),
+            version: 1,
+            body,
+        }];
+        let errs = p
+            .validate()
+            .expect_err("over-deep invariant must be rejected");
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::NestingTooDeep {
+                    context: ValidationContext::Invariant { name }
+                } if name == "deep"
+            )),
+            "expected NestingTooDeep for the invariant; got {errs:?}"
+        );
     }
-}
 
-/// Helper: emit the right error variant for a vocabulary call/emit site.
-pub(crate) fn check_declared(
-    vocabulary: VocabularyKind,
-    name: &str,
-    actual: usize,
-    arities: &HashMap<&str, usize>,
-    ctx: &ValidationContext,
-    errors: &mut Vec<ValidationError>,
-) {
-    match arities.get(name) {
-        None => errors.push(ValidationError::Undeclared {
-            vocabulary,
-            name: name.to_string(),
-            context: ctx.clone(),
-        }),
-        Some(&expected) if expected != actual => {
-            errors.push(ValidationError::ArityMismatch {
-                vocabulary,
-                name: name.to_string(),
-                expected,
-                actual,
-                context: ctx.clone(),
-            });
+    #[test]
+    fn nested_for_statements_past_the_limit_are_rejected() {
+        // `for z in c: for z in c: ...` - statement nesting is the
+        // other recursion dimension the guard covers.
+        let mut inner = vec![assert_("A", vec![var("z")])];
+        for _ in 0..(MAX_EXPR_DEPTH + 50) {
+            inner = vec![for_("z", term(var("c")), inner)];
         }
-        Some(_) => {}
+        let mut p = empty_program();
+        p.transformations = vec![Transformation {
+            name: "deep".to_string(),
+            parameters: params(&["c"]),
+            body: inner,
+        }];
+        let errs = p
+            .validate()
+            .expect_err("over-deep for-nesting must be rejected");
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::NestingTooDeep {
+                    context: ValidationContext::Transformation { name }
+                } if name == "deep"
+            )),
+            "expected NestingTooDeep for the transformation; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn shallow_nesting_passes_the_depth_guard() {
+        // A handful of levels: the guard must leave it alone (the rest
+        // of validation passes too, so this also pins that the guard
+        // adds no spurious error to a clean programme).
+        let mut p = empty_program();
+        p.predicates = vec![predicate("A").build()];
+        p.invariants = vec![Invariant {
+            name: "shallow".to_string(),
+            version: 1,
+            body: not(not(not(claim("A", vec![])))),
+        }];
+        assert!(
+            p.validate().is_ok(),
+            "shallow nesting must validate cleanly"
+        );
     }
 }
