@@ -64,9 +64,7 @@
 //!   subject-as-string-as-everything model is intentional, and
 //!   pseudo-types over it would not help.
 
-use crate::{
-    Claim, Expr, Intent, PredicateArgDecl, PredicateArgKind, PredicateDecl, Stmt, Term, Value,
-};
+use crate::{ArgDecl, Claim, Expr, Intent, PredicateArgKind, PredicateDecl, Stmt, Term, Value};
 
 // ============================================================
 // Term constructors
@@ -358,12 +356,12 @@ pub fn params(names: &[&str]) -> Vec<String> {
 #[must_use]
 pub struct PredicateDeclBuilder {
     name: String,
-    args: Vec<PredicateArgDecl>,
+    args: Vec<ArgDecl>,
 }
 
 impl PredicateDeclBuilder {
     fn arg(mut self, name: &str, kind: PredicateArgKind) -> Self {
-        self.args.push(PredicateArgDecl {
+        self.args.push(ArgDecl {
             name: name.to_string(),
             kind,
         });
@@ -412,6 +410,66 @@ impl PredicateDeclBuilder {
 /// position and finish with `.build()`.
 pub fn predicate(name: &str) -> PredicateDeclBuilder {
     PredicateDeclBuilder {
+        name: name.to_string(),
+        args: Vec::new(),
+    }
+}
+
+/// Builder for an [`crate::IntentDecl`]. Structurally identical to
+/// [`PredicateDeclBuilder`] - intents and predicates share the same
+/// `name`-and-args shape - but distinct so the resulting decl lands
+/// in the right vocabulary (`Program::intents` vs `Program::predicates`).
+#[must_use]
+pub struct IntentDeclBuilder {
+    name: String,
+    args: Vec<ArgDecl>,
+}
+
+impl IntentDeclBuilder {
+    fn arg(mut self, name: &str, kind: PredicateArgKind) -> Self {
+        self.args.push(ArgDecl {
+            name: name.to_string(),
+            kind,
+        });
+        self
+    }
+
+    pub fn subject(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Subject)
+    }
+
+    pub fn decimal(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Decimal)
+    }
+
+    pub fn date(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Date)
+    }
+
+    pub fn boolean(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Bool)
+    }
+
+    pub fn collection(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Collection)
+    }
+
+    pub fn any(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Any)
+    }
+
+    pub fn build(self) -> crate::IntentDecl {
+        crate::IntentDecl {
+            name: self.name,
+            args: self.args,
+        }
+    }
+}
+
+/// Start an intent declaration. Chain one kind method per argument
+/// position and finish with `.build()`.
+pub fn intent_decl(name: &str) -> IntentDeclBuilder {
+    IntentDeclBuilder {
         name: name.to_string(),
         args: Vec::new(),
     }

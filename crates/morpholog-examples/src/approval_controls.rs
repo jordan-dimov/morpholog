@@ -160,6 +160,35 @@ pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "approval_controls".to_string(),
         predicates: all_predicates(),
+        intents: vec![
+            intent_decl("ApprovalAuthorityGranted")
+                .subject("principal")
+                .subject("doc_type")
+                .build(),
+            intent_decl("ApprovalAuthorityRevoked")
+                .subject("principal")
+                .subject("doc_type")
+                .build(),
+            intent_decl("DocumentApproved")
+                .subject("doc_id")
+                .subject("actor")
+                .build(),
+            intent_decl("ApprovalLimitGranted")
+                .subject("principal")
+                .subject("doc_type")
+                .decimal("limit")
+                .build(),
+            intent_decl("ApprovalLimitRevoked")
+                .subject("principal")
+                .subject("doc_type")
+                .decimal("limit")
+                .build(),
+            intent_decl("DocumentApprovedWithinLimit")
+                .subject("doc_id")
+                .subject("actor")
+                .decimal("amount")
+                .build(),
+        ],
         invariants: all_invariants(),
         transformations: vec![
             grant_approval_authority(),

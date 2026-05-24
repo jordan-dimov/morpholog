@@ -354,6 +354,16 @@ pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "double_entry_ledger".to_string(),
         predicates: all_predicates(),
+        intents: vec![
+            intent_decl("JournalEntryPosted")
+                .subject("entry_id")
+                .build(),
+            intent_decl("PeriodClosed").subject("period").build(),
+            intent_decl("JournalEntryRestated")
+                .subject("new_entry_id")
+                .subject("prior_entry_id")
+                .build(),
+        ],
         invariants: all_invariants(),
         transformations: vec![
             post_simple_entry(),

@@ -25,6 +25,11 @@ predicate SettlementPaid(policy_id: Subject, claim_id: Subject, settlement_id: S
 predicate PolicyHeadroom(policy_id: Subject, remaining: Decimal)
 predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
 
+intent PolicyIssued(policy_id: Subject)
+intent ClaimReported(claim_id: Subject)
+intent SettlementAuthorityGranted(principal: Subject, limit: Decimal)
+intent ClaimPaymentRequested(settlement_id: Subject, amount: Decimal, actor: Subject)
+
 
 -- Every payment must be backed by an authorisation.
 invariant paid_implies_authorised:

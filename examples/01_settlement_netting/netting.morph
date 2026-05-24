@@ -15,6 +15,8 @@ predicate Between(line_id: Subject, party_a: Subject, party_b: Subject)
 predicate LineAmount(line_id: Subject, amount: Decimal)
 predicate Netted(line_id: Subject)
 
+intent NetSettlementCreated(net: Subject)
+
 -- Nested quantifiers (inside `implies`, `not`, `and`) need parens.
 -- At the top of an expression, `exists`/`forall` consume everything
 -- after the colon greedily; parens are how you embed them inside

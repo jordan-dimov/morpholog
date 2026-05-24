@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::ir::{Expr, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
-use crate::validate::{ValidationContext, ValidationError};
+use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
 /// Inferred kind of a value during static analysis. Distinct from
 /// [`PredicateArgKind`] (which is the *declared* kind on a predicate
@@ -129,6 +129,11 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
         .iter()
         .map(|d| (d.name.as_str(), d))
         .collect();
+    let intent_decls: HashMap<&str, &crate::IntentDecl> = program
+        .intents
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
 
     for inv in &program.invariants {
         let mut env = KindEnv::new();
@@ -150,7 +155,14 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
             let _ = env.observe(param, InferredKind::UnknownOrAny);
         }
         for stmt in &transformation.body {
-            walk_stmt(stmt, &mut env, &predicate_decls, &ctx, &mut errors);
+            walk_stmt(
+                stmt,
+                &mut env,
+                &predicate_decls,
+                &intent_decls,
+                &ctx,
+                &mut errors,
+            );
         }
     }
 
@@ -193,8 +205,9 @@ pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
                 if let InferredKind::Known(actual_kind) = actual
                     && !kinds_compatible(expected, actual_kind)
                 {
-                    errors.push(ValidationError::PredicateArgKindMismatch {
-                        predicate: derived.predicate.clone(),
+                    errors.push(ValidationError::ArgKindMismatch {
+                        vocabulary: VocabularyKind::Predicate,
+                        name: derived.predicate.clone(),
                         position,
                         expected,
                         actual: actual_kind,
@@ -389,11 +402,13 @@ fn walk_predicate_expr(
 /// - `For` requires its collection expression to be Collection-
 ///   kinded; the body runs under a scoped env clone so loop-
 ///   introduced bindings do not leak.
-/// - `Emit` is a no-op until `IntentDecl` lands.
+/// - `Emit` checks arg kinds against the declared intent. Mirror
+///   of `Assert` against the intent vocabulary.
 fn walk_stmt(
     stmt: &Stmt,
     env: &mut KindEnv,
     predicate_decls: &HashMap<&str, &PredicateDecl>,
+    intent_decls: &HashMap<&str, &crate::IntentDecl>,
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -469,13 +484,18 @@ fn walk_stmt(
             let mut scoped = env.clone();
             let _ = scoped.observe(binding, InferredKind::UnknownOrAny);
             for inner in body {
-                walk_stmt(inner, &mut scoped, predicate_decls, ctx, errors);
+                walk_stmt(
+                    inner,
+                    &mut scoped,
+                    predicate_decls,
+                    intent_decls,
+                    ctx,
+                    errors,
+                );
             }
         }
-        Stmt::Emit(_intent) => {
-            // Intent emission has no declared vocabulary today;
-            // `IntentDecl` would gate this. Until then, nothing
-            // to check at the kind layer.
+        Stmt::Emit(intent) => {
+            check_intent_args(&intent.name, &intent.args, env, intent_decls, ctx, errors);
         }
     }
 }
@@ -807,17 +827,10 @@ fn short_expr_shape(expr: &Expr) -> String {
     }
 }
 
-/// Check a predicate-call's arg list against the declared kinds.
-/// For each position: a literal contributes its kind directly; a
-/// variable is observed (refining the env); `Term::Wildcard` is
-/// skipped (matches anything, binds nothing); `Term::Actor`
-/// contributes `Subject` (its inherent kind; whether `actor` is
-/// reachable in this context is a separate Layer-3 concern).
-///
-/// An undeclared predicate is *not* an error here - the existing
-/// arity-and-declaration pass surfaces that earlier with
-/// `UndeclaredPredicate`. We skip silently if the predicate is
-/// unknown.
+/// Check a claim-call's arg list against the declared predicate.
+/// Thin wrapper around [`check_args`] that does the lookup; an
+/// undeclared predicate skips silently (the structural pass
+/// already surfaces it as `Undeclared`).
 fn check_claim_args(
     predicate: &str,
     args: &[Term],
@@ -826,25 +839,81 @@ fn check_claim_args(
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
-    let Some(decl) = predicate_decls.get(predicate) else {
-        return;
-    };
-    // Arity mismatch is also out of scope for the kind layer; the
-    // existing pass emits it. Walk only as many positions as both
-    // sides have.
-    let n = args.len().min(decl.args.len());
-    for (position, (arg, decl_arg)) in args
-        .iter()
-        .take(n)
-        .zip(decl.args.iter().take(n))
-        .enumerate()
-    {
-        check_one_claim_arg(predicate, position, arg, decl_arg.kind, env, ctx, errors);
+    if let Some(decl) = predicate_decls.get(predicate) {
+        check_args(
+            VocabularyKind::Predicate,
+            predicate,
+            args,
+            &decl.args,
+            env,
+            ctx,
+            errors,
+        );
     }
 }
 
-fn check_one_claim_arg(
-    predicate: &str,
+/// Same shape as [`check_claim_args`] but against the intent
+/// vocabulary. Powers the kindcheck of `Stmt::Emit`.
+fn check_intent_args(
+    intent: &str,
+    args: &[Term],
+    env: &mut KindEnv,
+    intent_decls: &HashMap<&str, &crate::IntentDecl>,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(decl) = intent_decls.get(intent) {
+        check_args(
+            VocabularyKind::Intent,
+            intent,
+            args,
+            &decl.args,
+            env,
+            ctx,
+            errors,
+        );
+    }
+}
+
+/// Generic arg-list kind check. For each position: a literal
+/// contributes its kind directly; a variable is observed (refining
+/// the env); `Term::Wildcard` is skipped; `Term::Actor`
+/// contributes `Subject`. Arity-mismatched sites are walked only
+/// to `min(args, decl)`; the structural pass owns the arity
+/// diagnostic.
+fn check_args(
+    vocabulary: VocabularyKind,
+    name: &str,
+    args: &[Term],
+    decl_args: &[crate::ArgDecl],
+    env: &mut KindEnv,
+    ctx: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let n = args.len().min(decl_args.len());
+    for (position, (arg, decl_arg)) in args
+        .iter()
+        .take(n)
+        .zip(decl_args.iter().take(n))
+        .enumerate()
+    {
+        check_one_arg(
+            vocabulary,
+            name,
+            position,
+            arg,
+            decl_arg.kind,
+            env,
+            ctx,
+            errors,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_one_arg(
+    vocabulary: VocabularyKind,
+    name: &str,
     position: usize,
     arg: &Term,
     expected: PredicateArgKind,
@@ -853,27 +922,24 @@ fn check_one_claim_arg(
     errors: &mut Vec<ValidationError>,
 ) {
     let actual = term_kind(arg);
-    // For variables, observe (refining the env). For literals and
-    // actor, just check compatibility - they carry their kind
-    // directly and cannot themselves be refined.
-    if let Term::Var(name) = arg {
-        if let Err((previous, new)) = env.observe(name, InferredKind::Known(expected)) {
+    if let Term::Var(var_name) = arg {
+        if let Err((previous, new)) = env.observe(var_name, InferredKind::Known(expected)) {
             errors.push(ValidationError::VariableKindConflict {
-                variable: name.clone(),
+                variable: var_name.clone(),
                 previous,
                 new,
                 context: ctx.clone(),
             });
         }
-        // Variable-vs-declaration conflict (e.g. var was already
-        // refined to Decimal and the current slot expects Subject)
-        // already comes out as VariableKindConflict above; nothing
-        // more to emit here.
+        // VariableKindConflict is the right diagnostic when the
+        // variable already held an incompatible kind; no extra
+        // ArgKindMismatch needed.
     } else if let InferredKind::Known(actual_kind) = actual
         && !kinds_compatible(expected, actual_kind)
     {
-        errors.push(ValidationError::PredicateArgKindMismatch {
-            predicate: predicate.to_string(),
+        errors.push(ValidationError::ArgKindMismatch {
+            vocabulary,
+            name: name.to_string(),
             position,
             expected,
             actual: actual_kind,
@@ -1001,7 +1067,7 @@ mod tests {
     // ============================================================
 
     use crate::dsl::*;
-    use crate::ir::{Invariant, PredicateArgDecl, Program, Transformation};
+    use crate::ir::{ArgDecl, Intent, Invariant, Program, Transformation};
 
     /// Build a `PredicateDecl` shorthand for tests.
     fn pdecl(name: &str, args: &[(&str, PredicateArgKind)]) -> crate::ir::PredicateDecl {
@@ -1009,7 +1075,7 @@ mod tests {
             name: name.to_string(),
             args: args
                 .iter()
-                .map(|(n, k)| PredicateArgDecl {
+                .map(|(n, k)| ArgDecl {
                     name: n.to_string(),
                     kind: *k,
                 })
@@ -1021,6 +1087,7 @@ mod tests {
         Program {
             name: "test".to_string(),
             predicates: vec![],
+            intents: vec![],
             invariants: vec![],
             transformations: vec![],
             derived_claims: vec![],
@@ -1061,19 +1128,20 @@ mod tests {
         let errs = kindcheck_program(&p);
         assert_eq!(errs.len(), 1, "expected one kind error; got {errs:?}");
         match &errs[0] {
-            ValidationError::PredicateArgKindMismatch {
-                predicate,
+            ValidationError::ArgKindMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                name,
                 position,
                 expected,
                 actual,
                 ..
             } => {
-                assert_eq!(predicate, "Policy");
+                assert_eq!(name, "Policy");
                 assert_eq!(*position, 0);
                 assert_eq!(*expected, PredicateArgKind::Subject);
                 assert_eq!(*actual, PredicateArgKind::Decimal);
             }
-            other => panic!("expected PredicateArgKindMismatch, got {other:?}"),
+            other => panic!("expected ArgKindMismatch, got {other:?}"),
         }
     }
 
@@ -1168,13 +1236,16 @@ mod tests {
             "actor-in-decimal-slot must flag; got {errs:?}"
         );
         match &errs[0] {
-            ValidationError::PredicateArgKindMismatch {
-                expected, actual, ..
+            ValidationError::ArgKindMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                expected,
+                actual,
+                ..
             } => {
                 assert_eq!(*expected, PredicateArgKind::Decimal);
                 assert_eq!(*actual, PredicateArgKind::Subject);
             }
-            other => panic!("expected PredicateArgKindMismatch, got {other:?}"),
+            other => panic!("expected ArgKindMismatch, got {other:?}"),
         }
     }
 
@@ -1298,7 +1369,10 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
-            ValidationError::PredicateArgKindMismatch { .. }
+            ValidationError::ArgKindMismatch {
+                vocabulary: VocabularyKind::Predicate,
+                ..
+            }
         ));
     }
 
@@ -1778,8 +1852,9 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::PredicateArgKindMismatch {
-                    predicate: pn,
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
+                    name: pn,
                     position: 0,
                     expected: PredicateArgKind::Subject,
                     actual: PredicateArgKind::Decimal,
@@ -1828,8 +1903,9 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::PredicateArgKindMismatch {
-                    predicate: pn,
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
+                    name: pn,
                     position: 1,
                     expected: PredicateArgKind::Subject,
                     actual: PredicateArgKind::Decimal,
@@ -1969,6 +2045,118 @@ mod tests {
     }
 
     // ============================================================
+    // Intent emit arg-kind checking
+    // ============================================================
+
+    use crate::IntentDecl;
+
+    fn intent(name: &str, args: &[(&str, PredicateArgKind)]) -> IntentDecl {
+        IntentDecl {
+            name: name.to_string(),
+            args: args
+                .iter()
+                .map(|(n, k)| ArgDecl {
+                    name: n.to_string(),
+                    kind: *k,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn emit_with_literal_in_wrong_kind_slot_flags_arg_kind_mismatch() {
+        // `emit X(100)` against `intent X(id: Subject)` - decimal
+        // literal in a Subject slot. Same shape of error as the
+        // predicate-side `Assert` case, but tagged Intent.
+        let mut p = empty_program();
+        p.intents = vec![intent("Notify", &[("id", PredicateArgKind::Subject)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![Stmt::Emit(Intent {
+                name: "Notify".to_string(),
+                args: vec![dec("100")],
+            })],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Intent,
+                    name,
+                    position: 0,
+                    expected: PredicateArgKind::Subject,
+                    actual: PredicateArgKind::Decimal,
+                    ..
+                } if name == "Notify"
+            )),
+            "expected Intent ArgKindMismatch; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn emit_variable_observed_against_declared_intent_arg_kind() {
+        // `bind_one P(x); emit Notify(x)` where P binds x:Decimal
+        // and Notify expects x:Subject. The conflict surfaces via
+        // VariableKindConflict (variable already had Decimal kind).
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("P", &[("v", PredicateArgKind::Decimal)])];
+        p.intents = vec![intent("Notify", &[("v", PredicateArgKind::Subject)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("P", vec![var("x")])),
+                Stmt::Emit(Intent {
+                    name: "Notify".to_string(),
+                    args: vec![var("x")],
+                }),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict {
+                    variable: v,
+                    previous: PredicateArgKind::Decimal,
+                    new: PredicateArgKind::Subject,
+                    ..
+                } if v == "x"
+            )),
+            "expected VariableKindConflict on x; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn emit_with_arg_kinds_matching_declared_intent_is_clean() {
+        // Happy path: emit args agree with intent decl.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("P", &[("v", PredicateArgKind::Subject)])];
+        p.intents = vec![intent(
+            "Notify",
+            &[
+                ("subject", PredicateArgKind::Subject),
+                ("count", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![
+                bind_one(claim("P", vec![var("x")])),
+                Stmt::Emit(Intent {
+                    name: "Notify".to_string(),
+                    args: vec![var("x"), dec("5")],
+                }),
+            ],
+        }];
+        let errs = kindcheck_program(&p);
+        assert!(errs.is_empty(), "well-typed emit should pass; got {errs:?}");
+    }
+
+    // ============================================================
     // Or branch independence
     // ============================================================
     //
@@ -2045,7 +2233,8 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::PredicateArgKindMismatch {
+                ValidationError::ArgKindMismatch {
+                    vocabulary: VocabularyKind::Predicate,
                     expected: PredicateArgKind::Subject,
                     actual: PredicateArgKind::Decimal,
                     ..

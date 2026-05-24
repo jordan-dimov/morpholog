@@ -48,15 +48,15 @@ pub use analysis::{
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::EvalError;
 pub use ir::{
-    Claim, DerivedClaim, DerivedValue, Expr, Intent, Invariant, PredicateArgDecl, PredicateArgKind,
-    PredicateDecl, Program, Stmt, Term, Transformation, Value,
+    ArgDecl, Claim, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
+    PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
     Transition, propose, propose_with_trace,
 };
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
-pub use validate::{ValidationContext, ValidationError};
+pub use validate::{ValidationContext, ValidationError, VocabularyKind};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -1233,6 +1233,7 @@ mod tests {
         Program {
             name: "tiny".to_string(),
             predicates: vec![predicate("Echo").subject("id").decimal("amount").build()],
+            intents: vec![],
             invariants: vec![],
             transformations: vec![Transformation {
                 name: "echo".to_string(),
@@ -1260,10 +1261,10 @@ mod tests {
         assert!(
             errors.iter().any(|e| matches!(
                 e,
-                ValidationError::UndeclaredPredicate { predicate, .. }
-                    if predicate == "MissingPredicate"
+                ValidationError::Undeclared { vocabulary: VocabularyKind::Predicate, name, .. }
+                    if name == "MissingPredicate"
             )),
-            "expected UndeclaredPredicate(MissingPredicate); got: {errors:?}"
+            "expected Undeclared(Predicate, MissingPredicate); got: {errors:?}"
         );
     }
 
@@ -1279,11 +1280,12 @@ mod tests {
             errors.iter().any(|e| matches!(
                 e,
                 ValidationError::ArityMismatch {
-                    predicate,
+                    vocabulary: VocabularyKind::Predicate,
+                    name,
                     expected: 2,
                     actual: 1,
                     ..
-                } if predicate == "Echo"
+                } if name == "Echo"
             )),
             "expected ArityMismatch(Echo, 2, 1); got: {errors:?}"
         );
@@ -1304,12 +1306,13 @@ mod tests {
             errors.iter().any(|e| matches!(
                 e,
                 ValidationError::ArityMismatch {
-                    predicate,
+                    vocabulary: VocabularyKind::Predicate,
+                    name: pred_name,
                     expected: 2,
                     actual: 3,
                     context: ValidationContext::Invariant { name },
                     ..
-                } if predicate == "Echo" && name == "bad_inv"
+                } if pred_name == "Echo" && name == "bad_inv"
             )),
             "expected ArityMismatch in invariant context; got: {errors:?}"
         );
@@ -1325,10 +1328,10 @@ mod tests {
         assert!(
             errors.iter().any(|e| matches!(
                 e,
-                ValidationError::DuplicatePredicateDecl { predicate }
-                    if predicate == "Echo"
+                ValidationError::DuplicateDecl { vocabulary: VocabularyKind::Predicate, name }
+                    if name == "Echo"
             )),
-            "expected DuplicatePredicateDecl(Echo); got: {errors:?}"
+            "expected DuplicateDecl(Predicate, Echo); got: {errors:?}"
         );
     }
 
@@ -1349,10 +1352,10 @@ mod tests {
         assert!(
             errors.iter().any(|e| matches!(
                 e,
-                ValidationError::UndeclaredPredicate { predicate, .. }
-                    if predicate == "Computed"
+                ValidationError::Undeclared { vocabulary: VocabularyKind::Predicate, name, .. }
+                    if name == "Computed"
             )),
-            "expected UndeclaredPredicate(Computed); got: {errors:?}"
+            "expected Undeclared(Predicate, Computed); got: {errors:?}"
         );
     }
 
@@ -1383,12 +1386,13 @@ mod tests {
             errors.iter().any(|e| matches!(
                 e,
                 ValidationError::ArityMismatch {
-                    predicate,
+                    vocabulary: VocabularyKind::Predicate,
+                    name,
                     expected: 3,
                     actual: 2,
                     context: ValidationContext::DerivedClaim { .. },
                     ..
-                } if predicate == "Computed"
+                } if name == "Computed"
             )),
             "expected ArityMismatch on derived claim Computed; got: {errors:?}"
         );
@@ -1411,7 +1415,11 @@ mod tests {
         let names: Vec<&str> = errors
             .iter()
             .filter_map(|e| match e {
-                ValidationError::UndeclaredPredicate { predicate, .. } => Some(predicate.as_str()),
+                ValidationError::Undeclared {
+                    vocabulary: VocabularyKind::Predicate,
+                    name,
+                    ..
+                } => Some(name.as_str()),
                 _ => None,
             })
             .collect();

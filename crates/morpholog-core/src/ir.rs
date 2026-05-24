@@ -2,7 +2,7 @@
 //!
 //! `Invariant`, `Expr`, `Term`, `Value`, `Claim`, `Intent`, `Stmt`,
 //! `Transformation`, `Program`, `DerivedClaim`, `DerivedValue`, plus the
-//! predicate-declaration types `PredicateDecl`, `PredicateArgDecl`,
+//! predicate-declaration types `PredicateDecl`, `ArgDecl`,
 //! `PredicateArgKind`. These are pure data; runtime concerns (state,
 //! evaluation, proposal execution, validation, persistence) live in
 //! sibling modules.
@@ -333,18 +333,23 @@ pub struct Transformation {
 /// built-in examples use `"settlement_netting"`, `"revenue_restatement"`,
 /// `"claim_standing"`, `"double_entry_ledger"`). The CLI uses it to
 /// select a program.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
     /// The vocabulary of admissible claim shapes for this programme.
     /// Every `Expr::Claim`, `Stmt::Assert`, `Stmt::Retract`, and
     /// `Expr::ValueOf` reference must target a declared predicate
     /// (validated by [`Program::validate`]); every `DerivedClaim`'s
-    /// output predicate must also appear here. Intent declarations
-    /// are deliberately out of scope - intents are outbox effects,
-    /// not admitted-claim vocabulary; that distinction is captured
-    /// here rather than papered over.
+    /// output predicate must also appear here.
     pub predicates: Vec<PredicateDecl>,
+    /// The vocabulary of outbox intent shapes this programme may
+    /// emit. Every `Stmt::Emit` must target a declared intent; a
+    /// misspelled intent name in `emit` is a validation error, not
+    /// a silent route-to-nowhere on the outbox. Intent and
+    /// predicate vocabularies live in separate namespaces - an
+    /// intent and a predicate may share a name without collision
+    /// (though doing so is usually a modelling smell).
+    pub intents: Vec<IntentDecl>,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,
     pub derived_claims: Vec<DerivedClaim>,
@@ -377,9 +382,16 @@ impl Program {
     /// If duplicate declarations exist this returns the first; the
     /// validator's arity lookup uses the last. Either way, duplicate
     /// declarations are invalid and are reported by
-    /// [`Program::validate`] as `ValidationError::DuplicatePredicateDecl`.
+    /// [`Program::validate`] as `ValidationError::DuplicateDecl`.
     pub fn predicate(&self, name: &str) -> Option<&PredicateDecl> {
         self.predicates.iter().find(|p| p.name == name)
+    }
+
+    /// Look up an intent declaration by name. Returns `None` if no
+    /// intent in the program has that name. Same duplicate-handling
+    /// semantics as [`Self::predicate`].
+    pub fn intent(&self, name: &str) -> Option<&IntentDecl> {
+        self.intents.iter().find(|i| i.name == name)
     }
 
     /// Structural and kind/type validation of the whole programme.
@@ -433,14 +445,33 @@ impl Program {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PredicateDecl {
     pub name: String,
-    pub args: Vec<PredicateArgDecl>,
+    pub args: Vec<ArgDecl>,
 }
 
-/// One argument-position declaration in a [`PredicateDecl`].
+/// One argument-position declaration. Used by both
+/// [`PredicateDecl`] and [`IntentDecl`]; both vocabularies share
+/// the same `name`-plus-kind shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PredicateArgDecl {
+pub struct ArgDecl {
     pub name: String,
     pub kind: PredicateArgKind,
+}
+
+/// A declaration of an outbox intent: the intent name and the
+/// shape of its argument list. Declarations appear in
+/// [`Program::intents`]; references appear inside [`Stmt::Emit`].
+///
+/// Mirrors [`PredicateDecl`] structurally - intents and predicates
+/// have the same shape (named, kinded positional args) but live in
+/// distinct vocabularies because they play distinct roles: predicates
+/// describe admitted claim shapes, intents describe outbox-effect
+/// shapes. The kindcheck pass validates `emit` arg kinds against
+/// these declarations the same way it validates `assert` against
+/// [`PredicateDecl`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentDecl {
+    pub name: String,
+    pub args: Vec<ArgDecl>,
 }
 
 /// The expected kind of a predicate argument position.

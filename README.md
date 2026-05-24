@@ -103,7 +103,9 @@ Each runs both in memory (against the kernel) and durably (against PostgreSQL). 
 - [**Double-entry ledger with trial balance**](examples/03_double_entry_ledger/) - the accounting equation as an invariant; period close as an admission gate; restatement that preserves the original; the trial balance as a **governed read-side projection**. As-of replay yields the historical trial balance without a bitemporal column in the schema.
 - [**Approval controls**](examples/04_approval_controls/) - unconditional and quantitative authority. The approving actor flows from transition context; the asserted record carries them. Revocation prevents future approvals while preserving every historical one.
 - [**Insurance claim settlement**](examples/05_insurance_claim_settlement/) - cumulative settlements against a policy aggregate limit, evaluated at admission as `paid_so_far + proposed_settlement <= aggregate_limit`. Same audit-grade evidence regime as the other examples.
-- [**Clinical trial enrolment**](examples/06_clinical_trial_enrolment/) - a participant is randomised only if protocol, consent, investigator delegation and eligibility evidence are all valid on the randomisation date. **Validity is admission-time, not eternal**: a later protocol amendment does not invalidate an earlier randomisation. The first non-finance worked example, grounded in Good Clinical Practice.
+- [**Clinical trial enrolment**](examples/06_clinical_trial_enrolment/) - a participant is randomised only if protocol, consent, investigator delegation and eligibility evidence are all valid on the randomisation date. **Validity is admission-time, not eternal**: a later protocol amendment does not invalidate an earlier randomisation. Grounded in Good Clinical Practice.
+- [**Chess transition invariants**](examples/07_chess_transition_invariants/) - the one non-business example: an isolated demonstration of *transition invariants*, rules that relate the state before a change to the state after (move count strictly increases; piece count never rises). The same `pre(...)` mechanism enforces a real per-policy conservation law in the insurance example.
+- [**KYC sanctions and PEP screening**](examples/08_kyc_sanctions_screening/) - onboarding is gated by current, clean screenings against both the sanctions and PEP lists; an unresolved match on *any* of a customer's screenings blocks admission until it is adjudicated. Each step emits a **declared intent** to a distinct downstream consumer - misspelling `MatchRaised` is a validation error, not a silently-dropped compliance event.
 
 Morpholog is not the whole stack. UIs, dashboards, dataloaders, ML pipelines stay in normal tools. What Morpholog owns is the line where *"may this be admitted as a valid record?"* needs a definite answer - the small fraction of any real business system that, when it fails, makes the news.
 
@@ -126,7 +128,7 @@ The `.morph` parser arc is complete: every worked example parses end-to-end as `
 
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
-What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching for higher-order authority; user-supplied program loading from `.morph` at runtime (today's CLI runs built-in programmes); materialised derived claims; legibility tooling that answers *"what does this system prevent?"* with mechanically-derived exclusion matrices. Each lands when a worked example forces the shape.
+What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching for higher-order authority; materialised derived claims; legibility tooling that answers *"what does this system prevent?"* with mechanically-derived exclusion matrices. Each lands when a worked example forces the shape.
 
 ## Deeper reading
 

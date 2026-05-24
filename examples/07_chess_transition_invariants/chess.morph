@@ -13,6 +13,10 @@ predicate MoveCount(n: Decimal)
 predicate PieceCount(n: Decimal)
 predicate CurrentTurn(color: Subject)
 
+intent GameStarted()
+intent PieceMoved(src: Subject, dst: Subject)
+intent PieceCaptured(src: Subject, dst: Subject, captured_type: Subject)
+
 invariant at_most_one_piece_per_square:
   (PieceAt(sq, t_a, c_a) and PieceAt(sq, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
 

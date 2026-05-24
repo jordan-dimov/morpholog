@@ -4,7 +4,8 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    DerivedClaim, DerivedValue, Invariant, PredicateArgDecl, PredicateDecl, Program, Transformation,
+    ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateDecl, Program,
+    Transformation,
 };
 use std::collections::HashMap;
 
@@ -96,6 +97,20 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
             pred_by_name.insert(decl.name.as_str(), span);
         }
     }
+    let mut intent_by_name: HashMap<&str, &Span> = HashMap::new();
+    for (decl, span) in &raw.intents {
+        if let Some(first_span) = intent_by_name.get(decl.name.as_str()) {
+            diagnostics.push(
+                Diagnostic::error(
+                    format!("duplicate intent declaration `{}`", decl.name),
+                    span.clone(),
+                )
+                .with_secondary((*first_span).clone(), "previously declared here"),
+            );
+        } else {
+            intent_by_name.insert(decl.name.as_str(), span);
+        }
+    }
     let mut inv_by_name: HashMap<&str, &Span> = HashMap::new();
     for (inv, span) in &raw.invariants {
         if let Some(first_span) = inv_by_name.get(inv.name.as_str()) {
@@ -183,6 +198,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     Ok(Program {
         name: raw.name,
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
+        intents: raw.intents.into_iter().map(|(d, _)| d).collect(),
         invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
         transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
@@ -197,6 +213,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
 struct RawProgram {
     name: String,
     predicates: Vec<(PredicateDecl, Span)>,
+    intents: Vec<(IntentDecl, Span)>,
     invariants: Vec<(Invariant, Span)>,
     transformations: Vec<(Transformation, Span)>,
     derived_claims: Vec<(DerivedClaim, Span)>,
@@ -210,6 +227,7 @@ struct RawProgram {
 /// first" file convention.
 enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
+    Intent(IntentDecl, Span),
     Invariant(Invariant, Span),
     Transformation(Transformation, Span),
     Derived(DerivedClaim, Span),
@@ -226,21 +244,38 @@ where
     let arg = ident
         .then_ignore(just(Token::Colon))
         .then(kind)
-        .map(|(name, kind)| PredicateArgDecl { name, kind });
+        .map(|(name, kind)| ArgDecl { name, kind });
 
     // arg_list ::= arg ("," arg)* ","?
     let arg_list = arg
         .separated_by(just(Token::Comma))
         .allow_trailing()
-        .collect::<Vec<PredicateArgDecl>>();
+        .collect::<Vec<ArgDecl>>();
 
     // predicate_decl ::= "predicate" Ident "(" arg_list? ")"
     let predicate_decl = just(Token::KwPredicate)
         .ignore_then(ident)
-        .then(arg_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then(
+            arg_list
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
         .map_with(|(name, args), e| {
             let span: SimpleSpan = e.span();
             TopLevelDecl::Predicate(PredicateDecl { name, args }, span.start()..span.end())
+        });
+
+    // intent_decl ::= "intent" Ident "(" arg_list? ")"
+    // Mirrors predicate_decl exactly - same surface shape, different
+    // vocabulary. The parser distinguishes them; the kindcheck
+    // validates emits against intent decls just as it validates
+    // claims against predicate decls.
+    let intent_decl = just(Token::KwIntent)
+        .ignore_then(ident)
+        .then(arg_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .map_with(|(name, args), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Intent(IntentDecl { name, args }, span.start()..span.end())
         });
 
     // invariant_decl ::= "invariant" Ident ":" body
@@ -363,6 +398,7 @@ where
     // within each category).
     let top_level_decl = choice((
         predicate_decl,
+        intent_decl,
         invariant_decl,
         transformation_decl,
         derived_decl,
@@ -375,6 +411,7 @@ where
         any().ignored(),
         just(Token::KwPredicate)
             .ignored()
+            .or(just(Token::KwIntent).ignored())
             .or(just(Token::KwInvariant).ignored())
             .or(just(Token::KwTransformation).ignored())
             .or(just(Token::KwDerived).ignored())
@@ -389,12 +426,14 @@ where
         .then_ignore(end())
         .map(|(name, decls)| {
             let mut predicates = Vec::new();
+            let mut intents = Vec::new();
             let mut invariants = Vec::new();
             let mut transformations = Vec::new();
             let mut derived_claims = Vec::new();
             for d in decls {
                 match d {
                     TopLevelDecl::Predicate(p, s) => predicates.push((p, s)),
+                    TopLevelDecl::Intent(i, s) => intents.push((i, s)),
                     TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
                     TopLevelDecl::Transformation(t, s) => transformations.push((t, s)),
                     TopLevelDecl::Derived(d, s) => derived_claims.push((d, s)),
@@ -403,6 +442,7 @@ where
             RawProgram {
                 name,
                 predicates,
+                intents,
                 invariants,
                 transformations,
                 derived_claims,

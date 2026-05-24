@@ -14,9 +14,10 @@ The canonical sources of doctrine are:
 - Per-example `README.md` under `examples/`.
 
 If a change interacts with the IR (`Invariant`, `Transformation`, `Stmt`,
-`Expr`, `Term`, `Value`, `Claim`, `Intent`, `DerivedClaim`, `Transition`),
-the runtime kernel, or the persistence adapter, prefer reading these
-docs over inferring intent from surrounding code.
+`Expr`, `Term`, `Value`, `Claim`, `Intent`, `DerivedClaim`, `Transition`,
+the declaration types `PredicateDecl` / `IntentDecl` / `ArgDecl`), the
+runtime kernel, or the persistence adapter, prefer reading these docs
+over inferring intent from surrounding code.
 
 ## A few rules code review doesn't get from the linter
 
@@ -43,7 +44,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo audit                                                                          # needs `cargo install cargo-audit` once
-cargo test -p morpholog-core -p morpholog-examples -p morpholog-cli --all-targets --locked
+cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support -p morpholog-cli --all-targets --locked
 
 # Against a local PostgreSQL 17+ with crates/morpholog-core/sql/schema.sql applied:
 DATABASE_URL=postgres:///morpholog_dev \

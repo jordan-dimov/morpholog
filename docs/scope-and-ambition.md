@@ -216,7 +216,7 @@ Real ETRM and accounting systems suffer the same small family of failures, regar
 
 These are not seven different failures. They are one failure with seven faces: *state was treated as legitimate that the system cannot, under explicit rules, justify treating as legitimate.*
 
-Morpholog's claim is that this whole class of failure becomes non-representable when the language itself is the legitimacy boundary. Measured this way, Morpholog can plausibly own **the majority of the legitimacy surface** of a serious business system while still being a minority of the lines of code. That is the ambition. "X% of the codebase" is the wrong frame.
+Morpholog's claim is that this whole class of failure becomes non-representable when the language itself is the legitimacy boundary. Measured this way, Morpholog owns **the majority of the legitimacy surface** of a serious business system while still being a minority of the lines of code. That is the ambition, and it is the right frame; "X% of the codebase" is the wrong one.
 
 ## Roadmap
 
@@ -245,11 +245,13 @@ The richer worked examples. Each one combines several of the patterns the langua
 
 - **[Chess transition invariants](../examples/07_chess_transition_invariants/).** A non-business teaching example that exercises transition invariants - rules over how state *changes*, not just over what state is admissible. Textbook chess invariants (the move counter advances by one, turn alternates, at most one capture per move) all need `pre(...)` to compare pre- and post-states; none can be expressed as a predicate over a single state. Forced `Expr::Or` (the capture rule admits a 0-or-1 disjunction) and the kernel mechanism that powers the insurance example's `headroom_consumed_by_payment` invariant.
 
+- **[KYC sanctions and PEP screening](../examples/08_kyc_sanctions_screening/).** Customer onboarding gated by current-clean screenings against the sanctions and PEP lists, with an unresolved match on any of a customer's screenings blocking admission until it is adjudicated. Each workflow step emits an intent to a distinct downstream consumer, where a misspelled emit must fail at validation rather than silently create a dead outbox partition. Forced `IntentDecl` - declared outbox vocabulary parallel to `PredicateDecl` - and the `VocabularyKind` unification that lets one set of validation diagnostics serve both vocabularies.
+
 - **As-of evaluation.** `reconstruct_state_at`, `list_claims_at`, `list_derived_at` reconstruct historical state by replaying the audit log up to a chosen `transition_id`. CLI exposes `--as-of <transition_id>` on `inspect claims` and `inspect derived`. The trial-balance example demonstrates this end-to-end.
 
 **The authoring-surface refactor arc.** After the worked examples crystallised the kernel's primitive set, a refactor arc made the IR pleasant to author against: a public `dsl` module with builder helpers; `Stmt::BindOne` as a deterministic unique-lookup binding statement (collapsing the older `require + let + value_of` workaround); `Program::predicates` with strict arity validation; structured per-statement diagnostic trace via `propose_with_trace` (with `failing_sub_expression` identifying which sub-expression of a rejected `require` or `bind_one` is responsible); predicate-scoped loading on both read and write paths of the PG adapter; the kernel split into focused submodules. After this arc a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with execution that's structurally inspectable. The kernel discipline stayed the same; the authoring layer above it became materially more usable. See [`docs/design-history.md`](design-history.md) for the per-PR retrospective.
 
-The candidate language affordances driven by Level 2: predicate declarations are now landed. The next forced moves - higher-order authority (one authority claim governing a family of transformations), effective time as a separate axis, validity windows, materialised derived claims - all await the worked examples that demand them. The current operational plan for them lives in [`docs/roadmap.md`](roadmap.md).
+The candidate language affordances driven by Level 2: predicate declarations, kind/type checking, and intent declarations are now landed. The next forced moves - higher-order authority (one authority claim governing a family of transformations), effective time as a separate axis, validity windows, materialised derived claims - all await the worked examples that demand them. The current operational plan for them lives in [`docs/roadmap.md`](roadmap.md).
 
 ### Level 3 - Governed external and integration provenance
 
@@ -268,6 +270,7 @@ These are floors. They do not get relaxed by accumulation of pressure; they get 
 - **No optimisation / solver runtime.** ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.
 - **No ad-hoc query DSL** beyond derived-claim queries and the as-of operator.
 - **No bypass flags** (`skip_validation`, `force_commit`, etc.). Exceptions, when needed, are first-class typed claims with full audit standing.
+- **No bespoke storage kernel.** Morpholog runs on PostgreSQL 17+ and leans, deliberately, on `SERIALIZABLE` isolation, JSONB, and atomic multi-table commit. The recurring suggestion - "if the language is truly minimal, compile it down to a standalone microkernel" - inverts the thesis. Atomic commit under serializable concurrency, crash recovery, and MVCC are the single hardest body of correctness code in computing; reimplementing them in a "lean" kernel would move millions of lines of un-battle-tested machinery *inside* the trust boundary, to win an elegance the product does not need. The minimalism that matters here is **surface** minimalism - the `.morph` language and the IR stay small - not **substrate** minimalism. The database is the correctness substrate, chosen on purpose, not an implementation detail to be outgrown.
 
 ## Where this leaves us
 

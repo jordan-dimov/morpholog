@@ -2,13 +2,15 @@
 
 Status: operational. This document is what the project is *doing next*. It is forward-looking and lower-stakes than [`scope-and-ambition.md`](scope-and-ambition.md) (which fixes what Morpholog is *for*) and [`runtime-semantics.md`](runtime-semantics.md) (which fixes what the runtime *means*). When this file and design-history disagree, design-history is the historical record; this file is intent.
 
-Each item below either has a concrete forcing scenario or is explicitly held until one appears. The "smallest possible increment, forced by a worked example" discipline still governs - this is not a wish list.
+The "forced by a worked example" discipline binds **kernel and IR primitives**: a new `Expr` / `Stmt` / `Value` variant earns its place only when an example needs it, never speculatively. That is where unconstrained growth is dangerous, and the bar stays high. It is *not* a brake on everything else - tooling, new worked examples, performance work, legibility surfaces, and product completeness move as soon as the direction is clear, not only when an example forces them. The bar for *adding to the language* is deliberately higher than the bar for *building around it*. This is intent, not a wish list.
 
 ## Status today
 
 The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are all in good shape. Programmes are declared-vocabulary objects. Execution is structurally inspectable through `propose_with_trace` and the CLI's `--trace` flag, including expression-internal failure-walk that identifies which sub-expression of a rejected `require` or `bind` was responsible. Predicate-scoped loading runs on both read and write paths.
 
-The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` now runs both the structural pass (arity, declarations, duplicates) and the kind/type compatibility pass that catches authoring mistakes the kernel would otherwise raise as `TypeMismatch` at runtime.
+The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` now runs the structural pass (arity, declarations, duplicates for both predicates and intents) and the kind/type compatibility pass that catches authoring mistakes the kernel would otherwise raise as `TypeMismatch` at runtime.
+
+Outbox intents are declared vocabulary too. `IntentDecl` (parallel to `PredicateDecl`) names every intent type the programme may emit; a misspelled `emit` is a validation error rather than a silent route-to-nowhere on the outbox.
 
 The compute-zone interface for non-Rust integrations is in place. `morpholog run` closes the input boundary; `morpholog outbox claim` / `complete` / `release` let a shell or Python deliverer participate in the lease protocol without a Rust `Deliverer` impl. The three-zone doctrine (compute / commit / outbox) is documented in [`scope-and-ambition.md`](scope-and-ambition.md); the round-trip compute pattern in [`outbox-sketch.md`](outbox-sketch.md).
 
@@ -16,16 +18,14 @@ The CLI is split by subcommand under `crates/morpholog-cli/src/commands/`. Addin
 
 ## Imminent
 
-With the input/output boundaries and the kind/type-compatibility layer in place, `.morph` authoring is materially more trustworthy than before. The remaining layers of enriched check are the next investment.
+With the input/output boundaries, the kind/type-compatibility layer, and the intent vocabulary in place, `.morph` authoring is materially more trustworthy than before. The remaining layers of enriched check are the next investment.
 
-- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates) and Layer 1 (kind/type compatibility) both ship today. Three layers remain, each independently testable:
+- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates for both predicates and intents) and Layer 1 (kind/type compatibility, covering both vocabularies) ship today. Three layers remain, each independently testable:
     - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced. The natural home for a symmetric "value-shaped expression at predicate position" check the kind layer deliberately left out.
     - **Actor-in-wrong-context.** `Term::Actor` resolves only inside transformation bodies; the kernel raises `UnboundActor` if an invariant or derived claim mentions `actor`. Catch it statically with a clear "actor is not available in invariant bodies - authority belongs in `require`" message.
-    - **Lint-grade hints under `--strict`.** Unused predicate declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on UndeclaredPredicate.
+    - **Lint-grade hints under `--strict`.** Unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on an `Undeclared` reference.
 
     Each layer is a separate small PR. `--strict` promotes hints to errors. `--json` emits diagnostics in a tooling-friendly form for IDE integration later.
-
-- **`IntentDecl` (intents-as-vocabulary).** Predicates are declared via `PredicateDecl`; intents are still stringly typed. A misspelled `emit X(...)` silently creates a new outbox partition with zero consumers. An `IntentDecl` mirroring `PredicateDecl` would let `morpholog check` validate intent emissions and give the outbox CLI a schema basis. Lands when a worked example or tooling genuinely forces it.
 
 - **Legibility tooling.** Surface syntax makes programmes readable; the next gap is making them *reviewable*. Three `morpholog inspect` subcommands derived from static analysis of parsed `.morph` programmes:
     1. `morpholog inspect exclusions <program>` - walks invariants and `not` / `Neq` requires; emits the mutually-exclusive predicate pairs it can derive. Controllers and regulators ask "what does this system *prevent*?" before "what does it enable?", and nothing in `inspect` today answers that. Highest-leverage first tool; smallest implementation.
@@ -41,9 +41,9 @@ The current bench shows linear scaling on additive workloads (~1.6s per commit, 
 - **Retraction-heavy bench scenario.** Add a `--retract-fraction K` flag mirroring the existing `--noise-claims`. Generates a fixture where K% of the N transitions are wildcard retracts against prior periods. The forcing pressure that would justify snapshot/lattice work is the curve this produces - not raw N. Worth doing the *measurement* before designing the lattice, so the snapshot interval and structure are sized to a real signal.
 - **Snapshot / incremental-materialisation for audit replay.** Once the bench surfaces a real problem. Likely shape: a checkpoint table that materialises the live claim set every K transitions, plus a delta-replay path that resumes from the nearest checkpoint. Compounded by concurrent bitemporal query density (matrix-style reports running `list_derived_at` across thousands of historical timestamps).
 
-## Operational completeness, when forced
+## Operational completeness
 
-Deferred until a worked example or a real operator forces them.
+The hardening real deployment needs. Not language growth and not gated on a worked example - these move as Morpholog approaches its first production deployment. Listed, not frozen.
 
 - **Worker supervisor.** The polling outbox worker exists and ships a `StdoutDeliverer`. Missing: a supervisor running multiple workers under restart-with-intensity, with crash isolation between deliverers.
 - **Per-target circuit breakers.** A delivery target that misbehaves should be ring-fenced (back off, alert, eventually quarantine), not continue eating the worker's loop indefinitely.

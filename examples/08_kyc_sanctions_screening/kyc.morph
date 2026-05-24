@@ -1,0 +1,144 @@
+program kyc_sanctions_screening
+
+-- ============================================================
+-- State vocabulary (admitted claims)
+-- ============================================================
+
+predicate Customer(customer_id: Subject)
+predicate Screening(screening_id: Subject, customer: Subject, list_type: Subject, requested_on: Date)
+predicate ScreeningResult(screening_id: Subject, disposition: Subject, completed_on: Date, expires_on: Date)
+predicate CurrentScreening(customer: Subject, list_type: Subject, screening_id: Subject)
+predicate MatchUnderReview(screening_id: Subject, raised_on: Date)
+predicate OnboardedCustomer(customer: Subject, onboarded_on: Date)
+
+
+-- ============================================================
+-- Outbox vocabulary (intent emissions)
+-- ============================================================
+
+intent ScreeningRequested(screening_id: Subject, customer: Subject, list_type: Subject)
+intent MatchRaised(screening_id: Subject, customer: Subject, list_type: Subject)
+intent CustomerOnboarded(customer: Subject, onboarded_on: Date)
+intent CustomerRejected(customer: Subject, reason: Subject)
+
+
+-- ============================================================
+-- Invariants
+-- ============================================================
+
+-- At most one current screening per (customer, list_type). The
+-- currentness pointer is singleton; later screenings retract the
+-- prior one and admit themselves in its place.
+invariant at_most_one_current_screening_per_customer_and_list_type:
+    (CurrentScreening(c, t, s_a) and CurrentScreening(c, t, s_b)) implies (s_a = s_b)
+
+-- An onboarded customer must have a current sanctions screening
+-- with a clean (or adjudicated-clear) disposition whose expiry
+-- has not been reached by the onboarding date.
+invariant onboarded_requires_current_clean_sanctions:
+    OnboardedCustomer(c, on_date) implies (
+        CurrentScreening(c, #sanctions, s)
+        and (ScreeningResult(s, #clean, completed, expires)
+             or ScreeningResult(s, #adjudicated_clear, completed, expires))
+        and (on_date on_or_before expires)
+    )
+
+-- Mirror for PEP screening: every onboarded customer must have a
+-- current PEP screening too. Sanctions and PEP are distinct lists
+-- with distinct legal weight; both must be current.
+invariant onboarded_requires_current_clean_pep:
+    OnboardedCustomer(c, on_date) implies (
+        CurrentScreening(c, #pep, s)
+        and (ScreeningResult(s, #clean, completed, expires)
+             or ScreeningResult(s, #adjudicated_clear, completed, expires))
+        and (on_date on_or_before expires)
+    )
+
+-- An onboarded customer cannot have ANY unresolved match on ANY
+-- of their screenings - not just the current standing one. A
+-- match found by a re-screen blocks onboarding even while an
+-- older clean screening still holds the currentness pointer; a
+-- hit must be adjudicated (clean-after-review or true-positive
+-- rejection), never simply superseded by a later clean result.
+-- The join is through Screening, not CurrentScreening, precisely
+-- so a newer unresolved match cannot hide behind an older clean
+-- current screening.
+invariant onboarded_requires_no_unresolved_match:
+    OnboardedCustomer(c, _) implies not (
+        Screening(s, c, _, _) and MatchUnderReview(s, _)
+    )
+
+
+-- ============================================================
+-- Transformations
+-- ============================================================
+
+-- Register a new customer. Idempotency is enforced by the
+-- existence check, not by an invariant, because registration
+-- must be lawfully blocked rather than silently no-op'd.
+transformation register_customer(customer_id):
+    require not Customer(customer_id)
+    admit Customer(customer_id)
+
+-- Request a screening for a customer against a specific list
+-- (sanctions, PEP, etc.). The result comes back asynchronously
+-- via record_clean_screening_result or record_match_screening_result.
+-- The ScreeningRequested intent is what carries the request to
+-- the external provider (e.g. World-Check, Refinitiv).
+transformation request_screening(screening_id, customer, list_type, requested_on):
+    require Customer(customer)
+    admit Screening(screening_id, customer, list_type, requested_on)
+    emit ScreeningRequested(screening_id, customer, list_type)
+
+-- The screening provider returned a clean result. Admit it and
+-- move the currentness pointer to this screening (retracting any
+-- prior current screening for the same customer + list_type).
+transformation record_clean_screening_result(screening_id, completed_on, expires_on):
+    bind Screening(screening_id, customer, list_type, _)
+    admit ScreeningResult(screening_id, #clean, completed_on, expires_on)
+    retract CurrentScreening(customer, list_type, _)
+    admit CurrentScreening(customer, list_type, screening_id)
+
+-- The screening provider returned a match. Admit the result and
+-- queue it for analyst review. The currentness pointer does NOT
+-- move - a match-laden screening cannot serve as the customer's
+-- current standing until disposition is recorded. The MatchRaised
+-- intent routes to the compliance review queue.
+transformation record_match_screening_result(screening_id, completed_on, expires_on, raised_on):
+    bind Screening(screening_id, customer, list_type, _)
+    admit ScreeningResult(screening_id, #match, completed_on, expires_on)
+    admit MatchUnderReview(screening_id, raised_on)
+    emit MatchRaised(screening_id, customer, list_type)
+
+-- Analyst adjudicates a raised match as a false positive. The
+-- screening is now standing-eligible; clear the under-review
+-- flag and update the currentness pointer. A separate
+-- transformation (not shown in v0) would handle true-positive
+-- adjudication: that path admits a CustomerRejected outcome.
+transformation adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on):
+    require MatchUnderReview(screening_id, _)
+    bind Screening(screening_id, customer, list_type, _)
+    admit ScreeningResult(screening_id, #adjudicated_clear, adjudicated_on, expires_on)
+    retract MatchUnderReview(screening_id, _)
+    retract CurrentScreening(customer, list_type, _)
+    admit CurrentScreening(customer, list_type, screening_id)
+
+-- Admit a customer as onboarded. The invariants do the work:
+-- the customer must exist, not already be onboarded, must have
+-- current clean screenings on both sanctions AND PEP lists, and
+-- must have no unresolved matches. Any failure of those rolls
+-- back atomically.
+transformation onboard_customer(customer, onboarded_on):
+    require Customer(customer)
+    require not OnboardedCustomer(customer, _)
+    admit OnboardedCustomer(customer, onboarded_on)
+    emit CustomerOnboarded(customer, onboarded_on)
+
+-- Reject a customer outright (e.g. confirmed sanctions match,
+-- prohibited jurisdiction). No state change beyond the rejection
+-- event - the customer record stays in admitted state so the
+-- decision audit trail survives. Re-application would require a
+-- separate process.
+transformation reject_customer(customer, reason):
+    require Customer(customer)
+    emit CustomerRejected(customer, reason)
