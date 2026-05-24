@@ -23,23 +23,16 @@ use crate::format;
 use crate::ir::{Claim, Intent, Invariant, Stmt, Term, Transformation};
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
-/// A proposed state transition under proposed context.
-///
-/// A `Transition` is the value evaluated, accepted-or-rejected, and
-/// persisted to the audit log on acceptance. It bundles three things:
+/// A proposed state transition. Evaluated, accepted-or-rejected, and
+/// persisted to the audit log on acceptance. Bundles:
 ///
 /// - `transformation_name`: which named transformation is being proposed.
 ///   Must match the `name` of the [`Transformation`] passed to [`propose`].
-/// - `args`: the per-call arguments to that transformation, positional,
-///   matching the transformation's declared `parameters`.
+/// - `args`: the per-call positional arguments, matching the
+///   transformation's declared `parameters`.
 /// - `actor`: the [`EvalValue::Subject`] under whose authority the
-///   transition is being proposed. Carried as transition context, not
-///   as a transformation parameter, so domain payloads stay free of
-///   plumbing concerns.
-///
-/// The actor is plumbed through `propose` and persisted with the audit
-/// row from this PR forward; admission rules that consult the actor
-/// (authority checks) arrive in a later PR.
+///   transition is proposed. Carried as transition context, not a
+///   transformation parameter, so domain payloads stay free of plumbing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub transformation_name: String,
@@ -73,20 +66,14 @@ pub(crate) enum StmtOutcome {
 
 /// Structured outcome of `propose_with_trace`. Mirrors `propose`'s
 /// success/error split but carries a [`Vec<TraceEntry>`] on **both**
-/// paths so that the worst debugging cases (multi-match `BindOne`,
-/// type-mismatch `DateLe`, multi-match `ValueOf`, unbound actor) do
-/// not silently discard the run-up that led to the failure.
+/// paths, so the worst debugging cases (multi-match `BindOne`,
+/// type-mismatch `DateLe`, multi-match `ValueOf`, unbound actor) do not
+/// silently discard the run-up to the failure.
 ///
-/// Scope (v0): trace is **statement-level plus failure-walk on
-/// rejection paths**. Each transformation statement and invariant
-/// check produces one entry. When a `require` or `bind_one`
-/// rejects, the entry's outcome carries a
-/// `failing_sub_expression: Option<String>` field identifying the
-/// most specific sub-expression responsible (e.g. the failing
-/// conjunct of an `And`, or the body of a `Forall` that failed at
-/// some iteration). Success paths drill no further than statement
-/// level; a full structural ExprTrace mirroring the evaluator is
-/// deferred until a worked example forces it.
+/// Trace is statement-level plus a failure-walk on rejection paths:
+/// each statement and invariant check produces one entry, and a
+/// rejecting `require`/`bind_one` carries a `failing_sub_expression`
+/// (see [`RequireOutcome`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TracedProposal {
     /// The transformation ran to a normal outcome (Accepted or
@@ -96,31 +83,27 @@ pub enum TracedProposal {
         outcome: Outcome,
         trace: Vec<TraceEntry>,
     },
-    /// The transformation surfaced a kernel-level error (bad
-    /// arguments, evaluator failure, multi-match `BindOne`, etc.).
-    /// `trace` contains every statement that ran before the error
-    /// was raised - exactly the diagnostic surface that the
-    /// `Result<_, EvalError>` shape would drop.
+    /// The transformation surfaced a kernel-level error (bad arguments,
+    /// evaluator failure, multi-match `BindOne`, etc.). `trace` contains
+    /// every statement that ran before the error - the surface a plain
+    /// `Result<_, EvalError>` would drop.
     Errored {
         error: EvalError,
         trace: Vec<TraceEntry>,
     },
 }
 
-/// One step in the trace produced by `propose_with_trace`. There is
-/// one entry per statement and one per invariant check. `For` is
-/// nested: its `iterations` carry a sub-trace per loop iteration.
+/// One step in the trace produced by `propose_with_trace`: one entry
+/// per statement and one per invariant check. `For` is nested - its
+/// `iterations` carry a sub-trace per loop iteration.
 ///
-/// Every variant that records an expression renders it via
-/// [`crate::format::format_expr_inline`] for human-readable diagnostic
-/// output; the exact string format is intentionally not pinned by
-/// type so future formatter improvements (PR A's territory) propagate
-/// here automatically.
+/// Variants that record an expression render it via
+/// [`crate::format::format_expr_inline`]; the exact string format is
+/// not pinned by type, so formatter improvements propagate here.
 ///
-/// Serde derives carry the wire format the CLI's `--trace` flag
-/// emits. The enum uses an internally-tagged shape
-/// (`{ "kind": "...", ... }`) so each entry is distinguishable in a
-/// flat JSON array.
+/// Serde derives carry the wire format the CLI's `--trace` flag emits.
+/// The internally-tagged shape (`{ "kind": "...", ... }`) keeps each
+/// entry distinguishable in a flat JSON array.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEntry {
@@ -143,10 +126,9 @@ pub enum TraceEntry {
     Assert {
         claim: ClaimInstance,
     },
-    /// Retraction trace carries the **actual retracted claims**, not
-    /// just a count. Retraction is exactly where debugging gets hard:
-    /// a wildcard retract that takes out three claims when you
-    /// expected one is invisible if only the count is recorded.
+    /// Carries the **actual retracted claims**, not just a count: a
+    /// wildcard retract that takes out more than expected is invisible
+    /// if only the count is recorded.
     Retract {
         predicate: String,
         retracted: Vec<ClaimInstance>,
@@ -182,40 +164,19 @@ pub struct ForIterationTrace {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RequireOutcome {
-    /// The require's expression admitted at least one matching
-    /// binding extension. `match_count` records the cardinality of
-    /// `find_matches`'s return; the require does not export these
-    /// bindings (that is `BindOne`'s job), but the count helps
-    /// explain downstream behaviour.
+    /// The require's expression admitted at least one matching binding
+    /// extension. `match_count` is the cardinality of `find_matches`'s
+    /// return; `require` does not export these bindings (that is
+    /// `BindOne`'s job), but the count explains downstream behaviour.
     Held { match_count: usize },
     Rejected {
         reason: String,
         /// The most specific sub-expression responsible for the
-        /// rejection, rendered via `format_expr_inline`, when the
-        /// kernel can identify one. Populated on failure paths only:
-        ///
-        /// - `And` failures point at the first failing conjunct (and
-        ///   recursively into it if compound).
-        /// - `Implies` failures (left held, right rejected) point at
-        ///   the right side.
-        /// - `Forall` failures point at the body where some binding
-        ///   from the source caused it to reject. Binding values are
-        ///   not substituted into the rendered string in v0; the
-        ///   caller correlates separately.
-        ///
-        /// `None` when no more specific sub-expression usefully
-        /// applies: `Exists` failures are structural (no single
-        /// sub-expression is "the one"); `Not` failures
-        /// describe what *held* rather than what failed; leaf
-        /// expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
-        /// `Term`, arithmetic, `Sum`, `ValueOf`) are already as
-        /// specific as the kernel can be.
-        ///
-        /// Distinct from `reason` (the human-readable rejection
-        /// string `propose` already produces); this field carries
-        /// only the rendered expression, never prose. A future
-        /// `failure_shape` field could carry structured "what kind
-        /// of failure" metadata if a worked example forces it.
+        /// rejection, rendered via `format_expr_inline`, when the kernel
+        /// can identify one (see [`crate::EvalError`] and the
+        /// `find_failing_subexpr` drill-down rules). `None` for `Exists`,
+        /// `Not`, `Or`, and leaf expressions. Carries only the rendered
+        /// expression, never prose - distinct from `reason`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failing_sub_expression: Option<String>,
     },
@@ -225,11 +186,10 @@ pub enum RequireOutcome {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BindOneOutcome {
     /// The bind_one's expression matched exactly one binding set.
-    /// `bindings` records the **full** new binding context the
-    /// matcher returned (sorted by variable name for stable
-    /// serialisation). PR B's doctrine is that `BindOne` replaces
-    /// the current binding context with the returned set; the
-    /// trace records the full set for completeness.
+    /// `bindings` records the **full** new binding context the matcher
+    /// returned (sorted by variable name for stable serialisation):
+    /// `BindOne` replaces the current context with the returned set, so
+    /// the trace records the full set, not a delta.
     Bound {
         bindings: Vec<(String, EvalValue)>,
     },
@@ -268,18 +228,14 @@ impl<'a> TraceSink<'a> {
     }
 }
 
-/// Propose a transformation against a pre-state. Stages asserts/retracts/
-/// intents, builds the candidate state, evaluates every invariant against
-/// that candidate state, and returns Accepted iff all invariants hold.
+/// Propose a transformation against a pre-state. Stages
+/// asserts/retracts/intents, builds the candidate state, evaluates every
+/// invariant against it, and returns Accepted iff all invariants hold.
+/// No PostgreSQL, audit, or outbox: this is the pure semantic loop.
 ///
-/// No PostgreSQL, no audit, no outbox - that's a later concern. This
-/// proves the semantic loop: transformation proposes, invariants decide.
-///
-/// The proposal is given as a [`Transition`], which bundles the
-/// transformation name (verified against `transformation.name`), the
-/// arguments, and the actor under whose authority the transition is
-/// being proposed. The actor is plumbed through from this PR; admission
-/// rules that consult it arrive later.
+/// The proposal is a [`Transition`] bundling the transformation name
+/// (verified against `transformation.name`), the arguments, and the
+/// proposing actor.
 pub fn propose(
     transformation: &Transformation,
     transition: &Transition,
@@ -300,24 +256,12 @@ pub fn propose(
 }
 
 /// `propose` with structured per-statement and per-invariant trace
-/// recording. Returns a [`TracedProposal`] that carries the trace on
-/// **both** success and error paths - the worst debugging cases
-/// (multi-match `BindOne`, type-mismatch `DateLe`, multi-match
-/// `ValueOf`, unbound actor) raise `EvalError`, and dropping the
-/// trace at exactly that moment would defeat the purpose of having
-/// one.
+/// recording. Returns a [`TracedProposal`] carrying the trace on both
+/// success and error paths.
 ///
-/// Trace scope is statement-level. The trace shows which statement
-/// failed, what bindings each statement produced, and which
-/// invariant fired - it does **not** drill into expression
-/// internals (which conjunct of an `And` was false, which branch of
-/// a `Forall` matched). Expression-level tracing is a separate
-/// evaluator refactor.
-///
-/// Both `propose` and `propose_with_trace` share a single execution
-/// path internally; the only difference is the `TraceSink` passed
-/// to the executor. Performance impact on the non-trace path is
-/// zero (the sink is an `Off` no-op).
+/// Both functions share one execution path; the only difference is the
+/// `TraceSink` passed to the executor, so the non-trace path pays
+/// nothing (the sink is an `Off` no-op).
 pub fn propose_with_trace(
     transformation: &Transformation,
     transition: &Transition,
@@ -444,18 +388,14 @@ pub(crate) fn execute_stmt(
     match stmt {
         Stmt::Require(expr) => {
             // Transformation bodies read pre-state as the only state in
-            // scope - there is no post to flip back from. `Expr::Pre`
-            // inside a `require` therefore surfaces as
-            // `EvalError::PreStateUnavailable`. The `None` for pre_state
-            // in the context is what enforces that doctrine.
+            // scope. Passing `None` for pre_state is what makes
+            // `Expr::Pre` inside a `require` surface as
+            // `EvalError::PreStateUnavailable`.
             let ctx = EvalContext::new(pre_state, None, bindings, actor);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
-                // The rejection path renders the expression for the
-                // reason string regardless of tracing (existing
-                // behaviour from PR B); reuse the same rendering for
-                // the trace entry rather than calling
-                // format_expr_inline twice.
+                // Render once; reused for both the reason string and the
+                // trace entry.
                 let rendered = format::format_expr_inline(expr);
                 let reason = format!("require failed: {rendered} did not hold over pre-state");
                 if trace.is_on() {
@@ -482,16 +422,11 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::BindOne(expr) => {
-            // Single-path deterministic unique lookup. See `Stmt::BindOne`
-            // rustdoc for the multi-outcome contract. Crucially, on a
-            // unique match we *replace* the binding context with the
-            // returned match rather than extending.
-            //
-            // For 0 / N>1 branches, the rejection reason / error
-            // message renders the expression regardless of tracing
-            // (existing behaviour from PR B); the trace entry reuses
-            // that single rendering rather than calling
-            // format_expr_inline a second time.
+            // Deterministic unique lookup (see the `bind_one` rustdoc for
+            // the multi-outcome contract). On a unique match we *replace*
+            // the binding context with the returned match, not extend.
+            // The expression is rendered once per branch and reused for
+            // both the reason/error string and the trace entry.
             let ctx = EvalContext::new(pre_state, None, bindings, actor);
             let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
@@ -575,11 +510,10 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            // Branch on trace.is_on() to keep the non-trace path
-            // streaming clones directly into `retracted` (its
-            // pre-PR-D shape). On the trace path, build an
-            // intermediate Vec so the trace entry can carry the
-            // actual retracted claims rather than a count.
+            // Branch on trace.is_on(): the non-trace path streams clones
+            // directly into `retracted`; the trace path builds an
+            // intermediate Vec so the entry can carry the actual
+            // retracted claims, not a count.
             if trace.is_on() {
                 let mut retracted_here: Vec<ClaimInstance> = vec![];
                 for claim in pre_state.claims_for(predicate) {
@@ -618,14 +552,11 @@ pub(crate) fn execute_stmt(
                 EvalValue::Collection(v) => v,
                 _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),
             };
-            // Iteration scope (see PR B): snapshot outer bindings,
-            // reset per iteration, restore on exit.
-            //
-            // Branched on `trace.is_on()` to keep the non-trace path
-            // tight: no per-iteration `iter_entries` allocation, no
-            // `item.clone()` (the value moves directly into bindings),
-            // no `iterations` Vec. The trace path opts into all of
-            // those for diagnostic completeness.
+            // Iteration scope: snapshot outer bindings, reset per
+            // iteration, restore on exit. Branched on `trace.is_on()` so
+            // the non-trace path skips the per-iteration allocations,
+            // the `item.clone()`, and the `iterations` Vec that the
+            // trace path needs for diagnostic completeness.
             let outer = bindings.clone();
             if trace.is_on() {
                 let mut iterations: Vec<ForIterationTrace> = vec![];

@@ -20,10 +20,9 @@ use sqlx::{Postgres, Transaction};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-/// Re-export of `sqlx::PgPool` so downstream crates (notably
-/// `morpholog-cli`) can use the connection-pool type that the public
-/// async functions in this crate take, without pulling `sqlx` in as a
-/// direct dependency.
+/// Re-export of `sqlx::PgPool` so downstream crates can take the
+/// connection-pool type the public async functions use without
+/// pulling `sqlx` in as a direct dependency.
 pub use sqlx::PgPool;
 
 /// Sentinel actor for transitions the runtime itself initiates, with
@@ -31,11 +30,8 @@ pub use sqlx::PgPool;
 /// Used by the outbox compensation path: when a delivery fails
 /// non-retryably and a [`CompensationSpec`] is configured, the
 /// compensating transformation is proposed by the runtime, not by
-/// the actor of the original commit.
-///
-/// First-class authority modeling (granting and consulting actor
-/// standing) is a later concern; the sentinel keeps the audit row's
-/// `actor` column populated meaningfully until then.
+/// the actor of the original commit. The sentinel keeps the audit
+/// row's `actor` column meaningfully populated.
 pub fn system_actor() -> EvalValue {
     EvalValue::Subject("morpholog-system".to_string())
 }
@@ -67,22 +63,19 @@ pub enum PgError {
     #[error("invalid persistent state: {0}")]
     InvalidState(String),
     /// A supplied `transition_id` does not name an existing audit row.
-    /// Returned by the as-of helpers ([`reconstruct_state_at`],
-    /// [`list_claims_at`], [`list_derived_at`]) when the caller asks
-    /// for state at a coordinate that does not correspond to any
-    /// committed transition. The contract is "exists or error" -
-    /// every unknown id, smaller, larger, or between known ids, is
-    /// rejected with this variant.
+    /// Returned by the as-of helpers when the caller asks for state at
+    /// a coordinate that does not correspond to any committed
+    /// transition. The contract is "exists or error": every unknown id
+    /// - smaller, larger, or between known ids - is rejected here.
     #[error("transition_id {0} not found in morpholog.audit")]
     TransitionNotFound(Uuid),
     /// A transformation emitted the same intent (same name and args)
     /// more than once, so two outbox rows collided on the
     /// deterministic idempotency key (SQLSTATE 23505 on the outbox
     /// idempotency-key unique constraint). The whole transformation
-    /// rolls back. This is a modelling bug, not a transient condition,
-    /// so it is named distinctly from [`PgError::Database`]: identical
+    /// rolls back. Named distinctly from [`PgError::Database`] because
+    /// it is a modelling bug, not a transient condition: identical
     /// duplicate intents must not silently produce two outbox rows.
-    /// See [`compute_idempotency_key`].
     #[error(
         "transformation emitted a duplicate intent (same name and args); \
          outbox idempotency keys collided"
@@ -97,12 +90,8 @@ pub enum PgError {
 /// per emitted intent. On `Rejected`, the transaction has been rolled
 /// back and no governed state has changed.
 ///
-/// `Serialize` is derived with serde's internally-tagged enum
-/// representation so the CLI can emit outcomes directly as JSON with
-/// a `status` discriminant. A committed outcome serialises as
-/// `{"status":"committed","transition_id":"...","asserted_claims":[...],
-/// "retracted_claims":[...],"emitted_intents":[...]}`; a rejected one as
-/// `{"status":"rejected","reason":"..."}`.
+/// `Serialize` uses serde's internally-tagged representation so the
+/// CLI can emit outcomes directly as JSON with a `status` discriminant.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum PgProposalOutcome {
@@ -128,11 +117,10 @@ pub enum PgProposalOutcome {
 /// External side effects do not run inside this transaction. Outbox rows
 /// are enqueued for post-commit delivery by workers running outside.
 ///
-/// The proposal is given as a [`Transition`] - which bundles the
-/// transformation name (verified against `transformation.name`), the
-/// arguments, and the actor under whose authority the transition is
-/// being proposed. On `Committed`, the actor is persisted to the
-/// `morpholog.audit.actor` column alongside the other audit fields.
+/// The [`Transition`] bundles the transformation name (verified against
+/// `transformation.name`), the arguments, and the actor under whose
+/// authority the transition is proposed. On `Committed`, the actor is
+/// persisted to the `morpholog.audit.actor` column.
 pub async fn propose_against_pg(
     pool: &PgPool,
     transformation: &Transformation,
@@ -158,11 +146,9 @@ pub async fn propose_against_pg(
 /// `InvalidState`).
 ///
 /// The `KernelErrored` variant exists so the trace produced by the
-/// kernel before the error is raised is **not** discarded. This is
-/// the worst debugging case (multi-match `BindOne`, type-mismatch
-/// `DateLe`, multi-match `ValueOf`, unbound actor) and exactly the
-/// situation where the trace is most valuable; the previous
-/// `Result<(_, trace), PgError>` shape dropped it.
+/// kernel before the error is raised is **not** discarded: a kernel
+/// error mid-transformation is exactly the case where the trace is
+/// most valuable for debugging.
 #[derive(Debug, Clone)]
 pub enum PgTracedOutcome {
     /// Kernel ran to a normal outcome (Committed or Rejected) and
@@ -174,8 +160,7 @@ pub enum PgTracedOutcome {
     },
     /// Kernel raised an [`EvalError`]. The SERIALIZABLE transaction
     /// has been rolled back; `trace` carries every statement that
-    /// ran before the error - exactly the diagnostic surface that
-    /// would otherwise be lost.
+    /// ran before the error.
     KernelErrored {
         error: EvalError,
         trace: Vec<TraceEntry>,
@@ -197,13 +182,6 @@ pub enum PgTracedOutcome {
 ///   `Encoding`, `InvalidState`) - `Err(PgError)`. These errors
 ///   happen outside the kernel call and have no kernel trace to
 ///   preserve.
-///
-/// The CLI's `--trace` flag uses this function and emits a JSON
-/// object on stdout for each kernel-side variant:
-/// `{"result": <PgProposalOutcome>, "trace": [...]}` on Outcome,
-/// `{"result": {"status": "errored", "error": "..."}, "trace": [...]}`
-/// on KernelErrored. PG-layer errors surface via the existing anyhow
-/// stderr error chain.
 pub async fn propose_against_pg_with_trace(
     pool: &PgPool,
     transformation: &Transformation,
@@ -226,12 +204,9 @@ pub async fn propose_against_pg_with_trace(
             Ok(PgTracedOutcome::Outcome { outcome, trace })
         }
         TracedProposal::Errored { error, trace } => {
-            // Roll back the open SERIALIZABLE transaction before
-            // returning. The transaction would drop anyway, but
-            // doing it explicitly keeps the connection available
-            // sooner and surfaces any rollback-time DB failure as a
-            // distinct `PgError::Database` rather than swallowing
-            // it.
+            // Explicit rollback (rather than relying on drop) frees
+            // the connection sooner and surfaces any rollback-time DB
+            // failure as a distinct `PgError::Database`.
             tx.rollback().await.map_err(classify)?;
             Ok(PgTracedOutcome::KernelErrored { error, trace })
         }
@@ -284,18 +259,15 @@ async fn finalise_outcome(
     }
 }
 
-/// Predicate: is this SQLSTATE the PostgreSQL serialization-failure
-/// code (`40001`) returned by SSI when a SERIALIZABLE transaction
-/// cannot be linearised? Extracted as a pure function so the magic
-/// string can be unit-tested without mocking `sqlx::DatabaseError`.
+/// Is this SQLSTATE the PostgreSQL serialization-failure code
+/// (`40001`) returned by SSI when a SERIALIZABLE transaction cannot be
+/// linearised? Pure function so the magic string can be unit-tested
+/// without mocking `sqlx::DatabaseError`.
 fn is_serialization_failure_code(code: Option<&str>) -> bool {
     code == Some("40001")
 }
 
-/// Predicate: is this SQLSTATE the PostgreSQL `unique_violation` code
-/// (`23505`)? Paired with a constraint-name check so only the outbox
-/// idempotency-key collision - the one a single transformation can
-/// trip by emitting a duplicate intent - is named distinctly.
+/// Is this SQLSTATE the PostgreSQL `unique_violation` code (`23505`)?
 fn is_unique_violation_code(code: Option<&str>) -> bool {
     code == Some("23505")
 }
@@ -324,22 +296,16 @@ fn classify(err: sqlx::Error) -> PgError {
 /// Load the pre-state for a `propose_against_pg` call, scoped to a
 /// specific set of predicate names.
 ///
-/// `scope` is the list of predicate names the transformation body
-/// (per [`morpholog_core::predicates_read_by_stmt`]) and the active
-/// invariants (per [`morpholog_core::predicates_referenced_by_expr`])
-/// will consult. Claims of any other predicate are not loaded - they
-/// cannot affect the kernel's evaluation of this transformation.
+/// `scope` is the list of predicate names the transformation body and
+/// the active invariants will consult (see [`compute_load_scope`]).
+/// Claims of any other predicate are not loaded - they cannot affect
+/// the kernel's evaluation of this transformation, and skipping them
+/// avoids fetching and decoding every row in `morpholog.claims`.
 ///
 /// Empty scope returns an empty state without issuing a query
-/// (mirrors [`list_claims_for_predicates`]'s contract). A
-/// transformation with no body statements that read state and no
-/// invariants will see an empty `State`; that is correct behaviour,
-/// not a bug.
-///
-/// The scoping is a substantial perf win on large claim tables: a
-/// transformation that touches three predicates with low cardinality
-/// no longer pays the linear cost of fetching and decoding every
-/// row in `morpholog.claims`.
+/// (mirrors [`list_claims_for_predicates`]). A transformation that
+/// reads no state and has no invariants correctly sees an empty
+/// `State`.
 async fn load_state(
     tx: &mut Transaction<'_, Postgres>,
     scope: &[String],
@@ -373,14 +339,13 @@ async fn load_state(
 ///   body (via `morpholog_core::predicates_read_by_stmt`).
 /// - Every predicate referenced by every invariant body (via
 ///   `morpholog_core::predicates_referenced_by_expr`). Invariants
-///   evaluate against the candidate state - which is built from the
-///   pre-state plus asserts minus retracts - so any predicate an
+///   evaluate against the candidate state, so any predicate an
 ///   invariant inspects must be loaded.
 ///
 /// `Stmt::Assert`'s output predicate is deliberately NOT in the read
-/// set; the assert stages a new claim, it doesn't read existing
-/// ones. If an invariant *also* references that predicate, it's
-/// picked up via the invariant walker and loaded.
+/// set: the assert stages a new claim rather than reading existing
+/// ones. An invariant that also references it is picked up via the
+/// invariant walker.
 fn compute_load_scope(transformation: &Transformation, invariants: &[Invariant]) -> Vec<String> {
     let mut scope = std::collections::BTreeSet::new();
     for stmt in &transformation.body {
@@ -392,21 +357,14 @@ fn compute_load_scope(transformation: &Transformation, invariants: &[Invariant])
     scope.into_iter().collect()
 }
 
-/// One entry in an audit row's `invariants_checked` JSONB array. Recorded
-/// per committed transformation: the invariant `name` plus the `version`
-/// active at admission time. Self-describing audit data is preferred over
-/// tuple compactness.
+/// One entry in an audit row's `invariants_checked` JSONB array.
+/// Recorded per committed transformation: the invariant `name` plus
+/// the `version` active at admission time.
 ///
-/// Named `AuditedInvariantCheck` rather than `InvariantCheck` to
-/// disambiguate from the kernel's `TraceEntry::InvariantCheck` variant
-/// (in `morpholog_core::TraceEntry`). Both describe "an invariant was
-/// checked" but at different layers: this type is the durable audit
-/// record persisted alongside a committed transition; the kernel
-/// variant is a transient per-call diagnostic entry produced by
-/// `propose_with_trace`.
-///
-/// `Serialize` is derived so the CLI can re-emit audit rows as JSON
-/// without an intermediate hand-rolled mapping.
+/// Named `AuditedInvariantCheck`, not `InvariantCheck`, to disambiguate
+/// from the kernel's `TraceEntry::InvariantCheck`: this is the durable
+/// audit record persisted alongside a committed transition, whereas the
+/// kernel variant is a transient per-call diagnostic entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditedInvariantCheck {
     pub name: String,
@@ -424,11 +382,11 @@ async fn write_accepted(
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
 ) -> Result<(), PgError> {
-    // Retractions: dedupe, then delete each distinct claim. We expect
-    // exactly one row affected per distinct retraction. Zero rows
-    // indicates a persistent-state mismatch - either a concurrent
-    // transaction has interfered (SSI will catch it later) or the
-    // pre-state snapshot disagrees with the live table.
+    // Retractions: dedupe, then delete each distinct claim. Exactly
+    // one row per distinct retraction is expected; zero rows means a
+    // persistent-state mismatch (concurrent interference, which SSI
+    // catches later, or a pre-state snapshot that disagrees with the
+    // live table).
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for claim in retracted_claims {
         let args_repr = serde_json::to_string(&claim.args)?;
@@ -529,25 +487,19 @@ async fn write_accepted(
 /// hex(sha256(transition_id_bytes ‖ 0x00 ‖ name_bytes ‖ 0x00 ‖ canonical_json(args)))
 /// ```
 ///
-/// `canonical_json` is `serde_json` output using the PR #4 pinned wire shape
-/// (stable for the current structs because field order is fixed by derived
-/// `Serialize` and there are no map-like runtime values).
+/// `canonical_json` is `serde_json` output; the shape is stable for
+/// the current structs because field order is fixed by derived
+/// `Serialize` and there are no map-like runtime values.
 ///
 /// The key is unique per `(transition_id, intent.name, intent.args)`. It
 /// prevents duplicate outbox rows under retry/redelivery mechanics - not
 /// duplicate business events, which would require an idempotency key
 /// derived from the inbound request.
 ///
-/// **Duplicate intents within one transformation:** if a transformation
-/// emits the same intent (same `name` and `args`) twice, both rows will
-/// share an idempotency key and the second `INSERT` will violate the
-/// `outbox.idempotency_key` UNIQUE constraint - surfacing as a
-/// [`PgError::DuplicateIntent`] and rolling back the whole
-/// transformation. This is intentional for v0: identical duplicate
-/// intents are almost always a bug and should not silently produce two
-/// outbox rows. If genuinely distinct same-shaped intents are needed
-/// later, the `Intent` type will gain a discriminator field (logical
-/// key, purpose, sequence) and this docstring should be updated.
+/// Within one transformation, two identical intents share a key and the
+/// second `INSERT` violates the `outbox.idempotency_key` constraint,
+/// surfacing as [`PgError::DuplicateIntent`] and rolling back the whole
+/// transformation - identical duplicate intents are almost always a bug.
 pub fn compute_idempotency_key(
     transition_id: Uuid,
     intent: &IntentInstance,
@@ -575,10 +527,8 @@ pub fn compute_idempotency_key(
 /// One row of `morpholog.audit` decoded into typed runtime values.
 ///
 /// Each row corresponds to exactly one committed transformation. The
-/// JSONB columns (`arguments`, `invariants_checked`, `asserted_claims`,
-/// `retracted_claims`, `emitted_intents`) are decoded through the same
-/// codec that wrote them, so the round-trip is exact for any value the
-/// kernel can represent.
+/// JSONB columns are decoded through the same codec that wrote them,
+/// so the round-trip is exact for any value the kernel can represent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditRow {
     pub transition_id: Uuid,
@@ -595,15 +545,11 @@ pub struct AuditRow {
 
 /// One row of `morpholog.outbox` decoded into typed runtime values.
 ///
-/// Carries every column on the table. The delivery-state extensions
-/// (`failed_at`, `failure_reason`, `next_attempt_at`,
-/// `compensation_transition_id`, `locked_by`, `lock_expires_at`)
-/// are nullable in the schema and `Option<T>` here; they fill in as
-/// a row moves through the delivery state machine. `attempt_count`
-/// and `last_attempt_at` retain the original contract: a `pending`
-/// row with `attempt_count > 0` and a non-NULL `last_attempt_at` is
-/// one a worker has tried and failed (transiently), not a fresh
-/// enqueue.
+/// Carries every column on the table. The delivery-state extensions are
+/// nullable in the schema and `Option<T>` here; they fill in as a row
+/// moves through the delivery state machine. A `pending` row with
+/// `attempt_count > 0` and a non-NULL `last_attempt_at` is one a worker
+/// has tried and failed transiently, not a fresh enqueue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OutboxRow {
     pub intent_id: Uuid,
@@ -626,14 +572,11 @@ pub struct OutboxRow {
 
 /// Outcome of a state-mutating helper on a leased outbox row.
 ///
-/// A worker that does not hold the current lease (because the lease
-/// expired and another worker took over, or because the worker
-/// supplied the wrong `worker_id`) cannot clobber the row's state.
-/// The helper does not error: lease loss is a normal operational
-/// condition for a worker that crashed mid-delivery and another
-/// worker now owns the row. But the helper does not silently lie
-/// about it either - the caller sees [`OutboxUpdate::LeaseLost`]
-/// and can choose to log, retry-after-reclaim, or move on.
+/// A worker that does not hold the current lease (expired and taken
+/// over, or wrong `worker_id`) cannot clobber the row's state. Lease
+/// loss is a normal operational condition, not an error, so the caller
+/// sees [`OutboxUpdate::LeaseLost`] and can log, retry-after-reclaim,
+/// or move on.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum OutboxUpdate {
@@ -646,14 +589,12 @@ pub enum OutboxUpdate {
 
 /// Return every currently-admitted claim from `morpholog.claims`.
 ///
-/// Order is `(asserted_at, predicate_name, arguments::text)` - causal
-/// admission order, with predicate-then-args as the stable tie-break.
-/// Two claims admitted in the same microsecond will appear in a
-/// deterministic order across runs.
+/// Order is `(asserted_at, predicate_name, arguments::text)`: causal
+/// admission order with predicate-then-args as the stable tie-break,
+/// so the result is deterministic across runs.
 ///
-/// This is a `SELECT *` over the entire table. For large states the
-/// caller should use SQL directly; the v0 helper is for tests, demos,
-/// and small-state inspection.
+/// A `SELECT *` over the entire table, intended for tests, demos, and
+/// small-state inspection; large states should query SQL directly.
 pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT predicate_name, arguments
@@ -676,18 +617,13 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
 
 /// Return every currently-admitted claim whose `predicate_name` is in
 /// `predicates`. Empty `predicates` short-circuits to `Ok(vec![])`
-/// without issuing a query; an empty input set means the caller has
-/// no predicate footprint to read, which is meaningful (e.g. a
-/// derived claim whose domain is a no-op) and is not an error.
+/// without a query: an empty footprint is meaningful (e.g. a derived
+/// claim whose domain is a no-op), not an error.
 ///
-/// Used by [`list_derived`] to load only the claims relevant to the
-/// derived claim's footprint - which avoids fetching and decoding the
-/// rest of `morpholog.claims` when the derived only needs a few
-/// predicates. The footprint analysis lives in
-/// [`morpholog_core::predicates_referenced_by_derived`].
+/// Used by [`list_derived`] to load only the claims a derived claim's
+/// footprint references, avoiding the rest of `morpholog.claims`.
 ///
-/// Order matches [`list_claims`]: `(asserted_at, predicate_name,
-/// arguments::text)`. Deterministic across runs.
+/// Order matches [`list_claims`].
 pub async fn list_claims_for_predicates(
     pool: &PgPool,
     predicates: &[String],
@@ -718,15 +654,12 @@ pub async fn list_claims_for_predicates(
 }
 
 /// Return every committed audit row from `morpholog.audit`, ordered by
-/// `(committed_at, transition_id)` - causal commit order with the
-/// `transition_id` PRIMARY KEY (UUIDv7, time-ordered) as the stable
-/// tie-break.
+/// `(committed_at, transition_id)`: causal commit order with the
+/// time-ordered UUIDv7 PRIMARY KEY as the stable tie-break.
 ///
-/// All five JSONB columns are decoded through the codec; the caller
-/// receives typed values, not raw `serde_json::Value`. A decoding error
-/// surfaces as [`PgError::Encoding`] - that should never happen against
-/// a database the runtime itself wrote to, and indicates corruption or
-/// out-of-band tampering.
+/// JSONB columns are decoded through the codec into typed values. A
+/// decoding error surfaces as [`PgError::Encoding`]; against a database
+/// the runtime itself wrote, that indicates corruption or tampering.
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
     type Row = (
         Uuid,
@@ -784,12 +717,10 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 }
 
 /// Return outbox rows whose `status = 'pending'`, ordered by
-/// `(enqueued_at, intent_id)` - the same causal-order-with-PK-tie-break
-/// pattern used elsewhere. This is the natural "what does the worker
-/// have to deliver?" query.
+/// `(enqueued_at, intent_id)`. The "what does the worker have to
+/// deliver?" query.
 ///
-/// For status-filtered reads (delivered, failed, in-flight, or
-/// every-status historical), use [`list_outbox_rows`].
+/// For other statuses or intent-type filtering, use [`list_outbox_rows`].
 pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
     let rows: Vec<OutboxRowRaw> = sqlx::query_as(OUTBOX_SELECT_ALL_COLUMNS)
         .bind("pending")
@@ -800,27 +731,19 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
 }
 
 /// Return outbox rows filtered by status and/or intent type. Both
-/// filters are optional: `status_filter = None` drops the status
-/// predicate entirely (returning rows of any status the schema
-/// admits, including the compensation-state variants that the
-/// worker maintains internally); `intent_type_filter = None`
-/// returns rows of every intent type. Order is `(enqueued_at,
-/// intent_id)` - the same chronological-with-tie-break order
-/// `list_pending_outbox` uses.
+/// filters are optional: `None` drops that predicate entirely (any
+/// status, including the worker's internal compensation states; any
+/// intent type). Order matches [`list_pending_outbox`].
 ///
-/// Counterpart to `list_pending_outbox` that lets a reader ask "what
-/// failed in the last hour?" or "what is in flight right now?"
-/// without writing custom SQL. Used by `morpholog inspect outbox` to
-/// surface non-pending rows.
+/// Lets a reader ask "what failed?" or "what is in flight?" without
+/// custom SQL; used by `morpholog inspect outbox` for non-pending rows.
 pub async fn list_outbox_rows(
     pool: &PgPool,
     status_filter: Option<&str>,
     intent_type_filter: Option<&str>,
 ) -> Result<Vec<OutboxRow>, PgError> {
-    // Build the WHERE clause dynamically based on which filters are
-    // supplied. `sqlx::query_as` does not support optional bind
-    // parameters, so the branch structure here matches the four
-    // possible combinations directly.
+    // `sqlx::query_as` has no optional bind parameters, so each filter
+    // combination is a distinct statement.
     let rows: Vec<OutboxRowRaw> = match (status_filter, intent_type_filter) {
         (Some(status), Some(intent_type)) => sqlx::query_as(
             "SELECT intent_id, transition_id, intent_type, arguments,
@@ -872,9 +795,9 @@ pub async fn list_outbox_rows(
     rows.into_iter().map(decode_outbox_row).collect()
 }
 
-/// The full column list returned by every outbox-row read in this
-/// module. Single source of truth so the `OutboxRowRaw` tuple shape,
-/// the `decode_outbox_row` helper, and the SQL all evolve together.
+/// Single source of truth for the outbox column list so the
+/// `OutboxRowRaw` tuple, `decode_outbox_row`, and the SQL evolve
+/// together.
 const OUTBOX_SELECT_ALL_COLUMNS: &str = "SELECT intent_id, transition_id, intent_type, arguments,
             idempotency_key, status, attempt_count, enqueued_at,
             last_attempt_at, delivered_at, failed_at, failure_reason,
@@ -949,24 +872,21 @@ fn decode_outbox_row(row: OutboxRowRaw) -> Result<OutboxRow, PgError> {
 // Helpers that move an outbox row through the delivery state machine.
 // All `mark_*` helpers gate on the worker holding a valid lease
 // (`locked_by = worker_id AND lock_expires_at > now()`) and return
-// `OutboxUpdate::LeaseLost` if the lease has been taken over by
-// another worker. `record_compensation` is the only helper that
-// errors on contract violation (rather than returning `LeaseLost`),
-// because attempting to record compensation against a non-failed
-// row or a row that already has a compensation linked is a
-// programming bug, not an operational condition.
+// `OutboxUpdate::LeaseLost` if another worker has taken the lease over.
+// `record_compensation` errors instead of returning `LeaseLost`,
+// because recording compensation against a non-failed or
+// already-compensated row is a programming bug, not an operational
+// condition.
 
 /// Mark a successfully-delivered outbox row.
 ///
 /// Transitions `status` to `'delivered'`, sets `delivered_at = now()`,
-/// increments `attempt_count`, and clears the lease fields (`locked_by`,
-/// `lock_expires_at`) so the row is unambiguously done.
+/// increments `attempt_count`, and clears the lease fields so the row
+/// is unambiguously done. Returns `Applied`, or `LeaseLost` if the
+/// worker no longer holds the lease.
 ///
-/// Returns `Applied` on success, `LeaseLost` if the worker no longer
-/// holds the lease.
-///
-/// Internal substrate of [`process_one_outbox_row`]; reach for that
-/// instead unless you are driving the state machine manually.
+/// Internal substrate of [`process_one_outbox_row`]; use that unless
+/// driving the state machine manually.
 #[doc(hidden)]
 pub async fn mark_outbox_delivered(
     pool: &PgPool,
@@ -1006,17 +926,15 @@ pub async fn mark_outbox_delivered(
 /// invisible to claims until that moment.
 ///
 /// **No upfront validation of `next_attempt_at`**: a past or
-/// equal-now retry instant is accepted by this helper. The drain
-/// loop's protection against re-claiming the same row in the same
-/// pass lives at [`claim_pending_outbox_row`]'s
-/// `claim_before` upper bound, not here. Adding a validation here
-/// would conflict with the helper contract (lease loss must
-/// surface as [`OutboxUpdate::LeaseLost`], not as a [`PgError`])
-/// and would spuriously fail a slow legitimate delivery whose
-/// retry instant elapses during transit.
+/// equal-now retry instant is accepted. Re-claim protection lives at
+/// [`claim_pending_outbox_row`]'s `claim_before` bound, not here.
+/// Validating here would conflict with the helper contract (lease loss
+/// surfaces as [`OutboxUpdate::LeaseLost`], not [`PgError`]) and would
+/// spuriously fail a slow legitimate delivery whose retry instant
+/// elapses in transit.
 ///
-/// Internal substrate of [`process_one_outbox_row`]; reach for that
-/// instead unless you are driving the state machine manually.
+/// Internal substrate of [`process_one_outbox_row`]; use that unless
+/// driving the state machine manually.
 #[doc(hidden)]
 pub async fn mark_outbox_transient_attempt(
     pool: &PgPool,
@@ -1054,8 +972,8 @@ pub async fn mark_outbox_transient_attempt(
 /// and releases its lease. A compensating transformation can then
 /// be invoked and recorded via [`record_compensation`].
 ///
-/// Internal substrate of [`process_one_outbox_row`]; reach for that
-/// instead unless you are driving the state machine manually.
+/// Internal substrate of [`process_one_outbox_row`]; use that unless
+/// driving the state machine manually.
 #[doc(hidden)]
 pub async fn mark_outbox_failed(
     pool: &PgPool,
@@ -1091,46 +1009,36 @@ pub async fn mark_outbox_failed(
 
 /// Link a compensating transformation to a failed outbox row.
 ///
-/// Gated by two preconditions, both enforced by the SQL `WHERE`:
-/// the row must be in `status='failed'`, and it must not already
-/// carry a `compensation_transition_id`. Violating either is a
-/// programming bug - attempting to attach compensation to a
-/// delivered or pending row, or double-recording compensation -
-/// and surfaces as [`PgError::InvalidState`] rather than a silent
-/// no-op.
+/// Gated by two SQL `WHERE` preconditions: the row must be
+/// `status='failed'` and must not already carry a
+/// `compensation_transition_id`. Violating either is a programming bug
+/// and surfaces as [`PgError::InvalidState`], not a silent no-op.
 ///
 /// `compensation_transition_id` must reference a row in
-/// `morpholog.audit` (foreign-key-enforced). The worker invokes
-/// the compensating transformation via [`propose_against_pg`] and
-/// passes the resulting `transition_id` here.
+/// `morpholog.audit` (foreign-key-enforced); the worker invokes the
+/// compensating transformation via [`propose_against_pg`] and passes
+/// the resulting `transition_id` here.
 ///
-/// This helper does NOT gate on a lease. By the time the worker
-/// is recording compensation, the original delivery attempt is
-/// over and the row is in `failed`; the lease was already released
-/// by [`mark_outbox_failed`].
+/// Does NOT gate on a lease: by the time compensation is recorded the
+/// row is in `failed` and the lease was already released by
+/// [`mark_outbox_failed`].
 ///
-/// **Important: this is a lineage setter, not a duplicate-invocation
-/// guard.** The `compensation_transition_id IS NULL` predicate only
-/// prevents a second *record* call from overwriting the first - it
-/// does not prevent a second *compensating transformation* from
-/// being committed via [`propose_against_pg`] before either record
-/// call runs. If two workers race on the same `failed` row, both
-/// can commit independent compensating transformations against the
-/// underlying state; only the second `record_compensation` will
-/// fail, but by then a duplicate compensation has already landed
-/// in `morpholog.audit` and its claims in `morpholog.claims`.
+/// **This is a lineage setter, not a duplicate-invocation guard.** The
+/// `compensation_transition_id IS NULL` predicate only stops a second
+/// *record* call from overwriting the first; it does not stop a second
+/// *compensating transformation* from committing via
+/// [`propose_against_pg`] first. If two workers race the same `failed`
+/// row, both can commit independent compensations - only the second
+/// `record_compensation` fails, by which point a duplicate is already
+/// in `morpholog.audit`.
 ///
-/// The single-row processor that invokes this helper is therefore
-/// responsible for preventing duplicate compensation upstream -
-/// either by retaining lease ownership across the failed -> commit
-/// compensation -> record_compensation arc (rather than releasing
-/// in [`mark_outbox_failed`]), or by guarding the compensating
-/// transformation itself with an invariant over an
-/// `original_intent_id` predicate. See `docs/outbox-sketch.md` for
-/// the two-mechanism discussion.
+/// Preventing that is the caller's responsibility: either retain lease
+/// ownership across the failed -> commit -> record arc, or guard the
+/// compensating transformation with an `original_intent_id` invariant.
+/// See `docs/outbox-sketch.md`.
 ///
-/// Internal substrate of [`process_one_outbox_row`]; reach for that
-/// instead unless you are driving the state machine manually.
+/// Internal substrate of [`process_one_outbox_row`]; use that unless
+/// driving the state machine manually.
 #[doc(hidden)]
 pub async fn record_compensation(
     pool: &PgPool,
@@ -1177,41 +1085,35 @@ pub async fn record_compensation(
 ///   whose previous worker crashed mid-delivery and whose lease
 ///   has expired is also eligible. Reclaim is transparent.
 ///
-/// The `claim_before` parameter is the upper bound for retry
-/// eligibility. One-shot callers pass `Utc::now()`. A drain loop
-/// captures `Utc::now()` once at the top of the pass and supplies
-/// that same instant for every iteration, so rows deferred *during*
-/// the pass (e.g., a deliverer that returns
-/// `Transient { next_attempt_at: now() + 1ms }`) are invisible
-/// until the next pass even if wall-clock time has moved past their
-/// `next_attempt_at`. Without this discipline a sub-second retry
-/// would let the drain re-claim the same row indefinitely; the
-/// worker would never sleep, never observe shutdown.
+/// `claim_before` is the upper bound for retry eligibility. One-shot
+/// callers pass `Utc::now()`. A drain loop captures `Utc::now()` once
+/// at the top of the pass and supplies that same instant every
+/// iteration, so rows deferred *during* the pass (a deliverer
+/// returning `Transient { next_attempt_at: now() + 1ms }`) stay
+/// invisible until the next pass. Without this, a sub-second retry
+/// would let the drain re-claim the same row indefinitely; the worker
+/// would never sleep or observe shutdown.
 ///
-/// Lease-expiry reclaim of `in_progress` rows still uses live
-/// `now()` - those are dead-worker recoveries, not scheduling
-/// decisions, and there is no loop pathology to defend against.
+/// Lease-expiry reclaim of `in_progress` rows still uses live `now()`:
+/// those are dead-worker recoveries, not scheduling decisions.
 ///
 /// On claim: sets `status='in_progress'`, `locked_by=worker_id`,
-/// `lock_expires_at=now()+lease_duration`. Returns the full
-/// `OutboxRow` (now reflecting the lease).
+/// `lock_expires_at=now()+lease_duration`, and returns the full
+/// `OutboxRow`.
 ///
-/// `lease_duration` is the wall-clock window during which the
-/// claiming worker has exclusive rights to mutate the row through
-/// `mark_outbox_delivered`, `mark_outbox_transient_attempt`, or
-/// `mark_outbox_failed`. Picking the right duration is the worker's
-/// responsibility - long enough to cover the deliverer's expected
-/// latency plus headroom; short enough that a crashed worker's
-/// rows become reclaimable in reasonable time.
+/// `lease_duration` is the window during which the claiming worker has
+/// exclusive rights to mutate the row through the `mark_*` helpers.
+/// Choosing it is the worker's responsibility: long enough to cover
+/// the deliverer's latency plus headroom, short enough that a crashed
+/// worker's rows become reclaimable in reasonable time.
 ///
-/// The deliverer must run **outside** any database transaction;
-/// this helper opens and closes the only transaction the claim
-/// needs (a single atomic UPDATE ... RETURNING), and the caller
-/// holds the lease via the `locked_by`/`lock_expires_at` columns
-/// rather than a held row lock.
+/// The deliverer must run **outside** any database transaction; this
+/// helper opens and closes the only transaction the claim needs (a
+/// single atomic UPDATE ... RETURNING), and the lease is held via the
+/// `locked_by`/`lock_expires_at` columns rather than a held row lock.
 ///
-/// Internal substrate of [`process_one_outbox_row`]; reach for that
-/// instead unless you are driving the state machine manually.
+/// Internal substrate of [`process_one_outbox_row`]; use that unless
+/// driving the state machine manually.
 #[doc(hidden)]
 pub async fn claim_pending_outbox_row(
     pool: &PgPool,
@@ -1258,15 +1160,13 @@ pub async fn claim_pending_outbox_row(
 }
 
 /// Release a held lease without resolving the row to a terminal
-/// state. The row returns to `status='pending'` and becomes
-/// claimable by another worker on its next pass.
+/// state. The row returns to `status='pending'`, claimable by another
+/// worker on its next pass.
 ///
-/// Useful for shutdown paths (a worker dying gracefully releases
-/// its in-flight claims so they can be re-picked immediately
-/// rather than waiting for the lease to expire). Returns
-/// `LeaseLost` if the worker no longer holds the lease - which is
-/// expected if a slow worker is shutting down after its lease
-/// already expired.
+/// For shutdown paths: a worker dying gracefully releases its
+/// in-flight claims so they re-pick immediately rather than waiting
+/// for lease expiry. Returns `LeaseLost` if the worker no longer holds
+/// the lease (expected when a slow worker shuts down after expiry).
 ///
 /// Internal substrate of the worker shutdown path; rarely needed
 /// directly.
@@ -1300,16 +1200,14 @@ pub async fn release_outbox_claim(
 /// Soonest future `next_attempt_at` over pending rows of the given
 /// `intent_type`. Returns `None` if no such row exists.
 ///
-/// A polling worker uses this after a drain returns no work to
-/// decide how long to sleep before its next poll: instead of always
-/// sleeping the base poll interval, it can wake up exactly when
-/// the soonest scheduled retry becomes due, but no later than the
-/// base interval (so that newly-enqueued immediately-due rows are
-/// still picked up promptly).
+/// A polling worker uses this after an empty drain to wake exactly
+/// when the soonest scheduled retry becomes due (but no later than the
+/// base poll interval, so newly-enqueued due rows are still picked up
+/// promptly) instead of always sleeping the full interval.
 ///
-/// `next_attempt_at` is filtered to `> now()` so a row whose retry
-/// instant has already passed is not returned (it would have been
-/// claimed by the drain that just ran).
+/// `next_attempt_at` is filtered to `> now()`: a row whose retry
+/// instant has already passed would have been claimed by the drain
+/// that just ran.
 pub async fn earliest_pending_retry(
     pool: &PgPool,
     intent_type: &str,
@@ -1350,41 +1248,30 @@ fn lease_duration_to_secs(lease_duration: std::time::Duration) -> Result<i64, Pg
 ///
 /// Eligible rows are `status='failed' AND compensation_transition_id
 /// IS NULL`. The claim transitions the row to `compensation_in_progress`
-/// and sets `locked_by` + `lock_expires_at`. Once held, the worker is
-/// expected to invoke the compensating transformation via
-/// [`propose_against_pg`] and then resolve the row through one of:
-/// - [`complete_compensation`] on `PgProposalOutcome::Committed`
-///   (transitions back to `failed` with the
-///   `compensation_transition_id` set);
-/// - [`mark_compensation_failed`] on `PgProposalOutcome::Rejected`
-///   (transitions to `compensation_failed`, the genuinely-broken
-///   state requiring operator intervention).
+/// and sets the lease. Once held, the worker invokes the compensating
+/// transformation via [`propose_against_pg`] and resolves the row with
+/// [`complete_compensation`] (on `Committed`) or
+/// [`mark_compensation_failed`] (on `Rejected`).
 ///
-/// The `SELECT ... FOR UPDATE SKIP LOCKED` wrapping the row UPDATE
-/// guarantees at most one worker holds the compensation lease for a
-/// given row at any moment. Returns `Ok(None)` if no eligible row
-/// exists for the supplied `intent_id` (either the row is missing,
-/// is not in `failed`, has already been compensated, or is currently
-/// locked by another worker mid-claim).
+/// `SELECT ... FOR UPDATE SKIP LOCKED` guarantees at most one worker
+/// holds the compensation lease at a time. Returns `Ok(None)` when no
+/// eligible row exists for `intent_id` (missing, not `failed`, already
+/// compensated, or locked by another worker mid-claim).
 ///
-/// **Important: this helper does NOT transparently reclaim
-/// expired-lease compensation_in_progress rows**, unlike
-/// [`claim_pending_outbox_row`]'s reclaim of expired in_progress
-/// leases. Transparent reclaim would risk duplicate compensation if
-/// a previous worker crashed *after* committing the compensating
-/// transformation but *before* calling `complete_compensation`. The
-/// safer default is: a stuck `compensation_in_progress` row
-/// requires operator intervention rather than automatic recovery.
-/// The lease pattern reduces the duplicate-compensation race to a
-/// narrow window (between `propose_against_pg` commit and
-/// `complete_compensation` call); programs that need full immunity
-/// should additionally guard the compensating transformation with
-/// a `CompensationApplied(original_intent_id)` invariant, per the
-/// two-mechanism discussion in `docs/outbox-sketch.md`.
+/// **Does NOT transparently reclaim expired-lease
+/// compensation_in_progress rows** (unlike [`claim_pending_outbox_row`]
+/// for `in_progress`). Reclaim would risk duplicate compensation if a
+/// worker crashed *after* committing the compensating transformation
+/// but *before* `complete_compensation`; a stuck row requires operator
+/// intervention instead. The lease narrows the duplicate-compensation
+/// race to the window between commit and `complete_compensation`;
+/// programs needing full immunity should additionally guard the
+/// compensating transformation with a
+/// `CompensationApplied(original_intent_id)` invariant. See
+/// `docs/outbox-sketch.md`.
 ///
 /// Internal substrate of [`process_one_outbox_row`]'s compensation
-/// arm; reach for that instead unless you are driving the state
-/// machine manually.
+/// arm; use that unless driving the state machine manually.
 #[doc(hidden)]
 pub async fn begin_compensation(
     pool: &PgPool,
@@ -1422,23 +1309,18 @@ pub async fn begin_compensation(
     row_opt.map(decode_outbox_row).transpose()
 }
 
-/// Resolve a compensation_in_progress row on success: transitions
-/// it back to `failed` with the supplied `compensation_transition_id`
-/// recorded, and releases the lease.
+/// Resolve a compensation_in_progress row on success: transitions it
+/// back to `failed` with `compensation_transition_id` recorded, and
+/// releases the lease.
 ///
-/// Gated by `status='compensation_in_progress' AND locked_by=$worker
-/// AND lock_expires_at > now()`. Returns `OutboxUpdate::LeaseLost`
-/// if the worker no longer holds the lease (expired or never
-/// acquired).
-///
-/// The `compensation_transition_id` must reference a row in
-/// `morpholog.audit` (foreign-key-enforced); typically it is the
-/// `transition_id` returned by [`propose_against_pg`] when the
-/// compensating transformation committed.
+/// Gated on the worker holding the lease; returns
+/// `OutboxUpdate::LeaseLost` otherwise. `compensation_transition_id`
+/// must reference a row in `morpholog.audit` (foreign-key-enforced),
+/// typically the `transition_id` [`propose_against_pg`] returned when
+/// the compensating transformation committed.
 ///
 /// Internal substrate of [`process_one_outbox_row`]'s compensation
-/// arm; reach for that instead unless you are driving the state
-/// machine manually.
+/// arm; use that unless driving the state machine manually.
 #[doc(hidden)]
 pub async fn complete_compensation(
     pool: &PgPool,
@@ -1470,36 +1352,26 @@ pub async fn complete_compensation(
     })
 }
 
-/// Resolve a compensation_in_progress row on failure: transitions
-/// it to `compensation_failed` with the supplied `reason` recorded,
-/// and releases the lease.
+/// Resolve a compensation_in_progress row on failure: transitions it
+/// to `compensation_failed` with `reason` recorded, and releases the
+/// lease.
 ///
-/// Use this when the compensating transformation itself was
-/// rejected by an invariant (i.e., [`propose_against_pg`] returned
-/// `PgProposalOutcome::Rejected`). This is the genuinely-broken
-/// state: the original delivery failed, AND the compensation
-/// designed to undo its business effect cannot be admitted. No
-/// automatic recovery; the row stays in `compensation_failed` until
-/// operator intervention (out of v0 scope).
+/// Use this when the compensating transformation was itself rejected
+/// by an invariant ([`propose_against_pg`] returned `Rejected`). This
+/// is the genuinely-broken state - the original delivery failed AND
+/// the compensation cannot be admitted - and stays in
+/// `compensation_failed` until operator intervention.
 ///
-/// Gated by `status='compensation_in_progress' AND locked_by=$worker
-/// AND lock_expires_at > now()`. Returns `OutboxUpdate::LeaseLost`
-/// if the worker no longer holds the lease.
+/// Gated on the worker holding the lease; returns
+/// `OutboxUpdate::LeaseLost` otherwise.
 ///
-/// `reason` is stored in the existing `failure_reason` column,
-/// **overwriting** the original delivery failure reason. The
-/// original is then lost as far as morpholog tables are concerned:
-/// state mutators like `mark_outbox_failed` and `begin_compensation`
-/// do NOT write audit rows (only transformations do), so there is
-/// nothing in `morpholog.audit` to reconstruct from. If callers
-/// need both the delivery failure reason and the compensation
-/// rejection reason, they must capture the original externally
-/// (an `outbox_event` table, structured logs, etc.) before calling
-/// this helper.
+/// `reason` **overwrites** the original delivery `failure_reason`,
+/// which is then lost to the morpholog tables: state mutators write no
+/// audit rows (only transformations do). Callers needing both reasons
+/// must capture the original externally before calling this.
 ///
 /// Internal substrate of [`process_one_outbox_row`]'s compensation
-/// arm; reach for that instead unless you are driving the state
-/// machine manually.
+/// arm; use that unless driving the state machine manually.
 #[doc(hidden)]
 pub async fn mark_compensation_failed(
     pool: &PgPool,
@@ -1534,26 +1406,21 @@ pub async fn mark_compensation_failed(
 /// Enumerate a derived claim's extension against the current durable state.
 ///
 /// Loads only the admitted claims for predicates the derived claim's
-/// body actually references (via [`list_claims_for_predicates`] and
+/// body references (via [`list_claims_for_predicates`] and
 /// [`morpholog_core::predicates_referenced_by_derived`]), wraps them
 /// in an in-memory [`State`], and calls the synchronous
 /// [`enumerate_derived`] kernel primitive. The result is a
-/// [`ClaimInstance`] per distinct key binding the derived claim's
-/// `domain` produces, with each `DerivedValue` evaluated and
-/// appended to the key positions.
+/// [`ClaimInstance`] per distinct key binding the `domain` produces,
+/// with each `DerivedValue` evaluated and appended to the key
+/// positions.
 ///
-/// Read-only: no claims are written, no audit row is produced, no
-/// outbox row is enqueued. Repeated calls compute the result from
-/// scratch - there is no materialised view in v0.
+/// Read-only: no claims written, no audit row, no outbox row. Repeated
+/// calls recompute from scratch; there is no materialised view.
 ///
-/// The predicate-scoped load is safe because the kernel only reads
-/// claims whose predicate matches an `Expr::Claim`, `Expr::ValueOf`,
-/// or other predicate-referencing expression node inside the
-/// derived's body. If a future PR adds a new `Expr` variant that
-/// references a predicate, `predicates_referenced_by_expr`'s
-/// exhaustive match will fail to compile until the new variant is
-/// handled - which prevents this read path from silently producing
-/// wrong answers under a partial state.
+/// The predicate-scoped load is safe because the footprint analysis's
+/// exhaustive `match` fails to compile if a new predicate-referencing
+/// `Expr` variant is added without handling it, so this read path
+/// cannot silently produce wrong answers under a partial state.
 ///
 /// Errors:
 /// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
@@ -1586,17 +1453,14 @@ pub async fn list_derived(
 //
 // These helpers reconstruct the `State` that existed immediately after a
 // chosen `transition_id` committed, by replaying every audit row up to and
-// including that transition in causal order. The kernel does not change;
-// `enumerate_derived(&State)` is unchanged. As-of evaluation is a question
-// of which `State` you hand to the kernel.
+// including that transition in causal order. The kernel is unchanged;
+// as-of evaluation is just a question of which `State` you hand it.
 //
 // The coordinate is "as of *this actual committed transition*". An
 // unknown id - smaller, larger, or between known ids - is rejected with
-// `PgError::TransitionNotFound`. There is no magical fallback to current
-// state for ids that happen to order past every committed transition.
+// `PgError::TransitionNotFound`; there is no fallback to current state.
 //
-// Replay is O(transitions up to T). v0 ships full replay; materialisation
-// is the next-forced optimisation if a bench scenario shows the cost.
+// Replay is O(transitions up to T); full replay, no materialisation.
 
 /// Reconstruct the full [`State`] that existed immediately after
 /// `transition_id` committed.
@@ -1619,9 +1483,7 @@ pub async fn list_derived(
 /// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
 ///   queries.
 ///
-/// Replay cost is O(transitions up to T). For long audit logs this
-/// becomes painful; snapshotting / materialisation is the next-forced
-/// optimisation but is deliberately out of scope in v0.
+/// Replay cost is O(transitions up to T).
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
     reconstruct_inner(pool, transition_id, None).await
 }
@@ -1632,27 +1494,23 @@ pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<
 /// claim's body references - the as-of analogue of
 /// [`list_claims_for_predicates`].
 ///
-/// The contract is intentionally distinct from the public
-/// [`reconstruct_state_at`]: the resulting [`State`] is **partial**.
-/// Callers downstream of this function must not query predicates
-/// outside the supplied set against the returned state - the kernel
-/// would correctly report zero matches because those claims were
-/// never added, not because they do not exist.
+/// Unlike the public [`reconstruct_state_at`], the resulting [`State`]
+/// is **partial**: callers must not query predicates outside the
+/// supplied set, since the kernel would report zero matches because
+/// those claims were never added, not because they do not exist.
 ///
-/// Empty `predicates` short-circuits: the target `transition_id`
-/// must still exist (returning [`PgError::TransitionNotFound`]
-/// otherwise), but no audit rows are fetched or replayed because
-/// the result is unconditionally an empty `State`. Mirrors the
-/// short-circuit behaviour of [`list_claims_for_predicates`].
+/// Empty `predicates` short-circuits to an empty `State`, but the
+/// target `transition_id` must still exist (otherwise
+/// [`PgError::TransitionNotFound`]). Mirrors
+/// [`list_claims_for_predicates`].
 pub(crate) async fn reconstruct_state_at_for_predicates(
     pool: &PgPool,
     transition_id: Uuid,
     predicates: &[String],
 ) -> Result<State, PgError> {
     if predicates.is_empty() {
-        // Still verify the target transition exists; the contract
-        // is "as of *this actual committed transition*", and an
-        // empty footprint does not change that.
+        // The "as of this committed transition" contract still
+        // requires the target to exist, even with an empty footprint.
         let target: Option<(Uuid,)> =
             sqlx::query_as("SELECT transition_id FROM morpholog.audit WHERE transition_id = $1")
                 .bind(transition_id)
@@ -1665,11 +1523,11 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
     reconstruct_inner(pool, transition_id, Some(predicates)).await
 }
 
-/// Returns the claims that were admitted at `transition_id`, in
-/// causal first-asserted order (the construction order produced by
-/// the replay loop). Differs from [`list_claims`] in two ways: the
-/// state is historical, not current; and the ordering is replay
-/// causality rather than `(asserted_at, predicate_name, args)`.
+/// Returns the claims admitted as of `transition_id`, in causal
+/// first-asserted order (the replay loop's construction order).
+/// Differs from [`list_claims`] in two ways: the state is historical,
+/// and the ordering is replay causality rather than `(asserted_at,
+/// predicate_name, args)`.
 ///
 /// Errors propagate from [`reconstruct_state_at`].
 pub async fn list_claims_at(
@@ -1730,11 +1588,8 @@ async fn reconstruct_inner(
     let (target_committed_at, target_transition_id) =
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
 
-    // Precompute the predicate scope as a HashSet for O(1) lookups
-    // inside the replay loop. For derived footprints with one or
-    // two predicates the linear scan was fine; precomputing once
-    // per reconstruction keeps it cheap regardless of footprint
-    // size or audit-log length.
+    // Precompute the scope as a HashSet so each in-loop membership
+    // check is O(1) regardless of footprint size or audit-log length.
     let scope_set: Option<HashSet<&str>> =
         predicates.map(|preds| preds.iter().map(String::as_str).collect());
 
@@ -1789,30 +1644,19 @@ fn predicate_in_scope_set(predicate: &str, scope: Option<&HashSet<&str>>) -> boo
     }
 }
 
-/// Working state for audit-log replay. Keeps claims in
-/// first-asserted order (matching the contract `list_claims_at`
-/// documents) while making both `assert` and `retract` `O(1)`
-/// amortised.
-///
-/// Earlier replay used a plain `Vec<ClaimInstance>` with
-/// `iter().any` for dedupe and `retain` for retraction; each was
-/// `O(|claims|)` per operation, summing to `O(N^2)` over a full
-/// replay. That pathology surfaced in the `morpholog-bench as-of`
-/// scenario (PR #28): N=10K reconstruction took ~4.6 s. This
-/// structure replaces both linear scans with hash-keyed lookups.
+/// Working state for audit-log replay. Keeps claims in first-asserted
+/// order (the contract `list_claims_at` documents) while making both
+/// `assert` and `retract` O(1) amortised - a plain `Vec` with linear
+/// dedupe and `retain` would be O(N^2) over a full replay.
 ///
 /// Internals:
-/// - `claims` holds every claim ever asserted during this replay,
-///   in the order it was first asserted. Never shrinks during
-///   replay; compacted once at the end via [`into_state`].
-/// - `index` maps `claim -> position in claims`. Used by both
-///   `assert` (to detect re-assertion of a previously-seen claim)
-///   and `retract` (to find the entry to mark dead).
+/// - `claims` holds every claim ever asserted during this replay, in
+///   first-asserted order. Never shrinks; compacted once at the end
+///   via [`into_state`].
+/// - `index` maps `claim -> position in claims`, used by both `assert`
+///   (re-assertion detection) and `retract` (entry to mark dead).
 /// - `live[i]` is `true` iff `claims[i]` is currently asserted.
-///   Retraction flips it to `false`; re-assertion flips it back.
-///
-/// The compaction in [`into_state`] walks `claims` once and keeps
-/// only the live entries, preserving original insertion order.
+///   Retraction flips it `false`; re-assertion flips it back.
 struct ReplaySet {
     claims: Vec<ClaimInstance>,
     index: HashMap<ClaimInstance, usize>,
@@ -1828,36 +1672,20 @@ impl ReplaySet {
         }
     }
 
-    /// Assert a claim. If it has never been asserted before, append
-    /// it to `claims` and mark it live. If it has been seen (whether
-    /// currently live or retracted), flip its existing slot back to
-    /// live. Re-asserting an already-live claim is a no-op (the set
-    /// semantics the kernel pins; an `INSERT ... ON CONFLICT DO
-    /// NOTHING` on the write side).
+    /// Assert a claim. First-time claims are appended and marked live;
+    /// a previously-seen claim (live or retracted) has its existing
+    /// slot flipped back to live. Re-asserting an already-live claim is
+    /// a no-op, matching the set semantics the kernel pins.
     ///
-    /// Clone counts:
-    /// - Re-assertion of an already-seen claim (live or retracted):
-    ///   **zero clones**. The `index.get(claim)` borrows the input;
-    ///   only the `live` bit is touched.
-    /// - First-time assertion: **two clones**. One into the `claims`
-    ///   vector (we need owned storage there) and one into the
-    ///   `index` HashMap as the key (HashMap keys must be owned).
-    ///   Single-clone is not reachable without `Rc`/`Arc` or
-    ///   borrow-checker gymnastics; the dual storage is the cost of
-    ///   keeping `claims` as a contiguous Vec.
-    ///
-    /// The clone of a `ClaimInstance` is cheap relative to the
-    /// JSON-decode that produced the input; for the common
-    /// asserts-only audit log every claim takes the two-clone path,
-    /// which is what the bench measures.
+    /// Re-assertion is zero-clone (only the `live` bit changes).
+    /// First-time assertion is two clones - one for the `claims` Vec,
+    /// one for the owned `index` key - the cost of keeping `claims`
+    /// contiguous. The clone is cheap relative to the JSON decode that
+    /// produced the input.
     fn assert(&mut self, claim: &ClaimInstance) {
         if let Some(&i) = self.index.get(claim) {
-            // Already seen: re-activate the existing slot. Zero
-            // clones; just a HashMap lookup and a Vec index write.
             self.live[i] = true;
         } else {
-            // First time seen: two clones (one for the Vec, one for
-            // the HashMap key).
             let i = self.claims.len();
             self.claims.push(claim.clone());
             self.live.push(true);
@@ -1921,52 +1749,43 @@ pub enum DeliveryOutcome {
 /// A delivery target. Implementors define how to take one
 /// admitted-and-enqueued intent and push it to the external world.
 ///
-/// The processor passes the full [`OutboxRow`] so implementors can
-/// access `arguments`, `attempt_count`, `enqueued_at`,
-/// `last_attempt_at`, etc. - enough context for retry/jitter
-/// decisions and for any per-target idempotency-key handling the
-/// receiver needs.
+/// The processor passes the full [`OutboxRow`] - enough context for
+/// retry/jitter decisions and any per-target idempotency-key handling
+/// the receiver needs.
 ///
-/// Implementors MUST NOT mutate any morpholog tables from within
-/// `deliver`. The processor owns the state machine; the deliverer
-/// owns only the external side effect.
+/// Implementors MUST NOT mutate any morpholog tables from `deliver`:
+/// the processor owns the state machine, the deliverer owns only the
+/// external side effect.
 ///
-/// The trait bakes in `Send + Sync` on the implementor and `Send`
-/// on the returned future so that polling loops that spawn one
-/// worker per intent type can `tokio::spawn(deliverer.deliver(...))`
-/// against an arbitrary `D: Deliverer`. RPITIT (return position impl
-/// trait in trait) does not let callers add a `Send` bound on the
-/// anonymous future later, so the bound is fixed here rather than
-/// reintroduced as a breaking change.
+/// `Send + Sync` on the implementor and `Send` on the returned future
+/// are baked in so polling loops can `tokio::spawn(deliverer.deliver(...))`
+/// against an arbitrary `D: Deliverer`. RPITIT does not let callers add
+/// the future's `Send` bound later, so it is fixed here.
 pub trait Deliverer: Send + Sync {
     fn deliver(&self, row: &OutboxRow)
     -> impl std::future::Future<Output = DeliveryOutcome> + Send;
 }
 
 /// Closure mapping the just-failed outbox row to the arguments the
-/// compensating transformation should be invoked with. Wrapped in
-/// a `Box<dyn ...>` rather than expressed as a generic so that
-/// `process_one_outbox_row`'s `Option<&CompensationSpec>` parameter
-/// has a single concrete type (callers can pass `None` without an
+/// compensating transformation is invoked with. Boxed rather than
+/// generic so `process_one_outbox_row`'s `Option<&CompensationSpec>`
+/// has a single concrete type (callers pass `None` without an
 /// inference workaround).
 pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Send + Sync>;
 
 /// Configuration the processor consults when delivery returns
 /// `NonRetryable` and the row is moved to `failed`.
 ///
-/// `args_from_row` is invoked AFTER [`begin_compensation`] has
-/// claimed the compensation lease on the row, so the row passed in
-/// is the one carrying `failure_reason` from the just-failed
-/// delivery attempt; the closure can read it to incorporate the
-/// reason into the compensating transformation's arguments.
+/// `args_from_row` is invoked AFTER [`begin_compensation`] has claimed
+/// the lease, so the row it receives carries `failure_reason` from the
+/// just-failed attempt and the closure can fold it into the
+/// compensating transformation's arguments.
 ///
-/// The compensating transformation is invoked via
-/// [`propose_against_pg`] just like any other transformation - it
-/// goes through every invariant check, writes its own audit row,
-/// and stages its own outbox intents. The audit log then preserves
-/// the full lineage: original commit, the
-/// `compensation_transition_id` linkage on the failed outbox row,
-/// and the compensation's audit row.
+/// The compensating transformation goes through [`propose_against_pg`]
+/// like any other - every invariant check, its own audit row, its own
+/// outbox intents - so the audit log preserves the full lineage:
+/// original commit, the `compensation_transition_id` linkage, and the
+/// compensation's audit row.
 pub struct CompensationSpec {
     pub transformation: Transformation,
     pub invariants: Vec<Invariant>,
@@ -2011,19 +1830,15 @@ pub enum ProcessOutcome {
     /// is in `compensation_failed`. This is the genuinely-broken
     /// state requiring operator intervention.
     CompensationFailed { intent_id: Uuid, reason: String },
-    /// A state-mutating helper returned [`OutboxUpdate::LeaseLost`].
-    /// The deliverer (or the compensation arm) ran to completion,
-    /// but by the time the processor went to write the result the
-    /// lease had already expired and another worker had reclaimed
-    /// the row.
+    /// A state-mutating helper returned [`OutboxUpdate::LeaseLost`]:
+    /// the deliverer (or compensation arm) ran to completion, but the
+    /// lease had expired and another worker reclaimed the row first.
     ///
-    /// LeaseLost is NOT an error. It is the honest answer when a
-    /// slow deliverer races the lease clock. Calling code should
-    /// log + alert (the orphan-audit case during compensation -
-    /// where the compensating transformation committed but the
-    /// row's pointer never landed - is the most operationally
-    /// noteworthy variety; reconcile from the audit log) and move
-    /// on to the next row.
+    /// Not an error - the honest answer when a slow deliverer races the
+    /// lease clock. Calling code should log and alert (the orphan-audit
+    /// case during compensation, where the compensating transformation
+    /// committed but the row's pointer never landed, is the most
+    /// noteworthy; reconcile from the audit log) and move on.
     LeaseLost { intent_id: Uuid },
 }
 
@@ -2045,28 +1860,18 @@ pub enum ProcessOutcome {
 ///      transformation via [`propose_against_pg`] + resolve via
 ///      [`complete_compensation`] or [`mark_compensation_failed`].
 ///
-/// Concurrency: safe under concurrent invocation across processes.
-/// `claim_pending_outbox_row` uses `SELECT ... FOR UPDATE SKIP
-/// LOCKED` so at most one worker claims a given row;
-/// `begin_compensation` uses the same pattern so at most one worker
-/// invokes the compensating transformation for a given failed row.
+/// Concurrency: safe across processes. Both [`claim_pending_outbox_row`]
+/// and [`begin_compensation`] use `SELECT ... FOR UPDATE SKIP LOCKED`,
+/// so at most one worker claims a given row or invokes the
+/// compensating transformation for a given failed row.
 ///
-/// The compensation race is closed under normal operation. A
-/// crashing worker between `propose_against_pg` commit and
-/// `complete_compensation` would leave the row in
-/// `compensation_in_progress`; the conservative reclaim policy
-/// (see [`begin_compensation`]'s docs) keeps such rows stuck and
-/// requires operator intervention rather than risking a duplicate
-/// compensation. Programs that need full immunity should
-/// additionally guard the compensating transformation with a
-/// `CompensationApplied(original_intent_id)` invariant.
+/// The compensation race is closed under normal operation; a worker
+/// crashing between `propose_against_pg` commit and
+/// `complete_compensation` leaves the row stuck for operator recovery
+/// rather than risking a duplicate (see [`begin_compensation`]).
 ///
-/// `claim_before` is the upper bound for retry eligibility passed
-/// through to [`claim_pending_outbox_row`]. One-shot callers (a
-/// Lambda invocation, a CLI consumer) pass `Utc::now()`. A drain
-/// loop captures `Utc::now()` once at the top of the pass and
-/// supplies the same instant on every iteration; see
-/// [`claim_pending_outbox_row`] for the loop-safety rationale.
+/// `claim_before` is passed through to [`claim_pending_outbox_row`];
+/// see it for the drain-loop safety rationale.
 #[allow(clippy::too_many_arguments)]
 pub async fn process_one_outbox_row<D>(
     pool: &PgPool,
@@ -2109,11 +1914,9 @@ where
         DeliveryOutcome::NonRetryable { reason } => {
             match mark_outbox_failed(pool, intent_id, worker_id, &reason).await? {
                 OutboxUpdate::LeaseLost => {
-                    // Row is no longer in our hands. Whatever the
-                    // new lease holder does next replaces what we
-                    // were trying to do. Compensation must not
-                    // run: begin_compensation requires status =
-                    // 'failed', and we never moved the row there.
+                    // The row is no longer ours; compensation must not
+                    // run because we never moved it to 'failed', which
+                    // begin_compensation requires.
                     return Ok(ProcessOutcome::LeaseLost { intent_id });
                 }
                 OutboxUpdate::Applied => {}
@@ -2121,11 +1924,9 @@ where
             let Some(spec) = compensation else {
                 return Ok(ProcessOutcome::Failed { intent_id, reason });
             };
-            // The lease was just released by mark_outbox_failed.
-            // Re-claim the right to compensate via the
-            // failed -> compensation_in_progress lease. Another
-            // worker may beat us here under a concurrent recovery
-            // scan; SKIP LOCKED ensures at most one wins.
+            // Re-claim the compensation lease that mark_outbox_failed
+            // just released. SKIP LOCKED ensures at most one worker
+            // wins under a concurrent recovery scan.
             let claimed = begin_compensation(pool, intent_id, worker_id, lease_duration).await?;
             let Some(failed_row) = claimed else {
                 return Ok(ProcessOutcome::CompensationDeferred { intent_id });
@@ -2170,9 +1971,8 @@ where
 mod tests {
     use super::is_serialization_failure_code;
 
-    /// Pins the SQLSTATE used to identify PostgreSQL SSI serialization
-    /// failures. If anyone changes the magic string `"40001"` this test
-    /// fails - the retry contract cannot regress silently.
+    /// Pins the `"40001"` magic string so the retry contract cannot
+    /// regress silently.
     #[test]
     fn sqlstate_40001_classified_as_serialization_failure() {
         assert!(is_serialization_failure_code(Some("40001")));

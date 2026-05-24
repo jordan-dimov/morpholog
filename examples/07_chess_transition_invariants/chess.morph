@@ -1,37 +1,93 @@
--- Chess transition invariants - the forcing example for `pre(...)`.
+-- Chess, used here purely as a teaching example. Every other example in
+-- this repo is a real business domain; this one is deliberately a game,
+-- because chess makes one idea easy to see.
+--
+-- That idea: some rules are about what a board position is allowed to
+-- look like, while others are about how the board is allowed to *change*
+-- from one move to the next. "At most one king per colour" is the first
+-- kind - you can check it by looking at a single snapshot of the board.
+-- But "every move advances the move counter by exactly one", "the turn
+-- always flips to the other player", and "a move captures at most one
+-- piece" are the second kind. You cannot check them by looking at one
+-- position alone; you have to compare the board before the move with the
+-- board after it. That is what makes them interesting.
+--
+-- Morpholog expresses the second kind with `pre(...)`. Read
+-- `pre(MoveCount(m))` as "the move count as it was before this move";
+-- the unwrapped `MoveCount(n)` is the value after. A rule that mentions
+-- both can constrain how one becomes the other.
+--
+-- The terms used below. An `invariant` is a rule that must hold for all
+-- admitted state - the runtime refuses to commit any change that would
+-- break one. A `require` is a gate on a single move, checked at the
+-- moment the move is made. And the runtime stores `claims` it has agreed
+-- to admit, never bare "facts": the board is just a set of claims that
+-- such-and-such piece sits on such-and-such square.
+--
+-- This is not a chess engine. It does not enforce legal moves (a bishop
+-- may slide sideways here), and it knows nothing of check, castling, or
+-- promotion. It models only enough to show before-and-after rules.
 -- Inspired by Murat Demirbas's Chess invariants post:
 -- https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html
---
--- The canonical business use of `pre(...)` lives in
--- examples/05_insurance_claim_settlement (per-policy headroom
--- conservation); chess is the small clean teaching domain.
 
 program chess_transition_invariants
 
+-- The vocabulary. The board is just a pile of "this piece is on this
+-- square" claims, plus three counters that track the game as a whole:
+-- how many moves have been played, how many pieces remain on the board,
+-- and whose turn it is.
 predicate PieceAt(square: Subject, piece_type: Subject, color: Subject)
 predicate MoveCount(n: Decimal)
 predicate PieceCount(n: Decimal)
 predicate CurrentTurn(color: Subject)
 
+-- Intents are messages announced to the outside world after a move
+-- commits: the game started, a piece moved, a piece was captured.
 intent GameStarted()
 intent PieceMoved(src: Subject, dst: Subject)
 intent PieceCaptured(src: Subject, dst: Subject, captured_type: Subject)
 
+-- Rules about a single board position. Each one can be judged by
+-- looking at one snapshot; none needs to know what the board looked
+-- like a move ago.
+
+-- A square holds at most one piece. If two claims put a piece on the
+-- same square, they must be describing the very same piece.
 invariant at_most_one_piece_per_square:
   (PieceAt(sq, t_a, c_a) and PieceAt(sq, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
 
+-- Each colour has at most one king. Two king claims of the same colour
+-- must point at the same square.
 invariant one_king_per_color:
   (PieceAt(sq_a, #king, c) and PieceAt(sq_b, #king, c)) implies (sq_a = sq_b)
 
+-- Rules about how the board changes from one move to the next. These
+-- compare the board after the move (the plain reading) with the board
+-- before it (the `pre(...)` reading). You could not state them by
+-- looking at a single position.
+
+-- Every move bumps the move counter up by exactly one. The new count
+-- must equal the previous count plus one.
 invariant move_count_strictly_increases:
   (MoveCount(n) and pre(MoveCount(m))) implies (n = (m + 1))
 
+-- The turn always flips: whoever is to move now must be the opposite
+-- colour to whoever was to move before.
 invariant turn_alternates:
   (CurrentTurn(t_now) and pre(CurrentTurn(t_prev))) implies (t_now != t_prev)
 
+-- A single move captures at most one piece. The piece count after a
+-- move is either unchanged (a quiet move) or exactly one less than
+-- before (a capture). It can never drop by two.
 invariant single_capture_per_move:
   (PieceCount(after) and pre(PieceCount(before))) implies ((after = before) or (after = (before - 1)))
 
+-- The ways the board may change. A move proposes a set of changes;
+-- the runtime applies them only if every invariant still holds.
+-- `admit` adds a claim, `retract` removes one, `require` gates the move.
+
+-- Set up the opening position: all 32 pieces on their starting squares,
+-- the move counter at zero, the piece count at 32, white to play.
 transformation start_game():
   admit PieceAt(#a1, #rook, #white)
   admit PieceAt(#b1, #knight, #white)
@@ -70,6 +126,12 @@ transformation start_game():
   admit CurrentTurn(#white)
   emit GameStarted()
 
+-- A move that does not capture. The piece leaves its source square and
+-- lands on an empty destination. The gates check the basics of turn
+-- order before anything moves: the piece being moved must belong to the
+-- player whose turn it is, the next turn must be the other player, and
+-- the destination must be empty. The move counter steps up by one; the
+-- turn flips; the piece count is untouched.
 transformation quiet_move(src, dst, new_turn):
   bind PieceAt(src, piece_type, piece_color)
   bind CurrentTurn(current_turn)
@@ -86,6 +148,10 @@ transformation quiet_move(src, dst, new_turn):
   admit MoveCount(next_m)
   emit PieceMoved(src, dst)
 
+-- A move that captures. Like a quiet move, but the destination holds an
+-- enemy piece, which is removed from the board. The gates additionally
+-- check that the captured piece really belongs to the opponent. The
+-- piece count drops by exactly one.
 transformation capturing_move(src, dst, new_turn):
   bind PieceAt(src, piece_type, piece_color)
   bind PieceAt(dst, captured_type, captured_color)

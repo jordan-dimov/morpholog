@@ -1,42 +1,23 @@
 //! Human-readable pretty-printer for [`Program`]s and their components.
 //!
-//! The IR types derive `Debug`, which is fine for `cargo test` failure
-//! messages and adequate for one-off inspection but is unreadable for
-//! anything more than a few claims deep. This module renders the same
-//! IR in a structured indented form intended for:
-//!
-//! - A failing test's `panic!` message that needs to show *which*
-//!   transformation produced unexpected state, not just dump the whole
-//!   `Outcome`.
-//! - The CLI's `inspect program` subcommand (when it lands) - operators
-//!   reading `morpholog inspect program <name>` should see what the
-//!   programme actually does, not a Debug-formatted dump.
-//! - A `diff` between two `Program` values - the `.morph` illustrative
-//!   file in each example directory currently has no machine-checkable
-//!   relationship to the Rust IR; this printer is the bridge.
+//! The IR derives `Debug`, which is unreadable past a few claims deep.
+//! This module renders the same IR in structured indented form for test
+//! `panic!` messages, CLI inspection, and kernel diagnostic strings.
+//! The output round-trips through `parse_program`.
 //!
 //! Output style:
 //!
-//! - **Not future surface syntax.** `.morph` is the eventual parser
-//!   target; the parser will define the surface. This printer aims for
-//!   *readable now* with 2-space indentation and no commitment to any
-//!   specific token choices.
 //! - **One concept per line where possible.** Statement bodies expand
 //!   vertically; sub-expressions inline unless they contain claims or
 //!   `And`/`Or`-style branching.
-//! - **Result ends with a trailing newline** so callers can append
-//!   directly to a `String` or write to a stream without composing
-//!   their own separator. Each per-section helper
-//!   (`format_invariant`, `format_transformation`,
-//!   `format_derived_claim`) likewise produces a newline-terminated
+//! - **Result ends with a trailing newline** so callers can append to a
+//!   `String` or write to a stream without composing their own
+//!   separator. Each per-section helper produces a newline-terminated
 //!   block.
 //!
-//! Cost: a deliberate cost. The exhaustive matches in this module
-//! mean every new IR variant ([`Expr`], [`Stmt`], [`Term`], [`Value`])
-//! requires a new arm. That is the same discipline as
-//! [`crate::predicates_referenced_by_expr`]: a compile-time gate
-//! that no future addition silently degrades the human-readable
-//! rendering.
+//! The exhaustive matches are a deliberate cost: every new IR variant
+//! requires a new arm, a compile-time gate that no addition silently
+//! degrades the rendering.
 
 use crate::{
     Claim, DerivedClaim, Expr, Intent, Invariant, PredicateArgKind, PredicateDecl, Program, Stmt,
@@ -50,12 +31,9 @@ pub fn format_program(p: &Program) -> String {
     let mut out = String::new();
     out.push_str(&format!("program {}\n", p.name));
 
-    // Predicates render between the header and the invariants - they
-    // are the programme's vocabulary contract, and seeing them first
-    // helps the reader interpret every subsequent claim reference.
-    // One blank line separates the section from the header; the
-    // declarations themselves stack consecutively (each
-    // format_predicate_decl call ends with its own `\n`).
+    // Predicates render first as the programme's vocabulary contract,
+    // so the reader can interpret every subsequent claim reference. One
+    // blank line separates the section; declarations stack consecutively.
     if !p.predicates.is_empty() {
         out.push('\n');
         for decl in &p.predicates {
@@ -63,8 +41,8 @@ pub fn format_program(p: &Program) -> String {
         }
     }
 
-    // Intents render after predicates in their own section,
-    // matching the two-vocabulary distinction visually.
+    // Intents render in their own section after predicates, matching
+    // the two-vocabulary distinction visually.
     if !p.intents.is_empty() {
         out.push('\n');
         for decl in &p.intents {
@@ -126,9 +104,7 @@ fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
 pub fn format_invariant(inv: &Invariant) -> String {
     let mut out = String::new();
     // Surface has no version syntax in v0; the IR's `version` field
-    // defaults to 1 and the formatter omits it. When versioning
-    // grows a meaningful second value, both the surface and this
-    // emitter add a clause.
+    // defaults to 1 and the formatter omits it.
     out.push_str(&format!("invariant {}:\n", inv.name));
     out.push_str(&indent(1));
     out.push_str(&format_expr_inline(&inv.body));
@@ -188,12 +164,9 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
     match s {
         Stmt::Require(e) => format!("{pad}require {}", format_expr_inline(e)),
         Stmt::BindOne(e) => {
-            // The surface grammar restricts `bind` to a claim
-            // pattern; the IR's `Stmt::BindOne(Expr)` is broader.
-            // Panic on non-Claim shapes rather than emit text the
-            // parser refuses. If a future worked example forces a
-            // wider `bind` surface, the IR change and the formatter
-            // change land together.
+            // The surface grammar restricts `bind` to a claim pattern,
+            // though the IR's `Stmt::BindOne(Expr)` is broader. Panic on
+            // non-Claim shapes rather than emit text the parser refuses.
             assert!(
                 matches!(e, Expr::Claim { .. }),
                 "format_stmt: bind requires a claim pattern; got {e:?}",
@@ -235,21 +208,14 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
 // Expression formatting
 // ============================================================
 
-/// Indented multi-line expression. Used by invariant bodies, derived-
-/// claim domains, and `For` bodies where vertical layout aids reading.
-/// One-line expression rendering. The only expression printer in
-/// the kernel; produces canonical surface text that round-trips
-/// through `parse_program`. Used inline in `require`, `let`,
-/// `bind`, invariant bodies, derived-claim domain and value
-/// expressions, and kernel diagnostic paths (`bind` rejection
-/// reasons, multi-match errors) that need a compact human-readable
-/// rendering
-/// of an expression.
+/// One-line expression rendering, the only expression printer in the
+/// kernel. Used in `require`/`let`/`bind`, invariant bodies,
+/// derived-claim domains and values, and kernel diagnostic paths
+/// (rejection reasons, multi-match errors).
 pub fn format_expr_inline(e: &Expr) -> String {
-    // Emits canonical surface text. Composite sub-expressions are
-    // wrapped in parens unconditionally; the result is verbose but
-    // unambiguous and round-trips through `parse_program`. The
-    // surface comparator precedence (arithmetic > comparators > not
+    // Composite sub-expressions are wrapped in parens unconditionally;
+    // verbose but unambiguous and round-trips through `parse_program`.
+    // The surface comparator precedence (arithmetic > comparators > not
     // > and > implies) makes the parens a no-op for the parser.
     fn primary(e: &Expr) -> String {
         match e {
@@ -261,10 +227,8 @@ pub fn format_expr_inline(e: &Expr) -> String {
                 body,
             } => {
                 // The surface form `sum(binding | body)` lowers to
-                // `Sum { value: Var(binding), binding, body }`; the
-                // formatter can only canonically emit that surface,
-                // so a Sum with `value != Var(binding)` cannot
-                // round-trip. Panic loudly if encountered.
+                // `Sum { value: Var(binding), binding, body }`; a Sum
+                // with `value != Var(binding)` cannot round-trip.
                 assert!(
                     matches!(value, Term::Var(name) if name == binding),
                     "format_expr_inline: sum's value must be Var(binding); got value={value:?}, binding={binding:?}",
@@ -282,10 +246,8 @@ pub fn format_expr_inline(e: &Expr) -> String {
                     None => base,
                 }
             }
-            // `pre(...)` is function-call-shape; no outer parens
-            // needed even at primary position.
+            // `pre(...)` is function-call-shape; no outer parens needed.
             Expr::Pre(inner) => format!("pre({})", format_expr_inline(inner)),
-            // Any composite gets parens.
             _ => format!("({})", format_expr_inline(e)),
         }
     }
@@ -319,9 +281,7 @@ pub fn format_expr_inline(e: &Expr) -> String {
         Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
-        // Boolean composition: prefix `not`, infix `and`, `or`, and
-        // `implies`; `pre(...)` is a function-call-shape primary that
-        // flips state lookup to pre-transition for its inner subtree.
+        // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.
         Expr::Pre(inner) => format!("pre({})", format_expr_inline(inner)),
         Expr::Not(inner) => format!("not {}", primary(inner)),
         Expr::And(exprs) => {
@@ -391,13 +351,10 @@ fn format_term(t: &Term) -> String {
 
 fn format_value(v: &Value) -> String {
     match v {
-        // Subjects use the `#name` sigil. The surface lexer only
-        // accepts an ASCII identifier after `#` (letters, digits,
-        // underscore; not starting with a digit). Subjects in
-        // worked examples are always identifier-safe; panic loudly
-        // on any subject that wouldn't round-trip so the issue
-        // surfaces at format time rather than as a confusing parse
-        // failure downstream.
+        // Subjects use the `#name` sigil; the surface lexer accepts
+        // only an ASCII identifier after `#`. Panic on any subject that
+        // wouldn't round-trip, so the issue surfaces at format time
+        // rather than as a confusing downstream parse failure.
         Value::Subject(s) => {
             assert!(
                 is_identifier_safe_subject(s),
@@ -431,10 +388,9 @@ fn indent(depth: usize) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     //! Tests pin the *shape* of the rendered output - specific tokens
-    //! the rendering must contain - not byte-for-byte equality. The
-    //! exact whitespace and indentation may change as the printer is
-    //! tuned; what must not change is that every variant is reachable
-    //! and produces readable output.
+    //! it must contain - not byte-for-byte equality, except where a
+    //! test explicitly checks exact bytes. What must not change is that
+    //! every variant is reachable and produces readable output.
 
     use super::*;
     use crate::Value;
@@ -500,11 +456,9 @@ mod tests {
         );
     }
 
-    /// Pins the predicate section layout in `format_program`: one
-    /// blank line separates the section from the header, then
-    /// declarations stack consecutively with no intervening blank
-    /// lines. Two consecutive predicates rendered with an extra blank
-    /// line between them was the Copilot review finding on PR #50.
+    /// Pins the predicate section layout in `format_program`: one blank
+    /// line separates the section from the header, then declarations
+    /// stack consecutively with no intervening blank lines.
     #[test]
     fn format_program_renders_predicates_section_consecutively() {
         let p = Program {
@@ -526,10 +480,9 @@ mod tests {
         );
     }
 
-    /// Every `PredicateArgKind` variant has a stable display name in
-    /// the formatter. Exhaustive match means a future variant
-    /// (e.g. an `Instant` kind when timezone-aware values land) must
-    /// extend `format_predicate_arg_kind`.
+    /// Every `PredicateArgKind` variant has a stable display name. The
+    /// exhaustive match means a future variant must extend
+    /// `format_predicate_arg_kind`.
     #[test]
     fn format_predicate_arg_kind_renders_each_variant() {
         for (kind, expected) in [
@@ -546,11 +499,9 @@ mod tests {
 
     #[test]
     fn format_expr_renders_each_variant() {
-        // One expression exercising every Expr variant. The test pins
-        // that each variant produces a recognisable token in the
-        // output; if a future variant is added without a printer arm,
-        // the exhaustive match in `format_expr_inline` will refuse to
-        // compile.
+        // One expression exercising every Expr variant; each must
+        // produce a recognisable token. A new variant without a printer
+        // arm fails to compile against the exhaustive match.
         let e = and(vec![
             claim("P", vec![var("x"), wildcard()]),
             not(claim("Q", vec![var("x")])),
@@ -572,9 +523,6 @@ mod tests {
         ]);
         let s = format_expr_inline(&e);
 
-        // Each variant contributes at least one recognisable token
-        // matching the surface syntax that round-trips through the
-        // parser.
         assert!(s.contains("P(x, _)"));
         assert!(s.contains("not Q(x)"));
         assert!(s.contains("implies"));

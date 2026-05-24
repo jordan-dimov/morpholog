@@ -1,38 +1,58 @@
--- Clinical trial enrolment (v0).
+-- Enrolling a participant into a clinical trial - the moment a person
+-- is "randomised" into a drug study - with the paperwork checked the way
+-- a regulator will check it years later.
 --
--- A regulator, an ethics committee or a future investigator asks:
--- *was this participant legitimately randomised on this date, under
--- the protocol, consent form, eligibility evidence and investigator
--- delegation that were valid on that day?*
+-- A quick tour of the domain, in case clinical trials are not your
+-- world. Before a participant can be randomised, several documents and
+-- approvals all have to be in force on that exact day: the protocol (the
+-- master plan for the study, approved by an ethics committee), the
+-- consent form the person signed, the doctor's delegated authority to
+-- enrol people, and a recent lab result showing the person is eligible.
+-- Each of these is valid only between two dates - a "from" date and a
+-- "to" date - and outside that window it simply does not count. A
+-- consent form approved through 31 March is no good on 1 April; a lab
+-- result expires once its stability window passes. The question an
+-- inspector asks, sometimes years afterwards, is always the same: *was
+-- this person legitimately randomised on this date, under everything
+-- that was valid that day?* That should be one lookup, not a forensic
+-- dig across four separate archives.
 --
--- The load-bearing rule is a set of inclusive `[from, to]` civil-date
--- validity windows checked at admission time. Each window is a pair
--- of `on_or_before` conjuncts joined with `and` (the comparator is
--- non-associative, so the chained form `a on_or_before b on_or_before c`
--- is not valid; write the two halves explicitly):
+-- Most of the rules below are validity-window checks. We write each one
+-- as two halves joined with `and`: the window's start is on-or-before
+-- the action date, and the action date is on-or-before the window's end.
+-- Read `x on_or_before y` simply as "the date x falls on or before the
+-- date y". Both ends are inclusive, so a document valid "through 31
+-- March" is still valid on 31 March itself.
 --
---   protocol_from on_or_before randomised_on and randomised_on on_or_before protocol_to
---   consent_from  on_or_before randomised_on and randomised_on on_or_before consent_to
---   consented_on  on_or_before randomised_on
---   del_from      on_or_before randomised_on and randomised_on on_or_before del_to
---   assessed_on   on_or_before randomised_on and randomised_on on_or_before expires_on
+-- Here is how Morpholog thinks about all this. It does not store
+-- "facts" - it stores *claims* it has agreed to admit because they obey
+-- the rules. Two kinds of rule do the work:
 --
--- The `on_or_before` keyword is the surface for `Expr::DateLe`,
--- distinct from decimal `<=` (which is `Expr::Le`). The kernel
--- keeps the two comparators as separate IR primitives so each
--- can type-check its operands; the surface refuses to overload
--- `<=` by operand kind. Without this separation, civil-date
--- comparison would degrade to lexicographic ordering on subject
--- literals (wrong by construction the moment a year changes
--- digits) or to ad-hoc string predicates outside the kernel.
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would
+--     break one.
+--   * a `require` is a gate on a single action - a condition checked at
+--     the moment you act, and never again.
 --
--- Validity is an admission-time gate, not an eternal invariant.
--- Closing a protocol window or amending the protocol must not
--- retroactively invalidate an earlier randomisation - it must only
--- govern future ones.
+-- The distinction is load-bearing here. The validity windows are gates,
+-- checked the day a participant is randomised. They are deliberately
+-- NOT invariants. A week after an enrolment, the sponsor may close the
+-- old protocol and approve a new one - and that must not reach back and
+-- invalidate an enrolment that was perfectly valid when it happened.
+-- "What did we admit, under the rules in force then?" must always have
+-- an honest answer. Closing a window governs the future, never the past.
 
 program clinical_trial_enrolment
 
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold and the shape of its arguments. These are the only nouns the
+-- system knows: the trial itself, the dated documents and approvals
+-- (protocol versions, consent forms, ethics sign-offs), the people
+-- involved (screened participants, delegated investigators), the
+-- eligibility criteria and the lab assessments against them, any open
+-- protocol deviation that blocks a participant, and finally the
+-- randomisation record itself. The dates on a version or assessment are
+-- its validity window: the period over which that thing is in force.
 predicate Trial(trial_id: Subject)
 predicate ProtocolVersion(trial_id: Subject, protocol_version: Subject, effective_from: Date, effective_to: Date)
 predicate ProtocolApprovedBy(protocol_version: Subject, ethics_committee: Subject, approval_id: Subject)
@@ -46,6 +66,11 @@ predicate DelegatedInvestigator(investigator: Subject, trial_id: Subject, role: 
 predicate ImportantProtocolDeviationOpen(participant_id: Subject, trial_id: Subject, deviation_id: Subject)
 predicate ParticipantRandomised(participant_id: Subject, trial_id: Subject, protocol_version: Subject, randomised_on: Date, randomised_by: Subject)
 
+-- Intents are messages the system sends to the outside world once a
+-- change commits - "a trial opened", "a participant was randomised".
+-- They are how the trial tells the rest of the machinery (the
+-- randomisation system, the case-report-form database) what just
+-- happened.
 intent TrialOpened(trial_id: Subject)
 intent ProtocolVersionApproved(trial_id: Subject, protocol_version: Subject)
 intent ConsentFormVersionApproved(trial_id: Subject, consent_form_version: Subject)
@@ -58,49 +83,50 @@ intent ImportantProtocolDeviationOpened(participant_id: Subject, trial_id: Subje
 intent ParticipantRandomised(participant_id: Subject)
 
 
--- ============================================================
--- Invariant: protocol version has at most one effective window.
--- ============================================================
+-- The rules that must always hold. If any change would leave the world
+-- violating one of these, the whole change is rejected at commit.
+
+-- A protocol version can have only one validity window. If the same
+-- protocol version were allowed two different "from/to" windows, you
+-- could quietly change after the fact whether an earlier enrolment fell
+-- inside it. Pinning one window per version keeps the past honest.
 invariant at_most_one_protocol_window_per_version:
     ProtocolVersion(trial, version, from_a, to_a) and ProtocolVersion(trial, version, from_b, to_b) implies (from_a = from_b and to_a = to_b)
 
--- ============================================================
--- Invariant: consent form version has at most one effective window.
--- ============================================================
+-- Same rule for consent form versions: one validity window per version.
 invariant at_most_one_consent_window_per_version:
     ConsentFormVersion(trial, version, from_a, to_a) and ConsentFormVersion(trial, version, from_b, to_b) implies (from_a = from_b and to_a = to_b)
 
--- ============================================================
--- Invariant: a participant is randomised at most once per trial.
--- ============================================================
+-- A participant is randomised at most once in a given trial. Two
+-- randomisation records for the same person in the same trial must
+-- agree on every detail - same protocol version, same date, same
+-- enrolling doctor. This catches the "accidentally enrolled twice"
+-- error without making the validity windows themselves eternal.
 invariant participant_randomised_once_per_trial:
     ParticipantRandomised(p, trial, proto_a, date_a, actor_a) and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies (proto_a = proto_b and date_a = date_b and actor_a = actor_b)
 
--- ============================================================
--- Invariant: consent must precede or coincide with randomisation.
---
--- For every randomised participant, an InformedConsentObtained
--- claim must exist with consent date on-or-before the
--- randomisation date. This is the date-window doctrine in its
--- purest form: validity is fixed at admission time, but the rule
--- itself is *eternal* over admitted state - if you accept a
--- correction that backdates a randomisation, the prior consent
--- must still cover the new date.
---
--- The civil-date `on_or_before` keyword here makes the comparator
--- semantically explicit. Decimal `<=` would parse but lower to
--- `Expr::Le`, which type-mismatches on `Date` operands at runtime.
--- ============================================================
+-- Consent must come before randomisation. For every randomised
+-- participant there must be a recorded consent whose signing date is
+-- on or before the randomisation date - you cannot enrol someone who
+-- had not yet agreed. This one IS an invariant rather than a one-time
+-- gate: even if a later correction moves a randomisation to a new date,
+-- the consent must still cover that new date. The order "consented,
+-- then randomised" must hold over all admitted state, forever.
 invariant consent_obtained_before_randomisation:
     ParticipantRandomised(p, t, _, randomised_on, _) implies (exists consented_on: InformedConsentObtained(p, t, _, consented_on, _) and consented_on on_or_before randomised_on)
 
 
 
--- ============================================================
--- Setup transformations - enough surface to make randomisation
--- reachable. Ethics-approval and delegation arrive as their own
--- claims rather than as side-effects of randomisation.
--- ============================================================
+-- The ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every invariant still holds
+-- once they are in place. `admit` adds a claim; `require` is the gate
+-- that must pass before the change goes through.
+
+-- Setup steps - just enough to make a real randomisation reachable.
+-- Each piece of the evidence (the ethics-approved protocol, the consent
+-- form, the doctor's delegated authority, the eligibility lab result)
+-- arrives as its own recorded step rather than being conjured as a side
+-- effect of enrolment, exactly as it happens in a real trial.
 transformation open_trial(trial_id):
     admit Trial(trial_id)
     emit TrialOpened(trial_id)
@@ -181,27 +207,26 @@ transformation open_important_protocol_deviation(participant_id, trial_id, devia
     admit ImportantProtocolDeviationOpen(participant_id, trial_id, deviation_id)
     emit ImportantProtocolDeviationOpened(participant_id, trial_id, deviation_id)
 
--- ============================================================
--- The load-bearing transformation. Admits randomisation only if
--- every validity-window gate holds on the randomisation date and
--- the eligibility evidence matches the criterion's required result.
---
--- `protocol_version` is an explicit parameter: the investigator
--- knows which protocol version they are enrolling under, and a
--- single require-And does not propagate its match's bindings out.
--- Making it a parameter lets the bound value flow into the admit
--- without a separate Let + ValueOf.
--- ============================================================
+-- The heart of the example: actually randomising a participant. This
+-- goes through only if EVERY piece of evidence is in force on the
+-- randomisation date - the protocol window covers it, the consent form
+-- window covers it, the signed consent precedes it, the doctor's
+-- delegation covers it, the eligibility lab result is recorded, matches
+-- the required result, and has not expired - and there is no open
+-- protocol deviation blocking the participant. If any single check
+-- fails, the whole enrolment is refused. The doctor passes in which
+-- protocol version they are enrolling under, since they know it.
 transformation randomise_participant(
     participant_id,
     trial_id,
     protocol_version,
     randomised_on
 ):
-    -- Long multi-line require body wrapped in parens: parens
-    -- disable the layout pass within them, so the continuation
-    -- lines can be indented freely without emitting virtual Indent
-    -- tokens that would interrupt expression parsing.
+    -- Every condition below is part of one big gate, joined with `and`.
+    -- Each validity window appears as two lines: the window opens on or
+    -- before the randomisation date, and the randomisation date is on or
+    -- before the window closes. All of it must hold, or the enrolment is
+    -- turned away.
     require (
         Trial(trial_id)
         and ProtocolVersion(trial_id, protocol_version, protocol_from, protocol_to)

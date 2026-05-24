@@ -1,49 +1,87 @@
--- Double-entry ledger with period close - canonical v0 example for
--- the fundamental accounting equation and period-close discipline.
+-- Double-entry bookkeeping, the way accountants have kept the books
+-- for five hundred years - now with the rules enforced by the runtime
+-- instead of by hope and review.
 --
--- Domain: a business posts journal entries throughout an accounting
--- period. Every posted entry must satisfy the foundational rule of
--- double-entry bookkeeping: the sum of its line debits equals the
--- sum of its line credits. When a period closes (at month-end, quarter-
--- end, year-end), no new entries dated within that period may be
--- posted by normal means. Errors discovered in a closed period are
--- corrected by *restatement* - a separate transformation that admits
--- a new entry and records a `Supersedes` link to the original. The
--- original is preserved as the record of what was filed.
+-- A quick tour of the domain, in case accounting is not your world.
+-- Every transaction a business makes is written down as a "journal
+-- entry" built from two or more lines. Each line records money moving
+-- into an account (a debit) or out of one (a credit). The iron rule:
+-- inside a single entry, the debits and the credits must add up to the
+-- same total. Buy a 100-pound laptop with cash and you debit Equipment
+-- 100 and credit Cash 100 - the books stay balanced. An entry whose
+-- debits and credits disagree is not a "slightly wrong" entry; it is
+-- not an entry at all.
 --
--- The key moves: balance is an eternal invariant (every entry in
--- admitted state must balance); period close is an admission gate
--- (`require` in the posting transformations, not an invariant) so
--- that closing a period does not invalidate the historical postings
--- made before it. Restatement reuses the `Supersedes` lineage pattern
--- proven by the verified-revenue example.
+-- Accountants also work in periods - a month, a quarter, a year. Once
+-- a period is closed and reported (to a tax authority, a board, an
+-- auditor), you must not quietly slip new entries back into it. A real
+-- mistake in a closed period is fixed by *restating*: you post a fresh,
+-- corrected entry and record that it supersedes the old one. The
+-- original is left exactly as it was filed, because "what did we report
+-- at the time?" must always have an honest answer.
+--
+-- Here is how Morpholog thinks about all this. It does not store
+-- "facts" - it stores *claims* that it has agreed to admit because they
+-- obey the rules. Two kinds of rule do the work below:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would
+--     break one. This is how we make a broken state impossible to save.
+--   * a `require` is a gate on a single action - a condition checked at
+--     the moment you act, and never again. The difference matters: the
+--     balance rule is an invariant (the books must always balance), but
+--     "you can't post into a closed period" is a gate. Closing a period
+--     must not reach back and invalidate the entries that were posted
+--     legitimately while it was open. An invariant governs what is
+--     true; a gate governs what you may do next.
 
 program double_entry_ledger
 
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold, and the shape of its arguments. These are the only nouns the
+-- system knows: entries and their lines, which periods are closed,
+-- which entry supersedes which, and the trial balance we read back out.
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
 predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
 predicate PeriodClosed(period: Subject)
 predicate Supersedes(new_entry_id: Subject, prior_entry_id: Subject)
 predicate TrialBalanceRow(account: Subject, balance: Decimal)
 
+-- Intents are messages the system sends to the outside world after a
+-- change commits - "an entry was posted", "a period was closed". They
+-- are how a ledger tells the rest of the business what just happened.
 intent JournalEntryPosted(entry_id: Subject)
 intent PeriodClosed(period: Subject)
 intent JournalEntryRestated(new_entry_id: Subject, prior_entry_id: Subject)
 
 
+-- The rules that must always hold. If any change below would leave the
+-- world violating one of these, the whole change is rejected.
+
+-- The five-hundred-year-old rule itself: for every entry, its debits
+-- and its credits sum to the same amount. Read `implies` as "whenever
+-- the left is true, the right must be too".
 invariant balanced_posted_entry:
     JournalEntry(entry, _, _) implies sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c))
 
-
+-- An entry with no lines is meaningless paperwork. Every entry must
+-- have at least one line.
 invariant journal_entry_has_lines:
     JournalEntry(entry, _, _) implies (exists line: JournalLine(entry, line, _, _))
 
-
+-- A correction history must stay a clean chain, not a fork: an entry
+-- can be superseded by at most one successor.
 invariant at_most_one_direct_successor:
     Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
+-- The only ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every invariant still
+-- holds once they are in place. `admit` adds a claim.
 
+-- The everyday case: one account debited, one credited, same amount.
+-- The gate allows posting only into an open period; the two equal-and-
+-- opposite lines mean the balance invariant is satisfied by construction.
 transformation post_simple_entry(
     entry_id, posting_date, period,
     debit_account, credit_account, amount
@@ -54,7 +92,11 @@ transformation post_simple_entry(
     admit JournalLine(entry_id, credit_account, 0, amount)
     emit JournalEntryPosted(entry_id)
 
-
+-- Real transactions are often one debit against several credits (a
+-- salary split into pay, tax, and pension, say). The single debit must
+-- equal the sum of the credits - and notice we do not have to check
+-- that here: the balance invariant already guarantees it, and any
+-- unbalanced split is simply refused at commit.
 transformation post_split_entry(
     entry_id, posting_date, period,
     debit_account, debit_amount,
@@ -68,13 +110,18 @@ transformation post_split_entry(
     admit JournalLine(entry_id, credit_b_account, 0, credit_b_amount)
     emit JournalEntryPosted(entry_id)
 
-
+-- Close a period. After this, the gate in the posting transformations
+-- turns away any new entry dated in that period.
 transformation close_period(period):
     require not PeriodClosed(period)
     admit PeriodClosed(period)
     emit PeriodClosed(period)
 
-
+-- Fix a mistake the honest way. Instead of editing the original entry
+-- (which would erase what was reported), we post a corrected entry and
+-- record that it supersedes the old one. The gate refuses to supersede
+-- an entry that has already been superseded, so the correction chain
+-- never forks. The original entry stays untouched, on the record.
 transformation restate_entry(
     new_entry_id, prior_entry_id, posting_date, period,
     debit_account, credit_account, amount
@@ -88,25 +135,13 @@ transformation restate_entry(
     emit JournalEntryRestated(new_entry_id, prior_entry_id)
 
 
--- Derived claim:
--- A derived claim is a governed view: not in the claim set, not
--- persisted, not visible to invariants, enumerated on demand from
--- admitted claims by the same kernel that admits them. The trial
--- balance cannot drift from the journal lines because it IS the
--- journal lines, projected through this stable rule.
---
--- Keys: one row per distinct account.
--- Values: balance = sum of debits posted to the account
---                 - sum of credits posted to the account.
--- Domain: every distinct account that appears in any JournalLine.
---
--- A derived claim declares: keys (positional), an `over` domain
--- expression that produces matching bindings, and one or more
--- `value` clauses whose expressions are evaluated against the
--- per-key bindings. Each `value` is independent - values cannot
--- reference one another (no intermediate `let` bindings); each
--- expression sees only the keys.
-
+-- A trial balance lists every account and its net balance (total
+-- debits minus total credits). Here it is a *derived* claim: a read-
+-- only view computed straight from the journal lines whenever someone
+-- asks for it, rather than a number stored on the side. Because it is
+-- recomputed from the lines, it can never quietly drift away from them
+-- - the reconciliation bug that haunts real accounting systems simply
+-- cannot occur. One row per account; balance is debits minus credits.
 derived TrialBalanceRow(account):
     over JournalLine(_, account, _, _)
     value balance = sum(d | JournalLine(_, account, d, _)) - sum(c | JournalLine(_, account, _, c))

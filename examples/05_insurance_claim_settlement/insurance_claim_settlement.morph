@@ -1,22 +1,63 @@
--- Insurance claim settlement.
+-- Insurance claim settlement - paying out on claims without ever
+-- letting the total quietly slip past the cap the policy promised.
 --
--- An insurer authorises claim settlements against a policy aggregate
--- limit. The audit log records who decided each payment, when,
--- against which policy, and under what authority.
+-- A quick tour of the domain, in case insurance is not your world.
+-- When a business buys an insurance policy, the policy carries an
+-- *aggregate limit*: the most the insurer will pay out across every
+-- claim on that policy for the period - say 100,000 in total. A single
+-- storm might produce one claim; a bad year might produce several. Each
+-- time the insurer settles a claim it pays out some money, and the sum
+-- of all those payments must never exceed the aggregate. A claims
+-- handler does the settling, but only up to their own delegated
+-- authority - they can sign off payments, but not unlimited ones. Months
+-- later a regulator may ask: who authorised this payment, under what
+-- authority, on what day, and was the policy still within its limit when
+-- the decision was made? The answer should be one lookup, not a forensic
+-- reconciliation across three separate systems.
 --
--- Two coexisting rules check the policy cap:
---   * an admission gate (cumulative spend stays under the aggregate),
---     which refuses payments up front,
---   * and a conservation invariant (each payment consumes exactly
---     its amount of the policy's remaining headroom), which
---     verifies that what was actually staged matches.
+-- The hard part is the *cumulative* nature of the cap. No single payment
+-- is obviously too large; it is the running total that must stay in
+-- bounds. The first payment of 60,000 is fine. A later one of 40,000 is
+-- fine too - it brings the total to exactly 100,000. But a third payment
+-- of 30,000 would push the total to 130,000, and that one must be
+-- refused outright: no money staged, no record written, because nothing
+-- was admitted.
 --
--- authorise_settlement declares no `actor` parameter; the proposing
--- actor flows through transition context as the reserved term
--- `actor`.
+-- Here is how Morpholog thinks about it. The system never stores bare
+-- "facts" - it stores *claims* it has agreed to admit because they obey
+-- the rules. Two distinct kinds of rule guard the cap, and the split
+-- between them is the main lesson here:
+--
+--   * A `require` is a gate on a single action, checked the moment you
+--     act. Before authorising a payment, the gate adds up everything
+--     already paid on the policy plus the proposed amount and refuses if
+--     that would breach the aggregate. This is the "am I allowed to do
+--     this?" question a handler interacts with.
+--   * An `invariant` is a rule that must hold for all admitted state,
+--     and the runtime refuses to commit any change that would break it.
+--     We also track the policy's *remaining headroom* as a running
+--     counter, and an invariant insists that every payment must drop
+--     that headroom by exactly its own amount. This is the "did I
+--     actually do it correctly?" question. A buggy action that recorded
+--     a payment but forgot to lower the headroom would pass the gate and
+--     still be caught by the invariant.
+--
+-- Notice what is deliberately *not* a rule here: there is no standing
+-- rule tying a recorded authorisation to live authority. Revoking a
+-- handler's authority tomorrow must not invalidate the payments they
+-- lawfully authorised today. Authority is checked once, at the gate; the
+-- record then stands.
 
 program insurance_claim_settlement
 
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold. `Policy` and its aggregate cap are set once and never change.
+-- `PolicyHeadroom` is the one moving part - the remaining capacity
+-- counter, retracted and re-admitted as each payment lands.
+-- `SettlementAuthority` is a handler's personal ceiling. The last three
+-- are the durable record: what was reported, who authorised what, and
+-- what was paid. `PolicyLimitUsage` is a read-only reporting view (see
+-- the bottom of the file).
 predicate Policy(policy_id: Subject, aggregate_limit: Decimal)
 predicate ClaimReported(claim_id: Subject, policy_id: Subject, claimed_amount: Decimal)
 predicate SettlementAuthority(actor: Subject, limit: Decimal)
@@ -25,60 +66,86 @@ predicate SettlementPaid(policy_id: Subject, claim_id: Subject, settlement_id: S
 predicate PolicyHeadroom(policy_id: Subject, remaining: Decimal)
 predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
 
+-- Intents are messages the system sends to the outside world after a
+-- change commits - a policy was issued, a claim reported, a payment
+-- requested. The payment-request intent is how a finance system
+-- downstream learns it should actually move the money.
 intent PolicyIssued(policy_id: Subject)
 intent ClaimReported(claim_id: Subject)
 intent SettlementAuthorityGranted(principal: Subject, limit: Decimal)
 intent ClaimPaymentRequested(settlement_id: Subject, amount: Decimal, actor: Subject)
 
 
--- Every payment must be backed by an authorisation.
+-- The rules that must always hold. Any change that would leave the
+-- world violating one of these is rejected outright.
+
+-- No payment may exist without a matching authorisation behind it. A
+-- hand-constructed payment with no one's sign-off is refused. Read
+-- `implies` as "whenever the left is true, the right must be too".
 invariant paid_implies_authorised:
     SettlementPaid(_, claim, settlement, amount) implies SettlementAuthorised(claim, settlement, amount, _)
 
--- Every payment must have a current headroom claim. Closes a gap
--- in the conservation invariant (vacuously true when no headroom).
+-- Every payment must sit against a policy that has a current headroom
+-- counter. This closes a loophole in the conservation rule below, which
+-- would otherwise be trivially satisfied if no headroom counter existed
+-- at all.
 invariant paid_implies_headroom:
     SettlementPaid(p, _, _, _) implies (exists r: PolicyHeadroom(p, r))
 
--- Operational uniqueness for PolicyHeadroom (the
--- remaining-capacity counter).
+-- A policy has at most one headroom counter at a time. Two competing
+-- values would mean two different answers to "how much is left?".
 invariant at_most_one_headroom_per_policy:
     PolicyHeadroom(policy, a) and PolicyHeadroom(policy, b) implies a = b
 
--- Per-policy headroom delta conservation: the change in
--- PolicyHeadroom must equal the total of newly-admitted
--- SettlementPaid amounts for that policy. Pairs with the
--- aggregate-cap require in authorise_settlement (admission gate vs
--- conservation law).
+-- The conservation law. This is the rule that compares the policy's
+-- state *before* a transaction to its state after: the headroom must go
+-- down by exactly the total of the payments newly admitted in that same
+-- transaction. `pre(...)` refers to a value as it stood before the
+-- change. Summing the new payments and comparing once (rather than
+-- payment by payment) is what keeps it correct even if two payments land
+-- together. Pairs with the gate inside authorise_settlement: the gate
+-- decides the payment is allowed, this rule confirms the books actually
+-- moved by the right amount.
 invariant headroom_consumed_by_payment:
     PolicyHeadroom(p, after) and pre(PolicyHeadroom(p, before))
     implies after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))
 
 
 
--- Open a policy. Admits the contractual cap and the initial
--- operational headroom (= aggregate_limit, no spend yet).
+-- The only ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every rule above still holds
+-- once they are in place.
+
+-- Open a policy. This records the contractual cap (set once, never
+-- touched again) and starts the headroom counter at the full aggregate,
+-- since nothing has been paid yet.
 transformation issue_policy(policy_id, aggregate_limit):
     admit Policy(policy_id, aggregate_limit)
     admit PolicyHeadroom(policy_id, aggregate_limit)
     emit PolicyIssued(policy_id)
 
--- Record a reported loss. claimed_amount is informational; the
--- aggregate-cap rule reads from SettlementPaid.
+-- Record a reported loss against a policy. The gate insists the policy
+-- exists first. The claimed amount is informational - it does not cap
+-- the settlement; the aggregate cap is enforced from the payments
+-- actually made.
 transformation report_claim(claim_id, policy_id, claimed_amount):
     require Policy(policy_id, _)
     admit ClaimReported(claim_id, policy_id, claimed_amount)
     emit ClaimReported(claim_id)
 
--- Grant settlement authority. Ungated in v0.
+-- Grant a claims handler their personal settlement ceiling.
 transformation grant_settlement_authority(actor, limit):
     admit SettlementAuthority(actor, limit)
     emit SettlementAuthorityGranted(actor, limit)
 
--- Authorise a settlement against a reported claim. Gates: actor
--- authority covers the amount; cumulative spend stays under the
--- aggregate. Stages the headroom retract+assert pair; the
--- conservation invariant verifies it post-commit.
+-- Authorise a settlement against a reported claim - the heart of the
+-- example. It first looks up the claim, its policy, and the policy's
+-- current headroom. Then two gates must pass: the proposing actor must
+-- hold authority covering the amount, and the cumulative spend (all
+-- prior payments plus this one) must stay within the aggregate cap. Only
+-- then does it lower the headroom by the amount, record who authorised
+-- what and what was paid, and ask downstream to move the money. The
+-- conservation invariant above checks the headroom move was honest.
 transformation authorise_settlement(claim_id, settlement_id, amount):
     bind ClaimReported(claim_id, policy_id, _)
     bind Policy(policy_id, aggregate_limit)
@@ -96,9 +163,12 @@ transformation authorise_settlement(claim_id, settlement_id, amount):
     emit ClaimPaymentRequested(settlement_id, amount, actor)
 
 
--- Read-side reporting view: cumulative paid per policy.
--- Distinct from PolicyHeadroom (admitted operational state);
--- enumerated on demand, replayable as-of.
+-- A reporting view: total paid on each policy, summed from the payment
+-- records whenever someone asks. This is a *derived* claim - read-only,
+-- recomputed on demand, never stored on the side - so it can never drift
+-- away from the payments it is built from. Distinct from the headroom
+-- counter, which is live operational state; this view can be replayed
+-- as it stood at any past moment to answer "what was the position then?".
 derived PolicyLimitUsage(policy_id):
     over SettlementPaid(policy_id, _, _, _)
     value used = sum(paid | SettlementPaid(policy_id, _, _, paid))

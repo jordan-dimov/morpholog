@@ -1,10 +1,9 @@
 //! Expression-level parsing: the recursive `expression_parser`
 //! combinator plus the public `parse_expression` entry point.
 //!
-//! Used in two places: directly by callers (and tests) for parsing
-//! standalone expressions, and indirectly by `program::program_parser`
-//! to parse invariant bodies (and, in P3+, transformation statement
-//! conditions and derived-claim domain/value expressions).
+//! Used directly by callers and tests for standalone expressions, and
+//! indirectly by `program::program_parser` for invariant bodies,
+//! transformation statement conditions, and derived-claim expressions.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -65,13 +64,10 @@ pub fn parse_expression(source: &str) -> Result<Expr, Vec<Diagnostic>> {
     Ok(expr)
 }
 
-/// Build the recursive expression parser. The grammar is laid out
-/// in increasing precedence: implies (lowest) wraps or, which wraps
-/// and, which wraps not, which wraps comparison, which wraps arith,
-/// which wraps primary (highest).
-///
-/// `recursive` lets `primary` reference `expression` so parenthesised
-/// sub-expressions can nest arbitrarily.
+/// Build the recursive expression parser. Increasing precedence:
+/// implies (lowest) -> or -> and -> not -> comparison -> arith ->
+/// primary (highest). `recursive` lets `primary` reference
+/// `expression` so parenthesised sub-expressions nest arbitrarily.
 pub(super) fn expression_parser<'a, I>()
 -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
 where
@@ -84,10 +80,9 @@ where
         let date_lit = select! { Token::DateLit(s) => s };
         let subject_lit = select! { Token::SubjectLit(s) => s };
 
-        // A `Term` is the limited atom that claim-call args and
-        // `Neq` / `In` operands accept. Variables (including the
-        // special `actor`), wildcards, decimal / date / subject
-        // literals.
+        // A `Term` is the limited atom that claim-call args and `Neq` /
+        // `In` operands accept: variables (including the special
+        // `actor`), wildcards, and decimal / date / subject literals.
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
@@ -102,19 +97,15 @@ where
             }),
         ));
 
-        // term_list inside claim calls.
         let term_list = term
             .clone()
             .separated_by(just(Token::Comma))
             .allow_trailing()
             .collect::<Vec<Term>>();
 
-        // A `primary` Expr: parens, decimal-literal-as-Term-as-Expr,
-        // wildcard-as-Term-as-Expr, claim call, or bare variable.
-        //
-        // The ident-vs-claim-call ambiguity is resolved by peeking
-        // for a following `(`. `ident.then(args.or_not())` does
-        // this in chumsky.
+        // A `primary` Expr: parens, a literal/wildcard, a claim call, or
+        // a bare variable. The ident-vs-claim-call ambiguity is resolved
+        // by peeking for a following `(` via `ident.then(args.or_not())`.
         let parenthesised = expression
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
@@ -147,13 +138,10 @@ where
 
         // sum aggregator: `sum ( <var-name> | <body-expr> )`
         //
-        // Target is restricted to a non-reserved variable in v0.
-        // Literals, wildcards, and `actor` in target position are
-        // rejected with a clean diagnostic. The literal/wildcard
-        // case fails earlier because `ident` only matches
-        // Token::Ident; the `actor` case must be caught here
-        // because the lexer treats it as a plain identifier.
-        // Generalised target lands when a worked example forces it.
+        // Target is restricted to a non-reserved variable. Literals and
+        // wildcards fail earlier because `ident` only matches
+        // Token::Ident; `actor` must be caught here, since the lexer
+        // treats it as a plain identifier.
         let sum_expr = just(Token::KwSum)
             .ignore_then(
                 ident
@@ -197,13 +185,11 @@ where
                 default: default.map(Box::new),
             });
 
-        // pre wrapper: `pre ( <expr> )`. Function-call-shape primary
-        // that flips the wrapped subtree's state lookup from the
-        // default (post / candidate) to pre-transition. Parens are
-        // mandatory - the lexer reserves `pre` everywhere so a bare
-        // `pre` outside this form would surface as an unexpected-
-        // token diagnostic rather than a silent Var("pre")
-        // interpretation. Lowers to `Expr::Pre(Box::new(inner))`.
+        // pre wrapper: `pre ( <expr> )`. Flips the wrapped subtree's
+        // state lookup from the default (post / candidate) to
+        // pre-transition. Parens are mandatory; the lexer reserves `pre`
+        // everywhere so a bare `pre` surfaces as an unexpected-token
+        // diagnostic rather than a silent Var("pre").
         let pre_expr = just(Token::KwPre)
             .ignore_then(
                 expression
@@ -226,8 +212,7 @@ where
 
         // arith ::= primary (("+" | "-") primary)*  (left-assoc)
         //
-        // foldl builds the left-associative tree: a + b + c becomes
-        // Add(Add(a, b), c).
+        // foldl builds the left-associative tree: a + b + c -> Add(Add(a, b), c).
         let arith_op = choice((just(Token::Plus).to(true), just(Token::Minus).to(false)));
         let arith = primary.clone().foldl(
             arith_op.then(primary.clone()).repeated(),
@@ -246,20 +231,19 @@ where
         //   - `=` -> Expr::Eq(Expr, Expr)
         //   - `<=` -> Expr::Le(Expr, Expr)   (decimal)
         //   - `on_or_before` -> Expr::DateLe(Expr, Expr)   (civil date)
-        //   - `!=` -> Expr::Neq(Term, Term)  - requires both sides to be Terms
-        //   - `in` -> Expr::In(Term, Term)  - requires both sides to be Terms
+        //   - `!=` -> Expr::Neq(Term, Term)  - both sides must be Terms
+        //   - `in` -> Expr::In(Term, Term)  - both sides must be Terms
         //
-        // `<=` and `on_or_before` are distinct surface forms because
-        // the kernel keeps `Expr::Le` (decimal) and `Expr::DateLe`
-        // (civil date) as separate IR primitives; the surface refuses
-        // to overload `<=` by operand kind.
+        // `<=` and `on_or_before` are distinct surface forms because the
+        // kernel keeps `Expr::Le` and `Expr::DateLe` as separate IR
+        // primitives; the surface refuses to overload `<=` by operand
+        // kind.
         //
-        // For `!=` and `in`, we accept any Expr on either side and
-        // then require it to be a bare `Expr::Term(t)`; otherwise
-        // emit a clean diagnostic about the term-only restriction.
-        // The `in` here is the membership comparator; the
-        // structural `in` of `forall x in source:` is consumed by
-        // the forall production before reaching this level.
+        // For `!=` and `in` we accept any Expr on either side, then
+        // require a bare `Expr::Term(t)`, emitting a clean diagnostic
+        // otherwise. This `in` is the membership comparator; the
+        // structural `in` of `forall x in source:` is consumed by the
+        // forall production before reaching this level.
         let comparison = arith.clone().then(
             choice((
                 just(Token::Eq).to(CmpOp::Eq),
@@ -343,10 +327,9 @@ where
         // or_expr ::= and_expr ("or" and_expr)*  (left-assoc,
         // flattened into a single Expr::Or(Vec<Expr>))
         //
-        // Standard logical precedence: `and` binds tighter than `or`,
-        // so `a and b or c` parses as `(a and b) or c`. `or` in turn
-        // binds tighter than `implies`, so `a or b implies c` parses
-        // as `(a or b) implies c`.
+        // Standard logical precedence: `and` tighter than `or` tighter
+        // than `implies`, so `a and b or c implies d` parses as
+        // `((a and b) or c) implies d`.
         let or_expr = and_expr
             .clone()
             .then(
@@ -404,33 +387,16 @@ where
 
         // expression ::= quantifier | implies
         //
-        // Quantifiers sit at the very top of the expression
-        // grammar - higher than `implies` - so their bodies
-        // greedily consume the rest of the expression after the
-        // colon. This matches mathematical convention: in
-        // `forall x in xs: A and B`, the body is `A and B` (the
-        // whole conjunction), not just `A`. Composition with
-        // outer expressions is achieved by parenthesising the
-        // quantifier: `(forall x in xs: body) and outer`.
+        // Quantifiers sit at the very top of the grammar - higher than
+        // `implies` - so their bodies greedily consume the rest of the
+        // expression after the colon. In `forall x in xs: A and B` the
+        // body is the whole conjunction, not just `A`, matching
+        // mathematical convention. Compose with outer expressions by
+        // parenthesising: `(forall x in xs: body) and outer`.
         //
-        // The source clause of `forall x in source: body` parses
-        // the source at the `primary` level. This is restrictive
-        // (a bare ident, claim call, parenthesised expression, or
-        // primary-shaped literal works; arithmetic does not) but
-        // matches every existing worked-example usage and avoids
-        // ambiguity with the comparator-level `in`.
-        //
-        // When the source is a Term-shaped primary (a bare
-        // variable, a literal), the parser auto-wraps it in
-        // `Expr::In(Var(binding), source_term)` because the
-        // kernel's Forall requires its source to be predicate-
-        // shaped. A claim-call source is already predicate-shaped
-        // and used as-is.
-        // Quantifier body accepts both inline and indented forms,
-        // mirroring how the invariant decl's body works in
-        // `program.rs`. The layout pass emits `Indent` / `Dedent`
-        // around an indented body; the inline form has no layout
-        // tokens.
+        // The body accepts both inline and indented forms. The layout
+        // pass emits `Indent` / `Dedent` around an indented body; the
+        // inline form has no layout tokens.
         let quantifier_body = choice((
             just(Token::Indent)
                 .ignore_then(expression.clone())
@@ -458,26 +424,19 @@ where
 
         // Restricted source parser for `forall x in <source>:`.
         //
-        // The kernel's `Expr::Forall { source, .. }` requires the
-        // source to be predicate-shaped so `find_matches` can
-        // produce binding extensions. The general `primary` parser
-        // accepts value-shaped forms (sum, value, decimal/date/
-        // subject literals, wildcards) that would let surface
-        // expressions like `forall x in 5: P(x)` parse and then
-        // produce ill-shaped IR. Per the surface doctrine, the
-        // parser must refuse what the kernel cannot evaluate.
+        // The kernel's `Expr::Forall { source, .. }` requires a
+        // predicate-shaped source so `find_matches` can produce binding
+        // extensions. Per the surface doctrine the parser must refuse
+        // what the kernel cannot evaluate, so the unparenthesised source
+        // grammar admits only:
+        //   - bare variable (Ident, no `(`)   -> auto-lifted to In below
+        //   - claim call (Ident "(" terms ")") -> used as-is
+        //   - parenthesised expression         -> used as-is
         //
-        // Accepted unparenthesised sources:
-        //   - bare variable (Ident with no `(`)       -> auto-lift to In
-        //   - claim call (Ident "(" terms ")")         -> use as-is
-        //   - parenthesised expression                 -> use as-is (user took responsibility)
-        //
-        // Value-shaped primaries (decimal/date/subject literals,
-        // wildcards, `sum(...)`, `value Foo(...)`) are NOT in the
-        // unparenthesised source grammar; they surface as parse
-        // errors. The user can still write `(sum(...))` with parens
-        // and the parser will pass it through - that's a choice
-        // they explicitly signalled.
+        // Value-shaped primaries (literals, wildcards, `sum(...)`,
+        // `value Foo(...)`) are excluded and surface as parse errors;
+        // wrapping in parens (`(sum(...))`) signals the user took
+        // responsibility and passes through.
         let bare_ident_or_call = ident
             .then(
                 term_list
@@ -517,11 +476,9 @@ where
                         "`actor` cannot be a quantifier binder: `actor` is reserved as the special term that resolves to the proposing transition's actor; references inside the body would resolve to that term, not the bound variable",
                     ));
                 }
-                // If the source is a bare Term wrapper (a variable
-                // or `actor`), lift it to an In-expression that
-                // binds the variable. If it's already predicate-
-                // shaped (Claim from a call, or anything the user
-                // wrapped in parens), use it as-is.
+                // A bare Term-wrapped source (variable or `actor`) is
+                // lifted to an In-expression binding the variable;
+                // anything already predicate-shaped is used as-is.
                 let source_expr = match source {
                     Expr::Term(t) => Expr::In(Term::Var(binding.clone()), t),
                     other => other,
@@ -544,26 +501,21 @@ where
 enum CmpOp {
     Eq,
     Neq,
-    /// Decimal `<=`. Lowers to `Expr::Le`. Type-checked at runtime
-    /// (operands must be `EvalValue::Decimal`).
+    /// Decimal `<=` -> `Expr::Le`. Operands must be
+    /// `EvalValue::Decimal` (checked at runtime).
     Le,
-    /// Civil-date `on_or_before`. Lowers to
-    /// `Expr::DateLe`. Type-checked at runtime (operands must be
-    /// `EvalValue::Date`). Distinct surface form from `<=` because
-    /// the kernel keeps `Le` and `DateLe` as separate IR primitives;
-    /// the surface refuses to overload `<=` by operand kind.
+    /// Civil-date `on_or_before` -> `Expr::DateLe`. Operands must be
+    /// `EvalValue::Date` (checked at runtime).
     DateLe,
-    /// Membership comparator (`x in xs`). Lowered to
-    /// `Expr::In(Term, Term)` with the same term-only restriction
-    /// as `Neq`. Distinct from the structural `in` in
-    /// `forall x in source: body`.
+    /// Membership comparator (`x in xs`) -> `Expr::In(Term, Term)`,
+    /// with the same term-only restriction as `Neq`. Distinct from the
+    /// structural `in` in `forall x in source: body`.
     In,
 }
 
-/// Convert an `Expr` to a `Term` if it's term-shaped (a bare
-/// `Expr::Term(_)` wrapper). Returns `None` for any compound
-/// expression. Used to enforce the IR's term-only restriction on
-/// `Neq` operands.
+/// Unwrap a term-shaped `Expr::Term(_)`, or `None` for any compound
+/// expression. Enforces the IR's term-only restriction on `Neq` and
+/// `In` operands.
 fn expr_as_term(e: &Expr) -> Option<Term> {
     match e {
         Expr::Term(t) => Some(t.clone()),

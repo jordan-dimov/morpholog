@@ -1,27 +1,10 @@
-//! Constructors for building Morpholog programs in Rust, used as the v0
-//! authoring surface until a parser exists.
+//! Constructors for building Morpholog programs in Rust, the v0
+//! authoring surface where the parser does not yet reach.
 //!
-//! The kernel IR (`Expr`, `Stmt`, `Term`, `Value`, `Claim`, `Intent`,
-//! `Invariant`, `Transformation`, `DerivedClaim`, `Program`) is
-//! deliberately low-level: every variant is one thing, every field
-//! carries one meaning, and there is no syntactic sugar. That keeps the
-//! kernel minimal but makes the call site of a transformation body read
-//! like data structure construction:
-//!
-//! ```ignore
-//! Stmt::Require(Expr::And(vec![
-//!     Expr::Claim {
-//!         predicate: "Policy".to_string(),
-//!         args: vec![Term::Var("policy_id".to_string()), Term::Wildcard],
-//!     },
-//!     Expr::Le(
-//!         Box::new(Expr::Term(Term::Var("amount".to_string()))),
-//!         Box::new(Expr::Term(Term::Var("limit".to_string()))),
-//!     ),
-//! ]))
-//! ```
-//!
-//! The `dsl` module gives that same construction a readable shape:
+//! The kernel IR is deliberately low-level - every variant is one
+//! thing, no syntactic sugar - so a hand-authored transformation body
+//! reads like raw struct construction. These thin wrappers give that
+//! same construction a readable shape:
 //!
 //! ```ignore
 //! use morpholog_core::dsl::*;
@@ -32,37 +15,16 @@
 //! ]))
 //! ```
 //!
-//! These constructors are thin wrappers; the kernel never sees them.
-//! They exist because every worked example, every test, and (until
-//! the parser surface covers all of v0) every external user
-//! assembles IR by hand. Making the construction surface readable
-//! is the v0 substitute for surface syntax where the parser does
-//! not yet reach.
-//!
-//! The parser arc is mid-stream: predicates, expressions, and
-//! invariants parse from `.morph` source today; transformations
-//! and derived claims still use this constructor surface. The
-//! `morpholog-surface` parser currently builds IR directly
-//! (`Program`, `PredicateDecl`, `Invariant`) without going through
-//! these helpers - they have different ergonomic audiences (the
-//! parser builds from token streams; this DSL serves hand-authored
-//! Rust IR). Both target the same `morpholog_core::Program` shape.
+//! The kernel never sees them; every worked example, test, and
+//! external user assembles IR by hand.
 //!
 //! Naming conventions:
 //! - Term literals are short: `subj`, `dec`, `date`. They return `Term`,
 //!   ready to drop into a `vec![...]` argument list.
-//! - Statement constructors that share a name with a Rust keyword take
-//!   a trailing underscore: `assert_`, `let_`, `let_new_subject`, `for_`.
-//!   These are unavoidable Rust constraints, not stylistic choices.
-//! - `actor()` and `wildcard()` are nullary constructors, the natural
-//!   way to write `Term::Actor` and `Term::Wildcard` in a `vec!` list.
-//! - `role()` is a semantic alias for `subj()` introduced when the
-//!   clinical-trial-enrolment example needed to name a delegated role
-//!   literal at the call site. The runtime representation is identical
-//!   to `subj()`; the alias only documents reader intent. Resist
-//!   adding more aliases until a worked example forces one - the
-//!   subject-as-string-as-everything model is intentional, and
-//!   pseudo-types over it would not help.
+//! - Statement constructors colliding with a Rust keyword take a
+//!   trailing underscore: `assert_`, `let_`, `let_new_subject`, `for_`.
+//! - `actor()` and `wildcard()` are nullary constructors for
+//!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{ArgDecl, Claim, Expr, Intent, PredicateArgKind, PredicateDecl, Stmt, Term, Value};
 
@@ -112,10 +74,10 @@ pub fn date(s: &str) -> Term {
 }
 
 /// Semantic alias for [`subj`]. Identical runtime representation;
-/// documents reader intent at the call site when the subject names
-/// a delegated role (e.g. `role("randomise_participant")` in the
-/// clinical-trial-enrolment example's `DelegatedInvestigator`
-/// pattern).
+/// documents reader intent at the call site when the subject names a
+/// delegated role. Resist adding more aliases until an example forces
+/// one - the subject-as-string model is intentional, and pseudo-types
+/// over it would not help.
 pub fn role(s: &str) -> Term {
     subj(s)
 }
@@ -220,17 +182,15 @@ pub fn in_(elem: Term, coll: Term) -> Expr {
 
 /// Functional lookup: match exactly one claim and yield its
 /// wildcard-position value. Zero matches errors unless `default` is
-/// supplied; multiple matches always errors. Constructed without a
-/// default by this helper; use [`value_of_with_default`] for the
-/// fallback form.
+/// supplied; multiple matches always errors. Use
+/// [`value_of_with_default`] for the fallback form.
 ///
-/// **Prefer [`bind_one`] in transformation bodies.** When the goal
-/// is to extract a uniquely-matching claim's values into the
-/// statement-level binding context, `bind_one` reads more directly
-/// and rejects lawfully on zero matches. Reach for `value_of` only
-/// in value-producing positions (inside arithmetic, comparisons,
-/// `Sum`, `Let`, or a `DerivedClaim` value expression) where a
-/// statement form does not fit.
+/// **Prefer [`bind_one`] in transformation bodies.** To extract a
+/// uniquely-matching claim's values into the statement-level binding
+/// context, `bind_one` reads more directly and rejects lawfully on
+/// zero matches. Reach for `value_of` only in value-producing
+/// positions (arithmetic, comparisons, `Sum`, `Let`, or a
+/// `DerivedClaim` value expression) where a statement form does not fit.
 pub fn value_of(predicate: &str, args: Vec<Term>) -> Expr {
     Expr::ValueOf {
         predicate: predicate.to_string(),
@@ -258,22 +218,18 @@ pub fn require(expr: Expr) -> Stmt {
 }
 
 /// Deterministic unique-lookup binding statement. The companion to
-/// [`require`]: where `require` is a yes/no gate that does not
-/// export bindings, `bind_one` evaluates a predicate-shaped
-/// expression, *replaces* the current binding context with the
-/// single matching binding set, and short-circuits with a kernel
-/// error if more than one claim matches (programme bug) or with a
-/// lawful rejection if no claim matches (business outcome).
-///
-/// Idiomatic shape for extracting a uniquely-identified claim's
-/// values into the binding context:
+/// [`require`]: where `require` is a yes/no gate that does not export
+/// bindings, `bind_one` evaluates a predicate-shaped expression,
+/// *replaces* the current binding context with the single matching
+/// binding set, and short-circuits with a kernel error if more than
+/// one claim matches (programme bug) or a lawful rejection if none
+/// matches (business outcome).
 ///
 /// ```ignore
 /// bind_one(claim("Policy", vec![var("policy_id"), var("aggregate_limit")]))
 /// ```
 ///
-/// After this statement, both `policy_id` and `aggregate_limit`
-/// are bound for the rest of the transformation body.
+/// binds both `policy_id` and `aggregate_limit` for the rest of the body.
 pub fn bind_one(expr: Expr) -> Stmt {
     Stmt::BindOne(expr)
 }
@@ -338,21 +294,9 @@ pub fn params(names: &[&str]) -> Vec<String> {
 /// Builder for a [`PredicateDecl`]. Construct with [`predicate`],
 /// chain one kind method per argument position
 /// (`subject`/`decimal`/`date`/`boolean`/`collection`/`any`), and
-/// terminate with [`PredicateDeclBuilder::build`].
-///
-/// Example:
-///
-/// ```ignore
-/// predicate("Policy")
-///     .subject("policy_id")
-///     .decimal("aggregate_limit")
-///     .build()
-/// ```
-///
-/// The order of `.<kind>(name)` calls is the predicate's positional
-/// argument order. Names are documentation and surface in
-/// `morpholog inspect predicates`; kinds are metadata for future
-/// kind-checking work and for the same CLI surface.
+/// terminate with [`PredicateDeclBuilder::build`]. Call order is the
+/// predicate's positional argument order. Names surface in
+/// `morpholog inspect predicates`; kinds drive kind-checking.
 #[must_use]
 pub struct PredicateDeclBuilder {
     name: String,
@@ -391,9 +335,7 @@ impl PredicateDeclBuilder {
         self.arg(name, PredicateArgKind::Collection)
     }
 
-    /// Kind escape hatch. Use when the argument position is
-    /// genuinely polymorphic or when committing to a specific kind
-    /// is deferred.
+    /// Kind escape hatch for a genuinely polymorphic argument position.
     pub fn any(self, name: &str) -> Self {
         self.arg(name, PredicateArgKind::Any)
     }
@@ -416,9 +358,8 @@ pub fn predicate(name: &str) -> PredicateDeclBuilder {
 }
 
 /// Builder for an [`crate::IntentDecl`]. Structurally identical to
-/// [`PredicateDeclBuilder`] - intents and predicates share the same
-/// `name`-and-args shape - but distinct so the resulting decl lands
-/// in the right vocabulary (`Program::intents` vs `Program::predicates`).
+/// [`PredicateDeclBuilder`] but distinct so the decl lands in the
+/// right vocabulary (`Program::intents` vs `Program::predicates`).
 #[must_use]
 pub struct IntentDeclBuilder {
     name: String,

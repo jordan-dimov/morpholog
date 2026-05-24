@@ -1,33 +1,15 @@
 //! Morpholog v0 semantic kernel.
 //!
-//! This crate is the synchronous, pure heart of Morpholog. It defines
-//! the IR (invariants, transformations, claims, statements, expressions),
+//! The synchronous, pure heart of Morpholog. It defines the IR
+//! (invariants, transformations, claims, statements, expressions),
 //! evaluates invariants against in-memory state, and exposes [`propose`],
 //! the function that turns a proposed transformation into either an
 //! accepted post-state or a rejected attempt.
 //!
-//! `morpholog-core` does no I/O. The PostgreSQL persistence adapter
-//! lives in the separate `morpholog-postgres` crate and wraps this
-//! kernel as an async boundary. Worked-example IR lives in the
+//! Does no I/O. The PostgreSQL persistence adapter lives in the separate
+//! `morpholog-postgres` crate and wraps this kernel as an async boundary;
+//! async must not infect this crate. Worked-example IR lives in the
 //! `morpholog-examples` crate.
-//!
-//! Module layout:
-//! - `ir` - IR types (`Invariant`, `Expr`, `Term`, `Value`, `Stmt`,
-//!   `Claim`, `Intent`, `Transformation`, `Program`, `DerivedClaim`,
-//!   `DerivedValue`, plus predicate-declaration types).
-//! - `state` - Runtime state types: `EvalValue`, `ClaimInstance`,
-//!   `IntentInstance`, `State`, `Bindings`.
-//! - `eval` - The in-memory evaluator: `find_matches`, `eval_value`,
-//!   `resolve_term`, `unify_args`, plus `EvalError`.
-//! - `derive` - `eval_invariant` and `enumerate_derived`.
-//! - `propose` - `propose`, `propose_with_trace`, and the trace types.
-//! - `validate` - `Program::validate` machinery.
-//! - `analysis` - Static analyses (`predicates_referenced_by_*`).
-//! - `dsl` - Public IR-construction helpers.
-//! - `format` - `format_program` and supporting renderers.
-//!
-//! The public API surface re-exports the items that callers (the PG
-//! adapter, the CLI, the examples crate, downstream consumers) need.
 
 pub mod dsl;
 pub mod format;
@@ -61,13 +43,9 @@ pub use validate::{ValidationContext, ValidationError, VocabularyKind};
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    //! Kernel-internal unit tests for IR literals.
-    //!
-    //! Tests that depend on private items (`unify_args`, `resolve_term`,
-    //! `Bindings`) live here. Tests that exercise the public surface -
-    //! example chains, codec round-trips, IR-shape assertions - live in
-    //! the `tests/` directory as integration tests, one file per example
-    //! plus `tests/codec.rs` and the shared `tests/common/mod.rs`.
+    //! Kernel-internal unit tests that depend on private items
+    //! (`unify_args`, `resolve_term`, `Bindings`). Tests against the
+    //! public surface live in `tests/` as integration tests.
 
     use super::*;
     use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
@@ -76,16 +54,13 @@ mod tests {
     use rust_decimal::Decimal;
     use std::collections::BTreeSet;
 
-    /// Test-local helper: build a no-actor, no-pre EvalContext for
-    /// standalone expression evaluation. Eliminates the boilerplate of
-    /// constructing the four-field struct in every test.
+    /// No-actor, no-pre EvalContext for standalone expression evaluation.
     fn ctx<'a>(state: &'a State, bindings: &'a Bindings) -> EvalContext<'a> {
         EvalContext::new(state, None, bindings, None)
     }
 
-    /// Test-local helper: build a no-actor EvalContext with both pre
-    /// and post states. Used by `Expr::Pre` tests where the wrapped
-    /// subtree needs to flip into pre-state lookup.
+    /// No-actor EvalContext with both pre and post states, for `Expr::Pre`
+    /// tests where the wrapped subtree flips into pre-state lookup.
     fn ctx_with_pre<'a>(
         state: &'a State,
         pre: &'a State,
@@ -245,27 +220,17 @@ mod tests {
         );
     }
 
-    /// Pins the contract of `predicates_referenced_by_expr` by
-    /// building an `Expr` that touches every variant carrying at
-    /// least one nested `Expr` or `Claim`-shaped node. Each `Claim`
-    /// and `ValueOf` site uses a unique predicate name. The
-    /// extracted set must contain every planted name.
-    ///
-    /// This is the runtime safety net for the analysis. The
-    /// compile-time safety net is the exhaustive `match` in
-    /// `predicates_referenced_by_expr` itself: if a new `Expr`
-    /// variant is added without handling, the function will not
-    /// compile.
+    /// Pins `predicates_referenced_by_expr`: an `Expr` touching every
+    /// variant that carries a nested `Expr` or `Claim` node, each site
+    /// using a unique predicate name, must extract every planted name.
     #[test]
     fn predicates_referenced_by_expr_covers_every_variant() {
-        // Helper to build a Claim-shaped Expr with a given predicate.
         let claim = |p: &str| Expr::Claim {
             predicate: p.to_string(),
             args: vec![],
         };
-        // Helper to build a ValueOf-shaped Expr with a given predicate
-        // and optionally a default expression that may carry more
-        // predicates.
+        // ValueOf carries its own predicate and an optional default
+        // expression that may carry more.
         let value_of = |p: &str, default: Option<Expr>| Expr::ValueOf {
             predicate: p.to_string(),
             args: vec![Term::Wildcard],
@@ -273,62 +238,45 @@ mod tests {
         };
 
         let expr = Expr::And(vec![
-            // Implies wraps two sides; both should be visited.
             Expr::Implies {
                 left: Box::new(claim("P_implies_left")),
                 right: Box::new(claim("P_implies_right")),
             },
-            // Exists has a body.
             Expr::Exists {
                 binding: "x".to_string(),
                 body: Box::new(claim("P_exists_body")),
             },
-            // Not wraps one expression.
             Expr::Not(Box::new(claim("P_not_body"))),
-            // Eq operates on two sub-expressions.
             Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
-            // Le operates on two sub-expressions.
             Expr::Le(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
-            // DateLe operates on two sub-expressions.
             Expr::DateLe(
                 Box::new(claim("P_datele_left")),
                 Box::new(claim("P_datele_right")),
             ),
-            // Sub operates on two sub-expressions.
             Expr::Sub(
                 Box::new(claim("P_sub_left")),
                 Box::new(claim("P_sub_right")),
             ),
-            // Add operates on two sub-expressions.
             Expr::Add(
                 Box::new(claim("P_add_left")),
                 Box::new(claim("P_add_right")),
             ),
-            // Sum wraps a body.
             Expr::Sum {
                 value: Term::Var("v".to_string()),
                 binding: "v".to_string(),
                 body: Box::new(claim("P_sum_body")),
             },
-            // Forall has both source and body.
             Expr::Forall {
                 binding: "y".to_string(),
                 source: Box::new(claim("P_forall_source")),
                 body: Box::new(claim("P_forall_body")),
             },
-            // ValueOf carries its own predicate AND a recursive
-            // default expression with another predicate.
             value_of("P_valueof_self", Some(claim("P_valueof_default"))),
-            // Or flattens its branches; each branch must contribute.
             Expr::Or(vec![claim("P_or_left"), claim("P_or_right")]),
-            // Pre wraps a single inner expression; the inner's
-            // predicate refs flow through unchanged.
             Expr::Pre(Box::new(claim("P_pre_inner"))),
-            // Variants that carry no predicate references: must
-            // contribute nothing. If any of these incorrectly added
-            // entries the test below would still pass, but the
-            // exhaustive set comparison further down catches
-            // unexpected predicates too.
+            // Variants carrying no predicate references: must contribute
+            // nothing. The exhaustive set comparison below would catch
+            // any spurious entry.
             Expr::Neq(Term::Var("a".to_string()), Term::Var("b".to_string())),
             Expr::Term(Term::Var("z".to_string())),
             Expr::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
@@ -379,23 +327,17 @@ mod tests {
     fn predicates_read_by_stmt_excludes_assert_includes_retract_and_reads() {
         use dsl::*;
         let body = vec![
-            // Reads via require.
             require(claim("P_require", vec![var("x")])),
-            // Reads via bind_one.
             bind_one(claim("P_bind", vec![var("y"), var("z")])),
-            // Reads via Let value (claim is read).
             let_("v", claim("P_let", vec![var("y")])),
             // Writes only: P_assert MUST NOT appear in the read set.
             assert_("P_assert", vec![var("y")]),
-            // Reads via retract pattern (pre-state matched).
             retract("P_retract", vec![wildcard()]),
-            // For collection (read) + body (recurses).
             for_(
                 "i",
                 term(var("xs")),
                 vec![require(claim("P_for_inner", vec![var("i")]))],
             ),
-            // Intent: nothing.
             emit("Notified", vec![var("y")]),
         ];
         let mut got = BTreeSet::new();
@@ -436,10 +378,8 @@ mod tests {
         assert_eq!(v, EvalValue::Decimal(Decimal::new(425, 1)));
     }
 
-    /// Non-decimal operands surface as `TypeMismatch`. Same contract as
-    /// `Sub`. Authority records and other claims that admit non-decimal
-    /// values into an `Add` position must trip this rather than fall
-    /// through silently.
+    /// Non-decimal operands surface as `TypeMismatch` rather than
+    /// falling through silently. Same contract as `Sub`.
     #[test]
     fn add_with_non_decimal_operand_is_type_mismatch() {
         let expr = Expr::Add(
@@ -473,11 +413,9 @@ mod tests {
         assert_eq!(matches.len(), 1, "earlier date must admit under DateLe");
     }
 
-    /// Boundary case: equal dates admit. This pins the **inclusive**
-    /// semantics of validity windows in v0 - `effective_to ==
-    /// action_date` is admissible, not rejected. The clinical-trial
-    /// enrolment example relies on this for "the protocol expires
-    /// today" being a valid randomisation date.
+    /// Boundary case: equal dates admit. Pins the **inclusive**
+    /// validity-window semantics - `effective_to == action_date` is
+    /// admissible, not rejected.
     #[test]
     fn date_le_admits_equal() {
         let expr = Expr::DateLe(
@@ -506,9 +444,8 @@ mod tests {
         assert!(matches.is_empty(), "later date must reject under DateLe");
     }
 
-    /// Mixed operand kinds raise `TypeMismatch`, not silent rejection.
-    /// The clinical-trial example must not be able to admit by mistake
-    /// because someone passed a decimal where a date was expected.
+    /// Mixed operand kinds raise `TypeMismatch`, not silent rejection:
+    /// a decimal passed where a date was expected must not admit.
     #[test]
     fn date_le_type_mismatch_decimal_vs_date() {
         let expr = Expr::DateLe(
@@ -562,10 +499,9 @@ mod tests {
         }
     }
 
-    /// A `Value::Date` literal in a `claim` argument matches a
-    /// claim admitted with the same date in that position. Pins the
-    /// unify-against-literal-date path, the parallel of the existing
-    /// decimal/subject literal unification.
+    /// A `Value::Date` literal in a `claim` argument matches a claim
+    /// admitted with the same date in that position. Pins the
+    /// unify-against-literal-date path.
     #[test]
     fn date_literal_unifies_with_matching_date_arg() {
         let claim = ClaimInstance {
@@ -593,10 +529,9 @@ mod tests {
         );
     }
 
-    /// The cumulative-cap shape: `Le(Add(running, proposed), cap)`.
-    /// This is the load-bearing composition the insurance-claim-settlement
-    /// example uses to gate authorisations under a policy aggregate
-    /// limit. Pinning it here so the kernel composition cannot drift.
+    /// The cumulative-cap shape: `Le(Add(running, proposed), cap)`,
+    /// gating an authorisation under an aggregate limit. Pins the
+    /// composition so the kernel cannot drift.
     #[test]
     fn add_nests_under_le_for_cumulative_cap() {
         let running = Expr::Term(Term::Literal(Value::Decimal("60".to_string())));
@@ -719,14 +654,6 @@ mod tests {
 
     // ============================================================
     // Expr::Pre - pre-state opt-in
-    //
-    // The transition-invariant primitive. `pre(inner)` flips the
-    // wrapped subtree to evaluate against pre-state instead of the
-    // default (post / candidate) state. Legal only when a pre-state
-    // is in scope (invariant evaluation during propose); surfaces
-    // PreStateUnavailable otherwise. Nested `pre` is unavailable by
-    // construction - the inner subtree's pre slot is cleared so
-    // `pre(pre(...))` errors.
     // ============================================================
 
     /// `pre(inner)` flips state lookup: the inner expression sees
@@ -880,28 +807,17 @@ mod tests {
     }
 
     // ============================================================
-    // Stmt::BindOne
+    // Stmt::BindOne - the deterministic unique-lookup binding statement.
     //
-    // The deterministic unique-lookup binding statement. The
-    // doctrine these tests pin:
-    //
+    // Binding quartet:
     //   require  = gate; does not export bindings
     //   bind_one = unique lookup; exports bindings
     //   let      = compute a value expression
-    //
-    // BindOne sits between Require (no binding export) and Let (a
-    // value-producing expression). The tests below cover every
-    // load-bearing branch: zero matches reject lawfully, one match
-    // extends the binding context, two-or-more matches surface a
-    // kernel error, the binding flows into subsequent statements,
-    // and the existing NotPredicate path catches value-only
-    // expressions slid into a BindOne by mistake.
     // ============================================================
 
-    /// Build a one-statement transformation body containing the given
-    /// statement, parameterless. Used by BindOne tests to drive the
-    /// full `propose` path so we exercise the statement contract
-    /// against a real transformation, not just `find_matches`.
+    /// One-statement parameterless transformation body. BindOne tests
+    /// drive the full `propose` path, not `find_matches` directly, so
+    /// the statement contract is exercised against a real transformation.
     fn single_stmt_transformation(name: &str, body: Vec<Stmt>) -> Transformation {
         Transformation {
             name: name.to_string(),
@@ -920,9 +836,7 @@ mod tests {
     }
 
     /// `bind_one` with a uniquely matching claim binds the variable
-    /// for use by subsequent statements. Pinned against `propose`,
-    /// not `execute_stmt` directly, so the test exercises the same
-    /// path a real transformation does.
+    /// for use by subsequent statements.
     #[test]
     fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
         use dsl::*;
@@ -985,11 +899,9 @@ mod tests {
         );
     }
 
-    /// `bind_one` against a state with two matching claims surfaces
-    /// a kernel error, not a lawful rejection. Two matches means
-    /// the programme expected unique state but admitted ambiguous
-    /// state - missing structural-uniqueness invariant or
-    /// corruption.
+    /// `bind_one` against two matching claims surfaces a kernel error,
+    /// not a lawful rejection: the programme expected unique state but
+    /// admitted ambiguous state.
     #[test]
     fn bind_one_with_multiple_matches_is_kernel_error() {
         use dsl::*;
@@ -1080,11 +992,8 @@ mod tests {
         );
     }
 
-    /// `bind_one` composes inside `For` bodies. The settlement-
-    /// netting migration relies on this - the per-line value lookup
-    /// (`bind_one LineAmount(line, amt)`) lives inside a
-    /// `for line in lines:` body. Also pins the For-scoping fix:
-    /// iteration 2 of the loop must not see iteration 1's `amt`
+    /// `bind_one` composes inside `For` bodies. Also pins the
+    /// For-scoping rule: iteration 2 must not see iteration 1's `amt`
     /// binding, or its bind_one would narrow to the wrong row.
     #[test]
     fn bind_one_inside_for_body_composes() {
@@ -1150,12 +1059,9 @@ mod tests {
         );
     }
 
-    /// `Term::Actor` is resolvable inside a `bind_one` expression,
-    /// because `bind_one` runs inside a transformation body (which
-    /// has a transition in scope). Pinned because the
-    /// `DelegatedInvestigator` pattern in the clinical-trial
-    /// example - and any future authority lookup migrated to
-    /// `bind_one` - depends on this.
+    /// `Term::Actor` resolves inside a `bind_one` expression, because
+    /// `bind_one` runs inside a transformation body (which has a
+    /// transition in scope). Authority-lookup patterns depend on this.
     #[test]
     fn bind_one_with_actor_in_pattern() {
         use dsl::*;
@@ -1192,10 +1098,9 @@ mod tests {
     }
 
     /// A value-producing expression (e.g. `Add`) inside `bind_one`
-    /// surfaces as `EvalError::NotPredicate`, via the existing
-    /// `find_matches` guardrail. Pinned because the public DSL
-    /// permits the construction; the runtime is the right place
-    /// to enforce the predicate-shaped contract.
+    /// surfaces as `EvalError::NotPredicate`. The public DSL permits
+    /// the construction; the runtime enforces the predicate-shaped
+    /// contract.
     #[test]
     fn bind_one_rejects_value_expr_as_not_predicate() {
         use dsl::*;
@@ -1215,19 +1120,15 @@ mod tests {
     }
 
     // ============================================================
-    // Program::validate() - strict arity validation
+    // Program::validate() - strict arity validation.
     //
-    // The tests below pin each ValidationError variant and the
-    // happy path. The validator collects every error rather than
-    // failing on the first; a programme migration that adds
-    // predicate declarations should see the full work list at
-    // once, not one item per re-run.
+    // The validator collects every error rather than failing on the
+    // first, so a migration sees the full work list in one re-run.
     // ============================================================
 
-    /// Build a tiny one-claim programme with a `predicate` declaration
-    /// that matches by default. Per-test mutations adjust the
-    /// predicates list or the transformation body to exercise each
-    /// validator branch.
+    /// Tiny one-claim programme with a `predicate` declaration that
+    /// matches by default. Per-test mutations exercise each validator
+    /// branch.
     fn one_claim_program() -> Program {
         use dsl::*;
         Program {
@@ -1398,9 +1299,7 @@ mod tests {
         );
     }
 
-    /// The validator collects every error and returns the full list.
-    /// A migration that adds declarations should see all undeclared
-    /// predicates at once, not one per re-run.
+    /// The validator returns every error, not just the first.
     #[test]
     fn validate_returns_all_errors_not_just_the_first() {
         use dsl::*;
@@ -1428,21 +1327,12 @@ mod tests {
     }
 
     // ============================================================
-    // propose_with_trace - structured per-statement diagnostic trace
+    // propose_with_trace - structured per-statement diagnostic trace.
     //
-    // The tests below cover every TraceEntry variant on the happy
-    // path, the rejection path with trace, and the kernel-error
-    // path with partial trace. The contract these pin:
-    //
-    //   - Every statement that ran produces exactly one trace entry
-    //     (For wraps its iterations in one entry).
-    //   - Rejections (require/bind_one no-match, invariant failure)
-    //     produce a Completed { Rejected, trace } including the
-    //     failing entry.
-    //   - Kernel errors (multi-match bind_one, evaluator errors)
-    //     produce Errored { error, trace } - the trace is NOT
-    //     dropped on the error path.
-    //   - For traces nest with iteration items preserved.
+    // The contract these pin: every statement that ran produces one
+    // entry (For wraps its iterations in one); rejections produce
+    // Completed { Rejected, trace }; kernel errors produce
+    // Errored { error, trace } - the trace is NOT dropped on error.
     // ============================================================
 
     fn trace_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
@@ -1562,10 +1452,9 @@ mod tests {
         ));
     }
 
-    /// BindOne unique match: trace records the full bound binding
-    /// set, sorted by variable name. PR B's "replace, not extend"
-    /// doctrine means the trace shows the new authoritative context,
-    /// not the delta.
+    /// BindOne unique match: trace records the full bound binding set,
+    /// sorted by variable name. The "replace, not extend" doctrine
+    /// means the trace shows the new authoritative context, not a delta.
     #[test]
     fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
         use dsl::*;
@@ -1603,7 +1492,7 @@ mod tests {
 
     /// BindOne multi-match is a kernel error. The trace MUST still
     /// carry the entry showing why - dropping the trace on Err is
-    /// exactly the case this PR exists to prevent.
+    /// exactly the case the trace-on-both-paths contract prevents.
     #[test]
     fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
         use dsl::*;
@@ -1817,12 +1706,12 @@ mod tests {
     }
 
     // ============================================================
-    // Expression failure-walk (PR-G)
+    // Expression failure-walk.
     //
     // When `require` or `bind_one` rejects, the trace's
     // `failing_sub_expression` field carries the most specific
-    // sub-expression responsible. These tests pin the failure-walk
-    // contract: which expression shapes drill in, which return None.
+    // sub-expression responsible. These tests pin which expression
+    // shapes drill in and which return None.
     // ============================================================
 
     fn extract_require_failure(trace: &[TraceEntry]) -> Option<&str> {
@@ -2120,7 +2009,7 @@ mod tests {
     }
 
     // ============================================================
-    // Additional failure-walk coverage (ChatGPT + Copilot PR #55)
+    // Additional failure-walk coverage
     // ============================================================
 
     /// Regression for the And binding-flow bug. The walker must
