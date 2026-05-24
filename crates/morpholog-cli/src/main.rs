@@ -14,7 +14,7 @@
 //!   rejection, and operational error.
 //! - `parse` - read a `.morph` source file and print the parsed
 //!   `Program` as JSON. No database connection.
-//! - `check` - read a `.morph` source file, parse it, and run
+//! - `check` - parse a `.morph` source file and run
 //!   `Program::validate()` against the IR. Silent on clean input;
 //!   uniform diagnostics on parse or validation failure.
 //!
@@ -22,18 +22,10 @@
 //!
 //! `propose` and `inspect` accept `--database-url <url>` or read
 //! `DATABASE_URL` from the environment; if neither is supplied, clap
-//! emits a clear error. Output is pretty-printed JSON via
-//! `serde_json::to_string_pretty`.
+//! emits a clear error. Output is pretty-printed JSON.
 //!
-//! Explicit non-goals (today): no user-supplied program loading
-//! (`propose` and `inspect derived` only accept built-in programs
-//! from `morpholog_examples::all_programs()`), no outbox-delivery
-//! worker, no filtering or pagination DSL, no materialised
-//! derived-claim storage.
-//!
-//! Module layout: `main.rs` carries the `clap`-derived CLI structs
-//! and the dispatch loop only. Each subcommand's logic lives in
-//! `commands/<name>.rs` and is invoked via `commands::<name>::run`.
+//! `main.rs` carries the `clap`-derived CLI structs and the dispatch
+//! loop only; each subcommand's logic lives in `commands::<name>::run`.
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -73,23 +65,20 @@ enum Command {
     /// ariadne-formatted diagnostics to stderr and exits one.
     Parse(SourceFileArgs),
 
-    /// Parse and validate a `.morph` source file. Runs the parser
-    /// first; if parsing succeeds, runs `Program::validate()` against
-    /// the resulting IR: declarations and arity for both predicates
-    /// and intents, kind/type compatibility, binding flow (unbound
-    /// variables), expression shape, actor context, and a nesting-depth
-    /// bound. Exits zero on a clean programme; exits one with
-    /// diagnostics on either a parse failure or a validation failure.
-    /// One command to answer "is this program well-formed?", with
-    /// uniform output regardless of which check raised the issue.
+    /// Parse and validate a `.morph` source file. If parsing succeeds,
+    /// runs `Program::validate()` against the IR: declarations and arity
+    /// for predicates and intents, kind/type compatibility, binding flow
+    /// (unbound variables), expression shape, actor context, and a
+    /// nesting-depth bound. Exits zero on a clean programme; exits one
+    /// with uniform diagnostics on either a parse or a validation
+    /// failure.
     Check(SourceFileArgs),
 
     /// Propose a transformation defined in a user-supplied `.morph`
-    /// source file against a Morpholog PostgreSQL database. The
-    /// non-built-in counterpart of `propose`: parses and validates
-    /// the source file, then proposes the named transformation with
-    /// the supplied actor and JSON args. Same JSON output and same
-    /// exit-code semantics as `propose`.
+    /// source file. The non-built-in counterpart of `propose`: parses
+    /// and validates the source file, then proposes the named
+    /// transformation with the supplied actor and JSON args. Same JSON
+    /// output and exit-code semantics as `propose`.
     Run(RunArgs),
 
     /// Drive the outbox state machine from outside Rust. Lets a
@@ -125,21 +114,20 @@ pub(crate) enum OutboxCmd {
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct OutboxClaimArgs {
-    /// Intent type to claim (e.g. `ClaimPaymentRequested`). Matches
-    /// the predicate-style name a transformation emits via `emit X(...)`.
+    /// Intent type to claim (e.g. `ClaimPaymentRequested`): the
+    /// predicate-style name a transformation emits via `emit X(...)`.
     #[arg(long)]
     pub(crate) intent_type: String,
 
-    /// Lease duration in seconds. The claimed row's `lock_expires_at`
-    /// is set to `now() + this`. If the caller does not call
-    /// `complete` or `release` within the window, the row becomes
-    /// reclaimable by another worker.
+    /// Lease duration in seconds; sets `lock_expires_at` to `now() +
+    /// this`. If the caller does not `complete` or `release` within the
+    /// window, the row becomes reclaimable by another worker.
     #[arg(long, default_value_t = 30)]
     pub(crate) lease_seconds: u64,
 
-    /// Worker identity. Defaults to a fresh UUIDv7 if not supplied;
-    /// the generated id appears in the returned row's `locked_by`
-    /// field so the caller can pass it back to `complete` / `release`.
+    /// Worker identity. Defaults to a fresh UUIDv7; the generated id
+    /// appears in the returned row's `locked_by` so the caller can pass
+    /// it back to `complete` / `release`.
     #[arg(long)]
     pub(crate) worker_id: Option<String>,
 
@@ -160,23 +148,21 @@ pub(crate) struct OutboxCompleteArgs {
 
     /// Outcome to record. `delivered` marks the row done; `transient`
     /// schedules another attempt (requires `--retry-after-seconds`);
-    /// `failed` marks the row failed (compensation, if configured,
-    /// is the Rust worker's responsibility; the CLI does not invoke it).
+    /// `failed` marks it failed (compensation, if any, is the Rust
+    /// worker's responsibility; the CLI does not invoke it).
     #[arg(long, value_enum)]
     pub(crate) outcome: OutboxCompleteOutcome,
 
-    /// Seconds until the next attempt for `--outcome transient`.
-    /// Internally converted to `now() + N seconds` for the row's
-    /// `next_attempt_at`. Required for `transient`; an error for
+    /// Seconds until the next attempt; sets the row's `next_attempt_at`
+    /// to `now() + N seconds`. Required for `transient`; an error for
     /// other outcomes.
     #[arg(long)]
     pub(crate) retry_after_seconds: Option<u64>,
 
     /// Optional human-readable narrative. Recorded as `failure_reason`
-    /// for `--outcome failed`. For `--outcome transient` it is
-    /// silently accepted but not yet persisted (the helper records
-    /// the schedule, not the per-attempt reason - a future enhancement
-    /// could carry it).
+    /// for `--outcome failed`. For `transient` it is accepted but not
+    /// persisted (the helper records the schedule, not the per-attempt
+    /// reason).
     #[arg(long)]
     pub(crate) reason: Option<String>,
 
@@ -211,19 +197,16 @@ pub(crate) enum Inspect {
     /// List currently-admitted claims, or claims as they were at a
     /// past `transition_id` via `--as-of`.
     Claims(InspectClaimsArgs),
-    /// List every committed audit row, in commit order. `--as-of`
-    /// does not apply here: the audit table IS the chronological
-    /// record. Callers who want a time-bounded audit view should
-    /// query `morpholog.audit` directly with their own predicate -
-    /// the same `(committed_at, transition_id) <= target` shape the
-    /// adapter's `reconstruct_state_at` uses internally, not
-    /// `transition_id <= T` alone (which can include or exclude the
-    /// wrong rows when commit order and UUID order diverge under
-    /// concurrent commits).
+    /// List every committed audit row, in commit order. `--as-of` does
+    /// not apply: the audit table IS the chronological record. For a
+    /// time-bounded view, query `morpholog.audit` directly with the
+    /// same `(committed_at, transition_id) <= target` shape
+    /// `reconstruct_state_at` uses - not `transition_id <= T` alone,
+    /// which selects the wrong rows when commit order and UUID order
+    /// diverge under concurrent commits.
     Audit(InspectArgs),
-    /// List outbox rows, in enqueue order. Defaults to `--status pending`
-    /// (the in-flight queue, matching the historical behaviour); use
-    /// `--status all` for a full historical view, or any of
+    /// List outbox rows, in enqueue order. Defaults to `--status
+    /// pending`; use `--status all` for a full view, or any of
     /// `delivered|failed|in-progress` for a specific slice. `--as-of`
     /// does not apply: outbox is delivery state, not claim state.
     Outbox(InspectOutboxArgs),
@@ -232,10 +215,10 @@ pub(crate) enum Inspect {
     /// via `--as-of`. Read-only: no claims are written, no audit row
     /// is produced.
     Derived(InspectDerivedArgs),
-    /// List the declared predicate vocabulary for a built-in
-    /// program. Read-only: no database connection, no state. The
-    /// declarations are static programme metadata - the same data
-    /// `Program::validate` checks references against.
+    /// List the declared predicate vocabulary for a built-in program.
+    /// Read-only: no database connection, no state. The declarations
+    /// are static programme metadata, the same data `Program::validate`
+    /// checks references against.
     Predicates(InspectPredicatesArgs),
 }
 
@@ -243,27 +226,22 @@ pub(crate) enum Inspect {
 /// declarations are programme metadata, not state.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectPredicatesArgs {
-    /// Built-in program name (e.g. `double_entry_ledger`). The same
-    /// registry that `propose` uses.
+    /// Built-in program name (e.g. `double_entry_ledger`).
     pub(crate) program: String,
 }
 
-/// Arguments for `inspect claims`. Same shape as the shared
-/// `InspectArgs` but with an optional `--as-of` for historical
-/// claim listing.
+/// Arguments for `inspect claims`. Like the shared `InspectArgs` plus
+/// an optional `--as-of` for historical claim listing.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectClaimsArgs {
-    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
-    /// environment variable.
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 
-    /// Optional: list claims as they were at this past
-    /// `transition_id` (UUIDv7). Without this flag, the current
-    /// admitted claim set is returned. With it, the adapter replays
-    /// the audit log up to the named transition and returns the
-    /// historical claim set. Unknown ids return an error
-    /// (`TransitionNotFound`).
+    /// Optional: list claims as they were at this past `transition_id`
+    /// (UUIDv7). Without it, the current admitted claim set is
+    /// returned; with it, the adapter replays the audit log up to the
+    /// named transition. Unknown ids return `TransitionNotFound`.
     #[arg(long)]
     pub(crate) as_of: Option<Uuid>,
 }
@@ -271,50 +249,43 @@ pub(crate) struct InspectClaimsArgs {
 /// Arguments for `inspect derived`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectDerivedArgs {
-    /// Built-in program name (e.g. `double_entry_ledger`). The same
-    /// registry that `propose` uses.
+    /// Built-in program name (e.g. `double_entry_ledger`).
     pub(crate) program: String,
 
     /// Derived claim predicate name (e.g. `TrialBalanceRow`). Looked
     /// up against the program's `derived_claims` by `predicate`.
     pub(crate) derived: String,
 
-    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
-    /// environment variable.
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 
-    /// Optional: enumerate the derived claim against the state at
-    /// this past `transition_id` (UUIDv7) instead of current state.
-    /// Same predicate-scoped replay as the current-state version;
-    /// unknown ids return `TransitionNotFound`.
+    /// Optional: enumerate against the state at this past
+    /// `transition_id` (UUIDv7) instead of current state. Same
+    /// predicate-scoped replay; unknown ids return `TransitionNotFound`.
     #[arg(long)]
     pub(crate) as_of: Option<Uuid>,
 }
 
-/// Shared arguments for the `inspect` subcommands that do NOT
-/// accept `--as-of` (audit, outbox). `inspect claims` uses its own
+/// Shared arguments for the `inspect` subcommands that do NOT accept
+/// `--as-of` (audit, outbox). `inspect claims` uses its own
 /// `InspectClaimsArgs` to expose the optional flag.
 ///
-/// Clap's `env` attribute falls back to the `DATABASE_URL` environment
-/// variable when `--database-url` is not supplied. If neither is set,
-/// clap emits a "required argument was not provided" error before any
-/// async work happens.
+/// The `env` attribute falls back to `DATABASE_URL`; if neither flag
+/// nor env is set, clap errors before any async work happens.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectArgs {
-    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
-    /// environment variable.
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 }
 
-/// Arguments for `inspect outbox`. Carries the same connection-string
-/// flag as [`InspectArgs`] plus the status and intent-type filters.
+/// Arguments for `inspect outbox`: the connection-string flag plus the
+/// status and intent-type filters.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectOutboxArgs {
-    /// Filter by row status. Default `pending` matches the
-    /// operationally common question "what is waiting?". `all` returns
-    /// every row regardless of status.
+    /// Filter by row status. Default `pending` answers "what is
+    /// waiting?"; `all` returns every row regardless of status.
     #[arg(long, value_enum, default_value_t = InspectOutboxStatus::Pending)]
     pub(crate) status: InspectOutboxStatus,
 
@@ -323,14 +294,13 @@ pub(crate) struct InspectOutboxArgs {
     #[arg(long)]
     pub(crate) intent_type: Option<String>,
 
-    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
-    /// environment variable.
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 }
 
-/// Status filter for `inspect outbox`. The first four map directly to
-/// the database's `status` column; `All` disables the status filter.
+/// Status filter for `inspect outbox`. The named values map to the
+/// database's `status` column; `All` disables the status filter.
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub(crate) enum InspectOutboxStatus {
     Pending,
@@ -355,8 +325,7 @@ impl InspectOutboxStatus {
 }
 
 /// Arguments for any subcommand whose only input is a `.morph` source
-/// file (today: `parse` and `check`). No database connection; these
-/// subcommands are pure source-to-IR pipelines.
+/// file (`parse` and `check`). No database connection.
 #[derive(clap::Args, Debug)]
 pub(crate) struct SourceFileArgs {
     /// Path to a `.morph` source file.
@@ -371,49 +340,43 @@ pub(crate) struct ProposeArgs {
     pub(crate) program: String,
 
     /// Transformation name within the program (e.g. `post_simple_entry`).
-    /// The per-example README documents each transformation's parameters
-    /// and the expected argument shape.
+    /// Its parameters and expected argument shape are in the per-example
+    /// README.
     pub(crate) transformation: String,
 
     /// JSON array of arguments matching the transformation's parameter
-    /// list. Each element must be an `EvalValue` in the codec's tagged
-    /// form: `{"type":"subject","value":"..."}`, `{"type":"decimal",
+    /// list. Each element is an `EvalValue` in the codec's tagged form:
+    /// `{"type":"subject","value":"..."}`, `{"type":"decimal",
     /// "value":"100"}`, `{"type":"bool","value":true}`, or
-    /// `{"type":"collection","value":[...]}`. See `examples/<n>/README.md`
-    /// for the expected shape of each transformation's argument list.
+    /// `{"type":"collection","value":[...]}`.
     #[arg(long)]
     pub(crate) args: String,
 
-    /// Subject value identifying the actor under whose authority this
-    /// transition is being proposed. Free-form subject string (e.g.
-    /// `jordan`, `user:jordan`, `desk:fx_spot`); the CLI wraps it as
-    /// an `EvalValue::Subject`. Persisted to `morpholog.audit.actor`
-    /// on commit. Required: every transition carries an actor.
+    /// Subject identifying the actor under whose authority this
+    /// transition is proposed. Free-form subject string (e.g. `jordan`,
+    /// `desk:fx_spot`), wrapped as an `EvalValue::Subject` and persisted
+    /// to `morpholog.audit.actor`. Required: every transition carries an
+    /// actor.
     #[arg(long)]
     pub(crate) actor: String,
 
-    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
-    /// environment variable.
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 
     /// When set, emit a structured per-statement trace alongside the
-    /// outcome. Output shape becomes `{"result": <PgProposalOutcome>,
-    /// "trace": [<TraceEntry>...]}` on commit or rejection. Useful
-    /// for diagnosing why a transformation rejected: the trace shows
-    /// which require/bind fired, what bindings each statement produced,
-    /// and which invariant (if any) failed. Kernel errors at the PG
-    /// boundary still surface via the normal anyhow error chain on
-    /// stderr.
+    /// outcome: `{"result": <PgProposalOutcome>, "trace":
+    /// [<TraceEntry>...]}` on commit or rejection. The trace shows which
+    /// require/bind fired, what bindings each statement produced, and
+    /// which invariant (if any) failed. Kernel errors at the PG boundary
+    /// still surface via the anyhow error chain on stderr.
     #[arg(long)]
     pub(crate) trace: bool,
 }
 
 /// Arguments for the `run` subcommand. The `propose`-shaped fields
-/// (`transformation`, `args`, `actor`, `database_url`, `trace`)
-/// match `propose` exactly; the difference is `file` (a path to a
-/// user-supplied `.morph` source) in place of `propose`'s `program`
-/// (a built-in registry name).
+/// match `propose` exactly; the difference is `file` (a user-supplied
+/// `.morph` source) in place of `program` (a built-in registry name).
 #[derive(clap::Args, Debug)]
 pub(crate) struct RunArgs {
     /// Path to a `.morph` source file containing the programme.
@@ -423,22 +386,20 @@ pub(crate) struct RunArgs {
     pub(crate) transformation: String,
 
     /// JSON array of arguments matching the transformation's parameter
-    /// list. Each element must be an `EvalValue` in the codec's tagged
-    /// form: `{"type":"subject","value":"..."}`, `{"type":"decimal",
+    /// list. Each element is an `EvalValue` in the codec's tagged form:
+    /// `{"type":"subject","value":"..."}`, `{"type":"decimal",
     /// "value":"100"}`, `{"type":"bool","value":true}`, or
     /// `{"type":"collection","value":[...]}`.
     #[arg(long)]
     pub(crate) args: String,
 
-    /// Subject value identifying the actor under whose authority this
-    /// transition is being proposed. Free-form subject string; the
-    /// CLI wraps it as an `EvalValue::Subject` and persists it to
-    /// `morpholog.audit.actor`.
+    /// Subject identifying the actor under whose authority this
+    /// transition is proposed. Wrapped as an `EvalValue::Subject` and
+    /// persisted to `morpholog.audit.actor`.
     #[arg(long)]
     pub(crate) actor: String,
 
-    /// PostgreSQL connection string. Falls back to the `DATABASE_URL`
-    /// environment variable.
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 
@@ -468,11 +429,10 @@ async fn main() -> anyhow::Result<()> {
 // ===========================================================================
 // Tests - CLI argument parsing only.
 //
-// End-to-end CLI-against-PostgreSQL tests would duplicate the read-helper
-// integration tests in morpholog-postgres without adding signal. These tests
-// only verify that clap parses the expected command shapes correctly,
-// catches missing required arguments, and threads the database URL through
-// from either the flag or the environment fallback.
+// End-to-end CLI-against-PostgreSQL coverage lives in morpholog-postgres'
+// read-helper integration tests; duplicating it here adds no signal. These
+// tests verify that clap parses the expected command shapes, catches missing
+// required arguments, and threads the database URL through from flag or env.
 // ===========================================================================
 
 #[cfg(test)]
@@ -599,9 +559,8 @@ mod tests {
             "not-a-uuid",
         ])
         .expect_err("bad UUID must surface a clap parse error");
-        // clap classifies FromStr failures as ValueValidation in
-        // recent versions; older versions used a different kind.
-        // Accept either as a signal that parsing rejected the input.
+        // clap classifies FromStr failures as ValueValidation in recent
+        // versions, InvalidValue in older ones; accept either.
         assert!(
             matches!(
                 err.kind(),
@@ -671,16 +630,6 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::UnknownArgument);
     }
 
-    /// Sanity-check that `Cli::try_parse_from` *can* surface a
-    /// `MissingRequiredArgument` error - without actually mutating the
-    /// process environment (which would require `unsafe` in edition
-    /// 2024 and the workspace forbids it). We trigger the error by
-    /// omitting the subcommand entirely, which is unambiguously
-    /// missing regardless of any `DATABASE_URL` value in the test
-    /// process. The "no `--database-url` and no env" failure mode is a
-    /// clap library guarantee (any `#[arg(env = "X")]` field with no
-    /// default falls back to env, and errors if neither is supplied)
-    /// and is not re-proven here.
     #[test]
     fn propose_with_all_args_parses() {
         let cli = Cli::parse_from([
@@ -919,14 +868,9 @@ mod tests {
     #[test]
     fn missing_required_argument_surfaces_as_clap_error() {
         let err = Cli::try_parse_from(["morpholog"]).expect_err("no subcommand should error");
-        // Either MissingRequiredArgument or MissingSubcommand depending
-        // on clap version; both are acceptable signals of "you didn't
-        // give me enough to act on."
-        // clap 4 surfaces this as DisplayHelpOnMissingArgumentOrSubcommand
-        // (which auto-prints help) rather than the explicit
-        // MissingSubcommand kind. Older clap versions used the latter; we
-        // accept either so the test does not break under minor clap
-        // updates.
+        // clap 4 surfaces this as DisplayHelpOnMissingArgumentOrSubcommand;
+        // older versions used MissingSubcommand. Accept either so the
+        // test does not break under minor clap updates.
         assert!(
             matches!(
                 err.kind(),

@@ -192,7 +192,7 @@ Transition invariant `headroom_consumed_by_payment`: per-policy delta conservati
 - A retrofit onto the ledger. The structural reshape would be wider; deferred until a worked example actively needs it.
 
 
-### Enriched `morpholog check`: kind/type compatibility (Layer 1 of four)
+### Enriched `morpholog check`: kind/type compatibility
 
 **Forced by:** the input/output boundary work shifted the leverage. With non-Rust integrators able to hand Morpholog a `.morph` file and get a deterministic outcome back, authoring trustworthiness became the bottleneck. Decimal-in-Subject-slot, `<=` against a date, arithmetic on a subject literal, `Eq` between incompatible kinds - all only surfaced at runtime as `EvalError::TypeMismatch`.
 

@@ -27,18 +27,14 @@ pub struct Invariant {
     pub body: Expr,
 }
 
-/// Expression nodes used inside invariant bodies, transformation requires,
-/// and let-bindings. An `Expr` is evaluated against a state and a set of
-/// variable bindings to yield either a boolean / truth-witness (when used
-/// as a predicate) or a value (when used in value position).
+/// Expression nodes used inside invariant bodies, transformation
+/// requires, and let-bindings. An `Expr` evaluates against a state and a
+/// binding set to yield either a truth-witness (predicate position) or a
+/// value (value position).
 ///
-/// The variants are deliberately narrow: predicate composition (`And`,
-/// `Or`, `Not`, `Implies`, `Exists`, `Forall`, `Pre`), claim and (in)equality matching
-/// (`Claim`, `Neq`, `Eq`), one decimal-comparison primitive (`Le`), one
-/// civil-date-comparison primitive (`DateLe`), one bounded aggregation
-/// (`Sum`), one decimal-arithmetic primitive (`Sub`), one collection
-/// primitive (`In`), one functional-lookup primitive (`ValueOf`), and
-/// `Term`-as-value lifting. Anything that cannot be expressed within this
+/// The variants are deliberately narrow - composition, claim and
+/// (in)equality matching, bounded aggregation, and one comparator or
+/// arithmetic primitive per kind. Anything not expressible within this
 /// set is, by design, not yet a runtime concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -61,68 +57,41 @@ pub enum Expr {
     /// Flattened `Vec<Expr>` so `a or b or c` is one node.
     Or(Vec<Expr>),
     /// Evaluates the wrapped subtree against the pre-transition state
-    /// instead of the candidate (post) state. The default for an
-    /// invariant body is post; `Pre` flips the lookup for one subtree
-    /// so a single invariant can relate pre and post values.
+    /// instead of the candidate (post) state, so one invariant can
+    /// relate pre and post values. Raises
+    /// [`crate::EvalError::PreStateUnavailable`] where no pre-state is in
+    /// scope (derived-claim bodies, transformation `require`s, a context
+    /// built with `pre_state: None`, the inner of a nested `Pre`).
     ///
-    /// Raises [`crate::EvalError::PreStateUnavailable`] when the
-    /// evaluation context has no pre-state in scope: derived-claim
-    /// bodies, transformation `require`s, evaluator calls whose
-    /// `EvalContext` was constructed with `pre_state: None`, and the
-    /// inner of a nested `Pre`.
-    ///
-    /// Quantifier composition is non-commutative: `pre(forall x in
-    /// Squares: ...)` resolves both the iteration domain and the body
-    /// against pre; `forall x in Squares: pre(...)` iterates the post-
-    /// state domain and only flips the body. The two diverge when the
-    /// iteration set itself changes between states.
+    /// Quantifier composition is non-commutative: `pre(forall x in C:
+    /// ...)` resolves both the domain and the body against pre, while
+    /// `forall x in C: pre(...)` iterates the post-state domain and flips
+    /// only the body - they diverge when the iteration set changes.
     Pre(Box<Expr>),
     Not(Box<Expr>),
     Neq(Term, Term),
     Term(Term),
     Eq(Box<Expr>, Box<Expr>),
-    /// Decimal less-than-or-equal. Both operands must evaluate to
-    /// `EvalValue::Decimal`. Predicate-shaped: returns the empty match
-    /// set when the comparison is false, the unchanged binding set when
-    /// true. Added with the approval-limits worked example so that
-    /// `require amount <= limit` can be expressed without smuggling
-    /// quantitative authority into the bindings via `Eq` games.
-    /// Deliberately the only decimal-comparison primitive in v0; `Lt`,
-    /// `Gt`, `Ge` arrive when an example forces them.
+    /// Decimal less-than-or-equal; both operands must evaluate to
+    /// `EvalValue::Decimal`. Predicate-shaped: empty match set when
+    /// false, the unchanged binding set when true. The only decimal
+    /// comparator in v0.
     Le(Box<Expr>, Box<Expr>),
-    /// Civil-date less-than-or-equal. Both operands must evaluate to
-    /// [`crate::EvalValue::Date`]. Predicate-shaped: returns the empty match
-    /// set when the comparison is false, the unchanged binding set when
-    /// true. Dates are ISO-8601 civil dates (`YYYY-MM-DD`) with no
-    /// time-of-day and no time zone. Validity windows modelled with
-    /// `DateLe(from, action_date)` and `DateLe(action_date, to)` are
-    /// **inclusive at both ends**: `effective_to == action_date` admits.
-    ///
-    /// Added with the clinical-trial-enrolment worked example so that
-    /// admission can require a protocol version, consent form,
-    /// eligibility evidence and investigator delegation that are all
-    /// valid on the action date. Deliberately separate from `Le` to
-    /// keep decimal and date ordering from sharing a generic-dispatch
-    /// shape before a third comparator forces one. Deliberately the
-    /// only date-comparison primitive in v0; `DateLt`, `DateGt`,
-    /// `DateGe`, date arithmetic, instants, time zones, durations and
-    /// business calendars arrive only when a worked example forces
-    /// them.
+    /// Civil-date less-than-or-equal; both operands must evaluate to
+    /// [`crate::EvalValue::Date`] (ISO-8601 `YYYY-MM-DD`, no time-of-day,
+    /// no time zone). Predicate-shaped like [`Expr::Le`]. Validity
+    /// windows built from `DateLe(from, d)` and `DateLe(d, to)` are
+    /// **inclusive at both ends**: `to == d` admits. Kept separate from
+    /// `Le` so each comparator type-checks its own operands. The only
+    /// date comparator in v0.
     DateLe(Box<Expr>, Box<Expr>),
-    /// Decimal subtraction. Both operands must evaluate to
-    /// `EvalValue::Decimal`; the result is the left minus the right.
-    /// Added with the trial-balance derived-claim example so that
-    /// `balance == sum(debits) - sum(credits)` can be expressed without
-    /// extending `Sum`'s value position into an expression sublanguage.
+    /// Decimal subtraction; both operands must evaluate to
+    /// `EvalValue::Decimal`, result is left minus right.
     Sub(Box<Expr>, Box<Expr>),
-    /// Decimal addition. Both operands must evaluate to
-    /// `EvalValue::Decimal`; the result is the left plus the right.
-    /// Added with the insurance-claim-settlement example so that
-    /// cumulative-cap rules like `sum(paid) + proposed <= aggregate`
-    /// can be expressed directly, instead of contorting the natural
-    /// rule into `proposed <= aggregate - sum(paid)`. Together with
-    /// `Sub` this is the entire decimal-arithmetic surface in v0; no
-    /// multiplication or division until a real example forces them.
+    /// Decimal addition; both operands must evaluate to
+    /// `EvalValue::Decimal`, result is left plus right. With `Sub`, the
+    /// whole decimal-arithmetic surface in v0 - no multiplication or
+    /// division until an example forces them.
     Add(Box<Expr>, Box<Expr>),
     Sum {
         value: Term,
@@ -136,20 +105,15 @@ pub enum Expr {
     },
     In(Term, Term),
     /// Reads exactly one matching claim and yields its value-position
-    /// binding. Wildcards in `args` mark the value position(s). Zero
-    /// matches is an error unless `default` is supplied; multiple
-    /// matches is always an error.
+    /// binding; wildcards in `args` mark the value position(s). Zero
+    /// matches errors unless `default` is supplied; multiple matches
+    /// always errors.
     ///
-    /// **Prefer [`Stmt::BindOne`] in transformation bodies.** When
-    /// the goal is to extract a uniquely-matching claim's values
-    /// into the statement-level binding context, `bind_one` reads
-    /// more directly and rejects lawfully on zero matches (where
-    /// `ValueOf` raises a kernel error). `ValueOf` remains the
-    /// right tool for **value-producing positions** that aren't
-    /// statement-level binding extensions: inside `Sum`, `Add`,
-    /// `Sub`, `Eq`, `Le`, or `DateLe` expressions, inside a `Let`
-    /// computing a derived value, or inside a `DerivedClaim` value
-    /// expression where a statement form does not fit.
+    /// Prefer [`Stmt::BindOne`] in transformation bodies (it rejects
+    /// lawfully on zero matches, where `ValueOf` raises a kernel error).
+    /// `ValueOf` is for value positions that are not statement-level
+    /// binding extensions: inside `Sum`/`Add`/`Sub`/`Eq`/`Le`/`DateLe`,
+    /// a `Let` value, or a `DerivedClaim` value expression.
     ValueOf {
         predicate: String,
         args: Vec<Term>,
@@ -157,17 +121,12 @@ pub enum Expr {
     },
 }
 
-/// A positional argument in a claim, intent, or expression. A `Term` is
-/// either a variable to be bound by the surrounding context, a wildcard
-/// that matches anything, a literal constant, or `Actor` - a reserved
-/// term that resolves to the actor of the proposed transition.
-///
-/// `Term::Actor` is only resolvable inside a transformation body
-/// (require, let, assert, retract, emit, for). Invariant bodies do not
-/// have a transition in scope; `Term::Actor` used inside an invariant
-/// surfaces as `EvalError::UnboundActor` at evaluation time. This is
-/// the require-vs-invariant doctrine made enforceable: authority
-/// checks belong in `require`, not in invariants.
+/// A positional argument in a claim, intent, or expression: a variable
+/// bound by the surrounding context, a wildcard matching anything, a
+/// literal constant, or `Actor`. `Term::Actor` resolves only inside a
+/// transformation body; in an invariant it surfaces as
+/// `EvalError::UnboundActor` - the require-vs-invariant doctrine made
+/// enforceable: authority checks belong in `require`, not invariants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(String),
@@ -180,9 +139,8 @@ pub enum Term {
 }
 
 /// Literal constants embeddable in IR `Term`s. Distinct from `EvalValue`
-/// (which is a runtime value, including booleans and collections that
-/// cannot appear as IR literals). The variants are deliberately narrow:
-/// each was added when a worked example forced it.
+/// (a runtime value, including the booleans and collections that cannot
+/// appear as IR literals).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     /// Arbitrary-precision decimal stored as its exact source string.
@@ -224,51 +182,24 @@ pub struct Intent {
     pub args: Vec<Term>,
 }
 
-/// One step inside a transformation body. Statements run in declared
-/// order against a binding context; a failing `Require` or `BindOne`
-/// short-circuits the transformation, while `Assert`, `Retract`,
-/// `Emit`, `Let`, `LetNewSubject`, and `For` extend the staged
-/// outcome or the binding context. `Retract` of a non-existent claim
-/// is an idempotent no-op (see the variant doc), not a short-circuit.
-///
-/// The statement-level binding doctrine is a four-way carve:
-///
-/// - [`Stmt::Require`] is a yes/no gate; bindings unchanged on
-///   success, transformation rejected on failure.
-/// - [`Stmt::BindOne`] is a deterministic unique lookup; on
-///   success the current binding context is *replaced* with the
-///   matching binding set, transformation rejected on zero matches,
-///   kernel error on multiple matches.
-/// - [`Stmt::Let`] computes a value-producing expression and binds
-///   its result under a new variable name.
-/// - [`Stmt::For`] iterates over a collection, executing its body
-///   once per element.
-///
-/// See `docs/runtime-semantics.md` for the require/bind_one/let/for
-/// quartet in full.
+/// One step inside a transformation body, run in declared order against
+/// a binding context. `Require` and `BindOne` can short-circuit the
+/// transformation; `Assert`, `Retract`, `Emit`, `Let`, `LetNewSubject`,
+/// and `For` extend the staged outcome or the bindings. The
+/// require/bind_one/let/for binding quartet is documented per variant
+/// below and in full in `docs/runtime-semantics.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Require(Expr),
     /// Deterministic unique-lookup binding statement. Evaluates a
-    /// predicate-shaped expression against current state and
-    /// bindings; the surviving binding set is treated as the next
-    /// binding context.
-    ///
-    /// Semantics:
-    /// - Zero matches: transformation rejected (lawful business
-    ///   outcome; the expected governed record is not present).
+    /// predicate-shaped expression against current state and bindings:
+    /// - Zero matches: transformation rejected (lawful: the expected
+    ///   governed record is absent).
     /// - One match: the returned binding set *replaces* the current
-    ///   bindings. Statements after a successful `BindOne` see the
-    ///   newly-bound variables.
-    /// - Multiple matches: `EvalError::TypeMismatch` (kernel error;
-    ///   the programme expected unique state but admitted ambiguous
-    ///   state - missing structural-uniqueness invariant or
-    ///   corruption).
-    ///
-    /// Replaces the `require + let + value_of` chain that previous
-    /// examples used to extract a uniquely-matching claim's values
-    /// into the binding context. Added with the insurance-claim-
-    /// settlement migration; see `docs/design-history.md`.
+    ///   bindings; later statements see the newly-bound variables.
+    /// - Multiple matches: `EvalError::TypeMismatch` (the programme
+    ///   expected unique state but admitted ambiguous state - a missing
+    ///   structural-uniqueness invariant, or corruption).
     BindOne(Expr),
     Let {
         name: String,
@@ -310,45 +241,28 @@ pub struct Transformation {
     pub body: Vec<Stmt>,
 }
 
-/// A governed domain model: a named set of invariants and named
-/// transformations, packaged together so the runtime, the CLI, and
-/// external callers can refer to it as one unit.
-///
-/// `Program` is deliberately the smallest possible container. It
-/// does not own any state, does not own a connection, does not own
-/// a schema. It is just the set of rules and the set of admitted
-/// state-change paths that make up one governed model. A caller
-/// proposes a transformation against a `Program` by looking up the
-/// transformation by name and passing it to [`crate::propose`] (or to the
-/// PostgreSQL adapter's `propose_against_pg`) together with the
-/// program's `invariants` and the arguments.
-///
-/// Each worked example exposes a `program()` constructor that
-/// returns its `Program`. Whether `Program`s are eventually loaded
-/// from `.morph` source files, or assembled programmatically, or
-/// both, is a later decision; the type is the smallest stable
-/// surface for naming "a governed domain model" today.
-///
-/// `name` is a stable identifier (snake_case is conventional; the
-/// built-in examples use `"settlement_netting"`, `"revenue_restatement"`,
-/// `"claim_standing"`, `"double_entry_ledger"`). The CLI uses it to
-/// select a program.
+/// A governed domain model: a named set of predicate and intent
+/// vocabularies, invariants, transformations, and derived claims,
+/// packaged so the runtime, CLI, and external callers can refer to it as
+/// one unit. It is the smallest possible container - it owns no state,
+/// no connection, no schema, just the rules and the admitted
+/// state-change paths. A caller proposes by looking up a transformation
+/// by name and passing it to [`crate::propose`] (or the PostgreSQL
+/// adapter's `propose_against_pg`) with the invariants and arguments.
+/// `name` is a stable snake_case identifier the CLI selects on; each
+/// worked example exposes a `program()` constructor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
-    /// The vocabulary of admissible claim shapes for this programme.
-    /// Every `Expr::Claim`, `Stmt::Assert`, `Stmt::Retract`, and
-    /// `Expr::ValueOf` reference must target a declared predicate
-    /// (validated by [`Program::validate`]); every `DerivedClaim`'s
-    /// output predicate must also appear here.
+    /// The vocabulary of admissible claim shapes. Every `Expr::Claim`,
+    /// `Stmt::Assert`, `Stmt::Retract`, `Expr::ValueOf`, and
+    /// `DerivedClaim` output must target a declared predicate (validated
+    /// by [`Program::validate`]).
     pub predicates: Vec<PredicateDecl>,
-    /// The vocabulary of outbox intent shapes this programme may
-    /// emit. Every `Stmt::Emit` must target a declared intent; a
-    /// misspelled intent name in `emit` is a validation error, not
-    /// a silent route-to-nowhere on the outbox. Intent and
-    /// predicate vocabularies live in separate namespaces - an
-    /// intent and a predicate may share a name without collision
-    /// (though doing so is usually a modelling smell).
+    /// The vocabulary of outbox intent shapes this programme may emit.
+    /// Every `Stmt::Emit` must target a declared intent, so a misspelled
+    /// name is a validation error, not a silent route-to-nowhere.
+    /// Separate namespace from predicates.
     pub intents: Vec<IntentDecl>,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,

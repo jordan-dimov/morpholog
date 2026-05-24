@@ -2,16 +2,14 @@
 //!
 //! `find_matches` walks an [`Expr`] against a [`State`] and a binding
 //! context, returning either the set of extended binding contexts that
-//! satisfy the expression (predicate-shaped use) or a kernel error.
-//! The supporting helpers (`find_claim_matches`, `unify_args`,
-//! `find_conjunction`, `find_in_matches`, `eval_value`, `resolve_term`,
-//! `parse_date_literal`) are crate-private workhorses called from
-//! `find_matches`, [`crate::propose`], and [`crate::derive`].
+//! satisfy the expression (predicate-shaped use) or a kernel error. Its
+//! crate-private helpers are also called from [`crate::propose`] and
+//! [`crate::derive`].
 //!
-//! `EvalError` is the structured error type raised when an expression
-//! is structurally ill-formed (type mismatches, missing variables,
-//! ValueOf cardinality violations, etc.). Distinct from lawful
-//! business rejection, which is reported as `Outcome::Rejected`.
+//! `EvalError` is raised when an expression is structurally ill-formed
+//! (type mismatches, missing variables, ValueOf cardinality violations).
+//! Distinct from lawful business rejection, reported as
+//! `Outcome::Rejected`.
 
 use jiff::civil::Date;
 use rust_decimal::Decimal;
@@ -20,10 +18,10 @@ use std::str::FromStr;
 use crate::ir::{Expr, Term, Value};
 use crate::state::{Bindings, EvalValue, State};
 
-/// Errors raised by the evaluator and the transformation runner. These
-/// are distinct from *lawful business rejection* (which is reported as
-/// [`crate::Outcome::Rejected`]); an `EvalError` indicates that an expression
-/// or transformation was structurally ill-formed and cannot be run.
+/// Errors raised by the evaluator and the transformation runner: an
+/// expression or transformation was structurally ill-formed and cannot
+/// be run. Distinct from lawful business rejection
+/// ([`crate::Outcome::Rejected`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalError {
     /// A variable was referenced before being bound by a parameter,
@@ -46,21 +44,17 @@ pub enum EvalError {
     /// `Expr::ValueOf(predicate, args)` matched more than one claim;
     /// the functional-lookup contract requires exactly one match.
     ValueOfMultipleMatches(String),
-    /// `Term::Actor` was referenced in a context that has no transition
-    /// in scope - any path that calls into the evaluator with
-    /// `actor = None`. The common cases are invariant bodies and
-    /// derived-claim bodies (both evaluate against admitted state, not
-    /// against any specific proposing transition). Authority checks
-    /// belong in `require`, not in invariants; this error makes that
-    /// doctrine enforceable rather than convention.
+    /// `Term::Actor` was referenced with no transition in scope (the
+    /// evaluator was called with `actor = None`): invariant or
+    /// derived-claim bodies, which evaluate against admitted state, not
+    /// a proposing transition. Authority checks belong in `require`, not
+    /// invariants; this error makes that doctrine enforceable.
     UnboundActor,
-    /// `Expr::Pre` was reached in a context with no pre-state in
-    /// scope: derived-claim bodies, transformation `require`s, the
-    /// inner of nested `pre`, or an evaluator call whose
-    /// `EvalContext` was constructed with `pre_state: None`.
-    /// Phrased about evaluation context rather than AST position so
-    /// future contexts that carry both states can share the
-    /// primitive without IR change.
+    /// `Expr::Pre` was reached with no pre-state in scope: derived-claim
+    /// bodies, transformation `require`s, the inner of nested `pre`, or
+    /// an `EvalContext` built with `pre_state: None`. Phrased about
+    /// evaluation context, not AST position, so future contexts that
+    /// carry both states share the primitive without IR change.
     PreStateUnavailable,
 }
 
@@ -92,26 +86,22 @@ impl std::fmt::Display for EvalError {
 impl std::error::Error for EvalError {}
 
 /// Evaluator context: state(s), bindings, optional actor. Threaded
-/// through `find_matches`, `eval_value`, and helpers that recurse
-/// into expression bodies. The two builder methods
-/// ([`EvalContext::with_bindings`], [`EvalContext::enter_pre`])
-/// cover the only mutations the matcher needs.
+/// through `find_matches`, `eval_value`, and the helpers that recurse
+/// into expression bodies.
 #[derive(Clone, Copy)]
 pub(crate) struct EvalContext<'a> {
-    /// The state predicate lookups resolve against. Outside any
-    /// `Expr::Pre` this is the candidate (post) state during
-    /// proposal-path invariant evaluation, or the only state in
-    /// derived-claim or other one-state contexts. Inside `pre(...)` this
-    /// is the pre-transition state.
+    /// The state predicate lookups resolve against: the candidate (post)
+    /// state during proposal-path invariant evaluation, the only state
+    /// in one-state contexts, or the pre-transition state inside
+    /// `pre(...)`.
     pub(crate) state: &'a State,
     /// Pre-transition state when both states are in scope; `None`
     /// otherwise. Cleared inside a `Pre` subtree so nested
     /// `pre(pre(...))` surfaces `PreStateUnavailable`.
     pub(crate) pre_state: Option<&'a State>,
     pub(crate) bindings: &'a Bindings,
-    /// The proposing transition's actor; `None` in invariant /
-    /// derived-claim or other one-state contexts. `Term::Actor` reached
-    /// with `actor: None` surfaces `UnboundActor`.
+    /// The proposing transition's actor; `None` in one-state contexts.
+    /// `Term::Actor` reached with `actor: None` surfaces `UnboundActor`.
     pub(crate) actor: Option<&'a EvalValue>,
 }
 
@@ -257,11 +247,8 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
 }
 
 /// Parse a `Value::Date(String)` literal into a `jiff::civil::Date`.
-/// Centralised so the IR-level literal and the runtime value cannot drift
-/// in how they interpret `YYYY-MM-DD`. Used by `resolve_term`, by
-/// `unify_args` for `Value::Date` literals in claim patterns, and by
-/// `find_claim_matches` when narrowing a predicate bucket by a ground
-/// date argument.
+/// Centralised so the IR-level literal and the runtime value cannot
+/// drift in how they interpret `YYYY-MM-DD`.
 pub(crate) fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
     s.parse::<Date>()
         .map_err(|e| EvalError::TypeMismatch(format!("invalid civil date `{s}`: {e}")))
@@ -280,37 +267,22 @@ pub(crate) fn find_claim_matches(
     } = *ctx;
     let mut out = vec![];
 
-    // Pre-pass: any occurrence of `Term::Actor` requires an actor in
-    // scope. Without this, a selective ground arg appearing *earlier*
-    // in the args could short-circuit to `Ok(empty)` (missing bucket)
-    // before the loop ever reaches `Term::Actor`. That would leak the
-    // doctrine - an invariant referencing `Term::Actor` could silently
-    // produce no matches instead of erroring. Make the requirement
-    // position-independent.
+    // Position-independent actor check: any `Term::Actor` requires an
+    // actor in scope. Without it, a selective ground arg appearing
+    // earlier could short-circuit to `Ok(empty)` before the loop
+    // reaches `Term::Actor`, letting an invariant that references
+    // `Term::Actor` silently produce no matches instead of erroring.
     if actor.is_none() && args.iter().any(|t| matches!(t, Term::Actor)) {
         return Err(EvalError::UnboundActor);
     }
 
-    // First pass: identify every argument position that is *ground* in
-    // the current binding context (Term::Literal in the IR, or
-    // Term::Var already bound in `base`). Pick the position whose
-    // (predicate, position, value) bucket is smallest; that's the most
-    // selective lookup.
-    //
-    // For a typical invariant body like `JournalLine(entry, _, d, _)`
-    // evaluated inside a `forall entry: ...`, `entry` is bound to a
-    // specific subject and position 0 has a bucket of exactly the few
-    // lines for that entry. That changes the scan from "all
-    // JournalLines" to "JournalLines for this entry" - the difference
-    // between O(N) and O(lines_per_entry) per lookup, which is where
-    // the quadratic in `balanced_posted_entry` lives.
-    //
-    // If a ground arg's bucket is missing entirely, no claim of this
-    // predicate has that value at that position; the result set is
-    // empty and we short-circuit.
-    //
-    // If no argument is ground, fall back to scanning the whole
-    // predicate bucket via `state.claims_for(predicate)`.
+    // Pick the most selective ground argument (literal, or var already
+    // bound in `base`) and scan its (predicate, position, value) bucket
+    // rather than the whole predicate. For `JournalLine(entry, _, d, _)`
+    // inside `forall entry: ...`, the bound `entry` narrows the scan to
+    // that entry's lines - O(lines_per_entry) instead of O(all lines).
+    // A missing bucket short-circuits to empty; no ground arg falls
+    // back to `state.claims_for(predicate)`.
     let mut best: Option<&[usize]> = None;
     for (pos, term) in args.iter().enumerate() {
         let ground = match term {
@@ -585,52 +557,33 @@ pub(crate) fn resolve_term(
 /// drill-down meaningfully applies.
 ///
 /// Called from [`crate::propose::execute_stmt`] on the rejection
-/// branches of `Require` and `BindOne`. Never called on the success
-/// path; the kernel's success-path cost is unchanged.
+/// branches of `Require` and `BindOne`. Never on the success path, so
+/// success-path cost is unchanged.
 ///
-/// Drill-down rules (failure-walk, statement-level + one layer):
+/// Drill-down rules (statement-level plus one layer):
 ///
-/// - `And(conjuncts)`: find the first conjunct whose `find_matches`
-///   is empty under the same bindings; recurse into it. If the
-///   recursion yields a more specific answer, use it; otherwise
-///   render the conjunct as-is.
-/// - `Implies { left, right }`: if `left` held (non-empty matches),
-///   the failure is in `right`. Recurse into `right` and fall back
-///   to rendering it. If `left` failed, the implies is vacuously
-///   true - caller should not have invoked us; return `None` as
-///   safety.
-/// - `Forall { binding, source, body }`: find the first source-match
-///   under which `body` fails, recurse into `body` under that
-///   binding context, fall back to rendering `body` as-is. Binding
-///   values are **not substituted** into the rendered string in v0
-///   (per the PR-G review constraint); the caller correlates the
-///   failing iteration separately if needed.
-/// - `Not`, `Exists`, `Or`: return `None`. Structurally these have
-///   no single sub-expression that's "the one responsible": `Not`
-///   describes what *held* rather than what failed; `Exists`
-///   failures mean "no member of the set satisfied", which is the
-///   whole expression, not any sub-part; `Or` failures mean every
-///   branch failed, so picking one branch to blame would mislead.
-/// - Leaf expressions (`Claim`, `Le`, `DateLe`, `Eq`, `Neq`, `In`,
-///   `Term`, `Sub`, `Add`, `Sum`, `ValueOf`): return `None`. Already
-///   as specific as the kernel can be.
-///
-/// Distinct from a structural ExprTrace mirror of the evaluator
-/// (Option B in the PR-G design discussion). This is the smallest
-/// useful failure-walk that closes the "which conjunct failed?"
-/// diagnostic gap without growing the trace surface beyond
-/// statement-level.
+/// - `And(conjuncts)`: recurse into the first conjunct whose
+///   `find_matches` is empty under the same bindings; render it as-is
+///   if the recursion yields nothing more specific.
+/// - `Implies { left, right }`: if `left` held, recurse into `right`.
+///   If `left` failed, the implies is vacuously true - return `None`.
+/// - `Forall { binding, source, body }`: recurse into `body` under the
+///   first source-match where it fails. Binding values are **not**
+///   substituted into the rendered string in v0.
+/// - `Not`, `Exists`, `Or`: return `None`. No single sub-expression is
+///   "the one responsible": `Not` describes what *held*; `Exists`
+///   failure means no member satisfied; `Or` failure means every
+///   branch failed.
+/// - Leaf expressions: return `None`, already as specific as possible.
 pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option<String> {
     match expr {
         Expr::And(conjuncts) => {
-            // Thread bindings through conjuncts the same way
-            // `find_conjunction` does in the evaluator: each conjunct
-            // runs against the contexts produced by the previous one.
-            // Evaluating each conjunct against the *original*
-            // `bindings` would miss failures that only show up after
-            // a prior conjunct narrowed the binding context (e.g.
-            // `And(A(x), B(x))` where some `A(a1)` holds and some
-            // `B(b2)` holds but no `x` exists where both hold).
+            // Thread bindings through conjuncts as `find_conjunction`
+            // does: each runs against the contexts the previous produced.
+            // Evaluating each against the original `bindings` would miss
+            // failures that only appear after a prior conjunct narrowed
+            // the context (e.g. `And(A(x), B(x))` where `A(a1)` and
+            // `B(b2)` each hold but no `x` satisfies both).
             let mut current: Vec<Bindings> = vec![ctx.bindings.clone()];
             for c in conjuncts {
                 let mut next: Vec<Bindings> = Vec::new();
@@ -638,9 +591,8 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
                     next.extend(find_matches(c, &ctx.with_bindings(b)).ok()?);
                 }
                 if next.is_empty() {
-                    // This conjunct kills the chain. Diagnose under
-                    // one of the binding contexts that survived to
-                    // this point; the first is fine.
+                    // This conjunct kills the chain. Diagnose under one
+                    // of the surviving binding contexts; the first is fine.
                     let failing_bindings = current.first().unwrap_or(ctx.bindings);
                     return Some(
                         find_failing_subexpr(c, &ctx.with_bindings(failing_bindings))
@@ -654,14 +606,11 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
         Expr::Implies { left, right } => {
             let left_matches = find_matches(left, ctx).ok()?;
             if left_matches.is_empty() {
-                // Implies is vacuously true when left fails; caller
-                // shouldn't have invoked us. Safety: return None.
+                // Vacuously true when left fails; return None as safety.
                 return None;
             }
-            // The right side rejected under at least one of left's
-            // satisfying bindings. Recurse with the first such
-            // extension so the drill-down sees the same context the
-            // evaluator did.
+            // Recurse into right under the first of left's satisfying
+            // bindings, so the drill-down sees the evaluator's context.
             for ext in &left_matches {
                 let ext_ctx = ctx.with_bindings(ext);
                 let right_matches = find_matches(right, &ext_ctx).ok()?;
@@ -680,12 +629,9 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
             body,
         } => {
             // Mirror find_matches's Forall: iterate every source
-            // binding extension and test the body against it. No
-            // `contains_key` filter here - the evaluator does not
-            // filter source matches that way, and a walker that
-            // diverged from the evaluator's iteration order could
-            // identify a "failing" iteration the evaluator never
-            // tried.
+            // extension and test the body. No `contains_key` filter -
+            // diverging from the evaluator's iteration order could blame
+            // a "failing" iteration the evaluator never tried.
             let source_matches = find_matches(source, ctx).ok()?;
             for ext in &source_matches {
                 let ext_ctx = ctx.with_bindings(ext);
