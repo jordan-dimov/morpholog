@@ -8,7 +8,7 @@ The "forced by a worked example" discipline binds **kernel and IR primitives**: 
 
 The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are all in good shape. Programmes are declared-vocabulary objects. Execution is structurally inspectable through `propose_with_trace` and the CLI's `--trace` flag, including expression-internal failure-walk that identifies which sub-expression of a rejected `require` or `bind` was responsible. Predicate-scoped loading runs on both read and write paths.
 
-The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` now runs the structural pass (arity, declarations, duplicates for both predicates and intents) and the kind/type compatibility pass that catches authoring mistakes the kernel would otherwise raise as `TypeMismatch` at runtime.
+The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` runs one traversal that does the structural pass (arity, declarations, duplicates for both predicates and intents), the kind/type compatibility pass, unbound-variable and predicate/value position checks, and the actor-in-wrong-context check - catching authoring mistakes the kernel would otherwise raise as `TypeMismatch`, `UnboundVariable`, `NotPredicate`, or `UnboundActor` at runtime.
 
 Outbox intents are declared vocabulary too. `IntentDecl` (parallel to `PredicateDecl`) names every intent type the programme may emit; a misspelled `emit` is a validation error rather than a silent route-to-nowhere on the outbox.
 
@@ -18,14 +18,10 @@ The CLI is split by subcommand under `crates/morpholog-cli/src/commands/`. Addin
 
 ## Imminent
 
-With the input/output boundaries, the kind/type-compatibility layer, and the intent vocabulary in place, `.morph` authoring is materially more trustworthy than before. The remaining layers of enriched check are the next investment.
+With the input/output boundaries, the kind/type-compatibility layer, and the intent vocabulary in place, `.morph` authoring is materially more trustworthy than before. Most of the enriched check has landed; one lint-grade layer remains.
 
-- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates for both predicates and intents) and Layer 1 (kind/type compatibility, covering both vocabularies) ship today. Three layers remain, each independently testable:
-    - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced. The natural home for a symmetric "value-shaped expression at predicate position" check the kind layer deliberately left out.
-    - **Actor-in-wrong-context.** `Term::Actor` resolves only inside transformation bodies; the kernel raises `UnboundActor` if an invariant or derived claim mentions `actor`. Catch it statically with a clear "actor is not available in invariant bodies - authority belongs in `require`" message.
-    - **Lint-grade hints under `--strict`.** Unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on an `Undeclared` reference.
-
-    Each layer is a separate small PR. `--strict` promotes hints to errors. `--json` emits diagnostics in a tooling-friendly form for IDE integration later.
+- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates for both predicates and intents), kind/type compatibility across both vocabularies, unbound-variable detection (the binding flow follows the runtime: parameters -> `bind` -> `let` -> `for`, and `require` does not export its matches), the symmetric predicate-shaped/value-shaped position checks, and actor-in-wrong-context all ship today - one traversal does the structural, kind, and binding-flow work together. What remains:
+    - **Lint-grade hints under `--strict`.** Unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on an `Undeclared` reference. `--strict` promotes hints to errors; `--json` emits diagnostics in a tooling-friendly form for IDE integration later.
 
 - **Legibility tooling.** Surface syntax makes programmes readable; the next gap is making them *reviewable*. Three `morpholog inspect` subcommands derived from static analysis of parsed `.morph` programmes:
     1. `morpholog inspect exclusions <program>` - walks invariants and `not` / `Neq` requires; emits the mutually-exclusive predicate pairs it can derive. Controllers and regulators ask "what does this system *prevent*?" before "what does it enable?", and nothing in `inspect` today answers that. Highest-leverage first tool; smallest implementation.
@@ -48,6 +44,7 @@ The hardening real deployment needs. Not language growth and not gated on a work
 - **Worker supervisor.** The polling outbox worker exists and ships a `StdoutDeliverer`. Missing: a supervisor running multiple workers under restart-with-intensity, with crash isolation between deliverers.
 - **Per-target circuit breakers.** A delivery target that misbehaves should be ring-fenced (back off, alert, eventually quarantine), not continue eating the worker's loop indefinitely.
 - **HTTP-aware deliverer.** Once a worked example actually sends an outbox intent over the wire, an `HttpDeliverer` with the right retry/idempotency semantics.
+- **Parser-side input-depth guard.** `Program::validate` already rejects expression and `for`-statement nesting past a fixed depth, so over-deep IR cannot exhaust the stack in `propose` - the teeth behind "validate untrusted IR before proposing it". The `.morph` parser has no equivalent guard: a pathologically nested source file could overflow the recursive-descent parser before it produces any IR. Deferred because in v0 you author your own `.morph` files; forced once `parse` ingests source from an untrusted origin.
 
 ## Language affordances awaiting a worked example
 

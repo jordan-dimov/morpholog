@@ -142,12 +142,12 @@ pub enum ValidationError {
     /// inside transformation bodies - authority checks belong in a
     /// `require`, not an invariant.
     ActorNotAvailable { context: ValidationContext },
-    /// A body in this context nests deeper than [`MAX_EXPR_DEPTH`].
-    /// The recursive evaluator and check walk descend one stack frame
-    /// per nesting level, so a pathologically deep expression or
-    /// `for`-statement chain would exhaust the stack during `propose`.
-    /// Validation rejects it first, which is why untrusted IR must be
-    /// validated before it is proposed.
+    /// A body in this context nests deeper than the validator's fixed
+    /// maximum depth. The recursive evaluator and check walk descend
+    /// one stack frame per nesting level, so a pathologically deep
+    /// expression or `for`-statement chain would exhaust the stack
+    /// during `propose`. Validation rejects it first, which is why
+    /// untrusted IR must be validated before it is proposed.
     NestingTooDeep { context: ValidationContext },
     /// A variable was used in a position that demands a bound value
     /// (an `admit`/`retract`/`emit` argument, a comparator or

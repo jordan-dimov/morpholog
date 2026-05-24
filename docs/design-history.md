@@ -229,3 +229,35 @@ The `VocabularyKind` enum was the foundational move. Predicates and intents shar
 **What stays out:**
 
 - An `inspect intents` CLI subcommand mirroring `inspect predicates`. Useful but not load-bearing; deferred until the legibility tooling work picks it up alongside the other inspectors.
+
+
+### Static-analysis pass: one visitor, binding flow, actor context, and a depth floor
+
+**Forced by:** the kind/type-compatibility check had landed as a second walker bolted next to the structural pass, and the checks due next - unbound variables, the value/predicate shape mirror, actor-in-wrong-context - all needed the same traversal and the same notion of "what is in scope here". Running them as separate walks would mean re-deriving binding scope each time and drifting from the runtime's binding rules each time. The forcing function was honest: the moment a second binding-aware check came due, the two-walker shape stopped paying.
+
+**Landed:** the `kindcheck` module became `check`, and `validate_program` is now a duplicate-declaration pass plus a single `check_program` traversal - the structural, kind, binding-flow, shape, and actor-context checks all ride one walk over each body. The visitor (`CheckCtx`) carries the declared vocabularies and accumulates errors; a `Scope { kinds: KindEnv, bound: BoundEnv }` threads kind inference and runtime-binding state together, cloned at the same boundaries (`require`, `sum`, `for`, `or`-branches) so the quartet's non-export rules fall out of the structure rather than from special-casing.
+
+Unbound-variable detection (`UnboundVariable`) follows the evaluator exactly, which is where the subtlety lived. Two rules had to match `find_conjunction`/`find_disjunction` precisely or they would reject correct programmes:
+
+- A disjunction exports only the *intersection* of names its branches bind. The runtime threads each conjunct's witness into the next, so after an `or` a name is guaranteed bound only if every branch bound it. The KYC `(clean or adjudicated_clear) and (on_date on_or_before expires)` invariant relies on this: both branches bind `expires`, so it reaches the comparator. A "branches export nothing" rule flagged it; a "first branch exports" rule would pass programmes the runtime rejects.
+- `in` is a generator, not a use. `sum(x | line in lines and LineAmount(line, x))` leaves `line` unbound at the `in`, and the runtime binds it to each item; treating the element as a use flagged the settlement-netting example.
+
+Both were caught by running the check over every worked example as the regression gate - a false positive there breaks `program.validate()` on real `.morph` source, so "zero example regressions" was the bar, above the unit tests.
+
+`ExpectedPredicateExpression` landed here too, where the kind-compatibility entry predicted it would: the mirror of `ExpectedValueExpression`, reusing the same `short_expr_shape` label, flagging a value-producing expression at a predicate position before the kernel raises `NotPredicate`. Actor-in-wrong-context (`ActorNotAvailable`) flags `Term::Actor` in an invariant or derived-claim body - the static face of `EvalError::UnboundActor`.
+
+Separately, `Program::validate` gained a nesting-depth floor (`NestingTooDeep`). The recursive evaluator and the check walk both descend one stack frame per nesting level, so a pathologically deep body - a long `not not ...` chain, deeply nested `for`s - could exhaust the stack during `propose`. The guard runs first and short-circuits, because the walk it protects is itself recursive; its own depth measure spends a fixed budget and bails the instant it runs out, so it cannot overflow on the input it exists to reject. This is the enforceable form of "validate untrusted IR before proposing it": `propose` does no programme-level check of its own and trusts the IR it is handed.
+
+On the persistence side, the duplicate-intent collision - one transformation emitting the same intent twice, colliding on the deterministic outbox idempotency key - is now `PgError::DuplicateIntent` rather than an opaque `PgError::Database`, so a caller can tell a modelling bug from a transient database error without string-matching.
+
+**Considered and rejected:**
+
+- *Keeping the two-walker shape and adding more walkers.* Each binding-aware check would re-derive scope and risk its own drift from the runtime. One traversal over one scope was the subtraction.
+- *Populating `BoundEnv` during the unification commit, before unbound-variable detection forced it.* The unification was proved to preserve behaviour first; the bound-env field was added only when the next layer forced it.
+- *A parser-side input-depth guard in the same change.* The `propose` path commits state and is the documented untrusted-IR contract, and it is now covered; the `.morph` parser is a weaker threat in v0 (you author your own files), and chumsky exposes no recursion-depth hook, so the guard would be a grammar-coupled heuristic. Deferred.
+- *An allowlist over the bench's SQL.* On review every bench statement is a static query string with bound parameters and bounds-checked integer conversions - no dynamic SQL to harden, and an allowlist would have been structure without a problem.
+
+**What stays out:**
+
+- `--strict` lint-grade hints (unused declarations, `sum(x | body)` with `x` absent from `body`, fuzzy "did you mean?" suggestions). The remaining check layer; this work's job was the runtime-error mirror.
+- Source spans on diagnostics. Unchanged: the IR still drops parser spans on lowering.
