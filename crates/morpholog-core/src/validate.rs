@@ -1,8 +1,11 @@
-//! Programme-level structural validation: every predicate referenced in
-//! any transformation body, invariant body, or derived-claim shape
-//! must be declared in [`Program::predicates`], every intent referenced
-//! in any `emit` statement must be declared in [`Program::intents`], and
-//! every reference must match the declared arity.
+//! Programme-level validation. Owns the [`ValidationError`] vocabulary
+//! and orchestrates three contributions into one error list: a
+//! nesting-depth guard (run first, so the recursive walks it protects
+//! cannot overflow on the input that would trip it), a name-level
+//! duplicate-declaration pass, and the single static-check traversal in
+//! [`crate::check`] (declarations and arity for both predicate and
+//! intent vocabularies, kind/type compatibility, binding flow, shape,
+//! and actor context).
 //!
 //! Called via [`crate::Program::validate`]. Strict mode: undeclared
 //! predicates and intents are errors, not passthrough. The validator

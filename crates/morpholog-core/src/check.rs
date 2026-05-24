@@ -1,17 +1,29 @@
-//! Kind/type compatibility check. Walks every expression in every
-//! invariant, transformation, and derived claim; emits the kind
-//! errors the runtime would otherwise raise as
-//! `EvalError::TypeMismatch`. Predicate declarations carry the
-//! expected kind per arg position; comparators, arithmetic, and
-//! aggregators have fixed expected kinds; variables are inferred
-//! and refined.
+//! The static-check traversal. One walk over every invariant,
+//! transformation, and derived-claim body surfaces the problems the
+//! runtime would otherwise raise during a `propose`:
 //!
-//! `Any` is unconstrained, not a kind-eraser: a variable seen
-//! first through an `Any` slot stays open and refines to a
-//! specific kind on its next concrete use.
+//! - **kind/type compatibility** - values flowing into a slot, a
+//!   comparator, or an arithmetic operand must match the declared or
+//!   fixed expected kind (`EvalError::TypeMismatch`);
+//! - **binding flow** - a name consumed where a bound value is
+//!   required must have been bound first, following the runtime
+//!   quartet's export rules (`EvalError::UnboundVariable`);
+//! - **shape** - a value-producing expression at a predicate position,
+//!   or the reverse (`EvalError::NotPredicate` / `NotValue`);
+//! - **actor context** - `Term::Actor` in an invariant or derived body,
+//!   where no proposing transition is in scope (`UnboundActor`).
 //!
-//! Diagnostics ship without source spans in v0; the IR drops
-//! parser spans on lowering.
+//! A [`Scope`] threads kind inference and runtime-binding state
+//! together, cloned at the boundaries (`require`, `sum`, `for`,
+//! `or`-branches) where the quartet's non-export rules apply, so those
+//! rules fall out of the structure rather than from special-casing.
+//!
+//! `Any` is unconstrained, not a kind-eraser: a variable seen first
+//! through an `Any` slot stays open and refines to a specific kind on
+//! its next concrete use.
+//!
+//! Diagnostics ship without source spans in v0; the IR drops parser
+//! spans on lowering.
 
 use std::collections::{HashMap, HashSet};
 
@@ -1259,8 +1271,8 @@ mod tests {
         // `actor` flowing into a Decimal slot is a kind mismatch.
         // Tested in a transformation body, where `actor` is
         // legitimately available - so the only error is the kind
-        // mismatch, not the actor-context error Layer 3 would add
-        // in an invariant.
+        // mismatch, not the actor-not-available error an invariant
+        // body would add.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Limit", &[("amount", PredicateArgKind::Decimal)])];
         p.transformations = vec![Transformation {
@@ -1288,7 +1300,7 @@ mod tests {
         }
     }
 
-    // ----- Layer 3: actor-in-wrong-context -----
+    // ----- actor-in-wrong-context -----
 
     #[test]
     fn actor_in_invariant_body_flags_actor_not_available() {
@@ -1427,8 +1439,9 @@ mod tests {
 
     #[test]
     fn require_does_not_export_bindings_to_subsequent_statements() {
-        // The load-bearing Layer-2 case: `require A(x)` matches and
-        // binds x WITHIN the require, but does not export it. The
+        // The load-bearing unbound-variable case: `require A(x)`
+        // matches and binds x WITHIN the require, but does not export
+        // it. The
         // later `assert B(x)` therefore uses an unbound x and must
         // flag UnboundVariable - exactly the runtime UnboundVariable
         // the gate's non-export rule would produce.

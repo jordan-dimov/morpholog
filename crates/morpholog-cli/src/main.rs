@@ -75,12 +75,13 @@ enum Command {
 
     /// Parse and validate a `.morph` source file. Runs the parser
     /// first; if parsing succeeds, runs `Program::validate()` against
-    /// the resulting IR (strict-arity check, duplicate-predicate
-    /// check, predicate-reference resolution). Exits zero on a clean
-    /// programme; exits one with diagnostics on either a parse
-    /// failure or a validation failure. One command to answer "is
-    /// this program well-formed?", with uniform output regardless of
-    /// which layer raised the issue.
+    /// the resulting IR: declarations and arity for both predicates
+    /// and intents, kind/type compatibility, binding flow (unbound
+    /// variables), expression shape, actor context, and a nesting-depth
+    /// bound. Exits zero on a clean programme; exits one with
+    /// diagnostics on either a parse failure or a validation failure.
+    /// One command to answer "is this program well-formed?", with
+    /// uniform output regardless of which check raised the issue.
     Check(SourceFileArgs),
 
     /// Propose a transformation defined in a user-supplied `.morph`
