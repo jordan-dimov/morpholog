@@ -273,9 +273,24 @@ The same change retired `Expr::Sum`'s `binding` field. It duplicated the target 
 
 **Considered and rejected:**
 
-- *Strict comparators (`<`, `>`, `>=`) for chess.* Tempting, but derivable: `a > b` is `not (a <= b)`, and `a >= b` is `b <= a`. They are surface sugar, not new capability, so they have not earned their place.
 - *A dedicated `Expr::Count` primitive.* Redundant with `sum(1 | body)`; the doctrine's anticipated move was to relax `sum`, not add a sibling that does the same arithmetic.
 
 **What stays out:**
 
 - A general expression as a `sum` target (`sum(debit - credit | ...)`). The IR's `value: Term` holds only a term; an expression target awaits an example that needs it.
+
+
+### The full comparator set per kind
+
+**Forced by:** ergonomics, not a worked example - the deliberate exception to "forced by example". The kernel had one comparator per kind (`Le` decimal, `DateLe` civil date) on the theory that the strict forms are derivable (`a > b` is `not (a <= b)`; `a >= b` is `b <= a`), so they were "sugar, not capability". That reasoning was wrong, for a reason the derivation hides: the kernel has no `>` to render, so the formatter would print `amount > limit` back as `not (amount <= limit)` everywhere it shows a programme - `parse`, `inspect`, diagnostics. Derivability buys nothing for *legibility*, and legibility for the auditor reading the formatted output is a core value. `not (a <= b)` is the third design principle's "the easy case is verbose, so the shape is wrong" smell.
+
+**Landed:** `Expr::Lt`/`Ge`/`Gt` (decimal, surface `<` `>=` `>`) and `Expr::DateLt`/`DateGe`/`DateGt` (civil date, surface `before` `on_or_after` `after`), each first-class so it renders and round-trips as written. The evaluator's two duplicated comparator arms became `decimal_comparison`/`date_comparison` helpers parameterised by an `admit` closure - the abstraction the fourth-through-eighth case finally forced. `before` and `after` are matched contextually in comparator position rather than reserved as keywords, because the chess and insurance examples already use `before`/`after` as variable names; reserving such common words would be its own ergonomic tax.
+
+**Considered and rejected:**
+
+- *Surface sugar that desugars `>` to `not(<=)`.* Smallest change, but it loses the legibility that is the entire point: the formatter would un-write the user's `>`. First-class variants are what make the surface form survive a round-trip.
+- *Reserving `before`/`after` as keywords.* Would have forced renames in existing examples and blocked two common variable names for everyone. Contextual matching avoids the tax.
+
+**What stays out:**
+
+- Date arithmetic and intervals (adding a duration to a date, interval length). The comparator set is complete; arithmetic on dates awaits an example.

@@ -156,8 +156,32 @@ pub fn le(lhs: Expr, rhs: Expr) -> Expr {
     Expr::Le(Box::new(lhs), Box::new(rhs))
 }
 
+pub fn lt(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::Lt(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn ge(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::Ge(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn gt(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::Gt(Box::new(lhs), Box::new(rhs))
+}
+
 pub fn date_le(lhs: Expr, rhs: Expr) -> Expr {
     Expr::DateLe(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn date_lt(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::DateLt(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn date_ge(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::DateGe(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn date_gt(lhs: Expr, rhs: Expr) -> Expr {
+    Expr::DateGt(Box::new(lhs), Box::new(rhs))
 }
 
 pub fn sub(lhs: Expr, rhs: Expr) -> Expr {

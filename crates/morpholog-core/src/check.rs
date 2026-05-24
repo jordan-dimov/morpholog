@@ -400,13 +400,31 @@ impl CheckCtx<'_> {
                 self.walk_predicate_expr(source, scope);
                 self.walk_predicate_expr(body, scope);
             }
-            Expr::Le(left, right) => {
-                self.check_operand_kind(left, PredicateArgKind::Decimal, "<=", scope);
-                self.check_operand_kind(right, PredicateArgKind::Decimal, "<=", scope);
+            Expr::Le(left, right)
+            | Expr::Lt(left, right)
+            | Expr::Ge(left, right)
+            | Expr::Gt(left, right) => {
+                let op = match expr {
+                    Expr::Le(..) => "<=",
+                    Expr::Lt(..) => "<",
+                    Expr::Ge(..) => ">=",
+                    _ => ">",
+                };
+                self.check_operand_kind(left, PredicateArgKind::Decimal, op, scope);
+                self.check_operand_kind(right, PredicateArgKind::Decimal, op, scope);
             }
-            Expr::DateLe(left, right) => {
-                self.check_operand_kind(left, PredicateArgKind::Date, "on_or_before", scope);
-                self.check_operand_kind(right, PredicateArgKind::Date, "on_or_before", scope);
+            Expr::DateLe(left, right)
+            | Expr::DateLt(left, right)
+            | Expr::DateGe(left, right)
+            | Expr::DateGt(left, right) => {
+                let op = match expr {
+                    Expr::DateLe(..) => "on_or_before",
+                    Expr::DateLt(..) => "before",
+                    Expr::DateGe(..) => "on_or_after",
+                    _ => "after",
+                };
+                self.check_operand_kind(left, PredicateArgKind::Date, op, scope);
+                self.check_operand_kind(right, PredicateArgKind::Date, op, scope);
             }
             Expr::Eq(left, right) => {
                 self.check_equality_operands(left, right, "==", scope);
@@ -723,7 +741,13 @@ impl CheckCtx<'_> {
             | Expr::Pre(_)
             | Expr::Eq(_, _)
             | Expr::Le(_, _)
+            | Expr::Lt(_, _)
+            | Expr::Ge(_, _)
+            | Expr::Gt(_, _)
             | Expr::DateLe(_, _)
+            | Expr::DateLt(_, _)
+            | Expr::DateGe(_, _)
+            | Expr::DateGt(_, _)
             | Expr::Neq(_, _)
             | Expr::In(_, _) => {
                 let context = self.context.clone();
@@ -975,7 +999,13 @@ fn expr_mentions_actor(expr: &Expr) -> bool {
         Expr::Implies { left, right }
         | Expr::Eq(left, right)
         | Expr::Le(left, right)
+        | Expr::Lt(left, right)
+        | Expr::Ge(left, right)
+        | Expr::Gt(left, right)
         | Expr::DateLe(left, right)
+        | Expr::DateLt(left, right)
+        | Expr::DateGe(left, right)
+        | Expr::DateGt(left, right)
         | Expr::Add(left, right)
         | Expr::Sub(left, right) => expr_mentions_actor(left) || expr_mentions_actor(right),
         Expr::Forall { source, body, .. } => {
@@ -1011,7 +1041,13 @@ fn short_expr_shape(expr: &Expr) -> String {
         Expr::Pre(_) => "pre(_)".to_string(),
         Expr::Eq(_, _) => "_ == _".to_string(),
         Expr::Le(_, _) => "_ <= _".to_string(),
+        Expr::Lt(_, _) => "_ < _".to_string(),
+        Expr::Ge(_, _) => "_ >= _".to_string(),
+        Expr::Gt(_, _) => "_ > _".to_string(),
         Expr::DateLe(_, _) => "_ on_or_before _".to_string(),
+        Expr::DateLt(_, _) => "_ before _".to_string(),
+        Expr::DateGe(_, _) => "_ on_or_after _".to_string(),
+        Expr::DateGt(_, _) => "_ after _".to_string(),
         Expr::Neq(_, _) => "_ != _".to_string(),
         Expr::In(_, _) => "_ in _".to_string(),
         Expr::Term(_) => "term".to_string(),

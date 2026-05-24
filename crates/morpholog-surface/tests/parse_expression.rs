@@ -761,6 +761,65 @@ fn sum_target_must_be_variable_not_wildcard() {
     assert!(!errs.is_empty());
 }
 
+// ---- comparators ----
+
+#[test]
+fn parses_decimal_strict_comparators() {
+    assert!(matches!(parse_expression("a < b").unwrap(), Expr::Lt(_, _)));
+    assert!(matches!(parse_expression("a > b").unwrap(), Expr::Gt(_, _)));
+    assert!(matches!(
+        parse_expression("a >= b").unwrap(),
+        Expr::Ge(_, _)
+    ));
+    // The point of first-class comparators: each round-trips as written,
+    // never as `not (a <= b)`.
+    for src in ["a < b", "a > b", "a >= b", "a <= b"] {
+        assert_eq!(format_expr_inline(&parse_expression(src).unwrap()), src);
+    }
+}
+
+#[test]
+fn parses_date_strict_comparators() {
+    assert!(matches!(
+        parse_expression("d1 before d2").unwrap(),
+        Expr::DateLt(_, _)
+    ));
+    assert!(matches!(
+        parse_expression("d1 after d2").unwrap(),
+        Expr::DateGt(_, _)
+    ));
+    assert!(matches!(
+        parse_expression("d1 on_or_after d2").unwrap(),
+        Expr::DateGe(_, _)
+    ));
+    for src in [
+        "d1 before d2",
+        "d1 after d2",
+        "d1 on_or_after d2",
+        "d1 on_or_before d2",
+    ] {
+        assert_eq!(format_expr_inline(&parse_expression(src).unwrap()), src);
+    }
+}
+
+#[test]
+fn before_and_after_remain_usable_as_variable_names() {
+    // `before`/`after` are contextual comparators, not reserved words:
+    // in argument position they are ordinary variables, which the chess
+    // and insurance examples rely on.
+    let got = parse_expression("Headroom(before, after)").unwrap();
+    let Expr::Claim { args, .. } = got else {
+        panic!("expected Claim, got {got:?}");
+    };
+    assert_eq!(
+        args,
+        vec![
+            Term::Var("before".to_string()),
+            Term::Var("after".to_string()),
+        ]
+    );
+}
+
 // ---- value lookup ----
 
 #[test]

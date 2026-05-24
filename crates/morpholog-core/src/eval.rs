@@ -144,6 +144,50 @@ impl<'a> EvalContext<'a> {
     }
 }
 
+/// Evaluate a decimal comparator. Both operands must resolve to
+/// `EvalValue::Decimal`; `admit` decides whether the comparison holds.
+/// Predicate-shaped: the unchanged bindings when it holds, empty
+/// otherwise. Shared by `Le`/`Lt`/`Ge`/`Gt`.
+fn decimal_comparison(
+    lhs: &Expr,
+    rhs: &Expr,
+    ctx: &EvalContext<'_>,
+    op: &str,
+    admit: impl Fn(Decimal, Decimal) -> bool,
+) -> Result<Vec<Bindings>, EvalError> {
+    match (eval_value(lhs, ctx)?, eval_value(rhs, ctx)?) {
+        (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(if admit(a, b) {
+            vec![ctx.bindings.clone()]
+        } else {
+            vec![]
+        }),
+        _ => Err(EvalError::TypeMismatch(format!(
+            "{op} expects decimal operands"
+        ))),
+    }
+}
+
+/// Civil-date comparator. The mirror of [`decimal_comparison`] for
+/// `EvalValue::Date`; shared by `DateLe`/`DateLt`/`DateGe`/`DateGt`.
+fn date_comparison(
+    lhs: &Expr,
+    rhs: &Expr,
+    ctx: &EvalContext<'_>,
+    op: &str,
+    admit: impl Fn(Date, Date) -> bool,
+) -> Result<Vec<Bindings>, EvalError> {
+    match (eval_value(lhs, ctx)?, eval_value(rhs, ctx)?) {
+        (EvalValue::Date(a), EvalValue::Date(b)) => Ok(if admit(a, b) {
+            vec![ctx.bindings.clone()]
+        } else {
+            vec![]
+        }),
+        _ => Err(EvalError::TypeMismatch(format!(
+            "{op} expects civil-date operands"
+        ))),
+    }
+}
+
 pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
     match e {
         Expr::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
@@ -200,34 +244,14 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
                 vec![]
             })
         }
-        Expr::Le(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(if a <= b {
-                    vec![ctx.bindings.clone()]
-                } else {
-                    vec![]
-                }),
-                _ => Err(EvalError::TypeMismatch(
-                    "Le expects decimal operands".into(),
-                )),
-            }
-        }
-        Expr::DateLe(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Date(a), EvalValue::Date(b)) => Ok(if a <= b {
-                    vec![ctx.bindings.clone()]
-                } else {
-                    vec![]
-                }),
-                _ => Err(EvalError::TypeMismatch(
-                    "DateLe expects civil-date operands".into(),
-                )),
-            }
-        }
+        Expr::Le(l, r) => decimal_comparison(l, r, ctx, "Le", |a, b| a <= b),
+        Expr::Lt(l, r) => decimal_comparison(l, r, ctx, "Lt", |a, b| a < b),
+        Expr::Ge(l, r) => decimal_comparison(l, r, ctx, "Ge", |a, b| a >= b),
+        Expr::Gt(l, r) => decimal_comparison(l, r, ctx, "Gt", |a, b| a > b),
+        Expr::DateLe(l, r) => date_comparison(l, r, ctx, "DateLe", |a, b| a <= b),
+        Expr::DateLt(l, r) => date_comparison(l, r, ctx, "DateLt", |a, b| a < b),
+        Expr::DateGe(l, r) => date_comparison(l, r, ctx, "DateGe", |a, b| a >= b),
+        Expr::DateGt(l, r) => date_comparison(l, r, ctx, "DateGt", |a, b| a > b),
         Expr::Neq(t1, t2) => {
             let l = resolve_term(t1, ctx.bindings, ctx.actor)?;
             let r = resolve_term(t2, ctx.bindings, ctx.actor)?;
@@ -648,7 +672,13 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
         | Expr::Exists { .. }
         | Expr::Claim { .. }
         | Expr::Le(..)
+        | Expr::Lt(..)
+        | Expr::Ge(..)
+        | Expr::Gt(..)
         | Expr::DateLe(..)
+        | Expr::DateLt(..)
+        | Expr::DateGe(..)
+        | Expr::DateGt(..)
         | Expr::Eq(..)
         | Expr::Neq(..)
         | Expr::In(..)
