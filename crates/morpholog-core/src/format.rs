@@ -101,7 +101,7 @@ pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
     format!("predicate {}({})\n", decl.name, args.join(", "))
 }
 
-/// Render a single [`IntentDecl`] as one line:
+/// Render a single [`crate::IntentDecl`] as one line:
 /// `intent Name(arg1: Kind, arg2: Kind)`.
 pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
     let args: Vec<String> = decl

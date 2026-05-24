@@ -8,7 +8,9 @@ Each item below either has a concrete forcing scenario or is explicitly held unt
 
 The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are all in good shape. Programmes are declared-vocabulary objects. Execution is structurally inspectable through `propose_with_trace` and the CLI's `--trace` flag, including expression-internal failure-walk that identifies which sub-expression of a rejected `require` or `bind` was responsible. Predicate-scoped loading runs on both read and write paths.
 
-The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` now runs both the structural pass (arity, declarations, duplicates) and the kind/type compatibility pass that catches authoring mistakes the kernel would otherwise raise as `TypeMismatch` at runtime.
+The `.morph` parser arc is closed. Every worked example parses end-to-end from `.morph` source; a round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()` with uniform diagnostics, silent on clean), and `run` (parse + validate + propose a transformation against PostgreSQL, the non-built-in counterpart of `propose`). `check` now runs the structural pass (arity, declarations, duplicates for both predicates and intents) and the kind/type compatibility pass that catches authoring mistakes the kernel would otherwise raise as `TypeMismatch` at runtime.
+
+Outbox intents are declared vocabulary too. `IntentDecl` (parallel to `PredicateDecl`) names every intent type the programme may emit; a misspelled `emit` is a validation error rather than a silent route-to-nowhere on the outbox.
 
 The compute-zone interface for non-Rust integrations is in place. `morpholog run` closes the input boundary; `morpholog outbox claim` / `complete` / `release` let a shell or Python deliverer participate in the lease protocol without a Rust `Deliverer` impl. The three-zone doctrine (compute / commit / outbox) is documented in [`scope-and-ambition.md`](scope-and-ambition.md); the round-trip compute pattern in [`outbox-sketch.md`](outbox-sketch.md).
 
@@ -16,16 +18,14 @@ The CLI is split by subcommand under `crates/morpholog-cli/src/commands/`. Addin
 
 ## Imminent
 
-With the input/output boundaries and the kind/type-compatibility layer in place, `.morph` authoring is materially more trustworthy than before. The remaining layers of enriched check are the next investment.
+With the input/output boundaries, the kind/type-compatibility layer, and the intent vocabulary in place, `.morph` authoring is materially more trustworthy than before. The remaining layers of enriched check are the next investment.
 
-- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates) and Layer 1 (kind/type compatibility) both ship today. Three layers remain, each independently testable:
+- **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates for both predicates and intents) and Layer 1 (kind/type compatibility, covering both vocabularies) ship today. Three layers remain, each independently testable:
     - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced. The natural home for a symmetric "value-shaped expression at predicate position" check the kind layer deliberately left out.
     - **Actor-in-wrong-context.** `Term::Actor` resolves only inside transformation bodies; the kernel raises `UnboundActor` if an invariant or derived claim mentions `actor`. Catch it statically with a clear "actor is not available in invariant bodies - authority belongs in `require`" message.
-    - **Lint-grade hints under `--strict`.** Unused predicate declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on UndeclaredPredicate.
+    - **Lint-grade hints under `--strict`.** Unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on UndeclaredPredicate.
 
     Each layer is a separate small PR. `--strict` promotes hints to errors. `--json` emits diagnostics in a tooling-friendly form for IDE integration later.
-
-- **`IntentDecl` (intents-as-vocabulary).** Predicates are declared via `PredicateDecl`; intents are still stringly typed. A misspelled `emit X(...)` silently creates a new outbox partition with zero consumers. An `IntentDecl` mirroring `PredicateDecl` would let `morpholog check` validate intent emissions and give the outbox CLI a schema basis. Lands when a worked example or tooling genuinely forces it.
 
 - **Legibility tooling.** Surface syntax makes programmes readable; the next gap is making them *reviewable*. Three `morpholog inspect` subcommands derived from static analysis of parsed `.morph` programmes:
     1. `morpholog inspect exclusions <program>` - walks invariants and `not` / `Neq` requires; emits the mutually-exclusive predicate pairs it can derive. Controllers and regulators ask "what does this system *prevent*?" before "what does it enable?", and nothing in `inspect` today answers that. Highest-leverage first tool; smallest implementation.

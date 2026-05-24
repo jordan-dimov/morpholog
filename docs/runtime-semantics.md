@@ -236,9 +236,9 @@ A fuller structural ExprTrace (mirroring `Expr` with success-path drill-downs, e
 
 Two layers compose:
 
-1. **Structural**: every claim reference must name a declared predicate, every reference must match the declared arity, no two declarations share a name. A derived claim's output arity must equal `keys.len() + values.len()`.
+1. **Structural**: every claim reference must name a declared predicate, every `emit` reference must name a declared intent, every reference must match the declared arity, and no two declarations in the same vocabulary share a name. A derived claim's output arity must equal `keys.len() + values.len()`. Predicates and intents live in separate namespaces.
 
-2. **Kind/type compatibility**: every value flowing into a slot must have a compatible kind. Predicate declarations carry per-argument kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`); comparators and arithmetic have fixed expected kinds (`<=` Decimal, `on_or_before` Date, `+`/`-` Decimal-only, `sum` produces Decimal); equality (`==` / `!=`) is strict (`Subject == Decimal` is a kind error, not a silent coercion); variables are inferred-and-refined as they flow through claim slots, comparators, and let-bindings.
+2. **Kind/type compatibility**: every value flowing into a slot must have a compatible kind. Declarations carry per-argument kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`); comparators and arithmetic have fixed expected kinds (`<=` Decimal, `on_or_before` Date, `+`/`-` Decimal-only, `sum` produces Decimal); equality (`==` / `!=`) is strict (`Subject == Decimal` is a kind error, not a silent coercion); variables are inferred-and-refined as they flow through claim slots, intent emits, comparators, and let-bindings.
 
 The kind layer respects the require/bind_one/let/for quartet's binding-export rules: a `require` body refines variables under a scoped env that does not leak (mirroring the runtime gate), while `bind_one` and `let` flow forward. `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local; the value term must resolve to a Decimal kind. `ValueOf`'s wildcard slot determines the result kind; its optional default must agree.
 

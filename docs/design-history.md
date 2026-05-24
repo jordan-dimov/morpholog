@@ -568,5 +568,23 @@ The walker mirrors the runtime quartet: `Require` against a cloned env (no expor
 **What stays out:**
 
 - Source spans on `ValidationError`. The IR drops parser spans on lowering; threading them through is its own design conversation.
-- `IntentDecl` kind-checking. Intents are still stringly-typed in the outbox.
 - Element-kind correlation for `Collection`-typed variables. The current `In` check pins the source side to `Collection` but does not yet propagate element kinds to body bindings.
+
+
+### `IntentDecl`: outbox vocabulary as a declared first-class kind
+
+**Forced by:** the KYC sanctions/PEP screening example, where every interesting moment fires an intent to a distinct downstream consumer - `ScreeningRequested` to the external provider, `MatchRaised` to the analyst queue, `CustomerOnboarded` to core banking, `CustomerRejected` to compliance reporting. Misspelling any of those is a real failure mode: a mistyped `SARFiled` would silently route to nowhere, no analyst would ever see it, and the regulatory breach is invisible until a downstream auditor notices the gap. Predicates already had `PredicateDecl`; intents were still stringly-typed, and the kindcheck layer skipped `Stmt::Emit` entirely.
+
+**Landed:** `IntentDecl { name, args: Vec<ArgDecl> }` mirroring `PredicateDecl`; `Program.intents: Vec<IntentDecl>`; parser surface `intent X(args)`; formatter round-trip; structural validation (undeclared / arity / duplicates) tagged via the new `VocabularyKind { Predicate, Intent }` enum; kindcheck wiring for `Stmt::Emit` that calls the same arg-kind checker as `Stmt::Assert` but against the intent vocabulary. Strict from day one: every `emit X(args)` must target a declared intent. All seven existing worked examples gained intent declarations.
+
+The `VocabularyKind` enum was the foundational move. Predicates and intents share four diagnostic shapes - undeclared reference, arity mismatch, duplicate declaration, arg-kind mismatch - so rather than four parallel intent-specific variants, the existing four were renamed (e.g. `UndeclaredPredicate` -> `Undeclared { vocabulary, name, context }`) and parameterised. Two diagnostics today; if a third declared vocabulary appears later, it slots in without further renaming. `PredicateArgDecl` was simultaneously renamed to `ArgDecl` since the struct is structurally generic - the "Predicate" prefix would read as wrong the moment `IntentDecl` reused it.
+
+**Considered and rejected:**
+
+- *Reusing the predicate namespace for intent shapes.* Predicates describe admitted claim vocabulary; intents describe outbox-effect vocabulary. Both pass through the same kindcheck mechanics but the distinction is load-bearing in the audit trail.
+- *Four new intent-specific error variants.* Larger surface for the same diagnostic shape.
+- *Optional / opt-in IntentDecl for v0.* Lower migration cost short-term, but the whole point of the layer is that misspellings fail validation.
+
+**What stays out:**
+
+- An `inspect intents` CLI subcommand mirroring `inspect predicates`. Useful but not load-bearing; deferred until the legibility tooling work picks it up alongside the other inspectors.
