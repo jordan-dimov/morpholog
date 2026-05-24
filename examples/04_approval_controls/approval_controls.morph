@@ -1,40 +1,59 @@
--- Approval controls (v0).
+-- Approval controls - who is allowed to sign off on what, and how a
+-- system can prove it three quarters from now.
 --
--- Two authority shapes a real business uses side by side:
+-- A quick tour of the domain. Every business of any size needs people
+-- to approve things, and not everyone may approve everything. Some
+-- approvals are simple sign-offs: onboarding a new vendor, agreeing a
+-- policy change. The only question is whether the person doing the
+-- approving holds authority for that kind of document - a compliance
+-- officer may, a marketing intern may not. Other approvals are about
+-- money: invoices, purchase orders, expense claims. Now the question
+-- grows a clause - does the person have authority *up to the amount*?
+-- A junior clerk might approve invoices up to a small ceiling, a
+-- finance manager a larger one, the CFO larger still. A real
+-- organisation runs both shapes side by side, and an auditor will one
+-- day ask: who approved this payment, under what authority, and was
+-- that authority still current on the day?
 --
---   * Unconditional authority - "may sign off on documents of this
---     kind". Vendor onboarding, policy changes, anything that is not
---     about amounts. The actor either holds the authority or they
---     do not.
+-- Here is how Morpholog thinks about it. The system never stores bare
+-- "facts" - it stores *claims* it has agreed to admit because they
+-- obey the rules. Authority itself is one of those claims: "this
+-- person may approve invoices" is something the system has admitted,
+-- and it can later be retracted. Two ideas do the real work below:
 --
---   * Quantitative authority - "may approve documents of this kind
---     up to this amount". A clerk approves invoices up to £1,000;
---     a director up to £100,000. Different ceilings for different
---     people for different document kinds.
---
--- Both shapes share one doctrine point. The actor approving a
--- document is *transition context*, not a transformation parameter.
--- The approve transformations declare no `actor` parameter; the
--- proposing actor is reached from inside the body via the reserved
--- term `actor` (Term::Actor in the IR). In an invariant body,
--- `actor` raises UnboundActor at evaluation time - authority lives
--- in require, not in invariants.
---
--- No invariants. Tying a recorded approval to live authority via
--- an invariant would either reject every revocation (because
--- historical approvals now break the rule) or cascade-retract those
--- historical approvals (which destroys the record). A document
--- approved on June 30 stays approved even if the approver leaves
--- on July 1. This is the require-vs-invariant lesson the verified-
--- revenue example crystallised.
+--   * The *actor* is simply whoever is proposing a change - the person
+--     whose hand is on the action right now. The approve actions below
+--     do not take the approver as a parameter you pass in; the runtime
+--     already knows who is acting, and the action consults that.
+--   * A `require` is a gate on a single action, checked at the moment
+--     you act and never again. Authority belongs in a gate, not in a
+--     standing rule. That distinction is the whole point of this
+--     example: a document approved today must stay approved even if
+--     the approver loses their authority tomorrow. If "approvals must
+--     be backed by live authority" were a standing rule over all
+--     state, then revoking someone's authority would suddenly break
+--     every document they ever approved - or force the system to erase
+--     that history. Neither is honest. So there are deliberately *no*
+--     standing rules here; every approval is checked once, at the
+--     moment it is made, and the record then stands on its own.
 
 program approval_controls
 
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold. The first two are about who *may* approve (the authority,
+-- which can be granted and revoked); the last two are the durable
+-- record of an approval that actually happened (append-only - they are
+-- never retracted). Note the `actor` slot: the recorded approval
+-- stamps in who did the approving.
 predicate MayApprove(actor: Subject, doc_type: Subject)
 predicate Approval(doc_id: Subject, doc_type: Subject, actor: Subject)
 predicate ApprovalLimit(actor: Subject, doc_type: Subject, limit: Decimal)
 predicate LimitedApproval(doc_id: Subject, doc_type: Subject, amount: Decimal, actor: Subject)
 
+-- Intents are messages the system sends to the outside world after a
+-- change commits - "authority was granted", "a document was approved".
+-- They are how this corner of the business tells the rest of it, and
+-- any downstream systems, what just happened.
 intent ApprovalAuthorityGranted(principal: Subject, doc_type: Subject)
 intent ApprovalAuthorityRevoked(principal: Subject, doc_type: Subject)
 intent DocumentApproved(doc_id: Subject, actor: Subject)
@@ -44,20 +63,29 @@ intent DocumentApprovedWithinLimit(doc_id: Subject, actor: Subject, amount: Deci
 
 
 -- ===========================================================
--- Unconditional authority
+-- Unconditional authority - the simple sign-off, no amount involved.
 -- ===========================================================
 
+-- Grant someone the authority to approve a kind of document. This adds
+-- the authority claim.
 transformation grant_approval_authority(actor, doc_type):
     admit MayApprove(actor, doc_type)
     emit ApprovalAuthorityGranted(actor, doc_type)
 
 
+-- Take that authority away. The gate insists the authority is actually
+-- held before it can be removed, then retracts it. Revoking only stops
+-- *future* approvals; documents already approved stay approved.
 transformation revoke_approval_authority(actor, doc_type):
     require MayApprove(actor, doc_type)
     retract MayApprove(actor, doc_type)
     emit ApprovalAuthorityRevoked(actor, doc_type)
 
 
+-- Approve a document. The gate checks that whoever is proposing this -
+-- the actor - holds the matching authority right now. If they do, the
+-- approval is recorded with their identity stamped on it; if not, the
+-- whole action is refused and nothing is recorded.
 transformation approve_document(doc_id, doc_type):
     require MayApprove(actor, doc_type)
     admit Approval(doc_id, doc_type, actor)
@@ -65,20 +93,31 @@ transformation approve_document(doc_id, doc_type):
 
 
 -- ===========================================================
--- Quantitative authority
+-- Quantitative authority - approval up to a money ceiling.
 -- ===========================================================
 
+-- Grant someone an approval ceiling for a kind of document - "may
+-- approve invoices up to this amount". The same person can be given
+-- ceilings for different document kinds.
 transformation grant_approval_limit(actor, doc_type, limit):
     admit ApprovalLimit(actor, doc_type, limit)
     emit ApprovalLimitGranted(actor, doc_type, limit)
 
 
+-- Remove a specific approval ceiling. The gate requires that exact
+-- grant to exist before it can be taken away.
 transformation revoke_approval_limit(actor, doc_type, limit):
     require ApprovalLimit(actor, doc_type, limit)
     retract ApprovalLimit(actor, doc_type, limit)
     emit ApprovalLimitRevoked(actor, doc_type, limit)
 
 
+-- Approve a document for a given amount. The gate does two things at
+-- once: it finds an approval ceiling the proposing actor holds for this
+-- document kind, and it checks the amount fits within that ceiling
+-- (the comparison is inclusive - exactly at the ceiling is allowed).
+-- Pass the gate and the approval is recorded with the actor and the
+-- authorised amount; fail it and nothing is recorded.
 transformation approve_within_limit(doc_id, doc_type, amount):
     require ApprovalLimit(actor, doc_type, limit) and amount <= limit
     admit LimitedApproval(doc_id, doc_type, amount, actor)

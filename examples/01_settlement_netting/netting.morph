@@ -1,13 +1,50 @@
--- Bilateral settlement netting - canonical v0 example.
+-- Bilateral settlement netting - turning a pile of small payments
+-- between two parties into a single net payment, with the rules that
+-- make that safe enforced by the runtime rather than by a spreadsheet.
 --
--- Domain: two parties have multiple settlement lines between them.
--- Each line has a signed amount (positive = receivable, negative =
--- payable). A net settlement is admissible only if its amount equals
--- the signed sum of its approved underlying lines, and no line is
--- netted into more than one settlement.
+-- A quick tour of the domain, in case settlement is not your world.
+-- When two firms trade with each other all day, they end up owing each
+-- other lots of small amounts in both directions: you owe me for this
+-- trade, I owe you for that one. Settling every one of those separately
+-- means a flurry of payments, each with its own cost and its own chance
+-- of going wrong. So instead they "net": they add up everything one
+-- owes the other, cancel the offsetting amounts, and replace the whole
+-- pile with one payment for the difference. Each underlying obligation
+-- here is a "settlement line" with a signed amount - positive means one
+-- party receives, negative means it pays. The single combined payment
+-- is the "net settlement".
+--
+-- Netting is only safe if a few things are true at once. Every line you
+-- fold in must already be approved. The net figure must be exactly the
+-- signed sum of those lines - not "close", exactly, or the books no
+-- longer tie out. And no line may be swept into two different nets, or
+-- it would be paid twice. Conventional systems check these rules in
+-- application code, then run a reconciliation job the next morning to
+-- check them again. Morpholog makes the rules the law of admission: a
+-- netting that breaks any of them cannot enter the system's state at all.
+--
+-- Here is how Morpholog thinks about this. It does not store "facts" -
+-- it stores *claims* it has agreed to admit because they obey the rules.
+-- Two kinds of rule do the work below:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would
+--     break one - so the "net equals the sum of its lines" rule can
+--     never be quietly false, even for an instant.
+--   * a `require` is a gate on a single action, checked at the moment
+--     you act and never again. The distinction matters here: "the lines
+--     must be approved and not already netted" is a gate on the act of
+--     netting - it is the right question to ask when someone proposes a
+--     net, but it is not a property the world must preserve forever. An
+--     invariant governs what is true; a gate governs what you may do next.
 
 program settlement_netting
 
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold and the shape of its arguments. These are the only nouns the
+-- system knows: the net settlement itself, the lines folded into it, who
+-- approved which line, which two parties a line sits between, what each
+-- line is worth, and whether a line has already been netted.
 predicate NetSettlement(net_id: Subject, party_a: Subject, party_b: Subject, amount: Decimal)
 predicate SettlementLine(line_id: Subject, net_id: Subject, amount: Decimal)
 predicate ApprovedSettlementLine(line_id: Subject)
@@ -15,30 +52,46 @@ predicate Between(line_id: Subject, party_a: Subject, party_b: Subject)
 predicate LineAmount(line_id: Subject, amount: Decimal)
 predicate Netted(line_id: Subject)
 
+-- An intent is a message the system sends to the outside world after a
+-- change commits - here, "a net settlement was created". It is how the
+-- netting engine tells the rest of the business that the combined
+-- payment now exists and can be acted on.
 intent NetSettlementCreated(net: Subject)
 
--- Nested quantifiers (inside `implies`, `not`, `and`) need parens.
--- At the top of an expression, `exists`/`forall` consume everything
--- after the colon greedily; parens are how you embed them inside
--- compound booleans.
+-- The rules that must always hold. If any change below would leave the
+-- world violating one of these, the whole change is rejected.
 
--- Multi-line expressions: without parentheses, continuation lines
--- must stay at the same indentation as the body's first line; the
--- layout pass treats deeper indent as a new block, and a `: body`
--- production only accepts one Indent. Wrapping in parens disables
--- layout for the parenthesised region, which makes long
--- expressions like multi-line `sum(...)` arbitrarily indented
--- continuation work naturally.
-
+-- A net settlement that folds in no lines is meaningless: it would be a
+-- payment for nothing. Every net must reference at least one line. Read
+-- `implies` as "whenever the left is true, the right must be too".
 invariant net_settlement_has_lines:
     NetSettlement(net, _, _, _) implies (exists line: SettlementLine(line, net, _))
 
+-- The heart of netting: the net amount must equal the signed sum of its
+-- lines, exactly. If the arithmetic does not tie out, the books are
+-- wrong, and the runtime simply will not admit the net.
 invariant net_amount_equals_lines:
     NetSettlement(net, _, _, amount) implies amount = sum(x | SettlementLine(_, net, x))
 
+-- No line may belong to two different nets at once - that would settle
+-- the same obligation twice. This is what makes "no double netting" a
+-- property of the world rather than just a check at netting time.
 invariant no_double_netting:
     SettlementLine(line, net, _) implies not (exists other: SettlementLine(line, other, _) and other != net)
 
+-- The only way state may change here. A transformation proposes a set
+-- of changes; the runtime applies them only if every invariant still
+-- holds once they are in place. `admit` adds a claim.
+--
+-- Create a net settlement from a set of lines between two parties. The
+-- gate runs first: every line must be approved, must sit between these
+-- two parties, and must not already be netted - checked once, at the
+-- moment of netting. Then we mint a fresh identifier for the net, total
+-- up the lines, record the net and each line's membership in it, and
+-- mark every line as netted so it can never be swept into a second net.
+-- Notice we never check the total against the invariant by hand: the
+-- "net equals the sum of its lines" invariant guarantees it at commit,
+-- and any mismatch is simply refused.
 transformation create_net_settlement(party_a, party_b, lines):
     require forall line in lines: ApprovedSettlementLine(line) and Between(line, party_a, party_b) and not Netted(line)
 

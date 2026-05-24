@@ -98,6 +98,8 @@ A worked example lives in two places:
 
 Both must produce the same `Program` IR. The round-trip property test in `crates/morpholog-surface/tests/round_trip.rs` will catch any divergence the moment you add the example to `all_programs()`. The CLI integration test in `crates/morpholog-cli/tests/check.rs` verifies every example parses and validates.
 
+The `.morph` comments are a **learner's guide**, not implementation notes. Their reader is someone learning Morpholog who is *not* an expert in the example's industry. Open each `.morph` with a header that teaches the domain from scratch in plain, engaging language - the real business problem and why the example is realistic - and weaves in the philosophy: an invariant is a rule the runtime will not let any change break; a `require` is a gate on a single action, checked only at the moment you act; the system stores admitted *claims*, not bare "facts". Annotate each section and non-obvious construct in business terms. Keep language and runtime internals out of `.morph` comments entirely - no type or variant names, no talk of the IR or the kernel; a learner does not care how it is implemented - and never open with a fictional scene; ground it in how the industry actually works. The gold standard is [`examples/03_double_entry_ledger/ledger.morph`](examples/03_double_entry_ledger/ledger.morph). This is a different audience from the example's `README.md` (the auditor or controller) and from rustdoc (the implementer).
+
 ## Reference
 
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - **read first** when reasoning about whether a direction fits the project.

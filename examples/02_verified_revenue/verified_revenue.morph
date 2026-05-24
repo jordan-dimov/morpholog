@@ -1,30 +1,67 @@
--- Verified revenue (v0).
+-- Verified revenue - defending a contested number over time, with the
+-- rules about who may rely on it enforced by the runtime instead of by
+-- combing through old emails.
 --
--- Two patterns woven through one programme. Together they are how a
--- regulated business defends a contested number over time.
+-- A quick tour of the domain. Picture a battery-storage system - the
+-- kind of asset that charges when power is cheap and sells when it is
+-- dear. Each month it earns revenue, and several parties care about that
+-- one figure for different reasons: the owner reports it, the bank that
+-- financed the battery tests it against loan covenants, investor
+-- relations puts it in a shareholder deck, sometimes a regulator looks
+-- at it. The number is the same; what differs is what each party is
+-- allowed to *do* with it.
 --
--- 1. Currentness with restatement. A verifier admits a revenue figure
---    for an asset / period; later they may correct it. The original
---    stays admitted as the record of what was filed; `Supersedes`
---    records the lineage; a singleton `CurrentVerification` pointer
---    moves to the corrected figure.
+-- Two things make this hard, and this example is built around both.
 --
--- 2. Admissibility-for-purpose. Different authorities (a bank's
---    credit committee, an investor-relations office) grant *standing*
---    for the verification to be relied on for *their* decisions
---    (debt-service-coverage, investor reporting). Standing can be
---    revoked; the verification itself is never mutated; decisions
---    admitted under valid standing survive any later revocation.
+-- First, the figure can be corrected. A verifier signs off on, say, Q1
+-- revenue; weeks later, after the meter data is reconciled, they revise
+-- it. The honest way to handle that is not to overwrite the old number -
+-- "what did we report at the time?" must always have a truthful answer.
+-- Instead the old figure stays on the record, a fresh corrected figure
+-- is admitted alongside it, a pointer to "the figure currently in force"
+-- moves to the new one, and a lineage link records that the new one
+-- supersedes the old.
 --
--- The combined doctrine: when a verification is corrected, the
--- standings granted on the prior verification are retracted by
--- pattern - the authorities must re-issue standing if they accept
--- the correction. Historical decisions admitted under the prior
--- standing are preserved by construction (no invariant ties decisions
--- to live standing).
+-- Second, relying on the figure takes permission. A party does not just
+-- use the number; an authority grants it *standing* to be relied on for
+-- a specific purpose - the bank's credit committee grants standing for
+-- covenant tests, investor relations grants standing for shareholder
+-- reporting. Two separate permissions on the same figure, from two
+-- different authorities, each revocable without touching the other.
+--
+-- Where the two meet is the crux. When the verifier corrects the figure,
+-- every standing granted on the old figure is withdrawn - the
+-- authorities must re-grant on the corrected figure if they still accept
+-- it. But every decision already made under the old standing survives
+-- untouched: a covenant test the bank ran in good faith in June is a
+-- true record of what the bank decided that day, even after the figure
+-- is corrected in July. Correction removes future reliance on the old
+-- figure; it never rewrites the past.
+--
+-- Here is how Morpholog thinks about this. It does not store "facts" -
+-- it stores *claims* it has agreed to admit because they obey the rules.
+-- Two kinds of rule do the work below:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would
+--     break one - for example, a live permission can never exist without
+--     a grant behind it.
+--   * a `require` is a gate on a single action, checked at the moment
+--     you act and never again. The distinction is the whole lesson of
+--     this example: whether a decision was allowed is settled when the
+--     decision is made and stays settled. If "every decision needs live
+--     standing" were an invariant instead of a gate, then revoking
+--     standing later would force the runtime either to refuse the
+--     revocation or to erase the decisions made under it - both wrong.
+--     An invariant governs what is true; a gate governs what you may do.
 
 program verified_revenue
 
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold. Some are append-only records (the figures, the grants, the
+-- revocations, the decisions) - history is never rewritten. Others are
+-- retractable pointers that move as the world changes (which figure is
+-- current, which permissions are live).
 predicate IndependentlyVerifiedRevenue(asset: Subject, period: Subject, amount: Decimal, verification_id: Subject)
 predicate CurrentVerification(asset: Subject, period: Subject, verification_id: Subject)
 predicate Supersedes(new_verification_id: Subject, prior_verification_id: Subject)
@@ -34,6 +71,11 @@ predicate StandingRevoked(verification_id: Subject, purpose: Subject, revocation
 predicate DebtServiceRevenue(asset: Subject, period: Subject, amount: Decimal, decision_id: Subject, verification_id: Subject)
 predicate InvestorReportedRevenue(asset: Subject, period: Subject, amount: Decimal, report_id: Subject, verification_id: Subject)
 
+-- Intents are messages the system sends to the outside world after a
+-- change commits - a figure was verified, a figure was corrected, a
+-- permission was granted or revoked, a decision was recorded. They are
+-- how this corner of the business announces what just happened to
+-- everyone downstream who is waiting on it.
 intent IndependentVerificationAdmitted(verification_id: Subject)
 intent VerificationCorrected(new_verification_id: Subject, prior_verification_id: Subject)
 intent StandingGranted(grant_id: Subject)
@@ -42,26 +84,47 @@ intent DebtServiceRevenueAdmitted(decision_id: Subject)
 intent InvestorReportedRevenueAdmitted(report_id: Subject)
 
 
+-- The rules that must always hold. If any change below would leave the
+-- world violating one of these, the whole change is rejected. Read
+-- `implies` as "whenever the left is true, the right must be too".
+
+-- A live permission can never float free: every active "admissible for
+-- this purpose" claim must have a grant standing behind it. You cannot
+-- end up able to rely on a figure with no record of who let you.
 invariant admissibility_has_provenance:
     AdmissibleFor(v, p) implies StandingGrantedBy(v, p, _, _)
 
 
+-- A permission and its own revocation cannot both be live at once. Once
+-- standing for a purpose is revoked, the matching "admissible for" claim
+-- must be gone.
 invariant admissibility_excludes_revocation:
     AdmissibleFor(v, p) implies not (exists r: StandingRevoked(v, p, r))
 
 
+-- There is exactly one figure in force at a time for a given asset and
+-- period. The "current" pointer is a singleton: two different current
+-- verifications for the same asset and period cannot coexist.
 invariant at_most_one_current_verification_per_asset_period:
     CurrentVerification(asset, period, a) and CurrentVerification(asset, period, b) implies a = b
 
 
+-- The correction history stays a clean chain, never a fork: a figure can
+-- be superseded by at most one direct successor.
 invariant at_most_one_direct_successor:
     Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
 
--- First admission. Asserts both the underlying IV claim and the
--- singleton CurrentVerification pointer. Rejected if there is already
--- a current verification for this (asset, period).
+-- The only ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every invariant still holds
+-- once they are in place. `admit` adds a claim; `retract` removes one.
+
+-- The first time a figure is verified for an asset and period. It
+-- records the figure and sets the "current" pointer to it. The gate
+-- refuses if a current figure already exists for this asset and period -
+-- a brand-new figure goes through the correction path instead, never by
+-- silently replacing what is already in force.
 transformation admit_independent_verification(
     asset, period, amount, verification_id
 ):
@@ -71,10 +134,15 @@ transformation admit_independent_verification(
     emit IndependentVerificationAdmitted(verification_id)
 
 
--- Correction. The original IV stays in admitted state; the new IV is
--- admitted; lineage recorded; the pointer moves; every active
--- standing on the prior verification is retracted by pattern.
--- Historical decisions admitted under those standings survive.
+-- Correct a figure the honest way. The original figure stays on the
+-- record; the corrected figure is admitted alongside it; a lineage link
+-- records that the new one supersedes the old; the "current" pointer
+-- moves to the new figure. The gate refuses to correct a figure that has
+-- already been superseded, so the chain never forks. Crucially, every
+-- live permission on the old figure is withdrawn here - the `_` means
+-- "every purpose", so all standing on the prior figure goes at once.
+-- Authorities must re-grant on the corrected figure if they accept it.
+-- Decisions already made under the old standing are left untouched.
 transformation correct_independent_verification(
     asset, period, new_amount, new_verification_id, prior_verification_id
 ):
@@ -88,11 +156,13 @@ transformation correct_independent_verification(
     emit VerificationCorrected(new_verification_id, prior_verification_id)
 
 
--- Standing may only be granted on a verification that exists AND is
--- current. After a verifier corrects a figure, no new standing can
--- attach to the superseded one - future reliance must attach to the
--- live verification. Historical decisions admitted under earlier
--- standings survive separately.
+-- An authority grants standing for a figure to be relied on for a
+-- purpose. The gates make sure it is sound: the figure must exist, it
+-- must be the one currently in force (you cannot grant new standing on a
+-- superseded figure - future reliance attaches to the live figure), the
+-- purpose must not already be revoked, and it must not already be live.
+-- Recording both the grant (who permitted it) and the live permission
+-- keeps the provenance invariant satisfied.
 transformation grant_standing(
     verification_id, purpose, authority, grant_id
 ):
@@ -105,6 +175,11 @@ transformation grant_standing(
     emit StandingGranted(grant_id)
 
 
+-- Withdraw a standing. The gate requires that the permission is
+-- currently live; the live permission is removed and a revocation is
+-- recorded. The revocation is permanent - there is no transformation to
+-- undo it - which is why the invariants above can treat a revoked
+-- purpose as closed for good.
 transformation revoke_standing(verification_id, purpose, revocation_id):
     require AdmissibleFor(verification_id, purpose)
     retract AdmissibleFor(verification_id, purpose)
@@ -112,6 +187,12 @@ transformation revoke_standing(verification_id, purpose, revocation_id):
     emit StandingRevocationAdmitted(revocation_id)
 
 
+-- Record a bank debt-service decision that relies on a figure. The gates
+-- run at the moment of the decision: the figure must match, and there
+-- must be live standing for this specific purpose. The purpose is
+-- written right into the gate. Once admitted, the decision is a permanent
+-- record - later revoking the standing does not, and must not, reach back
+-- and invalidate the decision that was legitimate when it was made.
 transformation admit_debt_service_revenue(
     asset, period, amount, decision_id, verification_id
 ):
@@ -121,6 +202,11 @@ transformation admit_debt_service_revenue(
     emit DebtServiceRevenueAdmitted(decision_id)
 
 
+-- The same shape for an investor-reporting decision: a matching figure
+-- and live standing for the investor-reporting purpose, gated at the
+-- moment the figure goes into the report. The two decision paths are
+-- deliberately parallel - same figure, different purposes, independent
+-- permissions.
 transformation admit_investor_reported_revenue(
     asset, period, amount, report_id, verification_id
 ):
