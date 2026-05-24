@@ -1,6 +1,6 @@
 # KYC sanctions and PEP screening
 
-A bank cannot open an account for a new customer until it has checked them against sanctions and PEP lists. Those checks are not a single event - they are a continuous obligation. A clean result has an expiry; a list update can flag a previously-clean customer; a flagged customer cannot be admitted until an analyst adjudicates the match. The legal weight is real: a missed alert is a regulatory breach, and a missed event in the outbox - a `SARFiled` quietly routed nowhere because someone mistyped `SARFilled` - is the same breach with no audit trail.
+A bank cannot open an account for a new customer until it has checked them against sanctions and PEP lists. Those checks are not a single event - they are a continuous obligation. A clean result has an expiry; a list update can flag a previously-clean customer; a flagged customer cannot be admitted until an analyst adjudicates the match. The legal weight is real: a missed alert is a regulatory breach, and a missed event in the outbox - a mistyped `emit SARFilled(...)` routed to a partition no consumer reads, so the `SARFiled` report the regulator expects silently never fires - is the same breach with no audit trail.
 
 This example is the smallest Morpholog programme that holds those constraints honestly. The central rule is:
 
