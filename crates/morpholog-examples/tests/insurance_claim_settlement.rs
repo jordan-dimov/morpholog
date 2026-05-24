@@ -715,7 +715,6 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
                 dsl::add(
                     dsl::sum(
                         dsl::var("paid"),
-                        "paid",
                         dsl::claim(
                             "SettlementPaid",
                             vec![

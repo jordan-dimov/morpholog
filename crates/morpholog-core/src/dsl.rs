@@ -168,10 +168,9 @@ pub fn add(lhs: Expr, rhs: Expr) -> Expr {
     Expr::Add(Box::new(lhs), Box::new(rhs))
 }
 
-pub fn sum(value: Term, binding: &str, body: Expr) -> Expr {
+pub fn sum(value: Term, body: Expr) -> Expr {
     Expr::Sum {
         value,
-        binding: binding.to_string(),
         body: Box::new(body),
     }
 }

@@ -136,21 +136,25 @@ where
                 }
             });
 
-        // sum aggregator: `sum ( <var-name> | <body-expr> )`
+        // sum aggregator: `sum ( <target> | <body-expr> )`
         //
-        // Target is restricted to a non-reserved variable. Literals and
-        // wildcards fail earlier because `ident` only matches
-        // Token::Ident; `actor` must be caught here, since the lexer
-        // treats it as a plain identifier.
+        // The target is either a variable bound by the body (the usual
+        // `sum(amount | ...)`) or a decimal literal, which turns the sum
+        // into a count of matches (`sum(1 | ...)`). `actor` lexes as a
+        // plain identifier, so it must be rejected here.
+        let sum_target = choice((
+            ident.map(Term::Var),
+            decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+        ));
         let sum_expr = just(Token::KwSum)
             .ignore_then(
-                ident
+                sum_target
                     .then_ignore(just(Token::Pipe))
                     .then(expression.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .validate(|(name, body): (String, Expr), e, emitter| {
-                if name == "actor" {
+            .validate(|(target, body): (Term, Expr), e, emitter| {
+                if matches!(&target, Term::Var(n) if n == "actor") {
                     let span: SimpleSpan = e.span();
                     emitter.emit(Rich::custom(
                         span,
@@ -158,8 +162,7 @@ where
                     ));
                 }
                 Expr::Sum {
-                    value: Term::Var(name.clone()),
-                    binding: name,
+                    value: target,
                     body: Box::new(body),
                 }
             });

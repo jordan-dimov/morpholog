@@ -31,7 +31,6 @@ pub fn balanced_posted_entry() -> Invariant {
             eq(
                 sum(
                     var("d"),
-                    "d",
                     claim(
                         "JournalLine",
                         vec![var("entry"), wildcard(), var("d"), wildcard()],
@@ -39,7 +38,6 @@ pub fn balanced_posted_entry() -> Invariant {
                 ),
                 sum(
                     var("c"),
-                    "c",
                     claim(
                         "JournalLine",
                         vec![var("entry"), wildcard(), wildcard(), var("c")],
@@ -323,7 +321,6 @@ pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
             expr: sub(
                 sum(
                     var("d"),
-                    "d",
                     claim(
                         "JournalLine",
                         vec![wildcard(), var("account"), var("d"), wildcard()],
@@ -331,7 +328,6 @@ pub fn trial_balance_row() -> morpholog_core::DerivedClaim {
                 ),
                 sum(
                     var("c"),
-                    "c",
                     claim(
                         "JournalLine",
                         vec![wildcard(), var("account"), wildcard(), var("c")],

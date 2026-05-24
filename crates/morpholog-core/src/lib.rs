@@ -263,7 +263,6 @@ mod tests {
             ),
             Expr::Sum {
                 value: Term::Var("v".to_string()),
-                binding: "v".to_string(),
                 body: Box::new(claim("P_sum_body")),
             },
             Expr::Forall {

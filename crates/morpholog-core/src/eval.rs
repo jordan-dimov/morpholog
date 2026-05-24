@@ -477,11 +477,7 @@ pub(crate) fn eval_value(e: &Expr, ctx: &EvalContext<'_>) -> Result<EvalValue, E
                 )),
             }
         }
-        Expr::Sum {
-            value,
-            binding: _,
-            body,
-        } => {
+        Expr::Sum { value, body } => {
             let matches = find_matches(body, ctx)?;
             let mut total = Decimal::ZERO;
             for m in matches {

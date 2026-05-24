@@ -656,11 +656,7 @@ impl CheckCtx<'_> {
                 self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
-            Expr::Sum {
-                value,
-                binding: _,
-                body,
-            } => {
+            Expr::Sum { value, body } => {
                 // Body-first inference on a cloned scope so body-
                 // bound names (the iteration binding, plus any
                 // others the body introduces) do not leak into the
@@ -973,7 +969,7 @@ fn expr_mentions_actor(expr: &Expr) -> bool {
             args.iter().any(is_actor) || default.as_ref().is_some_and(|d| expr_mentions_actor(d))
         }
         Expr::Neq(a, b) | Expr::In(a, b) => is_actor(a) || is_actor(b),
-        Expr::Sum { value, body, .. } => is_actor(value) || expr_mentions_actor(body),
+        Expr::Sum { value, body } => is_actor(value) || expr_mentions_actor(body),
         Expr::And(items) | Expr::Or(items) => items.iter().any(expr_mentions_actor),
         Expr::Not(e) | Expr::Pre(e) | Expr::Exists { body: e, .. } => expr_mentions_actor(e),
         Expr::Implies { left, right }
@@ -1611,7 +1607,6 @@ mod tests {
                 "total",
                 sum(
                     var("x"),
-                    "x",
                     and(vec![
                         in_(var("line"), var("lines")),
                         claim("P", vec![var("line"), var("x")]),
@@ -1966,7 +1961,6 @@ mod tests {
             body: le(
                 sum(
                     var("amount"),
-                    "amount",
                     claim("Payment", vec![wildcard(), var("amount")]),
                 ),
                 term(dec("1000")),
@@ -1992,7 +1986,7 @@ mod tests {
             name: "bad_sum".to_string(),
             version: 1,
             body: le(
-                sum(var("p"), "p", claim("Payment", vec![var("p"), wildcard()])),
+                sum(var("p"), claim("Payment", vec![var("p"), wildcard()])),
                 term(dec("1000")),
             ),
         }];
@@ -2020,7 +2014,7 @@ mod tests {
             name: "bad_sum_lit".to_string(),
             version: 1,
             body: le(
-                sum(date("2026-01-01"), "x", claim("X", vec![var("x")])),
+                sum(date("2026-01-01"), claim("X", vec![var("x")])),
                 term(dec("100")),
             ),
         }];
@@ -2064,11 +2058,7 @@ mod tests {
                 bind_one(claim("Q", vec![var("x")])),
                 require(le(
                     term(var("x")),
-                    sum(
-                        var("amount"),
-                        "amount",
-                        claim("P", vec![wildcard(), var("amount")]),
-                    ),
+                    sum(var("amount"), claim("P", vec![wildcard(), var("amount")])),
                 )),
                 // The Sum bound `amount` only inside its body. At
                 // this assert `amount` is unbound again, so it must
@@ -2225,11 +2215,7 @@ mod tests {
             keys: vec!["account".to_string()],
             values: vec![DerivedValue {
                 name: "count".to_string(),
-                expr: sum(
-                    var("amt"),
-                    "amt",
-                    claim("P", vec![var("account"), var("amt")]),
-                ),
+                expr: sum(var("amt"), claim("P", vec![var("account"), var("amt")])),
             }],
             domain: claim("P", vec![var("account"), wildcard()]),
         }];
@@ -2275,11 +2261,7 @@ mod tests {
             keys: vec!["account".to_string()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
-                expr: sum(
-                    var("amt"),
-                    "amt",
-                    claim("Line", vec![var("account"), var("amt")]),
-                ),
+                expr: sum(var("amt"), claim("Line", vec![var("account"), var("amt")])),
             }],
             domain: claim("Line", vec![var("account"), wildcard()]),
         }];

@@ -724,16 +724,10 @@ fn nested_forall() {
 #[test]
 fn parses_sum() {
     let got = parse_expression("sum(amount | SettlementPaid(claim, amount))").unwrap();
-    let Expr::Sum {
-        value,
-        binding,
-        body,
-    } = got
-    else {
+    let Expr::Sum { value, body } = got else {
         panic!("expected Sum");
     };
     assert_eq!(value, Term::Var("amount".to_string()));
-    assert_eq!(binding, "amount");
     assert!(matches!(*body, Expr::Claim { .. }));
 }
 
@@ -750,11 +744,15 @@ fn sum_body_can_be_compound() {
 }
 
 #[test]
-fn sum_target_must_be_variable_not_literal() {
-    // `sum(5 | ...)` is not valid: parser requires an Ident for
-    // the target. The parser fails with an unexpected-token diagnostic.
-    let errs = parse_expression("sum(5 | Foo())").expect_err("literal target should fail");
-    assert!(!errs.is_empty());
+fn sum_target_can_be_a_decimal_literal_for_counting() {
+    // `sum(1 | ...)` counts matches: the target is the literal 1, added
+    // once per match. The parser accepts a decimal-literal target
+    // alongside a variable.
+    let got = parse_expression("sum(1 | Foo())").expect("literal target should parse");
+    let Expr::Sum { value, .. } = got else {
+        panic!("expected Sum, got {got:?}");
+    };
+    assert_eq!(value, Term::Literal(Value::Decimal("1".to_string())));
 }
 
 #[test]

@@ -93,9 +93,12 @@ pub enum Expr {
     /// whole decimal-arithmetic surface in v0 - no multiplication or
     /// division until an example forces them.
     Add(Box<Expr>, Box<Expr>),
+    /// Sums `value` over every binding the `body` produces. `value` is
+    /// usually a variable bound by the body (`sum(amount | ...)`); a
+    /// decimal-literal `value` turns the sum into a count of matches
+    /// (`sum(1 | ...)`).
     Sum {
         value: Term,
-        binding: String,
         body: Box<Expr>,
     },
     Forall {

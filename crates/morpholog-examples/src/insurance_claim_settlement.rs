@@ -152,7 +152,6 @@ pub fn headroom_consumed_by_payment() -> Invariant {
                     term(var("before")),
                     sum(
                         var("amt"),
-                        "amt",
                         and(vec![
                             claim(
                                 "SettlementPaid",
@@ -297,7 +296,6 @@ pub fn authorise_settlement() -> Transformation {
                 add(
                     sum(
                         var("paid"),
-                        "paid",
                         claim(
                             "SettlementPaid",
                             vec![var("policy_id"), wildcard(), wildcard(), var("paid")],
@@ -415,7 +413,6 @@ pub fn policy_limit_usage() -> morpholog_core::DerivedClaim {
             name: "used".to_string(),
             expr: sum(
                 var("paid"),
-                "paid",
                 claim(
                     "SettlementPaid",
                     vec![var("policy_id"), wildcard(), wildcard(), var("paid")],
