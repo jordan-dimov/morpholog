@@ -2,7 +2,7 @@
 
 Status: operational. This document is what the project is *doing next*. It is forward-looking and lower-stakes than [`scope-and-ambition.md`](scope-and-ambition.md) (which fixes what Morpholog is *for*) and [`runtime-semantics.md`](runtime-semantics.md) (which fixes what the runtime *means*). When this file and design-history disagree, design-history is the historical record; this file is intent.
 
-Each item below either has a concrete forcing scenario or is explicitly held until one appears. The "smallest possible increment, forced by a worked example" discipline still governs - this is not a wish list.
+The "forced by a worked example" discipline binds **kernel and IR primitives**: a new `Expr` / `Stmt` / `Value` variant earns its place only when an example needs it, never speculatively. That is where unconstrained growth is dangerous, and the bar stays high. It is *not* a brake on everything else - tooling, new worked examples, performance work, legibility surfaces, and product completeness move as soon as the direction is clear, not only when an example forces them. The bar for *adding to the language* is deliberately higher than the bar for *building around it*. This is intent, not a wish list.
 
 ## Status today
 
@@ -41,9 +41,9 @@ The current bench shows linear scaling on additive workloads (~1.6s per commit, 
 - **Retraction-heavy bench scenario.** Add a `--retract-fraction K` flag mirroring the existing `--noise-claims`. Generates a fixture where K% of the N transitions are wildcard retracts against prior periods. The forcing pressure that would justify snapshot/lattice work is the curve this produces - not raw N. Worth doing the *measurement* before designing the lattice, so the snapshot interval and structure are sized to a real signal.
 - **Snapshot / incremental-materialisation for audit replay.** Once the bench surfaces a real problem. Likely shape: a checkpoint table that materialises the live claim set every K transitions, plus a delta-replay path that resumes from the nearest checkpoint. Compounded by concurrent bitemporal query density (matrix-style reports running `list_derived_at` across thousands of historical timestamps).
 
-## Operational completeness, when forced
+## Operational completeness
 
-Deferred until a worked example or a real operator forces them.
+The hardening real deployment needs. Not language growth and not gated on a worked example - these move as Morpholog approaches its first production deployment. Listed, not frozen.
 
 - **Worker supervisor.** The polling outbox worker exists and ships a `StdoutDeliverer`. Missing: a supervisor running multiple workers under restart-with-intensity, with crash isolation between deliverers.
 - **Per-target circuit breakers.** A delivery target that misbehaves should be ring-fenced (back off, alert, eventually quarantine), not continue eating the worker's loop indefinitely.

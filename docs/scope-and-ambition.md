@@ -216,7 +216,7 @@ Real ETRM and accounting systems suffer the same small family of failures, regar
 
 These are not seven different failures. They are one failure with seven faces: *state was treated as legitimate that the system cannot, under explicit rules, justify treating as legitimate.*
 
-Morpholog's claim is that this whole class of failure becomes non-representable when the language itself is the legitimacy boundary. Measured this way, Morpholog can plausibly own **the majority of the legitimacy surface** of a serious business system while still being a minority of the lines of code. That is the ambition. "X% of the codebase" is the wrong frame.
+Morpholog's claim is that this whole class of failure becomes non-representable when the language itself is the legitimacy boundary. Measured this way, Morpholog owns **the majority of the legitimacy surface** of a serious business system while still being a minority of the lines of code. That is the ambition, and it is the right frame; "X% of the codebase" is the wrong one.
 
 ## Roadmap
 
@@ -270,6 +270,7 @@ These are floors. They do not get relaxed by accumulation of pressure; they get 
 - **No optimisation / solver runtime.** ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.
 - **No ad-hoc query DSL** beyond derived-claim queries and the as-of operator.
 - **No bypass flags** (`skip_validation`, `force_commit`, etc.). Exceptions, when needed, are first-class typed claims with full audit standing.
+- **No bespoke storage kernel.** Morpholog runs on PostgreSQL 17+ and leans, deliberately, on `SERIALIZABLE` isolation, JSONB, and atomic multi-table commit. The recurring suggestion - "if the language is truly minimal, compile it down to a standalone microkernel" - inverts the thesis. Atomic commit under serializable concurrency, crash recovery, and MVCC are the single hardest body of correctness code in computing; reimplementing them in a "lean" kernel would move millions of lines of un-battle-tested machinery *inside* the trust boundary, to win an elegance the product does not need. The minimalism that matters here is **surface** minimalism - the `.morph` language and the IR stay small - not **substrate** minimalism. The database is the correctness substrate, chosen on purpose, not an implementation detail to be outgrown.
 
 ## Where this leaves us
 
