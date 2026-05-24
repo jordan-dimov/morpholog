@@ -438,15 +438,21 @@ impl CheckCtx<'_> {
                     }
                 }
             }
-            // Value-shaped expressions at a predicate position are
-            // not visited here; the runtime raises NotPredicate.
-            // A symmetric static check (ExpectedPredicateExpression)
-            // is a later layer.
+            // A value-producing expression at a predicate position
+            // matches nothing; the runtime raises NotPredicate. The
+            // mirror of ExpectedValueExpression.
             Expr::Term(_)
             | Expr::Add(_, _)
             | Expr::Sub(_, _)
             | Expr::Sum { .. }
-            | Expr::ValueOf { .. } => {}
+            | Expr::ValueOf { .. } => {
+                let context = self.context.clone();
+                self.errors
+                    .push(ValidationError::ExpectedPredicateExpression {
+                        context,
+                        expression: short_expr_shape(expr),
+                    });
+            }
         }
     }
 
@@ -1604,6 +1610,37 @@ mod tests {
         assert!(
             errs.is_empty(),
             "`in` binds the unbound element; the sum body is clean. got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn value_shaped_expression_in_require_flags_expected_predicate() {
+        // `require value Policy(p, _)` - a value-producing lookup
+        // where a state-matching predicate is required. The runtime
+        // raises NotPredicate; the check surfaces it as
+        // ExpectedPredicateExpression. `p` is a parameter, so the
+        // only error is the shape, not an unbound variable.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Policy",
+            &[
+                ("policy", PredicateArgKind::Subject),
+                ("limit", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: params(&["p"]),
+            body: vec![require(value_of("Policy", vec![var("p"), wildcard()]))],
+        }];
+        let errs = check_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::ExpectedPredicateExpression { expression, .. }
+                    if expression == "value Policy(...)"
+            )),
+            "value-shaped require body must flag ExpectedPredicateExpression; got {errs:?}"
         );
     }
 

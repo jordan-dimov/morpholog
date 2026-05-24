@@ -125,6 +125,16 @@ pub enum ValidationError {
         context: ValidationContext,
         expression: String,
     },
+    /// The mirror of `ExpectedValueExpression`: a value-producing
+    /// expression (a bare term, `+`, `-`, `sum`, `value`) appeared
+    /// where a predicate-shaped expression was required - a `require`
+    /// body, an invariant, a quantifier body, a comparator that
+    /// matches state. The runtime surfaces this as
+    /// `EvalError::NotPredicate`; the check surfaces it earlier.
+    ExpectedPredicateExpression {
+        context: ValidationContext,
+        expression: String,
+    },
     /// `actor` was referenced in an invariant or derived-claim
     /// body, where no proposing transition is in scope. The kernel
     /// raises `EvalError::UnboundActor` for this at evaluation
@@ -230,6 +240,14 @@ impl std::fmt::Display for ValidationError {
             } => write!(
                 f,
                 "expected a value-producing expression but found predicate-shaped \
+                 `{expression}` in {context}"
+            ),
+            ValidationError::ExpectedPredicateExpression {
+                context,
+                expression,
+            } => write!(
+                f,
+                "expected a predicate-shaped expression but found value-producing \
                  `{expression}` in {context}"
             ),
             ValidationError::ActorNotAvailable { context } => write!(
