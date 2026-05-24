@@ -1,6 +1,6 @@
 # Chess transition invariants
 
-A small chess world that demonstrates one specific Morpholog feature: rules that constrain not just *what state is allowed*, but *how state is allowed to change*.
+A small chess world that demonstrates two Morpholog ideas: rules that constrain not just *what state is allowed* but *how state is allowed to change*, and *counting* - a rule that fixes how many things of a kind may exist.
 
 The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+ and observes that some chess rules are properties of a single board position ("at most one king per colour"), while others are properties of a move ("the move counter goes up by exactly one"). Morpholog already supported the first kind. This example shows the second kind, made possible by a wrapper called `pre(...)` that lets a rule refer to the board *before* the move alongside the board *after*.
 
@@ -54,14 +54,16 @@ Constants used as subjects: `#white`, `#black`; the six piece types (`#pawn`, `#
 
 ### Rules about state
 
-Two rules that hold over any single board position:
+Rules that hold over any single board position - none of these needs `pre(...)`:
 
 | Invariant | What it says |
 | --- | --- |
 | `at_most_one_piece_per_square` | A square can hold at most one piece. If two `PieceAt` claims share a square they must describe the same piece. |
-| `one_king_per_color` | Each colour has at most one king. Two king claims for the same colour must point at the same square. |
+| `exactly_one_white_king` / `exactly_one_black_king` | Each colour has *exactly* one king. |
+| `piece_count_matches_board` | The `PieceCount` counter must equal the actual number of pieces on the board. |
+| `at_most_eight_pawns_per_color` | A colour has at most eight pawns. |
 
-Both are familiar from chess. Neither needs `pre(...)`.
+The last three are *counting* rules, and they bring out a second language idea (the first being `pre(...)`). `sum(1 | PieceAt(_, #king, #white))` adds `1` for every white-king claim on the board - that is, it counts them. Pinning that count to `1` says "exactly one white king", which is strictly stronger than the "at most one" rule it replaces: it also forbids the count falling to zero, so **a king can never be captured**. `piece_count_matches_board` uses the same trick to tie the hand-maintained counter to reality - admit a stray piece without updating `PieceCount` and the count no longer matches, so the move is refused. A `sum` whose target is the literal `1` rather than a variable is how Morpholog counts.
 
 ### Rules about transitions
 

@@ -261,3 +261,21 @@ On the persistence side, the duplicate-intent collision - one transformation emi
 
 - `--strict` lint-grade hints (unused declarations, `sum(x | body)` with `x` absent from `body`, fuzzy "did you mean?" suggestions). The remaining check layer; this work's job was the runtime-error mirror.
 - Source spans on diagnostics. Unchanged: the IR still drops parser spans on lowering.
+
+
+### Counting via a constant `sum` target (and dropping `Sum.binding`)
+
+**Forced by:** the chess example wanted to count - "how many pieces are on the board?", "how many kings does white have?" - and nothing in the kernel could express it. The doctrine had already flagged the relaxation (`sum`'s target was "restricted to a variable in v0; relax when a worked example forces it"); a material census was that example.
+
+**Landed:** the surface `sum` target now accepts a decimal literal as well as a variable, so `sum(1 | body)` counts the bindings the body produces. The evaluator already resolved the target term once per match, so a literal target sums 1 each time - counting needed no evaluator change, only a parser relaxation and a formatter that renders the target from the term. Chess gained `piece_count_matches_board` (the hand-kept `PieceCount` must equal `sum(1 | PieceAt(...))`, so the counter can never drift from the board), `exactly_one_white_king` / `exactly_one_black_king` (count `= 1`, which forbids capturing a king - strictly stronger than the at-most-one rule it replaced), and an at-most-eight-pawns-per-colour bound. So chess now forces counting in addition to `Expr::Or` and `Expr::Pre`.
+
+The same change retired `Expr::Sum`'s `binding` field. It duplicated the target variable's name, the evaluator ignored it, and the formatter carried an `assert!(value == Var(binding))` with a "cannot round-trip" caveat. Once the formatter rendered the target from `value`, `binding` was vestigial - a loose end the counting work exposed and removed.
+
+**Considered and rejected:**
+
+- *Strict comparators (`<`, `>`, `>=`) for chess.* Tempting, but derivable: `a > b` is `not (a <= b)`, and `a >= b` is `b <= a`. They are surface sugar, not new capability, so they have not earned their place.
+- *A dedicated `Expr::Count` primitive.* Redundant with `sum(1 | body)`; the doctrine's anticipated move was to relax `sum`, not add a sibling that does the same arithmetic.
+
+**What stays out:**
+
+- A general expression as a `sum` target (`sum(debit - credit | ...)`). The IR's `value: Term` holds only a term; an expression target awaits an example that needs it.
