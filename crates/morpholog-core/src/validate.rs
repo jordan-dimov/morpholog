@@ -219,7 +219,7 @@ impl std::fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 /// Strict programme validation. Merges the structural pass below
-/// with [`crate::kindcheck::kindcheck_program`] into a single
+/// with [`crate::check::check_program`] into a single
 /// `Vec<ValidationError>`. Called via [`Program::validate`].
 ///
 /// Both layers contribute to the same error list; a faulty
@@ -230,7 +230,7 @@ impl std::error::Error for ValidationError {}
 /// surface in one run.
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
     let mut errors = collect_structural_errors(p);
-    errors.extend(crate::kindcheck::kindcheck_program(p));
+    errors.extend(crate::check::check_program(p));
     if errors.is_empty() {
         Ok(())
     } else {

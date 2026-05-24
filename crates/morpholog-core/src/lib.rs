@@ -33,10 +33,10 @@ pub mod dsl;
 pub mod format;
 
 mod analysis;
+mod check;
 mod derive;
 mod eval;
 mod ir;
-mod kindcheck;
 mod propose;
 mod state;
 mod validate;

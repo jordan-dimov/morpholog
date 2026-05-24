@@ -465,7 +465,7 @@ pub struct ArgDecl {
 /// have the same shape (named, kinded positional args) but live in
 /// distinct vocabularies because they play distinct roles: predicates
 /// describe admitted claim shapes, intents describe outbox-effect
-/// shapes. The kindcheck pass validates `emit` arg kinds against
+/// shapes. The check pass validates `emit` arg kinds against
 /// these declarations the same way it validates `assert` against
 /// [`PredicateDecl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

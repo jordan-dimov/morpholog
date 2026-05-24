@@ -267,7 +267,7 @@ where
 
     // intent_decl ::= "intent" Ident "(" arg_list? ")"
     // Mirrors predicate_decl exactly - same surface shape, different
-    // vocabulary. The parser distinguishes them; the kindcheck
+    // vocabulary. The parser distinguishes them; the check
     // validates emits against intent decls just as it validates
     // claims against predicate decls.
     let intent_decl = just(Token::KwIntent)

@@ -122,7 +122,7 @@ impl KindEnv {
 /// structural pass (invariants, then transformations, then
 /// derived claims) so merged diagnostics come out in a
 /// predictable shape.
-pub(crate) fn kindcheck_program(program: &Program) -> Vec<ValidationError> {
+pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let predicate_decls: HashMap<&str, &PredicateDecl> = program
         .predicates
@@ -286,7 +286,7 @@ fn walk_predicate_expr(
             // constraints), then evaluates `body` against each
             // source-match. An outer variable of the same name as
             // `binding` constrains the loop rather than being
-            // shadowed; the kindcheck mirrors that by letting
+            // shadowed; the check mirrors that by letting
             // refinements flow through both source and body.
             walk_predicate_expr(source, env, predicate_decls, ctx, errors);
             walk_predicate_expr(body, env, predicate_decls, ctx, errors);
@@ -853,7 +853,7 @@ fn check_claim_args(
 }
 
 /// Same shape as [`check_claim_args`] but against the intent
-/// vocabulary. Powers the kindcheck of `Stmt::Emit`.
+/// vocabulary. Powers the check of `Stmt::Emit`.
 fn check_intent_args(
     intent: &str,
     args: &[Term],
@@ -1063,7 +1063,7 @@ mod tests {
     }
 
     // ============================================================
-    // kindcheck_program: claim arg checking + statement flow
+    // check_program: claim arg checking + statement flow
     // ============================================================
 
     use crate::dsl::*;
@@ -1109,7 +1109,7 @@ mod tests {
             version: 1,
             body: claim("Policy", vec![var("p"), var("l")]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "clean programme should report no errors; got {errs:?}"
@@ -1125,7 +1125,7 @@ mod tests {
             version: 1,
             body: claim("Policy", vec![dec("123")]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected one kind error; got {errs:?}");
         match &errs[0] {
             ValidationError::ArgKindMismatch {
@@ -1159,7 +1159,7 @@ mod tests {
             version: 1,
             body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "consistent refinement should pass; got {errs:?}"
@@ -1180,7 +1180,7 @@ mod tests {
             version: 1,
             body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected one conflict; got {errs:?}");
         match &errs[0] {
             ValidationError::VariableKindConflict {
@@ -1212,7 +1212,7 @@ mod tests {
             version: 1,
             body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "Any-then-Decimal should refine; got {errs:?}"
@@ -1229,7 +1229,7 @@ mod tests {
             version: 1,
             body: claim("Limit", vec![actor()]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(
             errs.len(),
             1,
@@ -1267,7 +1267,7 @@ mod tests {
                 assert_("B", vec![var("x")]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "bind_one then matching assert should pass; got {errs:?}"
@@ -1290,7 +1290,7 @@ mod tests {
                 assert_("B", vec![var("x")]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected conflict; got {errs:?}");
         assert!(matches!(
             errs[0],
@@ -1321,7 +1321,7 @@ mod tests {
                 assert_("B", vec![var("x")]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "require must not export bindings; got {errs:?}"
@@ -1339,7 +1339,7 @@ mod tests {
             parameters: vec![],
             body: vec![let_new_subject("fresh"), assert_("Amt", vec![var("fresh")])],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(
             errs.len(),
             1,
@@ -1365,7 +1365,7 @@ mod tests {
             parameters: vec![],
             body: vec![retract("P", vec![dec("99")])],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
@@ -1391,7 +1391,7 @@ mod tests {
             version: 1,
             body: le(term(date("2026-01-01")), term(dec("100"))),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected one operand error; got {errs:?}");
         match &errs[0] {
             ValidationError::OperandKindMismatch {
@@ -1417,7 +1417,7 @@ mod tests {
             version: 1,
             body: date_le(term(date("2026-01-01")), term(dec("100"))),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         match &errs[0] {
             ValidationError::OperandKindMismatch {
@@ -1446,7 +1446,7 @@ mod tests {
                 term(dec("100")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1480,7 +1480,7 @@ mod tests {
                 claim("B", vec![var("x")]),
             ]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1505,7 +1505,7 @@ mod tests {
             version: 1,
             body: eq(term(dec("100")), term(subj("S"))),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
@@ -1522,7 +1522,7 @@ mod tests {
             version: 1,
             body: neq(dec("100"), subj("S")),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
@@ -1544,7 +1544,7 @@ mod tests {
                 claim("B", vec![var("x")]),
             ]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1576,7 +1576,7 @@ mod tests {
                 assert_("S", vec![var("y")]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1609,7 +1609,7 @@ mod tests {
                 le(term(var("amount")), term(var("limit"))),
             ]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(errs.is_empty(), "happy path should pass; got {errs:?}");
     }
 
@@ -1643,7 +1643,7 @@ mod tests {
                 term(dec("1000")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(errs.is_empty(), "well-typed Sum should pass; got {errs:?}");
     }
 
@@ -1667,7 +1667,7 @@ mod tests {
                 term(dec("1000")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1695,7 +1695,7 @@ mod tests {
                 term(dec("100")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1747,7 +1747,7 @@ mod tests {
                 assert_("S", vec![var("amount")]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "Sum's body bindings must not leak; got {errs:?}"
@@ -1775,7 +1775,7 @@ mod tests {
                 term(dec("100")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "ValueOf at decimal slot should be Decimal; got {errs:?}"
@@ -1802,7 +1802,7 @@ mod tests {
                 term(dec("100")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1848,7 +1848,7 @@ mod tests {
             }],
             domain: claim("P", vec![var("account")]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1899,7 +1899,7 @@ mod tests {
             }],
             domain: claim("P", vec![var("account"), wildcard()]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -1949,7 +1949,7 @@ mod tests {
             }],
             domain: claim("Line", vec![var("account"), wildcard()]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "well-typed derived claim should pass; got {errs:?}"
@@ -1974,7 +1974,7 @@ mod tests {
                 for_("e", term(var("x")), vec![]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2004,7 +2004,7 @@ mod tests {
                 assert_("P", vec![var("xs")]),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2029,7 +2029,7 @@ mod tests {
             version: 1,
             body: Expr::In(Term::Var("x".to_string()), dec("100")),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2078,7 +2078,7 @@ mod tests {
                 args: vec![dec("100")],
             })],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2114,7 +2114,7 @@ mod tests {
                 }),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2152,7 +2152,7 @@ mod tests {
                 }),
             ],
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(errs.is_empty(), "well-typed emit should pass; got {errs:?}");
     }
 
@@ -2161,7 +2161,7 @@ mod tests {
     // ============================================================
     //
     // `Or` evaluates each branch against the same base context
-    // and concatenates the results. The kindcheck mirrors this:
+    // and concatenates the results. The check mirrors this:
     // each branch sees the env at the call site; refinements
     // inside one branch are not visible to other branches and do
     // not leak out of the `Or`.
@@ -2181,7 +2181,7 @@ mod tests {
             version: 1,
             body: or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "Or branches must check independently; got {errs:?}"
@@ -2209,7 +2209,7 @@ mod tests {
                 claim("C", vec![var("x")]),
             ]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.is_empty(),
             "Or branch refinements must not leak; got {errs:?}"
@@ -2229,7 +2229,7 @@ mod tests {
             version: 1,
             body: or(vec![claim("A", vec![dec("100")])]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2254,7 +2254,7 @@ mod tests {
     // sum binding constrains the source/body rather than being
     // shadowed; a kind mismatch between the outer and inner uses
     // is what the runtime would surface as a unification failure,
-    // so the kindcheck flags it as `VariableKindConflict`.
+    // so the check flags it as `VariableKindConflict`.
 
     #[test]
     fn forall_with_kind_conflicting_outer_variable_flags_conflict() {
@@ -2272,7 +2272,7 @@ mod tests {
                 forall("x", claim("P", vec![var("x")]), claim("C", vec![var("x")])),
             ]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2302,7 +2302,7 @@ mod tests {
                 exists("x", claim("D", vec![var("x")])),
             ]),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
@@ -2343,7 +2343,7 @@ mod tests {
                 term(dec("100")),
             ),
         }];
-        let errs = kindcheck_program(&p);
+        let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
                 e,
