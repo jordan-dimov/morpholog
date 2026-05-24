@@ -56,10 +56,41 @@ intent PieceCaptured(src: Subject, dst: Subject, captured_type: Subject)
 invariant at_most_one_piece_per_square:
   (PieceAt(sq, t_a, c_a) and PieceAt(sq, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
 
--- Each colour has at most one king. Two king claims of the same colour
--- must point at the same square.
-invariant one_king_per_color:
-  (PieceAt(sq_a, #king, c) and PieceAt(sq_b, #king, c)) implies (sq_a = sq_b)
+-- Exactly one king of each colour - always. `sum(1 | PieceAt(_, #king,
+-- #white))` counts how many white-king claims are on the board (it adds
+-- 1 for every match), and we insist that count is 1. This is stronger
+-- than "at most one king": it also forbids the count dropping to zero,
+-- so a king can never be captured. We state it once per colour, since
+-- chess has exactly two.
+invariant exactly_one_white_king:
+  sum(1 | PieceAt(_, #king, #white)) = 1
+
+invariant exactly_one_black_king:
+  sum(1 | PieceAt(_, #king, #black)) = 1
+
+-- The piece counter must agree with the board it summarises: the number
+-- stored in PieceCount must equal the actual number of pieces, counted
+-- straight from the PieceAt claims. This stops the hand-kept counter
+-- ever drifting from reality - admit a stray piece without bumping the
+-- counter and this rule turns the whole move away.
+invariant piece_count_matches_board:
+  PieceCount(n) implies (n = sum(1 | PieceAt(_, _, _)))
+
+-- The rule above only bites when a PieceCount claim exists - on its own
+-- it would be silently happy if a buggy move dropped the counter
+-- altogether. So we also insist that any board with pieces on it has a
+-- counter. The two together say "the counter exists and is correct";
+-- neither says that alone.
+invariant board_with_pieces_has_a_counter:
+  PieceAt(_, _, _) implies (exists n: PieceCount(n))
+
+-- At most eight pawns per colour. Here `c` is bound by the left side to
+-- whichever colour has a pawn, and the count on the right is scoped to
+-- that same colour. (Pawns only ever leave the board in this model, so
+-- the bound is never really threatened - it is here to show counting
+-- inside a comparison.)
+invariant at_most_eight_pawns_per_color:
+  PieceAt(_, #pawn, c) implies (sum(1 | PieceAt(_, #pawn, c)) <= 8)
 
 -- Rules about how the board changes from one move to the next. These
 -- compare the board after the move (the plain reading) with the board

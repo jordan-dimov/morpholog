@@ -221,19 +221,8 @@ pub fn format_expr_inline(e: &Expr) -> String {
         match e {
             Expr::Term(t) => format_term(t),
             Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
-            Expr::Sum {
-                value,
-                binding,
-                body,
-            } => {
-                // The surface form `sum(binding | body)` lowers to
-                // `Sum { value: Var(binding), binding, body }`; a Sum
-                // with `value != Var(binding)` cannot round-trip.
-                assert!(
-                    matches!(value, Term::Var(name) if name == binding),
-                    "format_expr_inline: sum's value must be Var(binding); got value={value:?}, binding={binding:?}",
-                );
-                format!("sum({binding} | {})", format_expr_inline(body))
+            Expr::Sum { value, body } => {
+                format!("sum({} | {})", format_term(value), format_expr_inline(body))
             }
             Expr::ValueOf {
                 predicate,
@@ -255,11 +244,9 @@ pub fn format_expr_inline(e: &Expr) -> String {
     match e {
         Expr::Term(t) => format_term(t),
         Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
-        Expr::Sum {
-            value: _,
-            binding,
-            body,
-        } => format!("sum({binding} | {})", format_expr_inline(body)),
+        Expr::Sum { value, body } => {
+            format!("sum({} | {})", format_term(value), format_expr_inline(body))
+        }
         Expr::ValueOf {
             predicate,
             args,
@@ -277,7 +264,13 @@ pub fn format_expr_inline(e: &Expr) -> String {
         Expr::Sub(l, r) => format!("{} - {}", primary(l), primary(r)),
         Expr::Eq(l, r) => format!("{} = {}", primary(l), primary(r)),
         Expr::Le(l, r) => format!("{} <= {}", primary(l), primary(r)),
+        Expr::Lt(l, r) => format!("{} < {}", primary(l), primary(r)),
+        Expr::Ge(l, r) => format!("{} >= {}", primary(l), primary(r)),
+        Expr::Gt(l, r) => format!("{} > {}", primary(l), primary(r)),
         Expr::DateLe(l, r) => format!("{} on_or_before {}", primary(l), primary(r)),
+        Expr::DateLt(l, r) => format!("{} before {}", primary(l), primary(r)),
+        Expr::DateGe(l, r) => format!("{} on_or_after {}", primary(l), primary(r)),
+        Expr::DateGt(l, r) => format!("{} after {}", primary(l), primary(r)),
         Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
         Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
@@ -517,7 +510,7 @@ mod tests {
             date_le(term(var("d1")), term(var("d2"))),
             add(term(var("p")), term(var("q"))),
             sub(term(var("p")), term(var("q"))),
-            sum(var("v"), "v", claim("W", vec![var("v")])),
+            sum(var("v"), claim("W", vec![var("v")])),
             in_(var("e"), var("coll")),
             value_of("X", vec![var("k"), wildcard()]),
         ]);

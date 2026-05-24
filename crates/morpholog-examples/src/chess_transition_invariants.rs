@@ -37,18 +37,96 @@ pub fn at_most_one_piece_per_square() -> Invariant {
     }
 }
 
-/// At most one king per colour: two same-colour king claims must
-/// be at the same square.
-pub fn one_king_per_color() -> Invariant {
+/// Exactly one white king. Counting the king claims of a colour and
+/// pinning the count to 1 is strictly stronger than "at most one": it
+/// also forbids the count falling to 0, so a king can never be
+/// captured. Stated per colour (chess has exactly two) rather than
+/// inventing a colour set.
+pub fn exactly_one_white_king() -> Invariant {
     Invariant {
-        name: "one_king_per_color".to_string(),
+        name: "exactly_one_white_king".to_string(),
+        version: 1,
+        body: eq(
+            sum(
+                dec("1"),
+                claim("PieceAt", vec![wildcard(), subj("king"), subj("white")]),
+            ),
+            term(dec("1")),
+        ),
+    }
+}
+
+/// Exactly one black king. The mirror of [`exactly_one_white_king`].
+pub fn exactly_one_black_king() -> Invariant {
+    Invariant {
+        name: "exactly_one_black_king".to_string(),
+        version: 1,
+        body: eq(
+            sum(
+                dec("1"),
+                claim("PieceAt", vec![wildcard(), subj("king"), subj("black")]),
+            ),
+            term(dec("1")),
+        ),
+    }
+}
+
+/// The piece counter must equal the actual number of pieces on the
+/// board. `sum(1 | PieceAt(...))` counts the matching claims; pinning
+/// `PieceCount` to that count stops the hand-maintained counter ever
+/// drifting from the board it is supposed to summarise.
+pub fn piece_count_matches_board() -> Invariant {
+    Invariant {
+        name: "piece_count_matches_board".to_string(),
         version: 1,
         body: implies(
-            and(vec![
-                claim("PieceAt", vec![var("sq_a"), subj("king"), var("c")]),
-                claim("PieceAt", vec![var("sq_b"), subj("king"), var("c")]),
-            ]),
-            eq(term(var("sq_a")), term(var("sq_b"))),
+            claim("PieceCount", vec![var("n")]),
+            eq(
+                term(var("n")),
+                sum(
+                    dec("1"),
+                    claim("PieceAt", vec![wildcard(), wildcard(), wildcard()]),
+                ),
+            ),
+        ),
+    }
+}
+
+/// A board with pieces on it must have a piece counter. `piece_count_
+/// matches_board` is conditional on a `PieceCount` claim existing, so on
+/// its own it is vacuously true if a buggy transition drops the counter
+/// entirely. This presence rule closes that gap - the same pairing the
+/// insurance example uses for policy headroom (a conservation rule plus
+/// an existence rule). Together they say "the counter exists and is
+/// correct", which neither says alone.
+pub fn board_with_pieces_has_a_counter() -> Invariant {
+    Invariant {
+        name: "board_with_pieces_has_a_counter".to_string(),
+        version: 1,
+        body: implies(
+            claim("PieceAt", vec![wildcard(), wildcard(), wildcard()]),
+            exists("n", claim("PieceCount", vec![var("n")])),
+        ),
+    }
+}
+
+/// At most eight pawns per colour. A pawn count can only fall in this
+/// model (there is no promotion), so this is a structural sanity bound;
+/// it is here to show counting inside a comparator, with the colour
+/// `c` bound by the antecedent and reused to scope the count.
+pub fn at_most_eight_pawns_per_color() -> Invariant {
+    Invariant {
+        name: "at_most_eight_pawns_per_color".to_string(),
+        version: 1,
+        body: implies(
+            claim("PieceAt", vec![wildcard(), subj("pawn"), var("c")]),
+            le(
+                sum(
+                    dec("1"),
+                    claim("PieceAt", vec![wildcard(), subj("pawn"), var("c")]),
+                ),
+                term(dec("8")),
+            ),
         ),
     }
 }
@@ -277,7 +355,11 @@ pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         at_most_one_piece_per_square(),
-        one_king_per_color(),
+        exactly_one_white_king(),
+        exactly_one_black_king(),
+        piece_count_matches_board(),
+        board_with_pieces_has_a_counter(),
+        at_most_eight_pawns_per_color(),
         move_count_strictly_increases(),
         turn_alternates(),
         single_capture_per_move(),

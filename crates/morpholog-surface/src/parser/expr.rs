@@ -136,21 +136,25 @@ where
                 }
             });
 
-        // sum aggregator: `sum ( <var-name> | <body-expr> )`
+        // sum aggregator: `sum ( <target> | <body-expr> )`
         //
-        // Target is restricted to a non-reserved variable. Literals and
-        // wildcards fail earlier because `ident` only matches
-        // Token::Ident; `actor` must be caught here, since the lexer
-        // treats it as a plain identifier.
+        // The target is either a variable bound by the body (the usual
+        // `sum(amount | ...)`) or a decimal literal, which turns the sum
+        // into a count of matches (`sum(1 | ...)`). `actor` lexes as a
+        // plain identifier, so it must be rejected here.
+        let sum_target = choice((
+            ident.map(Term::Var),
+            decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+        ));
         let sum_expr = just(Token::KwSum)
             .ignore_then(
-                ident
+                sum_target
                     .then_ignore(just(Token::Pipe))
                     .then(expression.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .validate(|(name, body): (String, Expr), e, emitter| {
-                if name == "actor" {
+            .validate(|(target, body): (Term, Expr), e, emitter| {
+                if matches!(&target, Term::Var(n) if n == "actor") {
                     let span: SimpleSpan = e.span();
                     emitter.emit(Rich::custom(
                         span,
@@ -158,8 +162,7 @@ where
                     ));
                 }
                 Expr::Sum {
-                    value: Term::Var(name.clone()),
-                    binding: name,
+                    value: target,
                     body: Box::new(body),
                 }
             });
@@ -249,7 +252,17 @@ where
                 just(Token::Eq).to(CmpOp::Eq),
                 just(Token::Neq).to(CmpOp::Neq),
                 just(Token::Le).to(CmpOp::Le),
+                just(Token::Lt).to(CmpOp::Lt),
+                just(Token::Ge).to(CmpOp::Ge),
+                just(Token::Gt).to(CmpOp::Gt),
                 just(Token::KwOnOrBefore).to(CmpOp::DateLe),
+                just(Token::KwOnOrAfter).to(CmpOp::DateGe),
+                // `before`/`after` are contextual: matched as comparators
+                // here, but left as ordinary identifiers everywhere else
+                // so a variable may still be named `before` or `after`
+                // (the worked examples do exactly that).
+                select! { Token::Ident(s) if s == "before" => CmpOp::DateLt },
+                select! { Token::Ident(s) if s == "after" => CmpOp::DateGt },
                 just(Token::KwIn).to(CmpOp::In),
             ))
             .then(arith.clone())
@@ -259,7 +272,13 @@ where
                 None => lhs,
                 Some((CmpOp::Eq, rhs)) => Expr::Eq(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::Le, rhs)) => Expr::Le(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::Lt, rhs)) => Expr::Lt(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::Ge, rhs)) => Expr::Ge(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::Gt, rhs)) => Expr::Gt(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::DateLe, rhs)) => Expr::DateLe(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::DateLt, rhs)) => Expr::DateLt(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::DateGe, rhs)) => Expr::DateGe(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::DateGt, rhs)) => Expr::DateGt(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::Neq, rhs)) => {
                     let span: SimpleSpan = e.span();
                     let lhs_term = expr_as_term(&lhs);
@@ -501,12 +520,21 @@ where
 enum CmpOp {
     Eq,
     Neq,
-    /// Decimal `<=` -> `Expr::Le`. Operands must be
-    /// `EvalValue::Decimal` (checked at runtime).
+    /// Decimal comparators (`<=` `<` `>=` `>`) -> `Expr::Le`/`Lt`/`Ge`/
+    /// `Gt`. Operands must be `EvalValue::Decimal` (checked at runtime).
     Le,
-    /// Civil-date `on_or_before` -> `Expr::DateLe`. Operands must be
-    /// `EvalValue::Date` (checked at runtime).
+    Lt,
+    Ge,
+    Gt,
+    /// Civil-date comparators (`on_or_before` `before` `on_or_after`
+    /// `after`) -> `Expr::DateLe`/`DateLt`/`DateGe`/`DateGt`. Operands
+    /// must be `EvalValue::Date` (checked at runtime). `before` and
+    /// `after` are matched contextually (in comparator position only),
+    /// so they remain usable as ordinary variable names elsewhere.
     DateLe,
+    DateLt,
+    DateGe,
+    DateGt,
     /// Membership comparator (`x in xs`) -> `Expr::In(Term, Term)`,
     /// with the same term-only restriction as `Neq`. Distinct from the
     /// structural `in` in `forall x in source: body`.

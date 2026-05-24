@@ -400,13 +400,31 @@ impl CheckCtx<'_> {
                 self.walk_predicate_expr(source, scope);
                 self.walk_predicate_expr(body, scope);
             }
-            Expr::Le(left, right) => {
-                self.check_operand_kind(left, PredicateArgKind::Decimal, "<=", scope);
-                self.check_operand_kind(right, PredicateArgKind::Decimal, "<=", scope);
+            Expr::Le(left, right)
+            | Expr::Lt(left, right)
+            | Expr::Ge(left, right)
+            | Expr::Gt(left, right) => {
+                let op = match expr {
+                    Expr::Le(..) => "<=",
+                    Expr::Lt(..) => "<",
+                    Expr::Ge(..) => ">=",
+                    _ => ">",
+                };
+                self.check_operand_kind(left, PredicateArgKind::Decimal, op, scope);
+                self.check_operand_kind(right, PredicateArgKind::Decimal, op, scope);
             }
-            Expr::DateLe(left, right) => {
-                self.check_operand_kind(left, PredicateArgKind::Date, "on_or_before", scope);
-                self.check_operand_kind(right, PredicateArgKind::Date, "on_or_before", scope);
+            Expr::DateLe(left, right)
+            | Expr::DateLt(left, right)
+            | Expr::DateGe(left, right)
+            | Expr::DateGt(left, right) => {
+                let op = match expr {
+                    Expr::DateLe(..) => "on_or_before",
+                    Expr::DateLt(..) => "before",
+                    Expr::DateGe(..) => "on_or_after",
+                    _ => "after",
+                };
+                self.check_operand_kind(left, PredicateArgKind::Date, op, scope);
+                self.check_operand_kind(right, PredicateArgKind::Date, op, scope);
             }
             Expr::Eq(left, right) => {
                 self.check_equality_operands(left, right, "==", scope);
@@ -656,11 +674,7 @@ impl CheckCtx<'_> {
                 self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
-            Expr::Sum {
-                value,
-                binding: _,
-                body,
-            } => {
+            Expr::Sum { value, body } => {
                 // Body-first inference on a cloned scope so body-
                 // bound names (the iteration binding, plus any
                 // others the body introduces) do not leak into the
@@ -727,7 +741,13 @@ impl CheckCtx<'_> {
             | Expr::Pre(_)
             | Expr::Eq(_, _)
             | Expr::Le(_, _)
+            | Expr::Lt(_, _)
+            | Expr::Ge(_, _)
+            | Expr::Gt(_, _)
             | Expr::DateLe(_, _)
+            | Expr::DateLt(_, _)
+            | Expr::DateGe(_, _)
+            | Expr::DateGt(_, _)
             | Expr::Neq(_, _)
             | Expr::In(_, _) => {
                 let context = self.context.clone();
@@ -973,13 +993,19 @@ fn expr_mentions_actor(expr: &Expr) -> bool {
             args.iter().any(is_actor) || default.as_ref().is_some_and(|d| expr_mentions_actor(d))
         }
         Expr::Neq(a, b) | Expr::In(a, b) => is_actor(a) || is_actor(b),
-        Expr::Sum { value, body, .. } => is_actor(value) || expr_mentions_actor(body),
+        Expr::Sum { value, body } => is_actor(value) || expr_mentions_actor(body),
         Expr::And(items) | Expr::Or(items) => items.iter().any(expr_mentions_actor),
         Expr::Not(e) | Expr::Pre(e) | Expr::Exists { body: e, .. } => expr_mentions_actor(e),
         Expr::Implies { left, right }
         | Expr::Eq(left, right)
         | Expr::Le(left, right)
+        | Expr::Lt(left, right)
+        | Expr::Ge(left, right)
+        | Expr::Gt(left, right)
         | Expr::DateLe(left, right)
+        | Expr::DateLt(left, right)
+        | Expr::DateGe(left, right)
+        | Expr::DateGt(left, right)
         | Expr::Add(left, right)
         | Expr::Sub(left, right) => expr_mentions_actor(left) || expr_mentions_actor(right),
         Expr::Forall { source, body, .. } => {
@@ -1015,7 +1041,13 @@ fn short_expr_shape(expr: &Expr) -> String {
         Expr::Pre(_) => "pre(_)".to_string(),
         Expr::Eq(_, _) => "_ == _".to_string(),
         Expr::Le(_, _) => "_ <= _".to_string(),
+        Expr::Lt(_, _) => "_ < _".to_string(),
+        Expr::Ge(_, _) => "_ >= _".to_string(),
+        Expr::Gt(_, _) => "_ > _".to_string(),
         Expr::DateLe(_, _) => "_ on_or_before _".to_string(),
+        Expr::DateLt(_, _) => "_ before _".to_string(),
+        Expr::DateGe(_, _) => "_ on_or_after _".to_string(),
+        Expr::DateGt(_, _) => "_ after _".to_string(),
         Expr::Neq(_, _) => "_ != _".to_string(),
         Expr::In(_, _) => "_ in _".to_string(),
         Expr::Term(_) => "term".to_string(),
@@ -1611,7 +1643,6 @@ mod tests {
                 "total",
                 sum(
                     var("x"),
-                    "x",
                     and(vec![
                         in_(var("line"), var("lines")),
                         claim("P", vec![var("line"), var("x")]),
@@ -1966,7 +1997,6 @@ mod tests {
             body: le(
                 sum(
                     var("amount"),
-                    "amount",
                     claim("Payment", vec![wildcard(), var("amount")]),
                 ),
                 term(dec("1000")),
@@ -1992,7 +2022,7 @@ mod tests {
             name: "bad_sum".to_string(),
             version: 1,
             body: le(
-                sum(var("p"), "p", claim("Payment", vec![var("p"), wildcard()])),
+                sum(var("p"), claim("Payment", vec![var("p"), wildcard()])),
                 term(dec("1000")),
             ),
         }];
@@ -2020,7 +2050,7 @@ mod tests {
             name: "bad_sum_lit".to_string(),
             version: 1,
             body: le(
-                sum(date("2026-01-01"), "x", claim("X", vec![var("x")])),
+                sum(date("2026-01-01"), claim("X", vec![var("x")])),
                 term(dec("100")),
             ),
         }];
@@ -2064,11 +2094,7 @@ mod tests {
                 bind_one(claim("Q", vec![var("x")])),
                 require(le(
                     term(var("x")),
-                    sum(
-                        var("amount"),
-                        "amount",
-                        claim("P", vec![wildcard(), var("amount")]),
-                    ),
+                    sum(var("amount"), claim("P", vec![wildcard(), var("amount")])),
                 )),
                 // The Sum bound `amount` only inside its body. At
                 // this assert `amount` is unbound again, so it must
@@ -2225,11 +2251,7 @@ mod tests {
             keys: vec!["account".to_string()],
             values: vec![DerivedValue {
                 name: "count".to_string(),
-                expr: sum(
-                    var("amt"),
-                    "amt",
-                    claim("P", vec![var("account"), var("amt")]),
-                ),
+                expr: sum(var("amt"), claim("P", vec![var("account"), var("amt")])),
             }],
             domain: claim("P", vec![var("account"), wildcard()]),
         }];
@@ -2275,11 +2297,7 @@ mod tests {
             keys: vec!["account".to_string()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
-                expr: sum(
-                    var("amt"),
-                    "amt",
-                    claim("Line", vec![var("account"), var("amt")]),
-                ),
+                expr: sum(var("amt"), claim("Line", vec![var("account"), var("amt")])),
             }],
             domain: claim("Line", vec![var("account"), wildcard()]),
         }];

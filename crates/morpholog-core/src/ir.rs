@@ -72,19 +72,33 @@ pub enum Expr {
     Neq(Term, Term),
     Term(Term),
     Eq(Box<Expr>, Box<Expr>),
-    /// Decimal less-than-or-equal; both operands must evaluate to
-    /// `EvalValue::Decimal`. Predicate-shaped: empty match set when
-    /// false, the unchanged binding set when true. The only decimal
-    /// comparator in v0.
+    /// Decimal comparators. Both operands must evaluate to
+    /// `EvalValue::Decimal`. Predicate-shaped: the empty match set when
+    /// the comparison is false, the unchanged binding set when true.
+    /// `Le`/`Lt`/`Ge`/`Gt` are first-class rather than derived from a
+    /// single primitive so each renders and round-trips as written -
+    /// `amount > limit` stays `amount > limit`, never `not (amount <=
+    /// limit)`.
     Le(Box<Expr>, Box<Expr>),
-    /// Civil-date less-than-or-equal; both operands must evaluate to
+    /// Decimal strict less-than. See [`Expr::Le`].
+    Lt(Box<Expr>, Box<Expr>),
+    /// Decimal greater-than-or-equal. See [`Expr::Le`].
+    Ge(Box<Expr>, Box<Expr>),
+    /// Decimal strict greater-than. See [`Expr::Le`].
+    Gt(Box<Expr>, Box<Expr>),
+    /// Civil-date comparators. Both operands must evaluate to
     /// [`crate::EvalValue::Date`] (ISO-8601 `YYYY-MM-DD`, no time-of-day,
-    /// no time zone). Predicate-shaped like [`Expr::Le`]. Validity
+    /// no time zone). Predicate-shaped like the decimal comparators, but
+    /// kept separate so each type-checks its own operands. Validity
     /// windows built from `DateLe(from, d)` and `DateLe(d, to)` are
-    /// **inclusive at both ends**: `to == d` admits. Kept separate from
-    /// `Le` so each comparator type-checks its own operands. The only
-    /// date comparator in v0.
+    /// **inclusive at both ends**: `to == d` admits.
     DateLe(Box<Expr>, Box<Expr>),
+    /// Civil-date strict before. See [`Expr::DateLe`].
+    DateLt(Box<Expr>, Box<Expr>),
+    /// Civil-date on-or-after. See [`Expr::DateLe`].
+    DateGe(Box<Expr>, Box<Expr>),
+    /// Civil-date strict after. See [`Expr::DateLe`].
+    DateGt(Box<Expr>, Box<Expr>),
     /// Decimal subtraction; both operands must evaluate to
     /// `EvalValue::Decimal`, result is left minus right.
     Sub(Box<Expr>, Box<Expr>),
@@ -93,9 +107,12 @@ pub enum Expr {
     /// whole decimal-arithmetic surface in v0 - no multiplication or
     /// division until an example forces them.
     Add(Box<Expr>, Box<Expr>),
+    /// Sums `value` over every binding the `body` produces. `value` is
+    /// usually a variable bound by the body (`sum(amount | ...)`); a
+    /// decimal-literal `value` turns the sum into a count of matches
+    /// (`sum(1 | ...)`).
     Sum {
         value: Term,
-        binding: String,
         body: Box<Expr>,
     },
     Forall {

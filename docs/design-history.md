@@ -261,3 +261,36 @@ On the persistence side, the duplicate-intent collision - one transformation emi
 
 - `--strict` lint-grade hints (unused declarations, `sum(x | body)` with `x` absent from `body`, fuzzy "did you mean?" suggestions). The remaining check layer; this work's job was the runtime-error mirror.
 - Source spans on diagnostics. Unchanged: the IR still drops parser spans on lowering.
+
+
+### Counting via a constant `sum` target (and dropping `Sum.binding`)
+
+**Forced by:** the chess example wanted to count - "how many pieces are on the board?", "how many kings does white have?" - and nothing in the kernel could express it. The doctrine had already flagged the relaxation (`sum`'s target was "restricted to a variable in v0; relax when a worked example forces it"); a material census was that example.
+
+**Landed:** the surface `sum` target now accepts a decimal literal as well as a variable, so `sum(1 | body)` counts the bindings the body produces. The evaluator already resolved the target term once per match, so a literal target sums 1 each time - counting needed no evaluator change, only a parser relaxation and a formatter that renders the target from the term. Chess gained `piece_count_matches_board` (the hand-kept `PieceCount` must equal `sum(1 | PieceAt(...))`, so the counter can never drift from the board), `exactly_one_white_king` / `exactly_one_black_king` (count `= 1`, which forbids capturing a king - strictly stronger than the at-most-one rule it replaced), and an at-most-eight-pawns-per-colour bound. So chess now forces counting in addition to `Expr::Or` and `Expr::Pre`.
+
+The same change retired `Expr::Sum`'s `binding` field. It duplicated the target variable's name, the evaluator ignored it, and the formatter carried an `assert!(value == Var(binding))` with a "cannot round-trip" caveat. Once the formatter rendered the target from `value`, `binding` was vestigial - a loose end the counting work exposed and removed.
+
+**Considered and rejected:**
+
+- *A dedicated `Expr::Count` primitive.* Redundant with `sum(1 | body)`; the doctrine's anticipated move was to relax `sum`, not add a sibling that does the same arithmetic.
+
+**What stays out:**
+
+- A general expression as a `sum` target (`sum(debit - credit | ...)`). The IR's `value: Term` holds only a term; an expression target awaits an example that needs it.
+
+
+### The full comparator set per kind
+
+**Forced by:** ergonomics, not a worked example - the deliberate exception to "forced by example". The kernel had one comparator per kind (`Le` decimal, `DateLe` civil date) on the theory that the strict forms are derivable (`a > b` is `not (a <= b)`; `a >= b` is `b <= a`), so they were "sugar, not capability". That reasoning was wrong, for a reason the derivation hides: the kernel has no `>` to render, so the formatter would print `amount > limit` back as `not (amount <= limit)` everywhere it shows a programme - `parse`, `inspect`, diagnostics. Derivability buys nothing for *legibility*, and legibility for the auditor reading the formatted output is a core value. `not (a <= b)` is the third design principle's "the easy case is verbose, so the shape is wrong" smell.
+
+**Landed:** `Expr::Lt`/`Ge`/`Gt` (decimal, surface `<` `>=` `>`) and `Expr::DateLt`/`DateGe`/`DateGt` (civil date, surface `before` `on_or_after` `after`), each first-class so it renders and round-trips as written. The evaluator's two duplicated comparator arms became `decimal_comparison`/`date_comparison` helpers parameterised by an `admit` closure - the abstraction the fourth-through-eighth case finally forced. `before` and `after` are matched contextually in comparator position rather than reserved as keywords, because the chess and insurance examples already use `before`/`after` as variable names; reserving such common words would be its own ergonomic tax.
+
+**Considered and rejected:**
+
+- *Surface sugar that desugars `>` to `not(<=)`.* Smallest change, but it loses the legibility that is the entire point: the formatter would un-write the user's `>`. First-class variants are what make the surface form survive a round-trip.
+- *Reserving `before`/`after` as keywords.* Would have forced renames in existing examples and blocked two common variable names for everyone. Contextual matching avoids the tax.
+
+**What stays out:**
+
+- Date arithmetic and intervals (adding a duration to a date, interval length). The comparator set is complete; arithmetic on dates awaits an example.

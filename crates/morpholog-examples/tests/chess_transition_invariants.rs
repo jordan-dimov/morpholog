@@ -38,12 +38,183 @@ fn program_has_expected_invariant_set() {
         names,
         vec![
             "at_most_one_piece_per_square",
-            "one_king_per_color",
+            "exactly_one_white_king",
+            "exactly_one_black_king",
+            "piece_count_matches_board",
+            "board_with_pieces_has_a_counter",
+            "at_most_eight_pawns_per_color",
             "move_count_strictly_increases",
             "turn_alternates",
             "single_capture_per_move",
         ],
     );
+}
+
+/// Capturing a king is now structurally impossible. `exactly_one_
+/// black_king` pins the count of black kings to one, so a move that
+/// removes the last black king (count -> 0) is rejected - something the
+/// old at-most-one rule, which only forbade duplicates, could not do.
+#[test]
+fn capturing_a_king_is_rejected() {
+    use common::claim_instance;
+
+    // A minimal mid-game position: a white rook on a1 poised to take
+    // the black king on a8, both kings present, the counter consistent
+    // with the four pieces on the board.
+    let pre = State::from_claims(vec![
+        claim_instance("PieceAt", &[subj("a1"), subj("rook"), subj("white")]),
+        claim_instance("PieceAt", &[subj("e1"), subj("king"), subj("white")]),
+        claim_instance("PieceAt", &[subj("a8"), subj("king"), subj("black")]),
+        claim_instance("PieceAt", &[subj("h8"), subj("rook"), subj("black")]),
+        claim_instance("CurrentTurn", &[subj("white")]),
+        claim_instance("MoveCount", &[dec(10)]),
+        claim_instance("PieceCount", &[dec(4)]),
+    ]);
+
+    let program = chess_transition_invariants::program();
+    let capturing = program.transformation("capturing_move").expect("exists");
+    let outcome = propose_with_test_actor(
+        capturing,
+        vec![subj("a1"), subj("a8"), subj("black")],
+        &pre,
+        &program.invariants,
+    )
+    .expect("kernel must not error");
+
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("exactly_one_black_king"),
+            "expected the king-count invariant to reject the capture, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("capturing a king must be rejected: a colour always has exactly one king")
+        }
+    }
+}
+
+/// The census invariant `piece_count_matches_board` has teeth: a move
+/// that leaves a stray piece on the board without updating `PieceCount`
+/// is rejected, because the hand-maintained counter no longer equals
+/// `sum(1 | PieceAt(...))`.
+#[test]
+fn piece_count_drift_is_rejected() {
+    use morpholog_core::Transformation;
+    use morpholog_core::dsl;
+
+    let mut program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+
+    // A knight move that admits the piece at the destination but forgets
+    // to retract it from the source - so the board gains a piece while
+    // PieceCount stays at 32. MoveCount and CurrentTurn are handled
+    // correctly, so the census invariant is the one that must fire.
+    let drifting_move = Transformation {
+        name: "drifting_move".to_string(),
+        parameters: dsl::params(&["src", "dst", "new_turn"]),
+        body: vec![
+            dsl::bind_one(dsl::claim(
+                "PieceAt",
+                vec![dsl::var("src"), dsl::var("pt"), dsl::var("pc")],
+            )),
+            dsl::bind_one(dsl::claim("CurrentTurn", vec![dsl::var("turn")])),
+            dsl::bind_one(dsl::claim("MoveCount", vec![dsl::var("m")])),
+            dsl::require(dsl::neq(dsl::var("new_turn"), dsl::var("turn"))),
+            dsl::let_(
+                "next_m",
+                dsl::add(dsl::term(dsl::var("m")), dsl::term(dsl::dec("1"))),
+            ),
+            dsl::retract("CurrentTurn", vec![dsl::var("turn")]),
+            dsl::retract("MoveCount", vec![dsl::var("m")]),
+            // Conspicuously missing: retract of the piece at `src`.
+            dsl::assert_(
+                "PieceAt",
+                vec![dsl::var("dst"), dsl::var("pt"), dsl::var("pc")],
+            ),
+            dsl::assert_("CurrentTurn", vec![dsl::var("new_turn")]),
+            dsl::assert_("MoveCount", vec![dsl::var("next_m")]),
+        ],
+    };
+    program.transformations.push(drifting_move);
+    let drifting = program
+        .transformation("drifting_move")
+        .expect("just pushed");
+
+    // Knight b1 -> c3 (c3 is empty in the opening); the knight ends up
+    // on both squares.
+    let outcome = propose_with_test_actor(
+        drifting,
+        vec![subj("b1"), subj("c3"), subj("black")],
+        &state,
+        &program.invariants,
+    )
+    .expect("kernel must not error");
+
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("piece_count_matches_board"),
+            "expected the census invariant to reject the drift, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("a move that adds a piece without updating PieceCount must be rejected")
+        }
+    }
+}
+
+/// Dropping the counter entirely is also caught. `piece_count_matches_
+/// board` is vacuous with no `PieceCount` present, but `board_with_
+/// pieces_has_a_counter` requires a non-empty board to carry a counter,
+/// so a move that retracts `PieceCount` without re-admitting it is
+/// refused.
+#[test]
+fn dropping_the_piece_counter_is_rejected() {
+    use morpholog_core::Transformation;
+    use morpholog_core::dsl;
+
+    let mut program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+
+    let counterless_move = Transformation {
+        name: "counterless_move".to_string(),
+        parameters: dsl::params(&["new_turn"]),
+        body: vec![
+            dsl::bind_one(dsl::claim("CurrentTurn", vec![dsl::var("turn")])),
+            dsl::bind_one(dsl::claim("MoveCount", vec![dsl::var("m")])),
+            dsl::bind_one(dsl::claim("PieceCount", vec![dsl::var("p")])),
+            dsl::require(dsl::neq(dsl::var("new_turn"), dsl::var("turn"))),
+            dsl::let_(
+                "next_m",
+                dsl::add(dsl::term(dsl::var("m")), dsl::term(dsl::dec("1"))),
+            ),
+            dsl::retract("CurrentTurn", vec![dsl::var("turn")]),
+            dsl::retract("MoveCount", vec![dsl::var("m")]),
+            dsl::retract("PieceCount", vec![dsl::var("p")]),
+            // Conspicuously missing: re-admit of PieceCount.
+            dsl::assert_("CurrentTurn", vec![dsl::var("new_turn")]),
+            dsl::assert_("MoveCount", vec![dsl::var("next_m")]),
+        ],
+    };
+    program.transformations.push(counterless_move);
+    let counterless = program
+        .transformation("counterless_move")
+        .expect("just pushed");
+
+    let outcome = propose_with_test_actor(
+        counterless,
+        vec![subj("black")],
+        &state,
+        &program.invariants,
+    )
+    .expect("kernel must not error");
+
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("board_with_pieces_has_a_counter"),
+            "expected the presence invariant to reject the dropped counter, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("dropping PieceCount on a non-empty board must be rejected")
+        }
+    }
 }
 
 // ============================================================

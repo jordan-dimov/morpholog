@@ -107,10 +107,9 @@ fn arb_expr() -> impl Strategy<Value = Expr> {
                     body: Box::new(body),
                 }
             }),
-            (arb_term(), arb_var_name(), inner.clone()).prop_map(|(value, binding, body)| {
+            (arb_term(), arb_var_name(), inner.clone()).prop_map(|(value, _binding, body)| {
                 Expr::Sum {
                     value,
-                    binding,
                     body: Box::new(body),
                 }
             }),
@@ -274,7 +273,6 @@ fn nest_expr(node: usize, depth: usize, leaf: Expr) -> Expr {
             },
             6 => Expr::Sum {
                 value: Term::Wildcard,
-                binding: "x".to_string(),
                 body: Box::new(e),
             },
             7 => Expr::Le(Box::new(e), filler()),

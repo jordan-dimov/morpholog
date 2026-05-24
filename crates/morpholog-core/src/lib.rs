@@ -263,7 +263,6 @@ mod tests {
             ),
             Expr::Sum {
                 value: Term::Var("v".to_string()),
-                binding: "v".to_string(),
                 body: Box::new(claim("P_sum_body")),
             },
             Expr::Forall {
@@ -497,6 +496,53 @@ mod tests {
             }
             other => panic!("expected TypeMismatch, got {other:?}"),
         }
+    }
+
+    /// The decimal strict/inclusive comparators admit in the right
+    /// direction: `Gt`/`Lt` are strict, `Ge` includes equality.
+    #[test]
+    fn decimal_strict_comparators_pin_direction() {
+        let d = |s: &str| Box::new(Expr::Term(Term::Literal(Value::Decimal(s.to_string()))));
+        let admits = |e: Expr| {
+            !find_matches(&e, &ctx(&State::from_claims(vec![]), &Bindings::new()))
+                .unwrap()
+                .is_empty()
+        };
+        assert!(admits(Expr::Gt(d("5"), d("3"))));
+        assert!(!admits(Expr::Gt(d("3"), d("5"))));
+        assert!(!admits(Expr::Gt(d("3"), d("3"))));
+        assert!(admits(Expr::Lt(d("3"), d("5"))));
+        assert!(!admits(Expr::Lt(d("3"), d("3"))));
+        assert!(admits(Expr::Ge(d("3"), d("3"))));
+        assert!(!admits(Expr::Ge(d("3"), d("5"))));
+    }
+
+    /// The civil-date comparators mirror the decimal ones: `before`
+    /// (`DateLt`) and `after` (`DateGt`) are strict, `on_or_after`
+    /// (`DateGe`) includes equality.
+    #[test]
+    fn date_strict_comparators_pin_direction() {
+        let admits = |e: Expr| {
+            !find_matches(&e, &ctx(&State::from_claims(vec![]), &Bindings::new()))
+                .unwrap()
+                .is_empty()
+        };
+        assert!(admits(Expr::DateLt(
+            Box::new(date_lit("2026-01-01")),
+            Box::new(date_lit("2026-06-01")),
+        )));
+        assert!(!admits(Expr::DateLt(
+            Box::new(date_lit("2026-06-01")),
+            Box::new(date_lit("2026-06-01")),
+        )));
+        assert!(admits(Expr::DateGt(
+            Box::new(date_lit("2026-06-01")),
+            Box::new(date_lit("2026-01-01")),
+        )));
+        assert!(admits(Expr::DateGe(
+            Box::new(date_lit("2026-06-01")),
+            Box::new(date_lit("2026-06-01")),
+        )));
     }
 
     /// A `Value::Date` literal in a `claim` argument matches a claim

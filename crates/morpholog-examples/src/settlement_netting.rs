@@ -36,7 +36,6 @@ pub fn net_amount_equals_lines() -> Invariant {
                 term(var("amount")),
                 sum(
                     var("x"),
-                    "x",
                     claim("SettlementLine", vec![wildcard(), var("net"), var("x")]),
                 ),
             ),
@@ -83,7 +82,6 @@ pub fn create_net_settlement() -> Transformation {
                 "amount",
                 sum(
                     var("x"),
-                    "x",
                     and(vec![
                         in_(var("line"), var("lines")),
                         claim("LineAmount", vec![var("line"), var("x")]),

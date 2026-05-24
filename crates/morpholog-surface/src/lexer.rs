@@ -14,7 +14,7 @@
 //!   string-valued because the runtime parses to
 //!   `rust_decimal::Decimal`, never to a float.
 //! - Punctuation: `(`, `)`, `:`, `,`.
-//! - Comparators: `=`, `!=`, `<=`.
+//! - Comparators: `=`, `!=`, `<=`, `<`, `>=`, `>`.
 //! - Arithmetic: `+`, `-`.
 //! - Wildcard: `_`.
 //!
@@ -98,8 +98,14 @@ pub enum Token {
     /// `Expr::DateLe`. Distinct from decimal `<=` because the kernel
     /// keeps `Expr::Le` (decimal) and `Expr::DateLe` (civil date) as
     /// separate IR primitives; the surface refuses to overload by
-    /// operand type.
+    /// operand type. The strict/after date comparators `before`,
+    /// `after`, and `on_or_after` complete the set; `before` and
+    /// `after` are matched contextually by the parser (not reserved),
+    /// so they stay usable as variable names.
     KwOnOrBefore,
+    /// `on_or_after` infix operator for civil-date `>=`; lowers to
+    /// `Expr::DateGe`.
+    KwOnOrAfter,
 
     // ---- Layout virtual tokens ----
     //
@@ -200,6 +206,12 @@ pub enum Token {
     /// `<=`, decimal-only; lowers to `Expr::Le`. (`on_or_before` is the
     /// surface for `Expr::DateLe` on civil dates.)
     Le,
+    /// `<`, decimal-only; lowers to `Expr::Lt`.
+    Lt,
+    /// `>=`, decimal-only; lowers to `Expr::Ge`.
+    Ge,
+    /// `>`, decimal-only; lowers to `Expr::Gt`.
+    Gt,
     /// `+` (Add).
     Plus,
     /// `-` (Sub).
@@ -226,6 +238,7 @@ impl fmt::Display for Token {
             Token::KwDerived => write!(f, "`derived`"),
             Token::KwOver => write!(f, "`over`"),
             Token::KwOnOrBefore => write!(f, "`on_or_before`"),
+            Token::KwOnOrAfter => write!(f, "`on_or_after`"),
             Token::Indent => write!(f, "indent"),
             Token::Dedent => write!(f, "dedent"),
             Token::KwNot => write!(f, "`not`"),
@@ -253,6 +266,9 @@ impl fmt::Display for Token {
             Token::Eq => write!(f, "`=`"),
             Token::Neq => write!(f, "`!=`"),
             Token::Le => write!(f, "`<=`"),
+            Token::Lt => write!(f, "`<`"),
+            Token::Ge => write!(f, "`>=`"),
+            Token::Gt => write!(f, "`>`"),
             Token::Plus => write!(f, "`+`"),
             Token::Minus => write!(f, "`-`"),
         }
@@ -302,6 +318,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "over" => Token::KwOver,
         // Civil-date <= comparator
         "on_or_before" => Token::KwOnOrBefore,
+        "on_or_after" => Token::KwOnOrAfter,
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),
@@ -377,7 +394,12 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     // next token-attempt fails and the lex error surfaces with its span.
     let operator = choice((
         just("!=").to(Token::Neq),
+        // Multi-char forms before their single-char prefixes: `<=`
+        // before `<`, `>=` before `>`.
         just("<=").to(Token::Le),
+        just('<').to(Token::Lt),
+        just(">=").to(Token::Ge),
+        just('>').to(Token::Gt),
         just('=').to(Token::Eq),
         just('+').to(Token::Plus),
         just('-').to(Token::Minus),

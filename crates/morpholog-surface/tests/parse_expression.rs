@@ -724,16 +724,10 @@ fn nested_forall() {
 #[test]
 fn parses_sum() {
     let got = parse_expression("sum(amount | SettlementPaid(claim, amount))").unwrap();
-    let Expr::Sum {
-        value,
-        binding,
-        body,
-    } = got
-    else {
+    let Expr::Sum { value, body } = got else {
         panic!("expected Sum");
     };
     assert_eq!(value, Term::Var("amount".to_string()));
-    assert_eq!(binding, "amount");
     assert!(matches!(*body, Expr::Claim { .. }));
 }
 
@@ -750,17 +744,80 @@ fn sum_body_can_be_compound() {
 }
 
 #[test]
-fn sum_target_must_be_variable_not_literal() {
-    // `sum(5 | ...)` is not valid: parser requires an Ident for
-    // the target. The parser fails with an unexpected-token diagnostic.
-    let errs = parse_expression("sum(5 | Foo())").expect_err("literal target should fail");
-    assert!(!errs.is_empty());
+fn sum_target_can_be_a_decimal_literal_for_counting() {
+    // `sum(1 | ...)` counts matches: the target is the literal 1, added
+    // once per match. The parser accepts a decimal-literal target
+    // alongside a variable.
+    let got = parse_expression("sum(1 | Foo())").expect("literal target should parse");
+    let Expr::Sum { value, .. } = got else {
+        panic!("expected Sum, got {got:?}");
+    };
+    assert_eq!(value, Term::Literal(Value::Decimal("1".to_string())));
 }
 
 #[test]
 fn sum_target_must_be_variable_not_wildcard() {
     let errs = parse_expression("sum(_ | Foo())").expect_err("wildcard target should fail");
     assert!(!errs.is_empty());
+}
+
+// ---- comparators ----
+
+#[test]
+fn parses_decimal_strict_comparators() {
+    assert!(matches!(parse_expression("a < b").unwrap(), Expr::Lt(_, _)));
+    assert!(matches!(parse_expression("a > b").unwrap(), Expr::Gt(_, _)));
+    assert!(matches!(
+        parse_expression("a >= b").unwrap(),
+        Expr::Ge(_, _)
+    ));
+    // The point of first-class comparators: each round-trips as written,
+    // never as `not (a <= b)`.
+    for src in ["a < b", "a > b", "a >= b", "a <= b"] {
+        assert_eq!(format_expr_inline(&parse_expression(src).unwrap()), src);
+    }
+}
+
+#[test]
+fn parses_date_strict_comparators() {
+    assert!(matches!(
+        parse_expression("d1 before d2").unwrap(),
+        Expr::DateLt(_, _)
+    ));
+    assert!(matches!(
+        parse_expression("d1 after d2").unwrap(),
+        Expr::DateGt(_, _)
+    ));
+    assert!(matches!(
+        parse_expression("d1 on_or_after d2").unwrap(),
+        Expr::DateGe(_, _)
+    ));
+    for src in [
+        "d1 before d2",
+        "d1 after d2",
+        "d1 on_or_after d2",
+        "d1 on_or_before d2",
+    ] {
+        assert_eq!(format_expr_inline(&parse_expression(src).unwrap()), src);
+    }
+}
+
+#[test]
+fn before_and_after_remain_usable_as_variable_names() {
+    // `before`/`after` are contextual comparators, not reserved words:
+    // in argument position they are ordinary variables, which the chess
+    // and insurance examples rely on.
+    let got = parse_expression("Headroom(before, after)").unwrap();
+    let Expr::Claim { args, .. } = got else {
+        panic!("expected Claim, got {got:?}");
+    };
+    assert_eq!(
+        args,
+        vec![
+            Term::Var("before".to_string()),
+            Term::Var("after".to_string()),
+        ]
+    );
 }
 
 // ---- value lookup ----
