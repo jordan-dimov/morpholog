@@ -23,7 +23,7 @@ With the input/output boundaries, the kind/type-compatibility layer, and the int
 - **Enriched `morpholog check`.** The structural check (arity, declarations, duplicates for both predicates and intents) and Layer 1 (kind/type compatibility, covering both vocabularies) ship today. Three layers remain, each independently testable:
     - **Unbound-variable detection.** Walk each transformation body's binding flow (parameters -> `bind` -> `let` -> `for`); flag any `require`/`admit`/`emit` that references a name nothing introduced. The natural home for a symmetric "value-shaped expression at predicate position" check the kind layer deliberately left out.
     - **Actor-in-wrong-context.** `Term::Actor` resolves only inside transformation bodies; the kernel raises `UnboundActor` if an invariant or derived claim mentions `actor`. Catch it statically with a clear "actor is not available in invariant bodies - authority belongs in `require`" message.
-    - **Lint-grade hints under `--strict`.** Unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on UndeclaredPredicate.
+    - **Lint-grade hints under `--strict`.** Unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on an `Undeclared` reference.
 
     Each layer is a separate small PR. `--strict` promotes hints to errors. `--json` emits diagnostics in a tooling-friendly form for IDE integration later.
 

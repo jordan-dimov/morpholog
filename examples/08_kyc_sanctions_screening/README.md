@@ -6,11 +6,11 @@ This example is the smallest Morpholog programme that holds those constraints ho
 
 > No customer may hold *onboarded* standing without a current screening per list-type whose disposition is *clean* (or adjudicated-clear) and whose expiry has not been reached by the onboarding date - and no unresolved match against any current screening.
 
-That single sentence becomes four invariants. Onboarding the wrong customer is structurally impossible.
+That single sentence becomes a handful of invariants - structural uniqueness of the currentness pointer, a current-clean screening per list-type, and a no-unresolved-match gate. Onboarding the wrong customer is structurally impossible.
 
 ## What it forces
 
-This example is the worked-example reason for `IntentDecl` to exist in the kernel. The four intents - `ScreeningRequested`, `MatchRaised`, `CustomerOnboarded`, `CustomerRejected` - each route to a distinct downstream consumer (provider API, analyst queue, core banking, compliance reporting). If `MatchRaised` were a stringly-typed emit and someone wrote `MatchRased`, it would silently create a new outbox partition that no analyst reviews. Declaring intents as first-class vocabulary, parallel to predicates, makes that impossible at validation time.
+This example is the worked-example reason for `IntentDecl` to exist in the kernel. Each emitted intent - `ScreeningRequested`, `MatchRaised`, `CustomerOnboarded`, `CustomerRejected` - routes to a distinct downstream consumer (provider API, analyst queue, core banking, compliance reporting). If `MatchRaised` were a stringly-typed emit and someone wrote `MatchRased`, it would silently create a new outbox partition that no analyst reviews. Declaring intents as first-class vocabulary, parallel to predicates, makes that impossible at validation time.
 
 The example also exercises the round-trip compute pattern from the three-zone doctrine (`docs/scope-and-ambition.md`):
 
