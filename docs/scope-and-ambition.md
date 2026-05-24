@@ -218,6 +218,22 @@ These are not seven different failures. They are one failure with seven faces: *
 
 Morpholog's claim is that this whole class of failure becomes non-representable when the language itself is the legitimacy boundary. Measured this way, Morpholog owns **the majority of the legitimacy surface** of a serious business system while still being a minority of the lines of code. That is the ambition, and it is the right frame; "X% of the codebase" is the wrong one.
 
+## Where Morpholog fits: fragile legitimacy, not hard calculation
+
+That failure family points at the kind of domain where Morpholog earns its place - a wider category than "regulated finance". The recurring shape is **official standing**: the moment something becomes *allowed, recognised, paid, certified, released, listed, funded, or treated as compliant*. Morpholog is strongest wherever the expensive failure is not a bad calculation but a bad standing - a state treated as legitimate that no one can, afterwards, justify. Put another way, the category is **systems where being wrong is not merely incorrect, but illegitimate**.
+
+A domain fits to the degree it has five properties, not by how complex its arithmetic is:
+
+1. A bad official state is expensive - legally, financially, or in safety terms.
+2. The rules are cross-cutting and scattered today (email, PDFs, spreadsheets, separate systems).
+3. Evidence matters as much as calculation.
+4. Audit and explanation carry monetary or legal weight.
+5. There are external effects after commit (a payment, a certificate, an instruction).
+
+Finance, KYC, insurance, clinical trials, and energy settlement score high - but so do trade finance, supply-chain custody, environmental-attribute claims (carbon credits, certificates of origin: "no green claim without admissible provenance"), healthcare eligibility, data-access governance, and the admission of AI-agent actions ("the agent may propose; only legitimate actions become official"). The diagnostic questions are always the same - *why was this allowed, who had the authority, what evidence existed at the time, what obligation did it create, what downstream effect did it emit, and what would have blocked it?* - which is the same observation as: **the legitimacy engine and the [explanation engine](roadmap.md) are one bet.** A domain becomes demonstrably compelling only once Morpholog can answer those questions about it.
+
+The boundary discipline holds across every one of these: Morpholog governs the *admission of the official-standing claim* - the permit is issued, the action approved, the credit retired - never the physical or computational act behind it (the switching hardware, the AI agent's reasoning and drift, the meter). Those stay outside and return as admitted evidence. It is the discipline that keeps "official state is everywhere" from eroding the inside/outside line.
+
 ## Roadmap
 
 Three levels. Each one is proven by a worked example before any language affordance is locked in.
