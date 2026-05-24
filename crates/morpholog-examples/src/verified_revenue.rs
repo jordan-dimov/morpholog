@@ -409,6 +409,25 @@ pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "verified_revenue".to_string(),
         predicates: all_predicates(),
+        intents: vec![
+            intent_decl("IndependentVerificationAdmitted")
+                .subject("verification_id")
+                .build(),
+            intent_decl("VerificationCorrected")
+                .subject("new_verification_id")
+                .subject("prior_verification_id")
+                .build(),
+            intent_decl("StandingGranted").subject("grant_id").build(),
+            intent_decl("StandingRevocationAdmitted")
+                .subject("revocation_id")
+                .build(),
+            intent_decl("DebtServiceRevenueAdmitted")
+                .subject("decision_id")
+                .build(),
+            intent_decl("InvestorReportedRevenueAdmitted")
+                .subject("report_id")
+                .build(),
+        ],
         invariants: all_invariants(),
         transformations: vec![
             admit_independent_verification(),

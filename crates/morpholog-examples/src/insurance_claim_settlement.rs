@@ -436,6 +436,19 @@ pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "insurance_claim_settlement".to_string(),
         predicates: all_predicates(),
+        intents: vec![
+            intent_decl("PolicyIssued").subject("policy_id").build(),
+            intent_decl("ClaimReported").subject("claim_id").build(),
+            intent_decl("SettlementAuthorityGranted")
+                .subject("principal")
+                .decimal("limit")
+                .build(),
+            intent_decl("ClaimPaymentRequested")
+                .subject("settlement_id")
+                .decimal("amount")
+                .subject("actor")
+                .build(),
+        ],
         invariants: all_invariants(),
         transformations: vec![
             issue_policy(),

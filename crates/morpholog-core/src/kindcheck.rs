@@ -1002,7 +1002,7 @@ mod tests {
     // ============================================================
 
     use crate::dsl::*;
-    use crate::ir::{Invariant, PredicateArgDecl, Program, Transformation};
+    use crate::ir::{ArgDecl, Invariant, Program, Transformation};
 
     /// Build a `PredicateDecl` shorthand for tests.
     fn pdecl(name: &str, args: &[(&str, PredicateArgKind)]) -> crate::ir::PredicateDecl {
@@ -1010,7 +1010,7 @@ mod tests {
             name: name.to_string(),
             args: args
                 .iter()
-                .map(|(n, k)| PredicateArgDecl {
+                .map(|(n, k)| ArgDecl {
                     name: n.to_string(),
                     kind: *k,
                 })
@@ -1022,6 +1022,7 @@ mod tests {
         Program {
             name: "test".to_string(),
             predicates: vec![],
+            intents: vec![],
             invariants: vec![],
             transformations: vec![],
             derived_claims: vec![],

@@ -290,6 +290,18 @@ pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "chess_transition_invariants".to_string(),
         predicates: all_predicates(),
+        intents: vec![
+            intent_decl("GameStarted").build(),
+            intent_decl("PieceMoved")
+                .subject("src")
+                .subject("dst")
+                .build(),
+            intent_decl("PieceCaptured")
+                .subject("src")
+                .subject("dst")
+                .subject("captured_type")
+                .build(),
+        ],
         invariants: all_invariants(),
         transformations: vec![start_game(), quiet_move(), capturing_move()],
         derived_claims: vec![],

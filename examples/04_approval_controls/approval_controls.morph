@@ -35,6 +35,12 @@ predicate Approval(doc_id: Subject, doc_type: Subject, actor: Subject)
 predicate ApprovalLimit(actor: Subject, doc_type: Subject, limit: Decimal)
 predicate LimitedApproval(doc_id: Subject, doc_type: Subject, amount: Decimal, actor: Subject)
 
+intent ApprovalAuthorityGranted(principal: Subject, doc_type: Subject)
+intent ApprovalAuthorityRevoked(principal: Subject, doc_type: Subject)
+intent DocumentApproved(doc_id: Subject, actor: Subject)
+intent ApprovalLimitGranted(principal: Subject, doc_type: Subject, limit: Decimal)
+intent ApprovalLimitRevoked(principal: Subject, doc_type: Subject, limit: Decimal)
+intent DocumentApprovedWithinLimit(doc_id: Subject, actor: Subject, amount: Decimal)
 
 
 -- ===========================================================

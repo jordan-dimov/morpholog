@@ -366,6 +366,8 @@ program temp_ledger
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
 predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
 
+intent JournalEntryPosted(entry_id: Subject)
+
 invariant balanced_posted_entry:
     JournalEntry(entry, _, _) implies (sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c)))
 
@@ -450,6 +452,8 @@ program temp_ledger_unbalanced
 
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
 predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
+
+intent JournalEntryPosted(entry_id: Subject)
 
 invariant balanced_posted_entry:
     JournalEntry(entry, _, _) implies (sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c)))

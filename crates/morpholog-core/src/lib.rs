@@ -48,8 +48,8 @@ pub use analysis::{
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::EvalError;
 pub use ir::{
-    Claim, DerivedClaim, DerivedValue, Expr, Intent, Invariant, PredicateArgDecl, PredicateArgKind,
-    PredicateDecl, Program, Stmt, Term, Transformation, Value,
+    ArgDecl, Claim, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
+    PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -1233,6 +1233,7 @@ mod tests {
         Program {
             name: "tiny".to_string(),
             predicates: vec![predicate("Echo").subject("id").decimal("amount").build()],
+            intents: vec![],
             invariants: vec![],
             transformations: vec![Transformation {
                 name: "echo".to_string(),

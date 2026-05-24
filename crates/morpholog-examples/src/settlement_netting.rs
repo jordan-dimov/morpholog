@@ -164,6 +164,7 @@ pub fn program() -> morpholog_core::Program {
     morpholog_core::Program {
         name: "settlement_netting".to_string(),
         predicates: all_predicates(),
+        intents: vec![intent_decl("NetSettlementCreated").subject("net").build()],
         invariants: all_invariants(),
         transformations: vec![create_net_settlement()],
         derived_claims: vec![],

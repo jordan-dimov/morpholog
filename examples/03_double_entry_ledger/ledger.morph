@@ -26,6 +26,10 @@ predicate PeriodClosed(period: Subject)
 predicate Supersedes(new_entry_id: Subject, prior_entry_id: Subject)
 predicate TrialBalanceRow(account: Subject, balance: Decimal)
 
+intent JournalEntryPosted(entry_id: Subject)
+intent PeriodClosed(period: Subject)
+intent JournalEntryRestated(new_entry_id: Subject, prior_entry_id: Subject)
+
 
 invariant balanced_posted_entry:
     JournalEntry(entry, _, _) implies sum(d | JournalLine(entry, _, d, _)) = sum(c | JournalLine(entry, _, _, c))

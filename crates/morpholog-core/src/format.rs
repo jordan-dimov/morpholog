@@ -63,6 +63,15 @@ pub fn format_program(p: &Program) -> String {
         }
     }
 
+    // Intents render after predicates in their own section,
+    // matching the two-vocabulary distinction visually.
+    if !p.intents.is_empty() {
+        out.push('\n');
+        for decl in &p.intents {
+            out.push_str(&format_intent_decl(decl));
+        }
+    }
+
     for inv in &p.invariants {
         out.push('\n');
         out.push_str(&format_invariant(inv));
@@ -90,6 +99,17 @@ pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
         .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(a.kind)))
         .collect();
     format!("predicate {}({})\n", decl.name, args.join(", "))
+}
+
+/// Render a single [`IntentDecl`] as one line:
+/// `intent Name(arg1: Kind, arg2: Kind)`.
+pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
+    let args: Vec<String> = decl
+        .args
+        .iter()
+        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(a.kind)))
+        .collect();
+    format!("intent {}({})\n", decl.name, args.join(", "))
 }
 
 fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
@@ -425,6 +445,7 @@ mod tests {
         let p = Program {
             predicates: vec![],
             name: "demo".to_string(),
+            intents: vec![],
             invariants: vec![],
             transformations: vec![],
             derived_claims: vec![],
@@ -492,6 +513,7 @@ mod tests {
                 predicate("Foo").subject("a").build(),
                 predicate("Bar").decimal("n").build(),
             ],
+            intents: vec![],
             invariants: vec![],
             transformations: vec![],
             derived_claims: vec![],
@@ -598,6 +620,7 @@ mod tests {
         let p = Program {
             predicates: vec![],
             name: "demo".to_string(),
+            intents: vec![],
             invariants: vec![],
             transformations: vec![Transformation {
                 name: "noop".to_string(),

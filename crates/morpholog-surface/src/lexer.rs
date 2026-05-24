@@ -63,6 +63,8 @@ pub enum Token {
     KwProgram,
     /// `predicate` keyword.
     KwPredicate,
+    /// `intent` keyword (intent-declaration surface).
+    KwIntent,
     /// Kind keyword in a predicate-arg position.
     Kind(PredicateArgKind),
 
@@ -249,6 +251,7 @@ impl fmt::Display for Token {
         match self {
             Token::KwProgram => write!(f, "`program`"),
             Token::KwPredicate => write!(f, "`predicate`"),
+            Token::KwIntent => write!(f, "`intent`"),
             Token::Kind(k) => write!(f, "kind `{:?}`", k),
             Token::KwInvariant => write!(f, "`invariant`"),
             Token::KwTransformation => write!(f, "`transformation`"),
@@ -325,6 +328,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         // P1 reserved words
         "program" => Token::KwProgram,
         "predicate" => Token::KwPredicate,
+        "intent" => Token::KwIntent,
         "invariant" => Token::KwInvariant,
         "transformation" => Token::KwTransformation,
         "require" => Token::KwRequire,

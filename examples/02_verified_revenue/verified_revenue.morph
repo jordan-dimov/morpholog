@@ -34,6 +34,13 @@ predicate StandingRevoked(verification_id: Subject, purpose: Subject, revocation
 predicate DebtServiceRevenue(asset: Subject, period: Subject, amount: Decimal, decision_id: Subject, verification_id: Subject)
 predicate InvestorReportedRevenue(asset: Subject, period: Subject, amount: Decimal, report_id: Subject, verification_id: Subject)
 
+intent IndependentVerificationAdmitted(verification_id: Subject)
+intent VerificationCorrected(new_verification_id: Subject, prior_verification_id: Subject)
+intent StandingGranted(grant_id: Subject)
+intent StandingRevocationAdmitted(revocation_id: Subject)
+intent DebtServiceRevenueAdmitted(decision_id: Subject)
+intent InvestorReportedRevenueAdmitted(report_id: Subject)
+
 
 invariant admissibility_has_provenance:
     AdmissibleFor(v, p) implies StandingGrantedBy(v, p, _, _)

@@ -46,6 +46,17 @@ predicate DelegatedInvestigator(investigator: Subject, trial_id: Subject, role: 
 predicate ImportantProtocolDeviationOpen(participant_id: Subject, trial_id: Subject, deviation_id: Subject)
 predicate ParticipantRandomised(participant_id: Subject, trial_id: Subject, protocol_version: Subject, randomised_on: Date, randomised_by: Subject)
 
+intent TrialOpened(trial_id: Subject)
+intent ProtocolVersionApproved(trial_id: Subject, protocol_version: Subject)
+intent ConsentFormVersionApproved(trial_id: Subject, consent_form_version: Subject)
+intent InvestigatorDelegated(investigator: Subject, trial_id: Subject, role: Subject)
+intent ParticipantScreened(participant_id: Subject, trial_id: Subject)
+intent InformedConsentObtained(participant_id: Subject, consent_form_version: Subject)
+intent EligibilityCriterionRecorded(protocol_version: Subject, criterion_id: Subject)
+intent EligibilityAssessmentRecorded(participant_id: Subject, criterion_id: Subject)
+intent ImportantProtocolDeviationOpened(participant_id: Subject, trial_id: Subject, deviation_id: Subject)
+intent ParticipantRandomised(participant_id: Subject)
+
 
 -- ============================================================
 -- Invariant: protocol version has at most one effective window.

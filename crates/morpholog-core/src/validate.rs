@@ -266,11 +266,34 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
         });
     }
 
-    // Build a name -> arity lookup once. If duplicates exist, the last
-    // declaration wins for arity-lookup purposes; the duplicate error
-    // above already surfaces the problem.
+    // Same duplicate check for intents - separate namespace.
+    let mut seen_intents = HashMap::<&str, usize>::new();
+    for decl in &p.intents {
+        *seen_intents.entry(decl.name.as_str()).or_insert(0) += 1;
+    }
+    let mut dup_intents: Vec<&str> = seen_intents
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(name, _)| *name)
+        .collect();
+    dup_intents.sort();
+    for name in dup_intents {
+        errors.push(ValidationError::DuplicateDecl {
+            vocabulary: VocabularyKind::Intent,
+            name: name.to_string(),
+        });
+    }
+
+    // Build name -> arity lookups for both vocabularies. Predicate
+    // and intent namespaces are separate; a name appearing in both
+    // is unusual but lawful.
     let arities: HashMap<&str, usize> = p
         .predicates
+        .iter()
+        .map(|d| (d.name.as_str(), d.args.len()))
+        .collect();
+    let intent_arities: HashMap<&str, usize> = p
+        .intents
         .iter()
         .map(|d| (d.name.as_str(), d.args.len()))
         .collect();
@@ -289,7 +312,7 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
             name: t.name.clone(),
         };
         for stmt in &t.body {
-            validate_stmt(stmt, &arities, &ctx, &mut errors);
+            validate_stmt(stmt, &arities, &intent_arities, &ctx, &mut errors);
         }
     }
 
@@ -331,6 +354,7 @@ fn collect_structural_errors(p: &Program) -> Vec<ValidationError> {
 pub(crate) fn validate_stmt(
     stmt: &Stmt,
     arities: &HashMap<&str, usize>,
+    intent_arities: &HashMap<&str, usize>,
     ctx: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -363,12 +387,18 @@ pub(crate) fn validate_stmt(
         } => {
             validate_expr(collection, arities, ctx, errors);
             for inner in body {
-                validate_stmt(inner, arities, ctx, errors);
+                validate_stmt(inner, arities, intent_arities, ctx, errors);
             }
         }
-        Stmt::Emit(_) => {
-            // Intents are not part of the claim vocabulary; an
-            // IntentDecl is a future, separate concept.
+        Stmt::Emit(intent) => {
+            check_declared(
+                VocabularyKind::Intent,
+                &intent.name,
+                intent.args.len(),
+                intent_arities,
+                ctx,
+                errors,
+            );
         }
     }
 }
