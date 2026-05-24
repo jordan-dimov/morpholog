@@ -165,6 +165,11 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         cx.context = ValidationContext::Invariant {
             name: inv.name.clone(),
         };
+        if expr_mentions_actor(&inv.body) {
+            let context = cx.context.clone();
+            cx.errors
+                .push(ValidationError::ActorNotAvailable { context });
+        }
         let mut env = KindEnv::new();
         cx.walk_predicate_expr(&inv.body, &mut env);
     }
@@ -189,6 +194,13 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         cx.context = ValidationContext::DerivedClaim {
             predicate: derived.predicate.clone(),
         };
+        if expr_mentions_actor(&derived.domain)
+            || derived.values.iter().any(|v| expr_mentions_actor(&v.expr))
+        {
+            let context = cx.context.clone();
+            cx.errors
+                .push(ValidationError::ActorNotAvailable { context });
+        }
         let mut env = KindEnv::new();
         cx.walk_predicate_expr(&derived.domain, &mut env);
         // Each `value <name> = <expr>` is value-producing; infer
@@ -796,6 +808,42 @@ fn value_of_result_kind(
         .unwrap_or(InferredKind::UnknownOrAny)
 }
 
+/// Whether an expression references `Term::Actor` anywhere in its
+/// tree. Used to flag `actor` in invariant and derived-claim
+/// bodies, where the runtime raises `EvalError::UnboundActor`
+/// because no proposing transition is in scope.
+///
+/// A standalone exhaustive walk rather than a hook in the kind
+/// visitor: `actor` can sit in any term position (claim arg,
+/// comparator operand, `sum` target, `in` operand), and a
+/// dedicated scan with no `_` arm guarantees a future `Expr`
+/// variant cannot let an `actor` slip through unnoticed.
+fn expr_mentions_actor(expr: &Expr) -> bool {
+    fn is_actor(t: &Term) -> bool {
+        matches!(t, Term::Actor)
+    }
+    match expr {
+        Expr::Term(t) => is_actor(t),
+        Expr::Claim { args, .. } => args.iter().any(is_actor),
+        Expr::ValueOf { args, default, .. } => {
+            args.iter().any(is_actor) || default.as_ref().is_some_and(|d| expr_mentions_actor(d))
+        }
+        Expr::Neq(a, b) | Expr::In(a, b) => is_actor(a) || is_actor(b),
+        Expr::Sum { value, body, .. } => is_actor(value) || expr_mentions_actor(body),
+        Expr::And(items) | Expr::Or(items) => items.iter().any(expr_mentions_actor),
+        Expr::Not(e) | Expr::Pre(e) | Expr::Exists { body: e, .. } => expr_mentions_actor(e),
+        Expr::Implies { left, right }
+        | Expr::Eq(left, right)
+        | Expr::Le(left, right)
+        | Expr::DateLe(left, right)
+        | Expr::Add(left, right)
+        | Expr::Sub(left, right) => expr_mentions_actor(left) || expr_mentions_actor(right),
+        Expr::Forall { source, body, .. } => {
+            expr_mentions_actor(source) || expr_mentions_actor(body)
+        }
+    }
+}
+
 /// Inherent kind of a `Term`. Variables are `UnknownOrAny` here;
 /// callers that want the env-resolved kind look it up separately.
 fn term_kind(term: &Term) -> InferredKind {
@@ -1077,12 +1125,16 @@ mod tests {
     #[test]
     fn actor_term_carries_subject_kind() {
         // `actor` flowing into a Decimal slot is a kind mismatch.
+        // Tested in a transformation body, where `actor` is
+        // legitimately available - so the only error is the kind
+        // mismatch, not the actor-context error Layer 3 would add
+        // in an invariant.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Limit", &[("amount", PredicateArgKind::Decimal)])];
-        p.invariants = vec![Invariant {
-            name: "actor_in_decimal_slot".to_string(),
-            version: 1,
-            body: claim("Limit", vec![actor()]),
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![assert_("Limit", vec![actor()])],
         }];
         let errs = check_program(&p);
         assert_eq!(
@@ -1102,6 +1154,89 @@ mod tests {
             }
             other => panic!("expected ArgKindMismatch, got {other:?}"),
         }
+    }
+
+    // ----- Layer 3: actor-in-wrong-context -----
+
+    #[test]
+    fn actor_in_invariant_body_flags_actor_not_available() {
+        // `actor` in an invariant body has no proposing transition
+        // in scope; the kernel raises UnboundActor at runtime, the
+        // check flags it statically. The predicate slot is Subject
+        // so no kind error muddies the result.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Approver", &[("who", PredicateArgKind::Subject)])];
+        p.invariants = vec![Invariant {
+            name: "mentions_actor".to_string(),
+            version: 1,
+            body: claim("Approver", vec![actor()]),
+        }];
+        let errs = check_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::ActorNotAvailable {
+                    context: ValidationContext::Invariant { .. }
+                }
+            )),
+            "actor in an invariant body must flag ActorNotAvailable; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn actor_in_derived_claim_value_flags_actor_not_available() {
+        // `actor` in a derived-claim value expression - same
+        // unavailability as an invariant body.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl(
+                "Row",
+                &[
+                    ("k", PredicateArgKind::Subject),
+                    ("v", PredicateArgKind::Subject),
+                ],
+            ),
+            pdecl("Src", &[("k", PredicateArgKind::Subject)]),
+        ];
+        p.derived_claims = vec![crate::ir::DerivedClaim {
+            predicate: "Row".to_string(),
+            keys: vec!["k".to_string()],
+            values: vec![crate::ir::DerivedValue {
+                name: "v".to_string(),
+                expr: term(actor()),
+            }],
+            domain: claim("Src", vec![var("k")]),
+        }];
+        let errs = check_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::ActorNotAvailable {
+                    context: ValidationContext::DerivedClaim { .. }
+                }
+            )),
+            "actor in a derived-claim value must flag ActorNotAvailable; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn actor_in_transformation_body_is_allowed() {
+        // `actor` resolves inside transformation bodies - no
+        // ActorNotAvailable. Slot is Subject so no kind error either.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Approver", &[("who", PredicateArgKind::Subject)])];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec![],
+            body: vec![assert_("Approver", vec![actor()])],
+        }];
+        let errs = check_program(&p);
+        assert!(
+            !errs
+                .iter()
+                .any(|e| matches!(e, ValidationError::ActorNotAvailable { .. })),
+            "actor in a transformation body must not flag; got {errs:?}"
+        );
     }
 
     // ----- Statement flow (require / bind_one / let / assert) -----

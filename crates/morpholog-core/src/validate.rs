@@ -125,6 +125,13 @@ pub enum ValidationError {
         context: ValidationContext,
         expression: String,
     },
+    /// `actor` was referenced in an invariant or derived-claim
+    /// body, where no proposing transition is in scope. The kernel
+    /// raises `EvalError::UnboundActor` for this at evaluation
+    /// time; the check surfaces it earlier. `actor` resolves only
+    /// inside transformation bodies - authority checks belong in a
+    /// `require`, not an invariant.
+    ActorNotAvailable { context: ValidationContext },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -211,6 +218,11 @@ impl std::fmt::Display for ValidationError {
                 f,
                 "expected a value-producing expression but found predicate-shaped \
                  `{expression}` in {context}"
+            ),
+            ValidationError::ActorNotAvailable { context } => write!(
+                f,
+                "`actor` is not available in {context}; it resolves only inside \
+                 transformation bodies, so authority checks belong in a `require`"
             ),
         }
     }
