@@ -84,10 +84,13 @@ pub fn onboarded_requires_current_clean_pep() -> Invariant {
     onboarded_requires_current_clean("onboarded_requires_current_clean_pep", PEP)
 }
 
-/// An onboarded customer cannot have any unresolved match against
-/// a current screening. Closes the gap where a match might be
-/// raised on a screening that itself is current (e.g. a clean
-/// sanctions screening becomes match-flagged after a list update).
+/// An onboarded customer cannot have any unresolved match on ANY
+/// of their screenings - not only the current standing one. The
+/// join is through `Screening`, not `CurrentScreening`: a match
+/// found by a re-screen must block onboarding even while an older
+/// clean screening still holds the currentness pointer. A hit
+/// must be adjudicated, never simply superseded by a later clean
+/// result.
 pub fn onboarded_requires_no_unresolved_match() -> Invariant {
     Invariant {
         name: "onboarded_requires_no_unresolved_match".to_string(),
@@ -95,7 +98,10 @@ pub fn onboarded_requires_no_unresolved_match() -> Invariant {
         body: implies(
             claim("OnboardedCustomer", vec![var("c"), wildcard()]),
             not(and(vec![
-                claim("CurrentScreening", vec![var("c"), wildcard(), var("s")]),
+                claim(
+                    "Screening",
+                    vec![var("s"), var("c"), wildcard(), wildcard()],
+                ),
                 claim("MatchUnderReview", vec![var("s"), wildcard()]),
             ])),
         ),

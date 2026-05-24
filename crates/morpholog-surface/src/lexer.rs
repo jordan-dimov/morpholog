@@ -2,7 +2,7 @@
 //!
 //! Recognised tokens:
 //!
-//! - Top-level keywords: `program`, `predicate`.
+//! - Top-level keywords: `program`, `predicate`, `intent`.
 //! - Kind keywords (lexer-level): `Subject`, `Decimal`, `Date`,
 //!   `Bool`, `Collection`, `Any`.
 //! - Boolean keywords: `not`, `and`, `or`, `implies`, `pre`.
@@ -39,7 +39,7 @@
 //! with [`crate::diagnostics::Span`] and `ariadne`.
 //!
 //! Reserved words include the structural keywords
-//! (`program`, `predicate`), the kind names (`Subject`,
+//! (`program`, `predicate`, `intent`), the kind names (`Subject`,
 //! `Decimal`, `Date`, `Bool`, `Collection`, `Any`), the boolean
 //! operators (`not`, `and`, `or`, `implies`, `pre`), and the placeholder bool
 //! literals (`true`, `false`, lexed but not parseable per the

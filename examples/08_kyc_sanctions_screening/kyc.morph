@@ -54,14 +54,18 @@ invariant onboarded_requires_current_clean_pep:
         and (on_date on_or_before expires)
     )
 
--- An onboarded customer cannot have any unresolved match. A match
--- raised against ANY current screening blocks onboarding until
--- the analyst adjudicates it (clean-after-review or true-positive
--- rejection); admission only re-opens once MatchUnderReview is
--- cleared.
+-- An onboarded customer cannot have ANY unresolved match on ANY
+-- of their screenings - not just the current standing one. A
+-- match found by a re-screen blocks onboarding even while an
+-- older clean screening still holds the currentness pointer; a
+-- hit must be adjudicated (clean-after-review or true-positive
+-- rejection), never simply superseded by a later clean result.
+-- The join is through Screening, not CurrentScreening, precisely
+-- so a newer unresolved match cannot hide behind an older clean
+-- current screening.
 invariant onboarded_requires_no_unresolved_match:
     OnboardedCustomer(c, _) implies not (
-        CurrentScreening(c, _, s) and MatchUnderReview(s, _)
+        Screening(s, c, _, _) and MatchUnderReview(s, _)
     )
 
 

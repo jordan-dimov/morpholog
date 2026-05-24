@@ -4,7 +4,7 @@ A bank cannot open an account for a new customer until it has checked them again
 
 This example is the smallest Morpholog programme that holds those constraints honestly. The central rule is:
 
-> No customer may hold *onboarded* standing without a current screening per list-type whose disposition is *clean* (or adjudicated-clear) and whose expiry has not been reached by the onboarding date - and no unresolved match against any current screening.
+> No customer may hold *onboarded* standing without a current screening per list-type whose disposition is *clean* (or adjudicated-clear) and whose expiry has not been reached by the onboarding date - and no unresolved match on any of their screenings, current or not.
 
 That single sentence becomes a handful of invariants - structural uniqueness of the currentness pointer, a current-clean screening per list-type, and a no-unresolved-match gate. Onboarding the wrong customer is structurally impossible.
 

@@ -294,6 +294,60 @@ fn onboarding_rejects_when_screening_has_expired_by_onboarding_date() {
 // blocks onboarding; adjudication as false-positive admits it.
 // ============================================================
 
+/// The load-bearing compliance test. A customer with clean current
+/// screenings on both lists gets a NEWER sanctions screening that
+/// returns a match. Recording the match does not move the
+/// currentness pointer (the old clean screening still holds it),
+/// so a naive "match against current screening" rule would let
+/// onboarding through. The invariant joins through Screening, not
+/// CurrentScreening, so the unresolved match blocks onboarding.
+#[test]
+fn onboarding_rejects_when_newer_screening_returns_match_even_if_old_clean_current_exists() {
+    let program = kyc_sanctions_screening::program();
+    let alice = "alice";
+
+    // Clean current screenings on both lists.
+    let state = registered_and_screened(&program, State::default(), alice);
+
+    // A re-screen against sanctions returns a match.
+    let state = run(
+        &program,
+        "request_screening",
+        vec![
+            subj("alice_sanctions_2"),
+            subj(alice),
+            subj(SANCTIONS),
+            date("2026-03-01"),
+        ],
+        state,
+    );
+    let state = run(
+        &program,
+        "record_match_screening_result",
+        vec![
+            subj("alice_sanctions_2"),
+            date("2026-03-02"),
+            date("2027-03-02"),
+            date("2026-03-02"),
+        ],
+        state,
+    );
+
+    // The old clean sanctions screening still holds the currentness
+    // pointer, but the new unresolved match must still block.
+    let outcome = try_run(
+        &program,
+        "onboard_customer",
+        vec![subj(alice), date("2026-03-15")],
+        &state,
+    )
+    .expect("propose should not error");
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "newer unresolved match must block onboarding even with an old clean current screening; got {outcome:?}"
+    );
+}
+
 #[test]
 fn match_adjudicated_false_positive_enables_onboarding() {
     let program = kyc_sanctions_screening::program();
