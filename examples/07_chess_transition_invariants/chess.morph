@@ -76,6 +76,14 @@ invariant exactly_one_black_king:
 invariant piece_count_matches_board:
   PieceCount(n) implies (n = sum(1 | PieceAt(_, _, _)))
 
+-- The rule above only bites when a PieceCount claim exists - on its own
+-- it would be silently happy if a buggy move dropped the counter
+-- altogether. So we also insist that any board with pieces on it has a
+-- counter. The two together say "the counter exists and is correct";
+-- neither says that alone.
+invariant board_with_pieces_has_a_counter:
+  PieceAt(_, _, _) implies (exists n: PieceCount(n))
+
 -- At most eight pawns per colour. Here `c` is bound by the left side to
 -- whichever colour has a pawn, and the count on the right is scoped to
 -- that same colour. (Pawns only ever leave the board in this model, so

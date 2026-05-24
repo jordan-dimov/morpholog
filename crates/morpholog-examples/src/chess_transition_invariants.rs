@@ -92,6 +92,24 @@ pub fn piece_count_matches_board() -> Invariant {
     }
 }
 
+/// A board with pieces on it must have a piece counter. `piece_count_
+/// matches_board` is conditional on a `PieceCount` claim existing, so on
+/// its own it is vacuously true if a buggy transition drops the counter
+/// entirely. This presence rule closes that gap - the same pairing the
+/// insurance example uses for policy headroom (a conservation rule plus
+/// an existence rule). Together they say "the counter exists and is
+/// correct", which neither says alone.
+pub fn board_with_pieces_has_a_counter() -> Invariant {
+    Invariant {
+        name: "board_with_pieces_has_a_counter".to_string(),
+        version: 1,
+        body: implies(
+            claim("PieceAt", vec![wildcard(), wildcard(), wildcard()]),
+            exists("n", claim("PieceCount", vec![var("n")])),
+        ),
+    }
+}
+
 /// At most eight pawns per colour. A pawn count can only fall in this
 /// model (there is no promotion), so this is a structural sanity bound;
 /// it is here to show counting inside a comparator, with the colour
@@ -340,6 +358,7 @@ pub fn all_invariants() -> Vec<Invariant> {
         exactly_one_white_king(),
         exactly_one_black_king(),
         piece_count_matches_board(),
+        board_with_pieces_has_a_counter(),
         at_most_eight_pawns_per_color(),
         move_count_strictly_increases(),
         turn_alternates(),

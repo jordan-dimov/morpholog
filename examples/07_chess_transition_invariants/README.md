@@ -60,10 +60,13 @@ Rules that hold over any single board position - none of these needs `pre(...)`:
 | --- | --- |
 | `at_most_one_piece_per_square` | A square can hold at most one piece. If two `PieceAt` claims share a square they must describe the same piece. |
 | `exactly_one_white_king` / `exactly_one_black_king` | Each colour has *exactly* one king. |
-| `piece_count_matches_board` | The `PieceCount` counter must equal the actual number of pieces on the board. |
+| `piece_count_matches_board` | When a `PieceCount` counter exists, it must equal the actual number of pieces on the board. |
+| `board_with_pieces_has_a_counter` | A board with any pieces on it must carry a `PieceCount`. |
 | `at_most_eight_pawns_per_color` | A colour has at most eight pawns. |
 
-The last three are *counting* rules, and they bring out a second language idea (the first being `pre(...)`). `sum(1 | PieceAt(_, #king, #white))` adds `1` for every white-king claim on the board - that is, it counts them. Pinning that count to `1` says "exactly one white king", which is strictly stronger than the "at most one" rule it replaces: it also forbids the count falling to zero, so **a king can never be captured**. `piece_count_matches_board` uses the same trick to tie the hand-maintained counter to reality - admit a stray piece without updating `PieceCount` and the count no longer matches, so the move is refused. A `sum` whose target is the literal `1` rather than a variable is how Morpholog counts.
+Most of these are *counting* rules, and they bring out a second language idea (the first being `pre(...)`). `sum(1 | PieceAt(_, #king, #white))` adds `1` for every white-king claim on the board - that is, it counts them. Pinning that count to `1` says "exactly one white king", which is strictly stronger than the "at most one" rule it replaces: it also forbids the count falling to zero, so **a king can never be captured**. `piece_count_matches_board` uses the same trick to tie the hand-maintained counter to reality - admit a stray piece without updating `PieceCount` and the count no longer matches, so the move is refused. A `sum` whose target is the literal `1` rather than a variable is how Morpholog counts.
+
+The last two go together. `piece_count_matches_board` only checks a counter that is *present*; on its own it would shrug at a buggy move that dropped the counter entirely. `board_with_pieces_has_a_counter` requires the counter to exist whenever pieces do. Together they say "the counter exists and is correct" - the same presence-plus-consistency pairing the [insurance example](../05_insurance_claim_settlement/) uses for policy headroom.
 
 ### Rules about transitions
 
