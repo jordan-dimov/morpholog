@@ -13,7 +13,7 @@
 //! Diagnostics ship without source spans in v0; the IR drops
 //! parser spans on lowering.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::{Expr, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
@@ -84,10 +84,6 @@ pub(crate) struct KindEnv {
 }
 
 impl KindEnv {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// Look up a variable's current inferred kind. Returns
     /// `UnknownOrAny` for variables never observed before - that
     /// matches how an unconstrained slot would treat them.
@@ -116,19 +112,71 @@ impl KindEnv {
     }
 }
 
+/// Set of variable names that are runtime-bound (available) at a
+/// point in the walk. Distinct from [`KindEnv`]: a variable can be
+/// kind-known but not bound (e.g. matched inside a `require`, whose
+/// bindings do not export). Cloned at the same scope boundaries as
+/// `KindEnv` so the quartet's non-export rules fall out for free.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct BoundEnv {
+    bound: HashSet<String>,
+}
+
+impl BoundEnv {
+    fn bind(&mut self, name: &str) {
+        self.bound.insert(name.to_string());
+    }
+
+    fn is_bound(&self, name: &str) -> bool {
+        self.bound.contains(name)
+    }
+
+    /// Keep only variables also bound in `other`. Used to merge
+    /// `or`-branch bindings: a variable is guaranteed bound after a
+    /// disjunction only if every branch bound it, since the runtime
+    /// carries whichever branch's witness forward and a name absent
+    /// from some branch may be unbound at a later conjunct.
+    fn intersect_with(&mut self, other: &BoundEnv) {
+        self.bound.retain(|v| other.bound.contains(v));
+    }
+}
+
+/// Per-walk mutable analysis state: the kind environment and the
+/// bound-variable environment, threaded together and cloned
+/// together at scope boundaries (`require`, `sum`, `for`, and
+/// `or`-branches). Pairing them is what lets one traversal do both
+/// kind inference and unbound-variable detection.
+#[derive(Debug, Default, Clone)]
+struct Scope {
+    kinds: KindEnv,
+    bound: BoundEnv,
+}
+
+impl Scope {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Whether a reference's variable arguments are being *introduced*
+/// or *consumed*. A claim in predicate position (`require`, `bind`,
+/// invariant body, `forall` source, `exists` body) matches against
+/// state, so its variables become bound (`Match`). A claim or
+/// intent in `admit` / `retract` / `emit`, and the key arguments of
+/// a `value` lookup, consume already-bound values (`Use`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefMode {
+    Match,
+    Use,
+}
+
 /// The static-check visitor. Holds the programme's declared
 /// vocabularies, the current `ValidationContext`, and the
-/// accumulating error list. The per-walk kind environment is
-/// passed separately (not held on the struct) because it is
+/// accumulating error list. The per-walk [`Scope`] (kind +
+/// bound-variable environments) is passed separately because it is
 /// cloned at scope boundaries - `require`, `sum`, `for`, and
-/// `or`-branches each walk a clone whose refinements do not leak
-/// back.
-///
-/// Shaped so a bound-variable environment can join the per-walk
-/// state later without disturbing this struct: today the only
-/// per-scope state threaded through the methods is the `KindEnv`;
-/// unbound-variable detection will pair it with a bound-set in a
-/// `Scope` when that behaviour lands.
+/// `or`-branches each walk a clone whose refinements and bindings
+/// do not leak back.
 struct CheckCtx<'a> {
     predicates: HashMap<&'a str, &'a PredicateDecl>,
     intents: HashMap<&'a str, &'a crate::IntentDecl>,
@@ -170,23 +218,24 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
-        let mut env = KindEnv::new();
-        cx.walk_predicate_expr(&inv.body, &mut env);
+        let mut scope = Scope::new();
+        cx.walk_predicate_expr(&inv.body, &mut scope);
     }
 
     for transformation in &program.transformations {
         cx.context = ValidationContext::Transformation {
             name: transformation.name.clone(),
         };
-        let mut env = KindEnv::new();
-        // Parameters arrive untyped; observe each at UnknownOrAny
-        // so the statement walk can refine them on use. The first
-        // observation against UnknownOrAny never conflicts.
+        let mut scope = Scope::new();
+        // Parameters arrive bound and untyped: bound so later uses
+        // are available, untyped so their kind refines on use. The
+        // first kind observation against UnknownOrAny never conflicts.
         for param in &transformation.parameters {
-            let _ = env.observe(param, InferredKind::UnknownOrAny);
+            scope.bound.bind(param);
+            let _ = scope.kinds.observe(param, InferredKind::UnknownOrAny);
         }
         for stmt in &transformation.body {
-            cx.walk_stmt(stmt, &mut env);
+            cx.walk_stmt(stmt, &mut scope);
         }
     }
 
@@ -201,15 +250,15 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
-        let mut env = KindEnv::new();
-        cx.walk_predicate_expr(&derived.domain, &mut env);
-        // Each `value <name> = <expr>` is value-producing; infer
-        // under the env built by `domain`. Keep the inferred kind
-        // for the output-arg check below.
+        // The domain binds the key variables (claim matches); the
+        // value expressions are inferred against the same scope, so
+        // they see those bindings.
+        let mut scope = Scope::new();
+        cx.walk_predicate_expr(&derived.domain, &mut scope);
         let value_kinds: Vec<InferredKind> = derived
             .values
             .iter()
-            .map(|v| cx.infer_value_expr(&v.expr, &mut env))
+            .map(|v| cx.infer_value_expr(&v.expr, &mut scope))
             .collect();
 
         // Output args check: the runtime emits claims of the form
@@ -240,7 +289,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         let n = output_arity.min(decl.args.len());
         for position in 0..n {
             let actual = if position < derived.keys.len() {
-                env.lookup(&derived.keys[position])
+                scope.kinds.lookup(&derived.keys[position])
             } else {
                 value_kinds[position - derived.keys.len()]
             };
@@ -265,84 +314,110 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
 }
 
 impl CheckCtx<'_> {
-    /// Walk a predicate-shaped expression. Threads bindings
-    /// through `env` for composition (`And`, `Implies`, `Pre`,
-    /// etc.); `Or` branches walk a clone so a refinement in one
-    /// branch does not constrain another. Comparator and
-    /// arithmetic operands delegate to `check_operand_kind`.
-    fn walk_predicate_expr(&mut self, expr: &Expr, env: &mut KindEnv) {
+    /// Walk a predicate-shaped expression. Threads the scope
+    /// through composition (`And`, `Implies`, `Pre`); `Or`
+    /// branches walk a clone so neither a refinement nor a binding
+    /// in one branch reaches another. A claim here is in `Match`
+    /// position - its variables become bound.
+    fn walk_predicate_expr(&mut self, expr: &Expr, scope: &mut Scope) {
         match expr {
             Expr::Claim { predicate, args } => {
-                self.check_predicate_ref(predicate, args, env);
+                self.check_predicate_ref(predicate, args, RefMode::Match, scope);
             }
             Expr::And(items) => {
-                // Conjuncts thread bindings forward: each branch
-                // sees refinements made by earlier conjuncts.
+                // Conjuncts thread the scope forward: each branch
+                // sees bindings and refinements from earlier ones.
                 for item in items {
-                    self.walk_predicate_expr(item, env);
+                    self.walk_predicate_expr(item, scope);
                 }
             }
             Expr::Or(items) => {
                 // Disjuncts evaluate against the same base context
-                // (mirrors `find_disjunction`). Each branch gets a
-                // fresh clone so a refinement in one branch does
-                // not conflict with another; branch-local
-                // refinements do not leak out.
+                // (mirrors `find_disjunction`): a branch's binding or
+                // refinement must not leak to a sibling branch. But
+                // the disjunction's witness flows to later conjuncts
+                // (`find_conjunction` threads each conjunct's matches
+                // into the next), so a variable bound in EVERY branch
+                // is guaranteed bound after the `or`. Join the
+                // intersection of branch-bound names into the live
+                // scope; refinements are dropped (a missed refinement
+                // risks only a false negative, never a false positive).
+                let mut merged: Option<BoundEnv> = None;
                 for item in items {
-                    let mut branch = env.clone();
+                    let mut branch = scope.clone();
                     self.walk_predicate_expr(item, &mut branch);
+                    merged = Some(match merged {
+                        None => branch.bound,
+                        Some(mut acc) => {
+                            acc.intersect_with(&branch.bound);
+                            acc
+                        }
+                    });
+                }
+                if let Some(merged) = merged {
+                    scope.bound = merged;
                 }
             }
             Expr::Not(inner) | Expr::Pre(inner) => {
-                self.walk_predicate_expr(inner, env);
+                self.walk_predicate_expr(inner, scope);
             }
             Expr::Implies { left, right } => {
-                self.walk_predicate_expr(left, env);
-                self.walk_predicate_expr(right, env);
+                self.walk_predicate_expr(left, scope);
+                self.walk_predicate_expr(right, scope);
             }
-            Expr::Exists { binding: _, body } => {
-                // No shadowing: `find_matches` for Exists walks the
-                // body against the same bindings it was called
-                // with, so an outer variable of the same name as
-                // `binding` acts as a unification constraint, not a
-                // shadow. Refinements flow through.
-                self.walk_predicate_expr(body, env);
+            Expr::Exists { binding, body } => {
+                // The binding is introduced by the quantifier;
+                // mark it bound before the body. No shadowing of an
+                // outer variable of the same name (the runtime
+                // unifies); binding it again is idempotent.
+                scope.bound.bind(binding);
+                self.walk_predicate_expr(body, scope);
             }
             Expr::Forall {
-                binding: _,
+                binding,
                 source,
                 body,
             } => {
-                // No shadowing, same reasoning as Exists:
-                // `unify_args` treats an existing binding as a
-                // constraint, so an outer variable of the same name
-                // constrains the loop rather than being shadowed.
-                self.walk_predicate_expr(source, env);
-                self.walk_predicate_expr(body, env);
+                // The binding ranges over `source`; mark it bound so
+                // both the source (when auto-lifted to `e in coll`)
+                // and the body see it. The source/body run in the
+                // live scope - conservative: a forall-introduced
+                // name may stay visible to a sibling conjunct rather
+                // than risk a false positive by scoping it away.
+                scope.bound.bind(binding);
+                self.walk_predicate_expr(source, scope);
+                self.walk_predicate_expr(body, scope);
             }
             Expr::Le(left, right) => {
-                self.check_operand_kind(left, PredicateArgKind::Decimal, "<=", env);
-                self.check_operand_kind(right, PredicateArgKind::Decimal, "<=", env);
+                self.check_operand_kind(left, PredicateArgKind::Decimal, "<=", scope);
+                self.check_operand_kind(right, PredicateArgKind::Decimal, "<=", scope);
             }
             Expr::DateLe(left, right) => {
-                self.check_operand_kind(left, PredicateArgKind::Date, "on_or_before", env);
-                self.check_operand_kind(right, PredicateArgKind::Date, "on_or_before", env);
+                self.check_operand_kind(left, PredicateArgKind::Date, "on_or_before", scope);
+                self.check_operand_kind(right, PredicateArgKind::Date, "on_or_before", scope);
             }
             Expr::Eq(left, right) => {
-                self.check_equality_operands(left, right, "==", env);
+                self.check_equality_operands(left, right, "==", scope);
             }
             Expr::Neq(left, right) => {
-                self.check_equality_terms(left, right, "!=", env);
+                self.check_equality_terms(left, right, "!=", scope);
             }
-            Expr::In(_element, collection) => {
-                // The collection side must be Collection-kinded.
-                // Variables refine; literals and `actor` carry a
-                // concrete kind the runtime would reject as "In
-                // expects a collection" - surface that statically.
+            Expr::In(element, collection) => {
+                // `In` is a generator-or-filter (mirrors
+                // `find_in_matches`): an unbound element variable is
+                // bound to each collection item; a bound one filters.
+                // Either way the element is bound afterward, so it is
+                // never a use. The collection must already be bound
+                // and Collection-kinded.
+                if let Term::Var(name) = element {
+                    scope.bound.bind(name);
+                    let _ = scope.kinds.observe(name, InferredKind::UnknownOrAny);
+                }
                 match collection {
                     Term::Var(name) => {
+                        self.use_var(scope, name);
                         self.observe_or_report(
-                            env,
+                            scope,
                             name,
                             InferredKind::Known(PredicateArgKind::Collection),
                         );
@@ -375,77 +450,80 @@ impl CheckCtx<'_> {
         }
     }
 
-    /// Walk a statement, threading kind information through `env`
-    /// per the runtime require/bind/let/for quartet:
+    /// Walk a statement, threading the scope per the runtime
+    /// require/bind/let/for quartet:
     ///
-    /// - `Require` walks a clone (refinements do not export).
-    /// - `BindOne` walks the live env (refinements flow forward).
-    /// - `Let` infers the value's kind and observes `name` at it.
-    /// - `LetNewSubject` observes `name` at `Subject`.
-    /// - `Assert`/`Retract` check args against declared kinds.
-    /// - `For` checks the collection is Collection-kinded; the body
-    ///   runs under a scoped env clone.
-    /// - `Emit` checks args against the declared intent.
-    fn walk_stmt(&mut self, stmt: &Stmt, env: &mut KindEnv) {
+    /// - `Require` walks a clone (matches and refinements do not
+    ///   export - this is the key binding-flow rule).
+    /// - `BindOne` walks the live scope (its matches bind and flow
+    ///   forward).
+    /// - `Let` / `LetNewSubject` bind their name.
+    /// - `Assert` / `Retract` / `Emit` consume args (`Use` mode).
+    /// - `For` consumes the collection and binds the loop variable
+    ///   in a scoped clone.
+    fn walk_stmt(&mut self, stmt: &Stmt, scope: &mut Scope) {
         match stmt {
             Stmt::Require(expr) => {
-                let mut scoped = env.clone();
+                let mut scoped = scope.clone();
                 self.walk_predicate_expr(expr, &mut scoped);
             }
             Stmt::BindOne(expr) => {
-                self.walk_predicate_expr(expr, env);
+                self.walk_predicate_expr(expr, scope);
             }
             Stmt::Let { name, value } => {
-                let value_kind = self.infer_value_expr(value, env);
-                self.observe_or_report(env, name, value_kind);
+                let value_kind = self.infer_value_expr(value, scope);
+                scope.bound.bind(name);
+                self.observe_or_report(scope, name, value_kind);
             }
             Stmt::LetNewSubject { name } => {
-                self.observe_or_report(env, name, InferredKind::Known(PredicateArgKind::Subject));
+                scope.bound.bind(name);
+                self.observe_or_report(scope, name, InferredKind::Known(PredicateArgKind::Subject));
             }
             Stmt::Assert(claim) => {
-                self.check_predicate_ref(&claim.predicate, &claim.args, env);
+                self.check_predicate_ref(&claim.predicate, &claim.args, RefMode::Use, scope);
             }
             Stmt::Retract { predicate, args } => {
-                self.check_predicate_ref(predicate, args, env);
+                self.check_predicate_ref(predicate, args, RefMode::Use, scope);
             }
             Stmt::For {
                 binding,
                 collection,
                 body,
             } => {
-                self.check_operand_kind(collection, PredicateArgKind::Collection, "for", env);
-                // Body runs under a scoped env clone so loop-
-                // introduced bindings do not leak across iterations
-                // or beyond the loop.
-                let mut scoped = env.clone();
-                let _ = scoped.observe(binding, InferredKind::UnknownOrAny);
+                self.check_operand_kind(collection, PredicateArgKind::Collection, "for", scope);
+                // Body runs under a scoped clone so the loop binding
+                // and any body-introduced names do not leak across
+                // iterations or beyond the loop.
+                let mut scoped = scope.clone();
+                scoped.bound.bind(binding);
+                let _ = scoped.kinds.observe(binding, InferredKind::UnknownOrAny);
                 for inner in body {
                     self.walk_stmt(inner, &mut scoped);
                 }
             }
             Stmt::Emit(intent) => {
-                self.check_intent_ref(&intent.name, &intent.args, env);
+                self.check_intent_ref(&intent.name, &intent.args, RefMode::Use, scope);
             }
         }
     }
 
     /// Check that a value-shaped operand evaluates to the expected
-    /// kind. A bare variable observes directly (a conflict surfaces
-    /// as `VariableKindConflict`, naming the variable); anything
-    /// else infers its kind and emits `OperandKindMismatch` on
-    /// disagreement (naming the operator and kinds).
+    /// kind. A bare variable is a use: it must be bound, and its
+    /// kind refines toward `expected`. Anything else infers its
+    /// kind and emits `OperandKindMismatch` on disagreement.
     fn check_operand_kind(
         &mut self,
         operand: &Expr,
         expected: PredicateArgKind,
         operator: &'static str,
-        env: &mut KindEnv,
+        scope: &mut Scope,
     ) {
         if let Expr::Term(Term::Var(name)) = operand {
-            self.observe_or_report(env, name, InferredKind::Known(expected));
+            self.use_var(scope, name);
+            self.observe_or_report(scope, name, InferredKind::Known(expected));
             return;
         }
-        let inferred = self.infer_value_expr(operand, env);
+        let inferred = self.infer_value_expr(operand, scope);
         if let InferredKind::Known(actual) = inferred
             && !kinds_compatible(expected, actual)
         {
@@ -470,7 +548,7 @@ impl CheckCtx<'_> {
         left: EqualityOperand<'_>,
         right: EqualityOperand<'_>,
         operator: &'static str,
-        env: &mut KindEnv,
+        scope: &mut Scope,
     ) {
         let combined = match (left.0, right.0) {
             (InferredKind::Known(l), InferredKind::Known(r)) => {
@@ -493,7 +571,7 @@ impl CheckCtx<'_> {
         };
         if let Some(refined) = combined {
             for name in [left.1, right.1].into_iter().flatten() {
-                self.observe_or_report(env, name, refined);
+                self.observe_or_report(scope, name, refined);
             }
         }
     }
@@ -503,11 +581,12 @@ impl CheckCtx<'_> {
         left: &Expr,
         right: &Expr,
         operator: &'static str,
-        env: &mut KindEnv,
+        scope: &mut Scope,
     ) {
-        let left_op = (self.infer_value_expr(left, env), expr_var_name(left));
-        let right_op = (self.infer_value_expr(right, env), expr_var_name(right));
-        self.check_equality(left_op, right_op, operator, env);
+        // `infer_value_expr` use-checks a bare-variable operand.
+        let left_op = (self.infer_value_expr(left, scope), expr_var_name(left));
+        let right_op = (self.infer_value_expr(right, scope), expr_var_name(right));
+        self.check_equality(left_op, right_op, operator, scope);
     }
 
     fn check_equality_terms(
@@ -515,34 +594,48 @@ impl CheckCtx<'_> {
         left: &Term,
         right: &Term,
         operator: &'static str,
-        env: &mut KindEnv,
+        scope: &mut Scope,
     ) {
+        if let Term::Var(name) = left {
+            self.use_var(scope, name);
+        }
+        if let Term::Var(name) = right {
+            self.use_var(scope, name);
+        }
         self.check_equality(
-            (resolved_term_kind(left, env), term_var_name(left)),
-            (resolved_term_kind(right, env), term_var_name(right)),
+            (resolved_term_kind(left, &scope.kinds), term_var_name(left)),
+            (
+                resolved_term_kind(right, &scope.kinds),
+                term_var_name(right),
+            ),
             operator,
-            env,
+            scope,
         );
     }
 
-    /// Infer the kind of a value-producing expression. Variables
-    /// look up via `env`; literals carry their kind; `Add`/`Sub`
-    /// recursively check Decimal operands and return Decimal;
-    /// `Sum` returns Decimal after a body-first walk under a
-    /// cloned env; `ValueOf` returns its wildcard slot's declared
-    /// kind. A predicate-shaped expression at a value position
-    /// surfaces as `ExpectedValueExpression`.
-    fn infer_value_expr(&mut self, expr: &Expr, env: &mut KindEnv) -> InferredKind {
+    /// Infer the kind of a value-producing expression. A bare
+    /// variable is a use (must be bound); literals carry their
+    /// kind; `Add`/`Sub` recursively check Decimal operands and
+    /// return Decimal; `Sum` returns Decimal after a body-first
+    /// walk under a cloned scope; `ValueOf` returns its wildcard
+    /// slot's declared kind. A predicate-shaped expression at a
+    /// value position surfaces as `ExpectedValueExpression`.
+    fn infer_value_expr(&mut self, expr: &Expr, scope: &mut Scope) -> InferredKind {
         match expr {
-            Expr::Term(term) => resolved_term_kind(term, env),
+            Expr::Term(term) => {
+                if let Term::Var(name) = term {
+                    self.use_var(scope, name);
+                }
+                resolved_term_kind(term, &scope.kinds)
+            }
             Expr::Add(left, right) | Expr::Sub(left, right) => {
                 let operator = if matches!(expr, Expr::Add(_, _)) {
                     "+"
                 } else {
                     "-"
                 };
-                self.check_operand_kind(left, PredicateArgKind::Decimal, operator, env);
-                self.check_operand_kind(right, PredicateArgKind::Decimal, operator, env);
+                self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
+                self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
             Expr::Sum {
@@ -550,14 +643,17 @@ impl CheckCtx<'_> {
                 binding: _,
                 body,
             } => {
-                // Body-first inference on a cloned env so body-bound
-                // names (the iteration binding, plus any others) do
-                // not leak into the surrounding expression. Outer
-                // variables stay visible via the clone. Sum's result
-                // is always Decimal.
-                let mut scoped = env.clone();
+                // Body-first inference on a cloned scope so body-
+                // bound names (the iteration binding, plus any
+                // others the body introduces) do not leak into the
+                // surrounding expression. Outer bindings stay
+                // visible via the clone. Sum's result is Decimal.
+                let mut scoped = scope.clone();
                 self.walk_predicate_expr(body, &mut scoped);
-                let resolved = resolved_term_kind(value, &scoped);
+                if let Term::Var(name) = value {
+                    self.use_var(&scoped, name);
+                }
+                let resolved = resolved_term_kind(value, &scoped.kinds);
                 if let InferredKind::Known(actual) = resolved
                     && !kinds_compatible(PredicateArgKind::Decimal, actual)
                 {
@@ -576,10 +672,12 @@ impl CheckCtx<'_> {
                 args,
                 default,
             } => {
-                self.check_predicate_ref(predicate, args, env);
+                // A lookup consumes its key arguments (the wildcard
+                // marks the extracted value, not a binding).
+                self.check_predicate_ref(predicate, args, RefMode::Use, scope);
                 let result_kind = value_of_result_kind(predicate, args, &self.predicates);
                 if let Some(default_expr) = default {
-                    let default_kind = self.infer_value_expr(default_expr, env);
+                    let default_kind = self.infer_value_expr(default_expr, scope);
                     // The runtime returns either the looked-up value
                     // or the default, so a kind mismatch between them
                     // is the same class of error as a comparator
@@ -624,29 +722,47 @@ impl CheckCtx<'_> {
         }
     }
 
+    /// A variable used where a bound value is required. Flags
+    /// `UnboundVariable` if nothing has bound it at this point.
+    fn use_var(&mut self, scope: &Scope, name: &str) {
+        if !scope.bound.is_bound(name) {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::UnboundVariable {
+                variable: name.to_string(),
+                context,
+            });
+        }
+    }
+
     /// Check a predicate reference end to end: declared, right
-    /// arity, then arg kinds. An undeclared predicate emits
-    /// `Undeclared` and stops; a wrong arity emits `ArityMismatch`
-    /// but still kind-checks the positions both sides share.
-    fn check_predicate_ref(&mut self, predicate: &str, args: &[Term], env: &mut KindEnv) {
-        self.check_reference(VocabularyKind::Predicate, predicate, args, env);
+    /// arity, then arg kinds (and, per `mode`, binding or use of
+    /// its variable arguments).
+    fn check_predicate_ref(
+        &mut self,
+        predicate: &str,
+        args: &[Term],
+        mode: RefMode,
+        scope: &mut Scope,
+    ) {
+        self.check_reference(VocabularyKind::Predicate, predicate, args, mode, scope);
     }
 
     /// Same, against the intent vocabulary; powers `Stmt::Emit`.
-    fn check_intent_ref(&mut self, intent: &str, args: &[Term], env: &mut KindEnv) {
-        self.check_reference(VocabularyKind::Intent, intent, args, env);
+    fn check_intent_ref(&mut self, intent: &str, args: &[Term], mode: RefMode, scope: &mut Scope) {
+        self.check_reference(VocabularyKind::Intent, intent, args, mode, scope);
     }
 
-    /// Shared declared + arity + arg-kind check for a reference in
+    /// Shared declared + arity + arg check for a reference in
     /// either vocabulary. The `.copied()` detaches the declaration
-    /// from the borrow of `self`, so the subsequent `&mut self`
-    /// arg-kind walk is free of a borrow conflict.
+    /// from the borrow of `self`, so the subsequent `&mut self` arg
+    /// walk is free of a borrow conflict.
     fn check_reference(
         &mut self,
         vocabulary: VocabularyKind,
         name: &str,
         args: &[Term],
-        env: &mut KindEnv,
+        mode: RefMode,
+        scope: &mut Scope,
     ) {
         let decl_args = match vocabulary {
             VocabularyKind::Predicate => self.predicates.get(name).copied().map(|d| &d.args),
@@ -671,20 +787,23 @@ impl CheckCtx<'_> {
                 context,
             });
         }
-        self.check_args(vocabulary, name, args, decl_args, env);
+        self.check_args(vocabulary, name, args, decl_args, mode, scope);
     }
 
-    /// Generic arg-list kind check. A literal contributes its kind;
-    /// a variable is observed (refining the env); `Wildcard` is
-    /// skipped; `Actor` contributes `Subject`. Walks only
-    /// `min(args, decl)`; the structural pass owns arity.
+    /// Generic arg-list check. A literal contributes its kind; a
+    /// variable binds (`Match`) or is use-checked (`Use`) and its
+    /// kind refines; `Wildcard` is skipped; `Actor` contributes
+    /// `Subject`. Walks only `min(args, decl)`; arity is owned by
+    /// `check_reference`.
+    #[allow(clippy::too_many_arguments)]
     fn check_args(
         &mut self,
         vocabulary: VocabularyKind,
         name: &str,
         args: &[Term],
         decl_args: &[crate::ArgDecl],
-        env: &mut KindEnv,
+        mode: RefMode,
+        scope: &mut Scope,
     ) {
         let n = args.len().min(decl_args.len());
         for (position, (arg, decl_arg)) in args
@@ -693,7 +812,7 @@ impl CheckCtx<'_> {
             .zip(decl_args.iter().take(n))
             .enumerate()
         {
-            self.check_one_arg(vocabulary, name, position, arg, decl_arg.kind, env);
+            self.check_one_arg(vocabulary, name, position, arg, decl_arg.kind, mode, scope);
         }
     }
 
@@ -705,11 +824,18 @@ impl CheckCtx<'_> {
         position: usize,
         arg: &Term,
         expected: PredicateArgKind,
-        env: &mut KindEnv,
+        mode: RefMode,
+        scope: &mut Scope,
     ) {
         let actual = term_kind(arg);
         if let Term::Var(var_name) = arg {
-            if let Err((previous, new)) = env.observe(var_name, InferredKind::Known(expected)) {
+            match mode {
+                RefMode::Match => scope.bound.bind(var_name),
+                RefMode::Use => self.use_var(scope, var_name),
+            }
+            if let Err((previous, new)) =
+                scope.kinds.observe(var_name, InferredKind::Known(expected))
+            {
                 let context = self.context.clone();
                 self.errors.push(ValidationError::VariableKindConflict {
                     variable: var_name.clone(),
@@ -735,10 +861,10 @@ impl CheckCtx<'_> {
         }
     }
 
-    /// Observe `name` at `kind`; on a refinement conflict, push a
-    /// `VariableKindConflict` carrying both kinds.
-    fn observe_or_report(&mut self, env: &mut KindEnv, name: &str, kind: InferredKind) {
-        if let Err((previous, new)) = env.observe(name, kind) {
+    /// Observe `name` at `kind` in the scope's kind environment; on
+    /// a refinement conflict, push a `VariableKindConflict`.
+    fn observe_or_report(&mut self, scope: &mut Scope, name: &str, kind: InferredKind) {
+        if let Err((previous, new)) = scope.kinds.observe(name, kind) {
             let context = self.context.clone();
             self.errors.push(ValidationError::VariableKindConflict {
                 variable: name.to_string(),
@@ -769,12 +895,12 @@ fn term_var_name(term: &Term) -> Option<&str> {
     }
 }
 
-/// Resolve a `Term`'s kind through the env: variables look up
+/// Resolve a `Term`'s kind through the kind env: variables look up
 /// their current inferred kind; literals and `actor` return their
 /// inherent kind. Wildcard stays UnknownOrAny.
-fn resolved_term_kind(term: &Term, env: &KindEnv) -> InferredKind {
+fn resolved_term_kind(term: &Term, kinds: &KindEnv) -> InferredKind {
     match term {
-        Term::Var(name) => env.lookup(name),
+        Term::Var(name) => kinds.lookup(name),
         other => term_kind(other),
     }
 }
@@ -932,7 +1058,7 @@ mod tests {
 
     #[test]
     fn kindenv_observe_then_lookup_returns_refined_kind() {
-        let mut env = KindEnv::new();
+        let mut env = KindEnv::default();
         env.observe("amount", InferredKind::Known(PredicateArgKind::Decimal))
             .expect("first observation always succeeds against UnknownOrAny");
         assert_eq!(
@@ -943,7 +1069,7 @@ mod tests {
 
     #[test]
     fn kindenv_observe_refines_through_any() {
-        let mut env = KindEnv::new();
+        let mut env = KindEnv::default();
         env.observe("x", InferredKind::Known(PredicateArgKind::Any))
             .unwrap();
         env.observe("x", InferredKind::Known(PredicateArgKind::Decimal))
@@ -956,7 +1082,7 @@ mod tests {
 
     #[test]
     fn kindenv_observe_reports_conflict_with_previous_kinds() {
-        let mut env = KindEnv::new();
+        let mut env = KindEnv::default();
         env.observe("x", InferredKind::Known(PredicateArgKind::Decimal))
             .unwrap();
         let err = env
@@ -1295,9 +1421,11 @@ mod tests {
 
     #[test]
     fn require_does_not_export_bindings_to_subsequent_statements() {
-        // require A(x) sees x as Decimal but should NOT export it.
-        // Then assert B(x) (Subject) should not conflict because x
-        // is fresh again at the assert.
+        // The load-bearing Layer-2 case: `require A(x)` matches and
+        // binds x WITHIN the require, but does not export it. The
+        // later `assert B(x)` therefore uses an unbound x and must
+        // flag UnboundVariable - exactly the runtime UnboundVariable
+        // the gate's non-export rule would produce.
         let mut p = empty_program();
         p.predicates = vec![
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
@@ -1313,8 +1441,169 @@ mod tests {
         }];
         let errs = check_program(&p);
         assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::UnboundVariable { variable: v, .. } if v == "x"
+            )),
+            "require must not export x to the later assert; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn params_flow_to_admit_without_a_binding_statement() {
+        // The positive complement to require-non-export: parameters
+        // are bound at transformation entry, so an `admit` using them
+        // directly - no intervening `bind`/`let` - is clean.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "Payment",
+            &[
+                ("payer", PredicateArgKind::Subject),
+                ("limit", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: params(&["p", "limit"]),
+            body: vec![assert_("Payment", vec![var("p"), var("limit")])],
+        }];
+        let errs = check_program(&p);
+        assert!(
             errs.is_empty(),
-            "require must not export bindings; got {errs:?}"
+            "parameters are bound at entry; the admit is clean. got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn or_binding_in_all_branches_exports_to_later_use() {
+        // The KYC shape: `(B(x, m) or C(x, m)) and (n <= m)`. Both
+        // disjuncts bind `m`, so whichever witness the runtime carries
+        // forward, `m` is bound at the comparator. No UnboundVariable.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl(
+                "A",
+                &[
+                    ("x", PredicateArgKind::Subject),
+                    ("n", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl(
+                "B",
+                &[
+                    ("x", PredicateArgKind::Subject),
+                    ("m", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl(
+                "C",
+                &[
+                    ("x", PredicateArgKind::Subject),
+                    ("m", PredicateArgKind::Decimal),
+                ],
+            ),
+        ];
+        p.invariants = vec![Invariant {
+            name: "ok".to_string(),
+            version: 1,
+            body: implies(
+                claim("A", vec![var("x"), var("n")]),
+                and(vec![
+                    or(vec![
+                        claim("B", vec![var("x"), var("m")]),
+                        claim("C", vec![var("x"), var("m")]),
+                    ]),
+                    le(term(var("n")), term(var("m"))),
+                ]),
+            ),
+        }];
+        let errs = check_program(&p);
+        assert!(
+            errs.is_empty(),
+            "`m` bound in both or-branches must export to the later use; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn or_binding_in_one_branch_only_does_not_export() {
+        // Same shape, but only the first disjunct binds `m`; the
+        // second (`C(x)`) does not. The runtime may carry the
+        // `C`-branch witness forward, leaving `m` unbound at the
+        // comparator - so the intersection rule must NOT export it.
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl(
+                "A",
+                &[
+                    ("x", PredicateArgKind::Subject),
+                    ("n", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl(
+                "B",
+                &[
+                    ("x", PredicateArgKind::Subject),
+                    ("m", PredicateArgKind::Decimal),
+                ],
+            ),
+            pdecl("C", &[("x", PredicateArgKind::Subject)]),
+        ];
+        p.invariants = vec![Invariant {
+            name: "bad".to_string(),
+            version: 1,
+            body: implies(
+                claim("A", vec![var("x"), var("n")]),
+                and(vec![
+                    or(vec![
+                        claim("B", vec![var("x"), var("m")]),
+                        claim("C", vec![var("x")]),
+                    ]),
+                    le(term(var("n")), term(var("m"))),
+                ]),
+            ),
+        }];
+        let errs = check_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::UnboundVariable { variable: v, .. } if v == "m"
+            )),
+            "`m` bound in only one branch must not export; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn in_generator_binds_unbound_element_in_sum_body() {
+        // The settlement shape: `sum(x | line in lines and P(line, x))`.
+        // `line` is not pre-bound; `in` binds it to each item (it is a
+        // generator, not a use), so `P(line, x)` matches cleanly.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl(
+            "P",
+            &[
+                ("line", PredicateArgKind::Subject),
+                ("amount", PredicateArgKind::Decimal),
+            ],
+        )];
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: params(&["lines"]),
+            body: vec![let_(
+                "total",
+                sum(
+                    var("x"),
+                    "x",
+                    and(vec![
+                        in_(var("line"), var("lines")),
+                        claim("P", vec![var("line"), var("x")]),
+                    ]),
+                ),
+            )],
+        }];
+        let errs = check_program(&p);
+        assert!(
+            errs.is_empty(),
+            "`in` binds the unbound element; the sum body is clean. got {errs:?}"
         );
     }
 
@@ -1731,24 +2020,29 @@ mod tests {
                         claim("P", vec![wildcard(), var("amount")]),
                     ),
                 )),
-                // If Sum had leaked `amount` as Decimal into the
-                // outer env, this assert would flag a conflict.
-                // It must NOT - amount is fresh again here.
+                // The Sum bound `amount` only inside its body. At
+                // this assert `amount` is unbound again, so it must
+                // flag UnboundVariable - which is precisely the
+                // non-leak property: the sum binding did not escape.
                 assert_("S", vec![var("amount")]),
             ],
         }];
         let errs = check_program(&p);
         assert!(
-            errs.is_empty(),
-            "Sum's body bindings must not leak; got {errs:?}"
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::UnboundVariable { variable: v, .. } if v == "amount"
+            )),
+            "Sum's `amount` binding must not leak to the later assert; got {errs:?}"
         );
     }
 
     #[test]
     fn value_of_resolves_to_wildcard_slot_kind() {
-        // `value Policy(p, _) <= 100` - the wildcard marks
-        // Policy's second slot (Decimal); Le's RHS is Decimal;
-        // no error.
+        // `value Policy(p, _)` resolves to Policy's second slot
+        // (Decimal); against `<= 100` (Decimal) there is no kind
+        // error. `p` is a transformation parameter so it is bound
+        // for the lookup key (an invariant would leave it unbound).
         let mut p = empty_program();
         p.predicates = vec![pdecl(
             "Policy",
@@ -1757,13 +2051,13 @@ mod tests {
                 ("limit", PredicateArgKind::Decimal),
             ],
         )];
-        p.invariants = vec![Invariant {
-            name: "ok_value_of".to_string(),
-            version: 1,
-            body: le(
+        p.transformations = vec![Transformation {
+            name: "t".to_string(),
+            parameters: vec!["p".to_string()],
+            body: vec![require(le(
                 value_of("Policy", vec![var("p"), wildcard()]),
                 term(dec("100")),
-            ),
+            ))],
         }];
         let errs = check_program(&p);
         assert!(

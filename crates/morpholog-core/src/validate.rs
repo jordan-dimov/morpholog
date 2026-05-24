@@ -132,6 +132,19 @@ pub enum ValidationError {
     /// inside transformation bodies - authority checks belong in a
     /// `require`, not an invariant.
     ActorNotAvailable { context: ValidationContext },
+    /// A variable was used in a position that demands a bound value
+    /// (an `admit`/`retract`/`emit` argument, a comparator or
+    /// arithmetic operand, a `value` lookup key, a `sum` target)
+    /// without anything having bound it first. The binding rules
+    /// follow the runtime: parameters, `bind`, `let`, `for`, and
+    /// claim matches inside a `require`/invariant bind names;
+    /// `require` does not export its matches to later statements.
+    /// The kernel raises `EvalError::UnboundVariable` for this at
+    /// evaluation time.
+    UnboundVariable {
+        variable: String,
+        context: ValidationContext,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -223,6 +236,11 @@ impl std::fmt::Display for ValidationError {
                 f,
                 "`actor` is not available in {context}; it resolves only inside \
                  transformation bodies, so authority checks belong in a `require`"
+            ),
+            ValidationError::UnboundVariable { variable, context } => write!(
+                f,
+                "variable `{variable}` is used in {context} but nothing binds it; \
+                 a `require` match does not export its bindings to later statements"
             ),
         }
     }
