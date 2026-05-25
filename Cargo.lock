@@ -1095,6 +1095,7 @@ version = "0.0.1"
 dependencies = [
  "jiff",
  "morpholog-core",
+ "morpholog-surface",
  "morpholog-test-support",
  "rust_decimal",
  "serde_json",

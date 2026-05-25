@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 morpholog-core = { path = "../morpholog-core" }
+morpholog-surface = { path = "../morpholog-surface" }
 
 [dev-dependencies]
 jiff = { workspace = true }
