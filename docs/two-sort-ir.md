@@ -8,6 +8,14 @@ Status: proposed. Pre-implementation. Once shipped this folds into
 Split `Expr` into two sorts. Make the predicate-vs-value boundary a *type*,
 not a runtime error plus a static checker.
 
+This sits **under the constitution** in
+[`scope-and-ambition.md`](scope-and-ambition.md): `Prop` and `ValueExpr` are
+*supporting machinery* - the body grammar of invariants and transformations -
+never a user-facing product concept. The split does not drift from "only
+invariants and transformations are first-class"; it *restores* that
+discipline by giving their bodies an honest, unambiguous shape instead of an
+overloaded `Expr` blob that lets anything sit anywhere.
+
 ## Doctrine (the why)
 
 Morpholog has two internal expression sorts:
@@ -91,19 +99,18 @@ proposition; a `let` value, a comparator operand, a `sum` target are
 values), so each production emits the right sort directly. `expr_as_term`
 (the term-only downconvert for `In` and claim args) stays.
 
-**Open decision - the `parse_expression` boundary.** Today the public
-`parse_expression` returns `Expr` and tests use it for *both* a bare value
-expression (`"a + b"` -> `Add`) and a proposition (`"a < b"` -> a
-comparison). After the split there is no single return type. Options:
+**The `parse_expression` boundary (resolved).** `parse_expression -> Prop`.
+That keeps the public/default parser entry programme-facing: invariant and
+`require` bodies are propositions, and a standalone `a + b` is not a valid
+Morpholog body - value expressions only appear nested. A narrower
+`parse_value_expr -> ValueExpr` serves the arithmetic-parsing tests and any
+parser-internal value-position production.
 
-1. `parse_expression -> Prop` (the program-facing default; bodies are
-   propositions), plus a test-only `parse_value_expr -> ValueExpr`.
-2. `parse_expression -> ParsedExpr { Prop(Prop), Value(ValueExpr) }` - the
-   parser returns whichever sort the input is.
-
-Recommendation: **(1)** - it matches the surface (a standalone `a + b` is
-not a valid invariant body; value expressions only appear nested), and the
-test split is cheap. Confirm before prototyping.
+We do **not** introduce a `ParsedExpr { Prop, Value }` union: that would
+preserve the one-expression ambiguity the split exists to destroy, at the
+boundary under a new name, and push the "which sort was this?" decision onto
+every caller. A later rename of `parse_expression` to `parse_prop` is
+possible once the split has landed; deferred.
 
 ## `ir_builder` changes
 
