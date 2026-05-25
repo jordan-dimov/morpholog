@@ -19,7 +19,8 @@ use morpholog_core::{Invariant, Program, Transformation};
 /// bug, so this panics rather than returning an error.
 pub(crate) fn parse_example(name: &str, source: &str) -> Program {
     morpholog_surface::parse_program(source).unwrap_or_else(|diagnostics| {
-        panic!("built-in example `{name}` must parse: {diagnostics:?}")
+        let rendered: String = diagnostics.iter().map(|d| d.render(name, source)).collect();
+        panic!("built-in example `{name}` must parse:\n{rendered}")
     })
 }
 
