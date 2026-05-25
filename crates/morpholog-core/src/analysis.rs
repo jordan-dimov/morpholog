@@ -201,7 +201,7 @@ pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
 /// Return the names of every transformation in `program` whose body
 /// asserts `predicate`, in declaration order. This is the one-hop
 /// "what could supply this claim?" lookup the explanation engine uses
-/// to name candidate suppliers for a directly-missing evidence claim.
+/// to name candidate suppliers for a directly-missing claim.
 ///
 /// Deliberately predicate-level and structural: a transformation that
 /// asserts `predicate` is a *candidate* supplier, not a guarantee it
