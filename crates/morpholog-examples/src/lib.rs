@@ -1,18 +1,53 @@
-//! Worked examples - the IR for the canonical Morpholog illustrations.
+//! Worked examples - the canonical Morpholog illustrations.
 //!
-//! These constructors serve double duty as both test fixtures (used by
-//! `morpholog-core`'s own tests and by `morpholog-postgres` integration
-//! tests) and as the canonical illustrations of what Morpholog programs
-//! look like as IR data. The corresponding surface-syntax `.morph` files
-//! live under `examples/<dir>/<example>.morph`.
+//! The single authored form of each example is its surface-syntax
+//! `.morph` file under `examples/<dir>/<example>.morph`. Each module here
+//! embeds that source, parses it once into a [`morpholog_core::Program`],
+//! and exposes it plus the by-name accessors (`program`, `all_invariants`,
+//! individual transformations and invariants) that the `morpholog-core`
+//! and `morpholog-postgres` tests use as fixtures. There is no hand-built
+//! IR: the `.morph` file is the source of truth, so the teaching surface
+//! and the runnable program cannot drift.
 //!
-//! **Not a stable API.** This module is `pub` so integration tests and
-//! documentation can share canonical IR fixtures; it is *not* a
-//! user-facing API and it is *not* the future surface language. The
-//! shapes here may change as the IR evolves, and the module may be
-//! moved behind a feature flag or out of the public surface entirely
-//! once a real parser and example-loading mechanism exist. Treat these
-//! as teaching fixtures, not a contract.
+//! **Not a stable API.** This module is `pub` so tests and documentation
+//! can share the canonical programs; it is not a user-facing API.
+
+use morpholog_core::{Invariant, Program, Transformation};
+
+/// Parse a built-in example's embedded `.morph` source into its
+/// [`Program`]. A built-in example that fails to parse is a build-time
+/// bug, so this panics rather than returning an error.
+pub(crate) fn parse_example(name: &str, source: &str) -> Program {
+    morpholog_surface::parse_program(source).unwrap_or_else(|diagnostics| {
+        panic!("built-in example `{name}` must parse: {diagnostics:?}")
+    })
+}
+
+/// Clone a named invariant out of a parsed example program. A missing
+/// name is a bug in the accessor, not a runtime condition.
+pub(crate) fn invariant(program: &Program, name: &str) -> Invariant {
+    program
+        .invariant(name)
+        .unwrap_or_else(|| panic!("example invariant `{name}` not found"))
+        .clone()
+}
+
+/// Clone a named transformation out of a parsed example program.
+pub(crate) fn transformation(program: &Program, name: &str) -> Transformation {
+    program
+        .transformation(name)
+        .unwrap_or_else(|| panic!("example transformation `{name}` not found"))
+        .clone()
+}
+
+/// Clone a derived claim (by its output predicate name) out of a parsed
+/// example program.
+pub(crate) fn derived(program: &Program, predicate: &str) -> morpholog_core::DerivedClaim {
+    program
+        .derived_claim(predicate)
+        .unwrap_or_else(|| panic!("example derived claim `{predicate}` not found"))
+        .clone()
+}
 
 pub mod approval_controls;
 pub mod carbon_credit_provenance;
