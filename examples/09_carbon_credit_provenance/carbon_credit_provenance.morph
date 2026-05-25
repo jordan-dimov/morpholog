@@ -1,0 +1,139 @@
+-- Carbon-credit provenance: no green claim should become official
+-- without admissible provenance.
+--
+-- A green claim without admissible provenance is not a weak green
+-- claim. It is not a green claim at all.
+--
+-- A quick tour of the domain, in case carbon markets are not your world.
+-- A carbon credit certifies a quantity of climate benefit - tonnes of
+-- carbon-dioxide equivalent avoided, reduced, or removed - traceable to a
+-- verified measurement. (Registries often standardise one credit to one
+-- tonne; here a credit carries its quantity explicitly, so nothing below
+-- turns on that convention.) What makes a credit valuable is not the
+-- arithmetic behind it but its *standing*: that a
+-- registry, buyer, auditor, or regulator can later justify it - who
+-- verified the measurement, who attested it, who was accredited at the
+-- time, who holds it now, and whether it has already been retired
+-- (used up). A credit no one can justify after the fact is not a small
+-- problem; it is a liability.
+--
+-- The measurement itself - generation times an emission factor, the
+-- monitoring-and-verification ("MRV") maths - is the meter. Morpholog
+-- does not compute it. That stays outside, and comes back as an admitted
+-- claim that a measurement has been verified to some quantity. Morpholog
+-- governs only the admission of standing: verified, attested, issued,
+-- held, retired.
+--
+-- Morpholog does not store "facts" - it stores *claims* it has agreed to
+-- admit because they obey the rules. Two kinds of rule do the work:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would break
+--     one - this is how an impossible state (two credits for the same
+--     measurement, one credit held in two places) becomes uncommittable.
+--   * a `require` is a gate on a single action, checked at the moment you
+--     act and never again. "Only an accredited verifier may attest" is a
+--     gate; "no two credits may back the same measurement" is an
+--     invariant. A gate governs what you may do next; an invariant
+--     governs what is true.
+--
+-- Currentness matters here, and the two kinds of rule make it precise.
+-- Revoking a verifier's accreditation blocks *new* issuance through them
+-- from that moment on - but it does not reach back and erase credits that
+-- were legitimately issued while they were accredited. What was admitted
+-- stays admitted; only what you may do next changes.
+
+program carbon_credit_provenance
+
+-- The vocabulary. Each `predicate` names a kind of claim this world can
+-- hold. `VerifiedMeasurement` carries the quantity the meter reported;
+-- admitting it records "this measurement was verified to this amount",
+-- never "this is the truth". `Attestation(measurement, verifier)` means
+-- the verifier attests the admitted measurement claim as a whole,
+-- including its quantity.
+predicate Accredited(verifier: Subject)
+predicate VerifiedMeasurement(measurement: Subject, quantity: Decimal)
+predicate Attestation(measurement: Subject, verifier: Subject)
+predicate Issued(credit: Subject, measurement: Subject, quantity: Decimal)
+predicate HeldBy(credit: Subject, account: Subject)
+predicate Retired(credit: Subject, account: Subject)
+
+-- The states this model makes impossible, forever.
+
+-- A measurement is verified to one quantity, not several. This also
+-- keeps the amount a credit inherits at issuance unambiguous.
+invariant at_most_one_verified_quantity_per_measurement:
+    VerifiedMeasurement(m, q1) and VerifiedMeasurement(m, q2) implies q1 = q2
+
+-- No double counting: at most one credit may be issued against any one
+-- measurement. Two distinct credits backed by the same measurement is the
+-- canonical double-counting failure - and it cannot be committed.
+invariant no_double_issuance:
+    Issued(c1, m, q1) and Issued(c2, m, q2) implies c1 = c2
+
+-- The converse: a credit is backed by exactly one measurement, and so
+-- carries one quantity. With the rule above, credits and measurements
+-- line up one to one.
+invariant credit_backed_by_one_measurement:
+    Issued(c, m1, q1) and Issued(c, m2, q2) implies (m1 = m2 and q1 = q2)
+
+-- A credit is in one place at a time.
+invariant single_custody:
+    HeldBy(credit, a1) and HeldBy(credit, a2) implies a1 = a2
+
+-- Retirement is terminal: no credit is ever both retired and held.
+-- Retiring a credit retracts its custody, so a retired credit can never
+-- be transferred or retired again.
+invariant retirement_terminal:
+    not (Retired(credit, ra) and HeldBy(credit, ha))
+
+-- The only ways state may change.
+
+-- Accredit a verifier. `revoke_accreditation` retracts that standing;
+-- from then on the verifier may not attest, and may not back new
+-- issuance - but credits already issued are left untouched.
+transformation grant_accreditation(verifier):
+    admit Accredited(verifier)
+
+transformation revoke_accreditation(verifier):
+    require Accredited(verifier)
+    retract Accredited(verifier)
+
+-- Admit the MRV result as evidence. The quantity was computed outside
+-- Morpholog; here we only record that the measurement has been verified
+-- to it.
+transformation verify_measurement(measurement, quantity):
+    admit VerifiedMeasurement(measurement, quantity)
+
+-- Only a currently accredited verifier may attest a measurement.
+transformation attest_measurement(measurement, verifier):
+    require Accredited(verifier)
+    admit Attestation(measurement, verifier)
+
+-- Issue a credit. This is the legitimacy gate: the measurement must be
+-- verified (which binds the quantity the credit will carry), and a
+-- currently accredited verifier must have attested it. If any link is
+-- missing, the runtime refuses - and can say exactly which claim is
+-- absent and which transformation would supply it.
+transformation issue_credit(credit, measurement, verifier, account):
+    bind VerifiedMeasurement(measurement, quantity)
+    require Attestation(measurement, verifier) and Accredited(verifier)
+    admit Issued(credit, measurement, quantity)
+    admit HeldBy(credit, account)
+
+-- Move a credit between accounts. A retired credit cannot move, and you
+-- may transfer only a credit you currently hold.
+transformation transfer_credit(credit, from_account, to_account):
+    require not Retired(credit, _)
+    require HeldBy(credit, from_account)
+    retract HeldBy(credit, from_account)
+    admit HeldBy(credit, to_account)
+
+-- Retire (cancel) a credit against an account. Terminal: the gate refuses
+-- a second retirement, and retracting custody keeps the
+-- retirement-terminal invariant true.
+transformation retire_credit(credit, account):
+    require not Retired(credit, _)
+    require HeldBy(credit, account)
+    retract HeldBy(credit, account)
+    admit Retired(credit, account)

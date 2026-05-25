@@ -294,3 +294,35 @@ The same change retired `Expr::Sum`'s `binding` field. It duplicated the target 
 **What stays out:**
 
 - Date arithmetic and intervals (adding a duration to a date, interval length). The comparator set is complete; arithmetic on dates awaits an example.
+
+
+### The explanation engine: rejection as read-side trace interpretation
+
+**Forced by:** the legibility gap. The runtime could say *whether* a transition was admissible, but the buyer's question is *why not, and what is still missing*. The distilled future directions named this the highest-leverage move ("Morpholog as an explanation engine"), and `propose_with_trace` already carried the failure data - so the work was interpretation, not a new evaluator.
+
+**Landed:** `morpholog_core::explain` returns a structured `Explanation` derived from the kernel trace - `Verdict::Admissible`, or a `Rejection` that is a gate (carrying the directly-missing positive claim conjuncts and, per missing predicate, the candidate transformations that assert it), an invariant violation, or a kernel error - rendered to deterministic claim-shaped prose or JSON, with no NLP. The diagnostic failure-walk gained `unsatisfied_positive_claims`, returning the unsatisfied positive claim conjuncts structurally (carried additively on `RequireOutcome::Rejected` / `BindOneOutcome::NoMatch`), and `analysis::transformations_asserting` is the one-hop supplier lookup. No IR primitive and no surface syntax: explanation is read-side analysis over the one executor's trace.
+
+**Considered and rejected:**
+
+- *Natural-language generation.* An explanation an auditor relies on must be reproducible and faithful to the exact failing claim; a probabilistic generator cannot be. The words come from predicate and transformation names plus fixed templates.
+- *Reporting "minimal" missing evidence now.* True minimality is a constrained search (abduction/repair), not a trace read. v0 reports the directly-missing positive claims only; the model speaks claims (`directly_missing_claims`), and the renderer reserves "evidence" for prose.
+
+**What stays out:**
+
+- Present blockers (`not X` where `X` holds), comparator failures, existential and disjunctive remedies, and bounded abduction - all later tiers; those render a faithful reason with an empty missing list. The CLI `explain` surface and a static `inspect guarantees` view are deferred.
+
+
+### Carbon-credit provenance: the flagship that forced no primitive
+
+**Forced by:** nothing in the kernel - and that is the point. The carbon-credit / certificate-of-origin domain was chosen as the explanation engine's first real home because its failure mode is pure legitimacy: a green claim that became official without an admissible, current provenance chain. The test was whether the existing claim model could carry evidence-provenance with no new primitive.
+
+**Landed:** the worked example (`carbon_credit_provenance`) models the whole provenance chain as ordinary claims about claims - `VerifiedMeasurement`, `Attestation`, `Accredited` - gating `issue_credit` on a verified measurement (binding its quantity), an attestation, and a *currently* accredited verifier. Double-counting in both directions (no two credits per measurement, no two measurements per credit), single custody, and terminal retirement are invariants; currentness is the verified-revenue pattern (revoking accreditation retracts standing via `retract`, blocking new issuance while leaving issued credits admitted). No kernel change was needed. The MRV computation stays outside and returns as the admitted `VerifiedMeasurement` quantity, holding the inside/outside boundary. The example exists to point the explanation engine at a real domain: a refused issuance names the missing `VerifiedMeasurement` / `Attestation` / `Accredited` claim and the transformation that would supply it.
+
+**Considered and rejected:**
+
+- *Forcing `Expr::Mul` via generation-times-factor.* That computation is the meter; governing it would cross the inside/outside line. Conservation checks, when needed, use the existing `sum` / comparators on admitted quantities.
+- *Conservation by sum across a batch.* Deferred behind a stated "one credit per measurement" simplification, so the legitimacy mechanics stay visible.
+
+**What stays out:**
+
+- Batch issuance (one credit backs one measurement here); obligations over time (retire-by-deadline) and a static `inspect guarantees` view, both of which will point at this model.

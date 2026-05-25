@@ -15,6 +15,7 @@
 //! as teaching fixtures, not a contract.
 
 pub mod approval_controls;
+pub mod carbon_credit_provenance;
 pub mod chess_transition_invariants;
 pub mod clinical_trial_enrolment;
 pub mod double_entry_ledger;
@@ -42,5 +43,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         clinical_trial_enrolment::program(),
         chess_transition_invariants::program(),
         kyc_sanctions_screening::program(),
+        carbon_credit_provenance::program(),
     ]
 }
