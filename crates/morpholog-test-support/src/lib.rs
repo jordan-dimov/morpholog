@@ -22,7 +22,7 @@
 //!   [`EvalValue`] from a Rust-friendly input.
 //! - `role`: semantic alias for `subj` when the subject names a
 //!   delegated role (e.g. `role(ROLE_RANDOMISE_PARTICIPANT)`); same
-//!   runtime, documents reader intent. Mirrors the `dsl::role` term
+//!   runtime, documents reader intent. Mirrors the `ir_builder::role` term
 //!   alias on the IR side.
 //! - `test_actor`, `test_transition`: a shared default actor for
 //!   tests that do not model authority. Authority-focused tests

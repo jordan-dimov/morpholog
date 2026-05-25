@@ -407,7 +407,7 @@ mod tests {
 
     use super::*;
     use crate::Value;
-    use crate::dsl::*;
+    use crate::ir_builder::*;
 
     #[test]
     fn format_program_starts_with_program_header() {

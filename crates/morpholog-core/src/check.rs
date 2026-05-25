@@ -1083,8 +1083,8 @@ mod tests {
     // check_program: claim arg checking + statement flow
     // ============================================================
 
-    use crate::dsl::*;
     use crate::ir::{ArgDecl, Intent, Invariant, Program, Transformation};
+    use crate::ir_builder::*;
 
     /// Build a `PredicateDecl` shorthand for tests.
     fn pdecl(name: &str, args: &[(&str, PredicateArgKind)]) -> crate::ir::PredicateDecl {

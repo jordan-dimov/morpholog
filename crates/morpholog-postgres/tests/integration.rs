@@ -1755,7 +1755,7 @@ async fn propose_rejects_non_subject_actor() {
 /// Emits the identical intent twice, forcing both outbox rows onto the
 /// same deterministic idempotency key.
 fn double_emit_transformation() -> Transformation {
-    use morpholog_core::dsl::{emit, subj as lit_subj};
+    use morpholog_core::ir_builder::{emit, subj as lit_subj};
     Transformation {
         name: "double_emit".to_string(),
         parameters: vec![],
