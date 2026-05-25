@@ -81,6 +81,18 @@ enum Command {
     /// output and exit-code semantics as `propose`.
     Run(RunArgs),
 
+    /// Explain why a transformation from a `.morph` source file would be
+    /// admitted or rejected against live state, without proposing it.
+    /// Parses and validates the source like `run`, loads the scoped
+    /// pre-state, then renders the structured explanation - the gate that
+    /// failed and the directly-missing claims, the violated invariant, or
+    /// admissibility - as claim-shaped prose, or as JSON with `--json`.
+    /// Read-only: the verdict does not affect the exit code (zero on both
+    /// admissible and rejected). Only operational failures - parse or
+    /// validation errors, bad `--args`, an unknown transformation, a
+    /// database failure - exit non-zero.
+    Explain(ExplainArgs),
+
     /// Drive the outbox state machine from outside Rust. Lets a
     /// shell or Python deliverer participate in the lease protocol
     /// (`claim` to acquire a row, `complete` to resolve it,
@@ -426,6 +438,38 @@ pub(crate) struct RunArgs {
     pub(crate) trace: bool,
 }
 
+/// Arguments for `explain`. The same source/transformation/args/actor
+/// shape as [`RunArgs`] - it builds the identical `Transition` - but with
+/// `--json` in place of `--trace`: explain's whole output already is the
+/// interpreted trace, so prose-or-JSON is the only output choice.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ExplainArgs {
+    /// Path to a `.morph` source file containing the programme.
+    pub(crate) file: PathBuf,
+
+    /// Transformation name within the parsed programme.
+    pub(crate) transformation: String,
+
+    /// JSON array of arguments matching the transformation's parameter
+    /// list, in the same tagged codec as `run --args` - e.g.
+    /// `[{"type":"subject","value":"c1"},{"type":"decimal","value":"100"}]`.
+    #[arg(long)]
+    pub(crate) args: String,
+
+    /// Subject identifying the actor under whose authority the explained
+    /// transition is proposed. Wrapped as an `EvalValue::Subject`.
+    #[arg(long)]
+    pub(crate) actor: String,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+
+    /// Emit the structured JSON `Explanation` instead of prose.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -435,6 +479,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Parse(args) => commands::parse::run(args),
         Command::Check(args) => commands::check::run(args),
         Command::Run(args) => commands::run::run(args).await,
+        Command::Explain(args) => commands::explain::run(args).await,
         Command::Outbox { what } => match what {
             OutboxCmd::Claim(args) => commands::outbox::claim(args).await,
             OutboxCmd::Complete(args) => commands::outbox::complete(args).await,
@@ -921,5 +966,67 @@ mod tests {
             "expected missing-argument error, got {:?}",
             err.kind()
         );
+    }
+
+    #[test]
+    fn explain_with_all_args_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "explain",
+            "model.morph",
+            "issue_credit",
+            "--args",
+            "[]",
+            "--actor",
+            "jordan",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Explain(args) = cli.command else {
+            panic!("expected Explain, got {:?}", cli.command);
+        };
+        assert_eq!(args.file.as_os_str(), "model.morph");
+        assert_eq!(args.transformation, "issue_credit");
+        assert_eq!(args.args, "[]");
+        assert_eq!(args.actor, "jordan");
+        assert_eq!(args.database_url, "postgres:///morpholog_dev");
+        assert!(!args.json, "expected --json to default to false");
+    }
+
+    #[test]
+    fn explain_with_json_flag_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "explain",
+            "model.morph",
+            "issue_credit",
+            "--args",
+            "[]",
+            "--actor",
+            "jordan",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--json",
+        ]);
+        let Command::Explain(args) = cli.command else {
+            panic!("expected Explain, got {:?}", cli.command);
+        };
+        assert!(args.json, "expected --json flag to be set");
+    }
+
+    #[test]
+    fn explain_missing_actor_flag_errors() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "explain",
+            "model.morph",
+            "issue_credit",
+            "--args",
+            "[]",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ])
+        .expect_err("missing --actor should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 }
