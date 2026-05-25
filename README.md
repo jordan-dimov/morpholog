@@ -106,6 +106,7 @@ Each runs both in memory (against the kernel) and durably (against PostgreSQL). 
 - [**Clinical trial enrolment**](examples/06_clinical_trial_enrolment/) - a participant is randomised only if protocol, consent, investigator delegation and eligibility evidence are all valid on the randomisation date. **Validity is admission-time, not eternal**: a later protocol amendment does not invalidate an earlier randomisation. Grounded in Good Clinical Practice.
 - [**Chess transition invariants**](examples/07_chess_transition_invariants/) - the one non-business example: an isolated demonstration of *transition invariants*, rules that relate the state before a change to the state after (move count strictly increases; piece count never rises). The same `pre(...)` mechanism enforces a real per-policy conservation law in the insurance example.
 - [**KYC sanctions and PEP screening**](examples/08_kyc_sanctions_screening/) - onboarding is gated by current, clean screenings against both the sanctions and PEP lists; an unresolved match on *any* of a customer's screenings blocks admission until it is adjudicated. Each step emits a **declared intent** to a distinct downstream consumer - misspelling `MatchRaised` is a validation error, not a silently-dropped compliance event.
+- [**Carbon-credit provenance**](examples/09_carbon_credit_provenance/) - the explanation engine's flagship: a green claim becomes official only on an admissible, *current* provenance chain - verified measurement, attestation, an accredited verifier - with double-counting forbidden in both directions, single custody, and terminal retirement. Retire-by-deadline obligations are swept by an outside coordinator that hands the date in. **No green claim without admissible provenance.**
 
 Morpholog is not the whole stack. UIs, dashboards, dataloaders, ML pipelines stay in normal tools. What Morpholog owns is the line where *"may this be admitted as a valid record?"* needs a definite answer - the small fraction of any real business system that, when it fails, makes the news.
 
@@ -128,7 +129,7 @@ The `.morph` parser arc is complete: every worked example parses end-to-end as `
 
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
-What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching for higher-order authority; materialised derived claims; legibility tooling that answers *"what does this system prevent?"* with mechanically-derived exclusion matrices. Each lands when a worked example forces the shape.
+The legibility tooling has begun: `morpholog inspect guarantees` names what a model makes impossible, and `morpholog explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap. What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching for higher-order authority; materialised derived claims; the rest of the legibility set (transformation graphs, mechanically-derived exclusion matrices). Each lands when a worked example forces the shape.
 
 ## Deeper reading
 

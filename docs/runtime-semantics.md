@@ -262,13 +262,12 @@ Steps 1-7 are atomic. Post-commit, outbox intents deliver at-least-once via work
 
 ## Explicit non-goals for v0
 
-- No surface syntax, lexer, or parser. The IR is constructed directly as data.
-- No "claim language" or "intent language" exposed to users.
-- No entities, classes, services, or projection forms.
+The doctrinal floors - no entities/classes/services, no workflow engine, no arbitrary computation inside transformations, no BI engine, no bypass flags - are in [`scope-and-ambition.md`](scope-and-ambition.md)'s Non-goals and not repeated here. The IR- and runtime-specific ones:
+
 - No invariant lifecycle. v0 has one canonical epoch; all invariants are `version: 1`, status `enforced`.
 - No SQL generation from claim shapes. v0 uses a small hand-written PG schema at `crates/morpholog-core/sql/schema.sql` for the runtime tables (claims, audit, outbox).
 - No model checker; the decidable-core spec is a later artefact.
-- No units. No floating-point arithmetic.
+- No units. No floating-point arithmetic; decimal only.
 
 ## Success criterion
 
