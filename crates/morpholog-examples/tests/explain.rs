@@ -8,6 +8,15 @@
 //! empty missing-claims list, invariant violations and kernel errors use
 //! their own rejection shapes, and the JSON and prose surfaces are
 //! deterministic.
+//!
+//! Test layers: the flagship and boundary cases run against the real
+//! `approval_controls` example; small bespoke scenarios (a sanctions
+//! blocker, a missing supplier, an invariant violation) are authored as
+//! inline `.morph` and parsed, so they read as models rather than IR
+//! struct-construction. The "transformation minus one statement"
+//! invariant-teeth tests (chess, insurance) are a different layer -
+//! deliberately adversarial, constructing shapes a correct programme
+//! never would, where the Rust IR builders are the right tool.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

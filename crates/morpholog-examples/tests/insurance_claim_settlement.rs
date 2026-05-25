@@ -680,6 +680,10 @@ fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
 /// the pre-state and post-state falsifies the rule.
 #[test]
 fn conservation_invariant_catches_payment_that_skips_headroom_update() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
     use morpholog_core::dsl;
 

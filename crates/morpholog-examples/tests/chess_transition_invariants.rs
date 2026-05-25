@@ -98,6 +98,10 @@ fn capturing_a_king_is_rejected() {
 /// `sum(1 | PieceAt(...))`.
 #[test]
 fn piece_count_drift_is_rejected() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
     use morpholog_core::dsl;
 
@@ -167,6 +171,10 @@ fn piece_count_drift_is_rejected() {
 /// refused.
 #[test]
 fn dropping_the_piece_counter_is_rejected() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
     use morpholog_core::dsl;
 
@@ -297,6 +305,10 @@ fn quiet_move_after_opening_succeeds() {
 
 #[test]
 fn transition_invariant_catches_missing_move_count_bump() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
     use morpholog_core::dsl;
 
