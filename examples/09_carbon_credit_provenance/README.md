@@ -37,6 +37,7 @@ See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the i
 | --- | --- |
 | `at_most_one_verified_quantity_per_measurement` | a measurement verified to two conflicting amounts |
 | `no_double_issuance` | two distinct credits backed by the same measurement |
+| `credit_backed_by_one_measurement` | one credit backed by two different measurements |
 | `single_custody` | one credit held by two accounts at once |
 | `retirement_terminal` | a credit that is both retired and still held |
 
@@ -80,6 +81,6 @@ Provenance is modelled as ordinary **claims about claims** - `VerifiedMeasuremen
 
 ### What this example deliberately does not cover
 
-This example models one credit as backed by one measurement. Real registries may split a project period into many units or batches. We keep one-credit-per-measurement here so the legitimacy mechanics stay visible: the `no_double_issuance` invariant makes double-counting impossible by refusing two issued credits backed by the same measurement. Conservation across a batch (total issued against a measured quantity) is a later extension, not a change to the legitimacy story.
+This example models one credit as backed by one measurement. Real registries may split a project period into many units or batches. We keep one-credit-per-measurement here so the legitimacy mechanics stay visible: `no_double_issuance` refuses two credits backed by the same measurement, and `credit_backed_by_one_measurement` refuses one credit backed by two - together pinning the credit-to-measurement correspondence one to one, so double-counting is impossible in either direction. Conservation across a batch (total issued against a measured quantity) is a later extension, not a change to the legitimacy story.
 
 Obligations over time (an entity must retire enough credits by a deadline) and a `morpholog inspect guarantees` view that lists what a model forbids are deferred to follow-up work; this example is the domain they will point at.

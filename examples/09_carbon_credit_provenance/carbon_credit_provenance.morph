@@ -5,9 +5,12 @@
 -- claim. It is not a green claim at all.
 --
 -- A quick tour of the domain, in case carbon markets are not your world.
--- A carbon credit is meant to stand for one unit of climate benefit - a
--- tonne of carbon dioxide avoided or removed. What makes a credit
--- valuable is not the arithmetic behind it but its *standing*: that a
+-- A carbon credit certifies a quantity of climate benefit - tonnes of
+-- carbon-dioxide equivalent avoided, reduced, or removed - traceable to a
+-- verified measurement. (Registries often standardise one credit to one
+-- tonne; here a credit carries its quantity explicitly, so nothing below
+-- turns on that convention.) What makes a credit valuable is not the
+-- arithmetic behind it but its *standing*: that a
 -- registry, buyer, auditor, or regulator can later justify it - who
 -- verified the measurement, who attested it, who was accredited at the
 -- time, who holds it now, and whether it has already been retired
@@ -67,6 +70,12 @@ invariant at_most_one_verified_quantity_per_measurement:
 -- canonical double-counting failure - and it cannot be committed.
 invariant no_double_issuance:
     Issued(c1, m, q1) and Issued(c2, m, q2) implies c1 = c2
+
+-- The converse: a credit is backed by exactly one measurement, and so
+-- carries one quantity. With the rule above, credits and measurements
+-- line up one to one.
+invariant credit_backed_by_one_measurement:
+    Issued(c, m1, q1) and Issued(c, m2, q2) implies (m1 = m2 and q1 = q2)
 
 -- A credit is in one place at a time.
 invariant single_custody:

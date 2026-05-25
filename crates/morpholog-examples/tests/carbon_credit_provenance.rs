@@ -170,6 +170,34 @@ fn second_credit_for_the_same_measurement_violates_no_double_issuance() {
     assert_eq!(inv.name, "no_double_issuance");
 }
 
+#[test]
+fn reissuing_one_credit_against_a_second_measurement_is_an_invariant_rejection() {
+    // c1 already backs m1; backing m2 with the same credit (to the same
+    // account, so custody stays single-valued) violates the converse rule
+    // that a credit is backed by exactly one measurement.
+    let state = State::from_claims(vec![
+        claim_instance("Accredited", &[subj("acme_verifier")]),
+        claim_instance("VerifiedMeasurement", &[subj("m2"), dec(50)]),
+        claim_instance("Attestation", &[subj("m2"), subj("acme_verifier")]),
+        claim_instance("Issued", &[subj("c1"), subj("m1"), dec(100)]),
+        claim_instance("HeldBy", &[subj("c1"), subj("acct1")]),
+    ]);
+
+    let explanation = explain(
+        &cc::program(),
+        &issue("c1", "m2", "acme_verifier", "acct1"),
+        &state,
+    );
+
+    let Verdict::Rejected(Rejection::Invariant(inv)) = &explanation.verdict else {
+        panic!(
+            "expected an invariant rejection, got {:?}",
+            explanation.verdict
+        );
+    };
+    assert_eq!(inv.name, "credit_backed_by_one_measurement");
+}
+
 // ============================================================
 // Retirement is terminal: transfer-after-retire and double-retire are
 // present-blocker gate rejections with no directly-missing claim.

@@ -98,6 +98,28 @@ pub fn no_double_issuance() -> Invariant {
     }
 }
 
+/// The converse of `no_double_issuance`: a credit is backed by exactly
+/// one measurement, and so carries one quantity. Together with
+/// `no_double_issuance` this makes `Issued` a one-to-one correspondence
+/// between credits and measurements - the precise meaning of "one credit
+/// per measurement", in both directions.
+pub fn credit_backed_by_one_measurement() -> Invariant {
+    Invariant {
+        name: "credit_backed_by_one_measurement".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim("Issued", vec![var("c"), var("m1"), var("q1")]),
+                claim("Issued", vec![var("c"), var("m2"), var("q2")]),
+            ]),
+            and(vec![
+                eq(term(var("m1")), term(var("m2"))),
+                eq(term(var("q1")), term(var("q2"))),
+            ]),
+        ),
+    }
+}
+
 /// A credit is held by at most one account at a time. Custody is
 /// single-valued; a credit cannot be in two places at once.
 pub fn single_custody() -> Invariant {
@@ -132,6 +154,7 @@ pub fn all_invariants() -> Vec<Invariant> {
     vec![
         at_most_one_verified_quantity_per_measurement(),
         no_double_issuance(),
+        credit_backed_by_one_measurement(),
         single_custody(),
         retirement_terminal(),
     ]
