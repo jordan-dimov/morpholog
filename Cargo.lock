@@ -1144,7 +1144,6 @@ dependencies = [
  "ariadne",
  "chumsky",
  "morpholog-core",
- "morpholog-examples",
 ]
 
 [[package]]
