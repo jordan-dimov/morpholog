@@ -428,7 +428,7 @@ fn discharge_succeeds_once_enough_is_retired() {
     let s = with_obligation(s, 100, "2026-12-31");
     let s = must_accept(
         &cc::discharge_obligation(),
-        vec![subj("o1")],
+        vec![subj("o1"), date("2026-06-01")],
         s,
         &cc::all_invariants(),
     );
@@ -437,10 +437,35 @@ fn discharge_succeeds_once_enough_is_retired() {
 
 #[test]
 fn discharge_under_target_is_a_comparator_gate_rejection() {
-    // Retired 100, but the obligation is for 200: the retired-total gate
-    // fails on a comparison, so nothing is directly missing.
+    // Retired 100, but the obligation is for 200: on time, so the
+    // retired-total gate fails on a comparison and nothing is directly
+    // missing.
     let s = with_obligation(state_with_one_retired_credit(100), 200, "2026-12-31");
-    let t = transition("discharge_obligation", vec![subj("o1")], "acct1");
+    let t = transition(
+        "discharge_obligation",
+        vec![subj("o1"), date("2026-06-01")],
+        "acct1",
+    );
+
+    let explanation = explain(&cc::program(), &t, &s);
+
+    let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
+        panic!("expected a gate rejection, got {:?}", explanation.verdict);
+    };
+    assert!(gate.directly_missing_claims.is_empty());
+}
+
+#[test]
+fn discharge_after_the_deadline_is_refused() {
+    // Enough retired, but discharge is attempted after the deadline: the
+    // date gate refuses it, so a late retirement cannot quietly satisfy a
+    // "by due_on" obligation. The breach sweep is what applies instead.
+    let s = with_obligation(state_with_one_retired_credit(100), 100, "2026-12-31");
+    let t = transition(
+        "discharge_obligation",
+        vec![subj("o1"), date("2027-01-01")],
+        "acct1",
+    );
 
     let explanation = explain(&cc::program(), &t, &s);
 
@@ -486,7 +511,7 @@ fn sweep_does_not_breach_a_satisfied_obligation() {
     let s = with_obligation(state_with_one_retired_credit(100), 100, "2026-12-31");
     let s = must_accept(
         &cc::discharge_obligation(),
-        vec![subj("o1")],
+        vec![subj("o1"), date("2026-06-01")],
         s,
         &cc::all_invariants(),
     );

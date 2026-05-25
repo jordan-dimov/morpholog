@@ -357,14 +357,16 @@ pub fn raise_obligation() -> Transformation {
     }
 }
 
-/// Discharge an obligation once the account has retired enough. The
-/// retired total sums the issued quantity of every credit the account has
-/// retired. A breached obligation cannot be discharged - the gate keeps
-/// the two outcomes mutually exclusive.
+/// Discharge an obligation: on or before the deadline, the account has
+/// retired enough. Like the sweep, discharge is date-aware and driven by
+/// the outside coordinator - `current_date` comes from outside - so a late
+/// retirement cannot quietly satisfy a "by `due_on`" obligation. An
+/// already-satisfied or breached obligation cannot be discharged, keeping
+/// the outcome terminal and the two states mutually exclusive.
 pub fn discharge_obligation() -> Transformation {
     Transformation {
         name: "discharge_obligation".to_string(),
-        parameters: params(&["obligation"]),
+        parameters: params(&["obligation", "current_date"]),
         body: vec![
             bind_one(claim(
                 "Obligation",
@@ -375,7 +377,9 @@ pub fn discharge_obligation() -> Transformation {
                     var("due_on"),
                 ],
             )),
+            require(not(claim("ObligationSatisfied", vec![var("obligation")]))),
             require(not(claim("ObligationBreached", vec![var("obligation")]))),
+            require(date_le(term(var("current_date")), term(var("due_on")))),
             require(ge(
                 sum(
                     var("q"),
@@ -410,6 +414,7 @@ pub fn sweep_obligation() -> Transformation {
                 ],
             )),
             require(not(claim("ObligationSatisfied", vec![var("obligation")]))),
+            require(not(claim("ObligationBreached", vec![var("obligation")]))),
             require(date_gt(term(var("current_date")), term(var("due_on")))),
             require(lt(
                 sum(

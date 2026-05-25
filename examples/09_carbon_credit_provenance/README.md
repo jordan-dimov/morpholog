@@ -31,7 +31,7 @@ See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the i
 | `HeldBy(credit, account)` | current custody |
 | `Retired(credit, account)` | the credit has been cancelled - terminal |
 | `Obligation(obligation, account, quantity, due_on)` | the account must retire `quantity` tonnes by `due_on` |
-| `ObligationSatisfied` / `ObligationBreached(obligation)` | the obligation's outcome |
+| `ObligationSatisfied(obligation)` / `ObligationBreached(obligation)` | the obligation's outcome |
 
 ### Invariants - what this model makes impossible
 
@@ -67,9 +67,9 @@ The same engine distinguishes a missing `VerifiedMeasurement`, a missing `Attest
 
 ## Obligations over time
 
-A compliance scheme can oblige an account to retire enough credits by a deadline: `raise_obligation(obligation, account, quantity, due_on)`. Retirement discharges it - `discharge_obligation` admits `ObligationSatisfied` once the account's retired total (summed across the credits it has retired) reaches the target.
+A compliance scheme can oblige an account to retire enough credits by a deadline: `raise_obligation(obligation, account, quantity, due_on)`. Retirement discharges it - `discharge_obligation(obligation, current_date)` admits `ObligationSatisfied(obligation)` when, *on or before the deadline*, the account's retired total (summed across the credits it has retired) reaches the target. Discharge is date-aware too: a late retirement cannot quietly satisfy a "by `due_on`" obligation.
 
-Morpholog keeps no clock. A deadline is a fact about *now*, and "now" lives outside the system - so a breach is only ever recorded when an outside scheduler invokes `sweep_obligation(obligation, current_date)` with the current date. Past the due date, not already satisfied, and still under target, the sweep admits `ObligationBreached`. This is the "Morpholog plus an Outside Coordinator" pattern: the kernel decides admissibility; the coordinator supplies the passage of time. The `obligation_not_both_satisfied_and_breached` invariant guarantees the two outcomes can never coexist, in whatever order things happen.
+Morpholog keeps no clock. A deadline is about *now*, and "now" is known only outside the system - so neither discharge nor breach invents it: both take `current_date` from the outside scheduler. A breach is recorded when `sweep_obligation(obligation, current_date)` finds an obligation past the due date, not already decided, and still under target. This is the "Morpholog plus an Outside Coordinator" pattern: the kernel decides admissibility; the coordinator supplies the passage of time. The `obligation_not_both_satisfied_and_breached` invariant guarantees the two outcomes can never coexist, in whatever order things happen.
 
 ## How to run it
 

@@ -45,7 +45,8 @@
 --
 -- Finally, some rules are about time. A scheme may oblige an account to
 -- retire enough credits by a deadline. Morpholog keeps no clock of its
--- own, and that is deliberate: "now" is an outside fact, so a deadline is
+-- own, and that is deliberate: "now" is known only outside the system,
+-- so a deadline is
 -- only ever checked when an outside scheduler hands the current date to a
 -- `sweep` transformation. The kernel decides; the coordinator says when.
 
@@ -166,20 +167,25 @@ transformation retire_credit(credit, account):
 transformation raise_obligation(obligation, account, quantity, due_on):
     admit Obligation(obligation, account, quantity, due_on)
 
--- Discharge once the account has retired enough. The retired total sums
--- the issued quantity of every credit the account has retired. A breached
--- obligation cannot be discharged.
-transformation discharge_obligation(obligation):
+-- Discharge on or before the deadline, once the account has retired
+-- enough. Like the sweep, discharge is date-aware - `current_date` comes
+-- from the outside coordinator - so a late retirement cannot quietly
+-- satisfy a "by due_on" obligation. An already-decided obligation cannot
+-- be discharged again.
+transformation discharge_obligation(obligation, current_date):
     bind Obligation(obligation, account, quantity, due_on)
+    require not ObligationSatisfied(obligation)
     require not ObligationBreached(obligation)
+    require current_date on_or_before due_on
     require sum(q | Retired(c, account) and Issued(c, m, q)) >= quantity
     admit ObligationSatisfied(obligation)
 
--- The outside-coordinator sweep. Past the due date, not already
--- satisfied, and still under target: record the breach.
+-- The outside-coordinator sweep. Past the due date, not already decided,
+-- and still under target: record the breach.
 transformation sweep_obligation(obligation, current_date):
     bind Obligation(obligation, account, quantity, due_on)
     require not ObligationSatisfied(obligation)
+    require not ObligationBreached(obligation)
     require current_date after due_on
     require sum(q | Retired(c, account) and Issued(c, m, q)) < quantity
     admit ObligationBreached(obligation)
