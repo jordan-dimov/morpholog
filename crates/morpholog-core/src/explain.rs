@@ -16,8 +16,9 @@
 //! that did not match under the current binding context* - which is why
 //! the field is `directly_missing_claims`, not "missing evidence":
 //! some unmatched claims are authority, standing, prior use, or
-//! currentness, not evidence in the narrow sense. The renderer may say
-//! "evidence" where that helps a reader; the model does not.
+//! currentness, not evidence in the narrow sense. The renderer keeps the
+//! term *claims* in v0 too; a domain-specific front-end may choose
+//! "evidence" where the narrow sense fits.
 //!
 //! Out of scope until a later tier (the moment we surface these we are
 //! explaining the *semantics* of failure, not formatting the trace):
@@ -83,6 +84,12 @@ pub enum Rejection {
 pub struct GateRejection {
     pub gate: String,
     pub statement_kind: GateKind,
+    /// v0 reports the first directly-missing positive claim that kills
+    /// the gate chain - not the exhaustive set of missing instances, and
+    /// not a bounded why-not search. Exhaustive enumeration and abduction
+    /// are later tiers; do not read this field as "every claim that would
+    /// make the gate pass". Empty for present blockers, comparator
+    /// failures, and any gate whose chain-killer is not a positive claim.
     pub directly_missing_claims: Vec<MissingClaim>,
 }
 
