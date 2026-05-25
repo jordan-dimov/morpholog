@@ -19,7 +19,7 @@ The product is four lines:
 3. Every transformation must preserve every active **invariant**.
 4. Therefore bad state cannot be committed.
 
-Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class programme declarations over it. Nothing else is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
+Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class constructs over it - the rules and the actions. The other declarations a programme carries (`predicate`, `intent`, `derived`) are vocabulary and read-side, in the supporting tier below; none is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
 
 - **Vocabulary** - `predicate` and `intent` declarations: the shapes claims and outbox effects may take.
 - **Body grammar** - the expression syntax of invariant and transformation *bodies*. Supporting syntax, not a user-facing concept; it exists only so that a rule, or a computation inside one, has an honest shape.
