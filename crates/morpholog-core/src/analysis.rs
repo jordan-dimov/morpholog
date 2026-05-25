@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ir::{DerivedClaim, Expr, Stmt};
+use crate::ir::{DerivedClaim, Expr, Program, Stmt};
 
 /// Return the set of predicate names this expression references
 /// anywhere in its tree. Used by the PostgreSQL adapter's read path
@@ -195,5 +195,47 @@ pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
             }
         }
         Stmt::Emit(_) => {}
+    }
+}
+
+/// Return the names of every transformation in `program` whose body
+/// asserts `predicate`, in declaration order. This is the one-hop
+/// "what could supply this claim?" lookup the explanation engine uses
+/// to name candidate suppliers for a directly-missing evidence claim.
+///
+/// Deliberately predicate-level and structural: a transformation that
+/// asserts `predicate` is a *candidate* supplier, not a guarantee it
+/// can supply a specific claim instance under given bindings - it may
+/// carry its own `require` gates, authority, or date windows. Honest
+/// candidate-supplier lookup; not instance matching, not multi-hop
+/// reachability (that is bounded model checking, deferred).
+///
+/// Recurses into `For` bodies: an assert nested in a loop still makes
+/// the transformation a supplier of that predicate.
+pub fn transformations_asserting(program: &Program, predicate: &str) -> Vec<String> {
+    program
+        .transformations
+        .iter()
+        .filter(|t| t.body.iter().any(|s| stmt_asserts(s, predicate)))
+        .map(|t| t.name.clone())
+        .collect()
+}
+
+/// Whether a statement (or, for `For`, its body) asserts `predicate`.
+///
+/// Exhaustive over `Stmt` for the same reason as the predicate walkers:
+/// a future variant that can assert a claim must declare itself here
+/// rather than fall silently through a `_` arm and make a supplier
+/// invisible to `explain`.
+fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
+    match stmt {
+        Stmt::Assert(claim) => claim.predicate == predicate,
+        Stmt::For { body, .. } => body.iter().any(|s| stmt_asserts(s, predicate)),
+        Stmt::Require(_)
+        | Stmt::BindOne(_)
+        | Stmt::Let { .. }
+        | Stmt::LetNewSubject { .. }
+        | Stmt::Retract { .. }
+        | Stmt::Emit(_) => false,
     }
 }

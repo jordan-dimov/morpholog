@@ -13,6 +13,7 @@
 
 use jiff::civil::Date;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::ir::{Expr, Term, Value};
@@ -687,5 +688,132 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
         | Expr::Add(..)
         | Expr::Sum { .. }
         | Expr::ValueOf { .. } => None,
+    }
+}
+
+/// A claim-shaped gate conjunct that did not match, rendered with its
+/// arguments resolved under the binding context live at the rejection.
+///
+/// Carried structurally on the rejection trace (see
+/// [`crate::RequireOutcome`]) so the explanation engine can attach
+/// candidate suppliers by predicate without re-deriving bindings.
+/// `predicate` is kept separate from `rendered` precisely so supplier
+/// lookup is by predicate name, not by parsing the rendered string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderedClaim {
+    pub predicate: String,
+    pub rendered: String,
+}
+
+/// On a failing predicate-shaped gate expression, return the positive
+/// claim conjuncts directly responsible for the failure - the
+/// "directly missing claims" the explanation engine reports. Mirrors
+/// [`find_failing_subexpr`]'s conjunction threading so the binding flow
+/// matches the kernel's `And` semantics exactly (a conjunct is evaluated
+/// against the contexts the previous conjuncts produced, not the entry
+/// bindings).
+///
+/// Scope is deliberately narrow in v0:
+///
+/// - a top-level [`Expr::Claim`] that did not match -> that claim;
+/// - a top-level [`Expr::And`] -> the first conjunct that kills the
+///   chain, *if and only if* it is itself a positive `Claim`.
+///
+/// Everything else returns empty: `Or`, `Not`, `Exists`, `Implies`,
+/// `Forall`, the comparators, `ValueOf`, `Pre`, `Term`, and an `And`
+/// whose chain-killing conjunct is not a positive claim. Those are
+/// faithful rejections without a directly-missing claim. Present
+/// blockers (`not X` where `X` holds), comparator failures, and
+/// bounded abduction are deliberately out of scope - surfacing them
+/// would mean explaining the *semantics* of failure, a later tier.
+///
+/// Called only on the rejection branch, like `find_failing_subexpr`, so
+/// the success path pays nothing.
+pub(crate) fn unsatisfied_positive_claims(
+    expr: &Expr,
+    ctx: &EvalContext<'_>,
+) -> Vec<RenderedClaim> {
+    match expr {
+        Expr::Claim { .. } => match find_matches(expr, ctx) {
+            // Reached only because the gate failed; guard anyway so this
+            // never reports a claim that actually matched.
+            Ok(m) if m.is_empty() => vec![render_claim(expr, ctx)],
+            _ => vec![],
+        },
+        Expr::And(conjuncts) => {
+            let mut current: Vec<Bindings> = vec![ctx.bindings.clone()];
+            for c in conjuncts {
+                let mut next: Vec<Bindings> = Vec::new();
+                for b in &current {
+                    match find_matches(c, &ctx.with_bindings(b)) {
+                        Ok(ms) => next.extend(ms),
+                        // An evaluator error mid-chain is a kernel error,
+                        // not a missing claim; leave it to the error path.
+                        Err(_) => return vec![],
+                    }
+                }
+                if next.is_empty() {
+                    // `c` killed the chain. Report it only when it is
+                    // itself a positive claim; a comparator/`not`/etc.
+                    // failure has no directly-missing claim in v0.
+                    let failing_bindings = current.first().unwrap_or(ctx.bindings);
+                    if matches!(c, Expr::Claim { .. }) {
+                        return vec![render_claim(c, &ctx.with_bindings(failing_bindings))];
+                    }
+                    return vec![];
+                }
+                current = next;
+            }
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+/// Render an `Expr::Claim` with its arguments resolved under `ctx`'s
+/// live bindings - `MayApprove(alice, contract)`, not
+/// `MayApprove(actor, doc_type)`. A term that does not resolve (an
+/// unbound variable) falls back to its symbolic form. Panics if handed a
+/// non-`Claim`; the only callers pass a `Claim`.
+fn render_claim(expr: &Expr, ctx: &EvalContext<'_>) -> RenderedClaim {
+    let Expr::Claim { predicate, args } = expr else {
+        unreachable!("render_claim is only called on Expr::Claim")
+    };
+    let rendered_args: Vec<String> = args.iter().map(|t| render_term(t, ctx)).collect();
+    RenderedClaim {
+        predicate: predicate.clone(),
+        rendered: format!("{}({})", predicate, rendered_args.join(", ")),
+    }
+}
+
+/// Resolve a term to its value under `ctx` and render it; fall back to
+/// the term's symbolic form when it cannot be resolved.
+fn render_term(t: &Term, ctx: &EvalContext<'_>) -> String {
+    match resolve_term(t, ctx.bindings, ctx.actor) {
+        Ok(v) => render_eval_value(&v),
+        Err(_) => match t {
+            Term::Var(name) => name.clone(),
+            Term::Wildcard => "_".to_string(),
+            Term::Actor => "actor".to_string(),
+            // Literals always resolve, so this arm is unreachable in
+            // practice; render defensively rather than panic.
+            Term::Literal(_) => "?".to_string(),
+        },
+    }
+}
+
+/// Render a runtime value to a short human string for explanations and
+/// trace prose. Subjects and decimals render as their bare text; dates
+/// as ISO-8601; collections bracketed.
+pub(crate) fn render_eval_value(v: &EvalValue) -> String {
+    match v {
+        EvalValue::Subject(s) => s.clone(),
+        EvalValue::Decimal(d) => d.to_string(),
+        EvalValue::Bool(b) => b.to_string(),
+        EvalValue::Date(d) => d.to_string(),
+        EvalValue::Collection(items) => {
+            let inner: Vec<String> = items.iter().map(render_eval_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
     }
 }
