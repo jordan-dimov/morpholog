@@ -37,8 +37,8 @@ pub use explain::{
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
-    ArgDecl, Claim, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
-    PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
+    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -56,6 +56,74 @@ mod tests {
 
     use super::*;
     use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
+
+    // The eight comparator variants were collapsed into one
+    // `Expr::Compare { op, domain }`. These boxed-operand builders keep the
+    // test call sites as terse as the old tuple variants were.
+    fn le_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Le,
+            domain: OrderedDomain::Decimal,
+            left: l,
+            right: r,
+        }
+    }
+    fn lt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Lt,
+            domain: OrderedDomain::Decimal,
+            left: l,
+            right: r,
+        }
+    }
+    fn ge_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Ge,
+            domain: OrderedDomain::Decimal,
+            left: l,
+            right: r,
+        }
+    }
+    fn gt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Gt,
+            domain: OrderedDomain::Decimal,
+            left: l,
+            right: r,
+        }
+    }
+    fn date_le_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Le,
+            domain: OrderedDomain::Date,
+            left: l,
+            right: r,
+        }
+    }
+    fn date_lt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Lt,
+            domain: OrderedDomain::Date,
+            left: l,
+            right: r,
+        }
+    }
+    fn date_ge_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Ge,
+            domain: OrderedDomain::Date,
+            left: l,
+            right: r,
+        }
+    }
+    fn date_gt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
+        Expr::Compare {
+            op: CompareOp::Gt,
+            domain: OrderedDomain::Date,
+            left: l,
+            right: r,
+        }
+    }
     use crate::state::Bindings;
     use jiff::civil::Date;
     use rust_decimal::Decimal;
@@ -255,8 +323,8 @@ mod tests {
             },
             Expr::Not(Box::new(claim("P_not_body"))),
             Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
-            Expr::Le(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
-            Expr::DateLe(
+            le_(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
+            date_le_(
                 Box::new(claim("P_datele_left")),
                 Box::new(claim("P_datele_right")),
             ),
@@ -283,7 +351,10 @@ mod tests {
             // Variants carrying no predicate references: must contribute
             // nothing. The exhaustive set comparison below would catch
             // any spurious entry.
-            Expr::Neq(Term::Var("a".to_string()), Term::Var("b".to_string())),
+            Expr::Neq(
+                Box::new(Expr::Term(Term::Var("a".to_string()))),
+                Box::new(Expr::Term(Term::Var("b".to_string()))),
+            ),
             Expr::Term(Term::Var("z".to_string())),
             Expr::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
         ]);
@@ -410,7 +481,7 @@ mod tests {
     /// returns the unchanged binding set, mirroring decimal `Le`.
     #[test]
     fn date_le_admits_before() {
-        let expr = Expr::DateLe(
+        let expr = date_le_(
             Box::new(date_lit("2026-03-11")),
             Box::new(date_lit("2026-03-12")),
         );
@@ -424,7 +495,7 @@ mod tests {
     /// admissible, not rejected.
     #[test]
     fn date_le_admits_equal() {
-        let expr = Expr::DateLe(
+        let expr = date_le_(
             Box::new(date_lit("2026-03-12")),
             Box::new(date_lit("2026-03-12")),
         );
@@ -441,7 +512,7 @@ mod tests {
     /// rejection path, distinct from `TypeMismatch`.
     #[test]
     fn date_le_rejects_after() {
-        let expr = Expr::DateLe(
+        let expr = date_le_(
             Box::new(date_lit("2026-03-13")),
             Box::new(date_lit("2026-03-12")),
         );
@@ -454,14 +525,14 @@ mod tests {
     /// a decimal passed where a date was expected must not admit.
     #[test]
     fn date_le_type_mismatch_decimal_vs_date() {
-        let expr = Expr::DateLe(
+        let expr = date_le_(
             Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
             Box::new(date_lit("2026-03-12")),
         );
         let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
             .expect_err("decimal lhs must be a TypeMismatch");
         match err {
-            EvalError::TypeMismatch(msg) => assert!(msg.contains("DateLe")),
+            EvalError::TypeMismatch(msg) => assert!(msg.contains("civil-date")),
             other => panic!("expected TypeMismatch, got {other:?}"),
         }
     }
@@ -471,7 +542,7 @@ mod tests {
     /// covers both positions.
     #[test]
     fn date_le_type_mismatch_date_vs_subject() {
-        let expr = Expr::DateLe(
+        let expr = date_le_(
             Box::new(date_lit("2026-03-12")),
             Box::new(Expr::Term(Term::Literal(Value::Subject(
                 "oops".to_string(),
@@ -480,7 +551,7 @@ mod tests {
         let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
             .expect_err("subject rhs must be a TypeMismatch");
         match err {
-            EvalError::TypeMismatch(msg) => assert!(msg.contains("DateLe")),
+            EvalError::TypeMismatch(msg) => assert!(msg.contains("civil-date")),
             other => panic!("expected TypeMismatch, got {other:?}"),
         }
     }
@@ -491,7 +562,7 @@ mod tests {
     /// pass; parsing is the evaluator's concern.
     #[test]
     fn date_le_invalid_iso_string_is_type_mismatch() {
-        let expr = Expr::DateLe(
+        let expr = date_le_(
             Box::new(date_lit("not-a-date")),
             Box::new(date_lit("2026-03-12")),
         );
@@ -515,13 +586,13 @@ mod tests {
                 .unwrap()
                 .is_empty()
         };
-        assert!(admits(Expr::Gt(d("5"), d("3"))));
-        assert!(!admits(Expr::Gt(d("3"), d("5"))));
-        assert!(!admits(Expr::Gt(d("3"), d("3"))));
-        assert!(admits(Expr::Lt(d("3"), d("5"))));
-        assert!(!admits(Expr::Lt(d("3"), d("3"))));
-        assert!(admits(Expr::Ge(d("3"), d("3"))));
-        assert!(!admits(Expr::Ge(d("3"), d("5"))));
+        assert!(admits(gt_(d("5"), d("3"))));
+        assert!(!admits(gt_(d("3"), d("5"))));
+        assert!(!admits(gt_(d("3"), d("3"))));
+        assert!(admits(lt_(d("3"), d("5"))));
+        assert!(!admits(lt_(d("3"), d("3"))));
+        assert!(admits(ge_(d("3"), d("3"))));
+        assert!(!admits(ge_(d("3"), d("5"))));
     }
 
     /// The civil-date comparators mirror the decimal ones: `before`
@@ -534,19 +605,19 @@ mod tests {
                 .unwrap()
                 .is_empty()
         };
-        assert!(admits(Expr::DateLt(
+        assert!(admits(date_lt_(
             Box::new(date_lit("2026-01-01")),
             Box::new(date_lit("2026-06-01")),
         )));
-        assert!(!admits(Expr::DateLt(
+        assert!(!admits(date_lt_(
             Box::new(date_lit("2026-06-01")),
             Box::new(date_lit("2026-06-01")),
         )));
-        assert!(admits(Expr::DateGt(
+        assert!(admits(date_gt_(
             Box::new(date_lit("2026-06-01")),
             Box::new(date_lit("2026-01-01")),
         )));
-        assert!(admits(Expr::DateGe(
+        assert!(admits(date_ge_(
             Box::new(date_lit("2026-06-01")),
             Box::new(date_lit("2026-06-01")),
         )));
@@ -592,7 +663,7 @@ mod tests {
         let cap = Expr::Term(Term::Literal(Value::Decimal("100".to_string())));
 
         // 60 + 40 <= 100 admits (binding pass-through).
-        let under_cap = Expr::Le(
+        let under_cap = le_(
             Box::new(Expr::Add(Box::new(running.clone()), Box::new(proposed))),
             Box::new(cap.clone()),
         );
@@ -604,7 +675,7 @@ mod tests {
         assert_eq!(matches.len(), 1, "60 + 40 <= 100 should admit");
 
         // 60 + 50 <= 100 fails (empty match set).
-        let over_cap = Expr::Le(
+        let over_cap = le_(
             Box::new(Expr::Add(
                 Box::new(running),
                 Box::new(Expr::Term(Term::Literal(Value::Decimal("50".to_string())))),

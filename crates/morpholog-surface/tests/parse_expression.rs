@@ -2,7 +2,7 @@
 //!
 //! Covers: atoms (vars, literals, wildcards, actor, claim calls),
 //! arithmetic, comparators, boolean composition, precedence,
-//! associativity, the term-only restriction on `!=`.
+//! associativity, the term-only restriction on `in`.
 //!
 //! Deferred until later increments (not tested here): bool literals (`true` /
 //! `false`), date literals, subject literals, `in`, `exists`,
@@ -11,7 +11,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::format::format_expr_inline;
-use morpholog_core::{Expr, Term, Value};
+use morpholog_core::{CompareOp, Expr, OrderedDomain, Term, Value};
+
+/// Build an `Expr::Compare` for the assertions below (the eight comparator
+/// variants were collapsed into one `Compare { op, domain }`).
+fn cmp(op: CompareOp, domain: OrderedDomain, l: Expr, r: Expr) -> Expr {
+    Expr::Compare {
+        op,
+        domain,
+        left: Box::new(l),
+        right: Box::new(r),
+    }
+}
 use morpholog_surface::parse_expression;
 
 // ---- Helpers ----
@@ -158,7 +169,12 @@ fn parses_le_with_decimal_literal() {
     let got = parse_expression("amount <= 100").unwrap();
     assert_eq!(
         got,
-        Expr::Le(Box::new(var_expr("amount")), Box::new(dec_expr("100")))
+        cmp(
+            CompareOp::Le,
+            OrderedDomain::Decimal,
+            var_expr("amount"),
+            dec_expr("100")
+        )
     );
 }
 
@@ -174,19 +190,24 @@ fn parses_eq() {
 #[test]
 fn parses_neq_between_variables() {
     let got = parse_expression("a != b").unwrap();
-    assert_eq!(got, Expr::Neq(var("a"), var("b")));
+    assert_eq!(
+        got,
+        Expr::Neq(Box::new(var_expr("a")), Box::new(var_expr("b")))
+    );
 }
 
 #[test]
-fn neq_rejects_arithmetic_lhs() {
-    // `Expr::Neq(Term, Term)` cannot represent `a + 1 != b`. The
-    // parser must surface a clean diagnostic, not silently
-    // produce ill-shaped IR.
-    let errs = parse_expression("a + 1 != b").expect_err("term-only restriction should fire");
-    assert!(
-        errs.iter()
-            .any(|d| d.message.contains("!=") && d.message.contains("terms")),
-        "expected a diagnostic about the term-only restriction; got: {errs:?}"
+fn neq_accepts_arithmetic_operand() {
+    // `!=` is symmetric with `=`: `Expr::Neq` takes full expressions, so
+    // `a + 1 != b` parses to `Neq(Add(a, 1), b)` rather than being
+    // rejected as it was when Neq operated on terms only.
+    let got = parse_expression("a + 1 != b").unwrap();
+    assert_eq!(
+        got,
+        Expr::Neq(
+            Box::new(Expr::Add(Box::new(var_expr("a")), Box::new(dec_expr("1")))),
+            Box::new(var_expr("b")),
+        )
     );
 }
 
@@ -196,9 +217,11 @@ fn arithmetic_binds_tighter_than_comparison() {
     let got = parse_expression("a + 5 <= limit").unwrap();
     assert_eq!(
         got,
-        Expr::Le(
-            Box::new(Expr::Add(Box::new(var_expr("a")), Box::new(dec_expr("5")),)),
-            Box::new(var_expr("limit")),
+        cmp(
+            CompareOp::Le,
+            OrderedDomain::Decimal,
+            Expr::Add(Box::new(var_expr("a")), Box::new(dec_expr("5"))),
+            var_expr("limit"),
         )
     );
 }
@@ -274,9 +297,11 @@ fn comparators_bind_tighter_than_not() {
     let got = parse_expression("not a <= b").unwrap();
     assert_eq!(
         got,
-        Expr::Not(Box::new(Expr::Le(
-            Box::new(var_expr("a")),
-            Box::new(var_expr("b")),
+        Expr::Not(Box::new(cmp(
+            CompareOp::Le,
+            OrderedDomain::Decimal,
+            var_expr("a"),
+            var_expr("b"),
         )))
     );
 }
@@ -462,7 +487,12 @@ fn realistic_insurance_cap_rule() {
     // simplified (no sum yet (no sum yet).
     // `already_paid + proposed <= limit`.
     let got = parse_expression("already_paid + proposed <= limit").unwrap();
-    let Expr::Le(lhs, rhs) = got else {
+    let Expr::Compare {
+        left: lhs,
+        right: rhs,
+        ..
+    } = got
+    else {
         panic!("expected Le");
     };
     let Expr::Add(a, b) = *lhs else {
@@ -765,11 +795,29 @@ fn sum_target_must_be_variable_not_wildcard() {
 
 #[test]
 fn parses_decimal_strict_comparators() {
-    assert!(matches!(parse_expression("a < b").unwrap(), Expr::Lt(_, _)));
-    assert!(matches!(parse_expression("a > b").unwrap(), Expr::Gt(_, _)));
+    assert!(matches!(
+        parse_expression("a < b").unwrap(),
+        Expr::Compare {
+            op: CompareOp::Lt,
+            domain: OrderedDomain::Decimal,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parse_expression("a > b").unwrap(),
+        Expr::Compare {
+            op: CompareOp::Gt,
+            domain: OrderedDomain::Decimal,
+            ..
+        }
+    ));
     assert!(matches!(
         parse_expression("a >= b").unwrap(),
-        Expr::Ge(_, _)
+        Expr::Compare {
+            op: CompareOp::Ge,
+            domain: OrderedDomain::Decimal,
+            ..
+        }
     ));
     // The point of first-class comparators: each round-trips as written,
     // never as `not (a <= b)`.
@@ -782,15 +830,27 @@ fn parses_decimal_strict_comparators() {
 fn parses_date_strict_comparators() {
     assert!(matches!(
         parse_expression("d1 before d2").unwrap(),
-        Expr::DateLt(_, _)
+        Expr::Compare {
+            op: CompareOp::Lt,
+            domain: OrderedDomain::Date,
+            ..
+        }
     ));
     assert!(matches!(
         parse_expression("d1 after d2").unwrap(),
-        Expr::DateGt(_, _)
+        Expr::Compare {
+            op: CompareOp::Gt,
+            domain: OrderedDomain::Date,
+            ..
+        }
     ));
     assert!(matches!(
         parse_expression("d1 on_or_after d2").unwrap(),
-        Expr::DateGe(_, _)
+        Expr::Compare {
+            op: CompareOp::Ge,
+            domain: OrderedDomain::Date,
+            ..
+        }
     ));
     for src in [
         "d1 before d2",
@@ -862,7 +922,12 @@ fn realistic_insurance_aggregate_cap() {
     // sum(paid | SettlementPaid(claim, paid)) + proposed <= limit
     let got =
         parse_expression("sum(paid | SettlementPaid(claim, paid)) + proposed <= limit").unwrap();
-    let Expr::Le(lhs, rhs) = got else {
+    let Expr::Compare {
+        left: lhs,
+        right: rhs,
+        ..
+    } = got
+    else {
         panic!("expected Le");
     };
     let Expr::Add(a, b) = *lhs else {
@@ -1113,9 +1178,11 @@ fn on_or_before_lowers_to_date_le() {
     let got = parse_expression("from_date on_or_before action_date").unwrap();
     assert_eq!(
         got,
-        Expr::DateLe(
-            Box::new(var_expr("from_date")),
-            Box::new(var_expr("action_date")),
+        cmp(
+            CompareOp::Le,
+            OrderedDomain::Date,
+            var_expr("from_date"),
+            var_expr("action_date"),
         )
     );
 }
@@ -1126,7 +1193,12 @@ fn decimal_le_still_lowers_to_le() {
     let got = parse_expression("amount <= limit").unwrap();
     assert_eq!(
         got,
-        Expr::Le(Box::new(var_expr("amount")), Box::new(var_expr("limit")),)
+        cmp(
+            CompareOp::Le,
+            OrderedDomain::Decimal,
+            var_expr("amount"),
+            var_expr("limit"),
+        )
     );
 }
 
@@ -1135,8 +1207,13 @@ fn on_or_before_at_same_precedence_as_le() {
     // `a + 1 on_or_before b` parses as `(a + 1) on_or_before b`,
     // matching `<=`'s precedence (arithmetic binds tighter).
     let got = parse_expression("a + 1 on_or_before b").unwrap();
-    let Expr::DateLe(lhs, rhs) = got else {
-        panic!("expected DateLe, got non-DateLe");
+    let Expr::Compare {
+        left: lhs,
+        right: rhs,
+        ..
+    } = got
+    else {
+        panic!("expected a comparison, got non-Compare");
     };
     assert!(matches!(*lhs, Expr::Add(_, _)));
     assert_eq!(*rhs, var_expr("b"));
@@ -1151,6 +1228,16 @@ fn on_or_before_inside_and_chain() {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    assert!(matches!(ops[0], Expr::DateLe(_, _)));
-    assert!(matches!(ops[1], Expr::DateLe(_, _)));
+    let is_date_le = |e: &Expr| {
+        matches!(
+            e,
+            Expr::Compare {
+                op: CompareOp::Le,
+                domain: OrderedDomain::Date,
+                ..
+            }
+        )
+    };
+    assert!(is_date_le(&ops[0]));
+    assert!(is_date_le(&ops[1]));
 }

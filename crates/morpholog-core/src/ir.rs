@@ -69,36 +69,32 @@ pub enum Expr {
     /// only the body - they diverge when the iteration set changes.
     Pre(Box<Expr>),
     Not(Box<Expr>),
-    Neq(Term, Term),
     Term(Term),
+    /// Value equality and inequality. Both operate on full expressions
+    /// (a bare `Term`, arithmetic, `Sum`, or `ValueOf`), evaluated to a
+    /// value and compared. Predicate-shaped: the unchanged binding set
+    /// when the (in)equality holds, empty otherwise. `Eq` and `Neq` are
+    /// symmetric - neither restricts its operands to bare terms.
     Eq(Box<Expr>, Box<Expr>),
-    /// Decimal comparators. Both operands must evaluate to
-    /// `EvalValue::Decimal`. Predicate-shaped: the empty match set when
-    /// the comparison is false, the unchanged binding set when true.
-    /// `Le`/`Lt`/`Ge`/`Gt` are first-class rather than derived from a
-    /// single primitive so each renders and round-trips as written -
-    /// `amount > limit` stays `amount > limit`, never `not (amount <=
-    /// limit)`.
-    Le(Box<Expr>, Box<Expr>),
-    /// Decimal strict less-than. See [`Expr::Le`].
-    Lt(Box<Expr>, Box<Expr>),
-    /// Decimal greater-than-or-equal. See [`Expr::Le`].
-    Ge(Box<Expr>, Box<Expr>),
-    /// Decimal strict greater-than. See [`Expr::Le`].
-    Gt(Box<Expr>, Box<Expr>),
-    /// Civil-date comparators. Both operands must evaluate to
-    /// [`crate::EvalValue::Date`] (ISO-8601 `YYYY-MM-DD`, no time-of-day,
-    /// no time zone). Predicate-shaped like the decimal comparators, but
-    /// kept separate so each type-checks its own operands. Validity
-    /// windows built from `DateLe(from, d)` and `DateLe(d, to)` are
-    /// **inclusive at both ends**: `to == d` admits.
-    DateLe(Box<Expr>, Box<Expr>),
-    /// Civil-date strict before. See [`Expr::DateLe`].
-    DateLt(Box<Expr>, Box<Expr>),
-    /// Civil-date on-or-after. See [`Expr::DateLe`].
-    DateGe(Box<Expr>, Box<Expr>),
-    /// Civil-date strict after. See [`Expr::DateLe`].
-    DateGt(Box<Expr>, Box<Expr>),
+    Neq(Box<Expr>, Box<Expr>),
+    /// Ordered comparison: an operator (`<=` `<` `>=` `>`) over an ordered
+    /// domain (decimal or civil date). Predicate-shaped - the unchanged
+    /// binding set when the comparison holds, empty otherwise.
+    ///
+    /// `op` is first-class so the comparison renders and round-trips as
+    /// written: `amount > limit` stays `amount > limit`, never `not (amount
+    /// <= limit)`. `domain` is carried explicitly rather than inferred from
+    /// operand kind, so there is no operator overloading by operand kind -
+    /// the surface picks the domain by token (`<` decimal, `before` date)
+    /// and each domain type-checks its own operands (`EvalValue::Decimal` /
+    /// `EvalValue::Date`). Date windows built from `<=` are inclusive at
+    /// both ends: `to == d` admits.
+    Compare {
+        op: CompareOp,
+        domain: OrderedDomain,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
     /// Decimal subtraction; both operands must evaluate to
     /// `EvalValue::Decimal`, result is left minus right.
     Sub(Box<Expr>, Box<Expr>),
@@ -136,6 +132,28 @@ pub enum Expr {
         args: Vec<Term>,
         default: Option<Box<Expr>>,
     },
+}
+
+/// A comparison operator, independent of operand domain. Carried by
+/// [`Expr::Compare`] together with an [`OrderedDomain`]; the pair replaces
+/// what were once eight flat comparator variants (`Le` through `DateGt`) -
+/// the operator stays first-class without the enum exploding by kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOp {
+    Le,
+    Lt,
+    Ge,
+    Gt,
+}
+
+/// The ordered domain an [`Expr::Compare`] compares over. Explicit in the
+/// IR, never inferred from operand kind: the surface picks it by token (`<`
+/// decimal, `before` date), so there is no runtime operator overloading and
+/// each domain type-checks its own operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderedDomain {
+    Decimal,
+    Date,
 }
 
 /// A positional argument in a claim, intent, or expression: a variable

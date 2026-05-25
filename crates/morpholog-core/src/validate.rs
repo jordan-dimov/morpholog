@@ -369,21 +369,15 @@ fn expr_exceeds_depth(expr: &Expr, budget: usize) -> bool {
         return true;
     };
     match expr {
-        Expr::Claim { .. } | Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => false,
+        Expr::Claim { .. } | Expr::Term(_) | Expr::In(_, _) => false,
         Expr::And(items) | Expr::Or(items) => items.iter().any(|e| expr_exceeds_depth(e, budget)),
         Expr::Not(inner) | Expr::Pre(inner) | Expr::Exists { body: inner, .. } => {
             expr_exceeds_depth(inner, budget)
         }
         Expr::Implies { left, right }
         | Expr::Eq(left, right)
-        | Expr::Le(left, right)
-        | Expr::Lt(left, right)
-        | Expr::Ge(left, right)
-        | Expr::Gt(left, right)
-        | Expr::DateLe(left, right)
-        | Expr::DateLt(left, right)
-        | Expr::DateGe(left, right)
-        | Expr::DateGt(left, right)
+        | Expr::Neq(left, right)
+        | Expr::Compare { left, right, .. }
         | Expr::Sub(left, right)
         | Expr::Add(left, right) => {
             expr_exceeds_depth(left, budget) || expr_exceeds_depth(right, budget)

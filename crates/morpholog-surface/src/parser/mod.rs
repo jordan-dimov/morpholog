@@ -40,13 +40,12 @@
 //! are allowed. Comments are stripped at the lexer; the parser
 //! never sees them.
 //!
-//! Asymmetry to honour: `Expr::Neq(Term, Term)` and `Expr::In(Term,
-//! Term)` operate on *terms*, not expressions. `Eq`, `Le`, `Sub`,
-//! `Add` operate on full expressions. The parser must therefore
-//! reject `Foo + 1 != Bar` because both `!=` operands must be
-//! terms, not arithmetic expressions, and the same holds for
-//! membership: `a + 1 in xs` is rejected. Similarly, claim-call
-//! arguments are terms only - `Foo(x + 1, y)` is rejected. These
+//! Asymmetry to honour: `Expr::In(Term, Term)` operates on *terms*,
+//! not expressions, as do claim-call arguments. `Eq`, `Neq`, the
+//! comparators, `Sub`, and `Add` operate on full expressions. The
+//! parser must therefore reject `a + 1 in xs` (membership is
+//! term-only) and `Foo(x + 1, y)` (claim arguments are terms), while
+//! `Foo + 1 != Bar` is accepted - `!=` is symmetric with `=`. These
 //! constraints follow directly from the IR shape under the
 //! `docs/scope-and-ambition.md` surface doctrine.
 //!

@@ -95,16 +95,17 @@ pub enum Token {
 
     // ---- Civil-date comparison ----
     /// `on_or_before` infix operator for civil-date `<=`. Lowers to
-    /// `Expr::DateLe`. Distinct from decimal `<=` because the kernel
-    /// keeps `Expr::Le` (decimal) and `Expr::DateLe` (civil date) as
-    /// separate IR primitives; the surface refuses to overload by
-    /// operand type. The strict/after date comparators `before`,
-    /// `after`, and `on_or_after` complete the set; `before` and
-    /// `after` are matched contextually by the parser (not reserved),
-    /// so they stay usable as variable names.
+    /// `Expr::Compare` with the `Date` domain. Distinct keyword from
+    /// decimal `<=` because the comparison's domain is carried
+    /// explicitly in the IR, type-checking each operand kind separately
+    /// rather than overloading one operator by operand type. The
+    /// strict/after date comparators `before`, `after`, and
+    /// `on_or_after` complete the set; `before` and `after` are matched
+    /// contextually by the parser (not reserved), so they stay usable as
+    /// variable names.
     KwOnOrBefore,
     /// `on_or_after` infix operator for civil-date `>=`; lowers to
-    /// `Expr::DateGe`.
+    /// `Expr::Compare` (`Ge`, `Date`).
     KwOnOrAfter,
 
     // ---- Layout virtual tokens ----
@@ -203,14 +204,14 @@ pub enum Token {
     Eq,
     /// `!=` (Neq).
     Neq,
-    /// `<=`, decimal-only; lowers to `Expr::Le`. (`on_or_before` is the
-    /// surface for `Expr::DateLe` on civil dates.)
+    /// `<=`, decimal-only; lowers to `Expr::Compare` (`Le`, `Decimal`).
+    /// (`on_or_before` is the civil-date surface for the same operator.)
     Le,
-    /// `<`, decimal-only; lowers to `Expr::Lt`.
+    /// `<`, decimal-only; lowers to `Expr::Compare` (`Lt`, `Decimal`).
     Lt,
-    /// `>=`, decimal-only; lowers to `Expr::Ge`.
+    /// `>=`, decimal-only; lowers to `Expr::Compare` (`Ge`, `Decimal`).
     Ge,
-    /// `>`, decimal-only; lowers to `Expr::Gt`.
+    /// `>`, decimal-only; lowers to `Expr::Compare` (`Gt`, `Decimal`).
     Gt,
     /// `+` (Add).
     Plus,

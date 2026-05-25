@@ -27,7 +27,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{Expr, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
+use crate::format::compare_token;
+use crate::ir::{Expr, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
 /// Inferred kind of a value during static analysis. Distinct from
@@ -400,37 +401,25 @@ impl CheckCtx<'_> {
                 self.walk_predicate_expr(source, scope);
                 self.walk_predicate_expr(body, scope);
             }
-            Expr::Le(left, right)
-            | Expr::Lt(left, right)
-            | Expr::Ge(left, right)
-            | Expr::Gt(left, right) => {
-                let op = match expr {
-                    Expr::Le(..) => "<=",
-                    Expr::Lt(..) => "<",
-                    Expr::Ge(..) => ">=",
-                    _ => ">",
+            Expr::Compare {
+                op,
+                domain,
+                left,
+                right,
+            } => {
+                let token = compare_token(*op, *domain);
+                let kind = match domain {
+                    OrderedDomain::Decimal => PredicateArgKind::Decimal,
+                    OrderedDomain::Date => PredicateArgKind::Date,
                 };
-                self.check_operand_kind(left, PredicateArgKind::Decimal, op, scope);
-                self.check_operand_kind(right, PredicateArgKind::Decimal, op, scope);
-            }
-            Expr::DateLe(left, right)
-            | Expr::DateLt(left, right)
-            | Expr::DateGe(left, right)
-            | Expr::DateGt(left, right) => {
-                let op = match expr {
-                    Expr::DateLe(..) => "on_or_before",
-                    Expr::DateLt(..) => "before",
-                    Expr::DateGe(..) => "on_or_after",
-                    _ => "after",
-                };
-                self.check_operand_kind(left, PredicateArgKind::Date, op, scope);
-                self.check_operand_kind(right, PredicateArgKind::Date, op, scope);
+                self.check_operand_kind(left, kind, token, scope);
+                self.check_operand_kind(right, kind, token, scope);
             }
             Expr::Eq(left, right) => {
-                self.check_equality_operands(left, right, "==", scope);
+                self.check_equality_operands(left, right, "=", scope);
             }
             Expr::Neq(left, right) => {
-                self.check_equality_terms(left, right, "!=", scope);
+                self.check_equality_operands(left, right, "!=", scope);
             }
             Expr::In(element, collection) => {
                 // `In` is a generator-or-filter (mirrors
@@ -625,30 +614,6 @@ impl CheckCtx<'_> {
         self.check_equality(left_op, right_op, operator, scope);
     }
 
-    fn check_equality_terms(
-        &mut self,
-        left: &Term,
-        right: &Term,
-        operator: &'static str,
-        scope: &mut Scope,
-    ) {
-        if let Term::Var(name) = left {
-            self.use_var(scope, name);
-        }
-        if let Term::Var(name) = right {
-            self.use_var(scope, name);
-        }
-        self.check_equality(
-            (resolved_term_kind(left, &scope.kinds), term_var_name(left)),
-            (
-                resolved_term_kind(right, &scope.kinds),
-                term_var_name(right),
-            ),
-            operator,
-            scope,
-        );
-    }
-
     /// Infer the kind of a value-producing expression. A bare
     /// variable is a use (must be bound); literals carry their
     /// kind; `Add`/`Sub` recursively check Decimal operands and
@@ -740,14 +705,7 @@ impl CheckCtx<'_> {
             | Expr::Not(_)
             | Expr::Pre(_)
             | Expr::Eq(_, _)
-            | Expr::Le(_, _)
-            | Expr::Lt(_, _)
-            | Expr::Ge(_, _)
-            | Expr::Gt(_, _)
-            | Expr::DateLe(_, _)
-            | Expr::DateLt(_, _)
-            | Expr::DateGe(_, _)
-            | Expr::DateGt(_, _)
+            | Expr::Compare { .. }
             | Expr::Neq(_, _)
             | Expr::In(_, _) => {
                 let context = self.context.clone();
@@ -926,13 +884,6 @@ fn expr_var_name(expr: &Expr) -> Option<&str> {
     }
 }
 
-fn term_var_name(term: &Term) -> Option<&str> {
-    match term {
-        Term::Var(name) => Some(name.as_str()),
-        _ => None,
-    }
-}
-
 /// Resolve a `Term`'s kind through the kind env: variables look up
 /// their current inferred kind; literals and `actor` return their
 /// inherent kind. Wildcard stays UnknownOrAny.
@@ -992,20 +943,14 @@ fn expr_mentions_actor(expr: &Expr) -> bool {
         Expr::ValueOf { args, default, .. } => {
             args.iter().any(is_actor) || default.as_ref().is_some_and(|d| expr_mentions_actor(d))
         }
-        Expr::Neq(a, b) | Expr::In(a, b) => is_actor(a) || is_actor(b),
+        Expr::In(a, b) => is_actor(a) || is_actor(b),
         Expr::Sum { value, body } => is_actor(value) || expr_mentions_actor(body),
         Expr::And(items) | Expr::Or(items) => items.iter().any(expr_mentions_actor),
         Expr::Not(e) | Expr::Pre(e) | Expr::Exists { body: e, .. } => expr_mentions_actor(e),
         Expr::Implies { left, right }
         | Expr::Eq(left, right)
-        | Expr::Le(left, right)
-        | Expr::Lt(left, right)
-        | Expr::Ge(left, right)
-        | Expr::Gt(left, right)
-        | Expr::DateLe(left, right)
-        | Expr::DateLt(left, right)
-        | Expr::DateGe(left, right)
-        | Expr::DateGt(left, right)
+        | Expr::Neq(left, right)
+        | Expr::Compare { left, right, .. }
         | Expr::Add(left, right)
         | Expr::Sub(left, right) => expr_mentions_actor(left) || expr_mentions_actor(right),
         Expr::Forall { source, body, .. } => {
@@ -1040,14 +985,7 @@ fn short_expr_shape(expr: &Expr) -> String {
         Expr::Not(_) => "not _".to_string(),
         Expr::Pre(_) => "pre(_)".to_string(),
         Expr::Eq(_, _) => "_ == _".to_string(),
-        Expr::Le(_, _) => "_ <= _".to_string(),
-        Expr::Lt(_, _) => "_ < _".to_string(),
-        Expr::Ge(_, _) => "_ >= _".to_string(),
-        Expr::Gt(_, _) => "_ > _".to_string(),
-        Expr::DateLe(_, _) => "_ on_or_before _".to_string(),
-        Expr::DateLt(_, _) => "_ before _".to_string(),
-        Expr::DateGe(_, _) => "_ on_or_after _".to_string(),
-        Expr::DateGt(_, _) => "_ after _".to_string(),
+        Expr::Compare { op, domain, .. } => format!("_ {} _", compare_token(*op, *domain)),
         Expr::Neq(_, _) => "_ != _".to_string(),
         Expr::In(_, _) => "_ in _".to_string(),
         Expr::Term(_) => "term".to_string(),
@@ -1869,7 +1807,7 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
-            ValidationError::EqualityKindMismatch { operator: "==", .. }
+            ValidationError::EqualityKindMismatch { operator: "=", .. }
         ));
     }
 

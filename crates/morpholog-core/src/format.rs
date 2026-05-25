@@ -20,9 +20,26 @@
 //! degrades the rendering.
 
 use crate::{
-    Claim, DerivedClaim, Expr, Intent, Invariant, PredicateArgKind, PredicateDecl, Program, Stmt,
-    Term, Transformation, Value,
+    Claim, CompareOp, DerivedClaim, Expr, Intent, Invariant, OrderedDomain, PredicateArgKind,
+    PredicateDecl, Program, Stmt, Term, Transformation, Value,
 };
+
+/// The surface token for an ordered comparison. The single source of
+/// truth for rendering `Expr::Compare` (used by the formatter and the
+/// static checker's diagnostics); the parser holds the inverse mapping,
+/// and the round-trip test couples the two.
+pub(crate) fn compare_token(op: CompareOp, domain: OrderedDomain) -> &'static str {
+    match (domain, op) {
+        (OrderedDomain::Decimal, CompareOp::Le) => "<=",
+        (OrderedDomain::Decimal, CompareOp::Lt) => "<",
+        (OrderedDomain::Decimal, CompareOp::Ge) => ">=",
+        (OrderedDomain::Decimal, CompareOp::Gt) => ">",
+        (OrderedDomain::Date, CompareOp::Le) => "on_or_before",
+        (OrderedDomain::Date, CompareOp::Lt) => "before",
+        (OrderedDomain::Date, CompareOp::Ge) => "on_or_after",
+        (OrderedDomain::Date, CompareOp::Gt) => "after",
+    }
+}
 
 /// Top-level entry. Returns a multi-line string terminated by a
 /// final `\n`, so callers can write directly to a stream or append
@@ -263,15 +280,18 @@ pub fn format_expr_inline(e: &Expr) -> String {
         Expr::Add(l, r) => format!("{} + {}", primary(l), primary(r)),
         Expr::Sub(l, r) => format!("{} - {}", primary(l), primary(r)),
         Expr::Eq(l, r) => format!("{} = {}", primary(l), primary(r)),
-        Expr::Le(l, r) => format!("{} <= {}", primary(l), primary(r)),
-        Expr::Lt(l, r) => format!("{} < {}", primary(l), primary(r)),
-        Expr::Ge(l, r) => format!("{} >= {}", primary(l), primary(r)),
-        Expr::Gt(l, r) => format!("{} > {}", primary(l), primary(r)),
-        Expr::DateLe(l, r) => format!("{} on_or_before {}", primary(l), primary(r)),
-        Expr::DateLt(l, r) => format!("{} before {}", primary(l), primary(r)),
-        Expr::DateGe(l, r) => format!("{} on_or_after {}", primary(l), primary(r)),
-        Expr::DateGt(l, r) => format!("{} after {}", primary(l), primary(r)),
-        Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
+        Expr::Compare {
+            op,
+            domain,
+            left,
+            right,
+        } => format!(
+            "{} {} {}",
+            primary(left),
+            compare_token(*op, *domain),
+            primary(right)
+        ),
+        Expr::Neq(lhs, rhs) => format!("{} != {}", primary(lhs), primary(rhs)),
         Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
         // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.
