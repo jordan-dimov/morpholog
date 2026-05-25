@@ -10,6 +10,25 @@ Morpholog governs **commit legitimacy**. The only way governed state changes is 
 
 Everything else - UI, reporting, analytics, optimisation, market data ingestion, OCR, ML, scheduling, integrations - lives outside Morpholog and interacts with governed state only through transformations and reads.
 
+## The constitution
+
+The whole product:
+
+1. The world is a set of admitted **claims**.
+2. The only way claims change is through a **transformation**.
+3. Every transformation must preserve every active **invariant**.
+4. Therefore bad state cannot be committed.
+
+Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class constructs over it - the rules and the actions. The other declarations a programme carries (`predicate`, `intent`, `derived`) are vocabulary and read-side, in the supporting tier below; none is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
+
+- **Vocabulary** - `predicate` and `intent` declarations: the shapes claims and outbox effects may take.
+- **Body grammar** - the expression syntax of invariant and transformation *bodies*. Supporting syntax, not a user-facing concept; it exists only so that a rule, or a computation inside one, has an honest shape.
+- **Read side** - derived claims are named reads over admitted claims. They never mutate governed state; for a derived result to carry legitimacy, a transformation must admit it as an ordinary claim.
+- **Execution account** - the trace and `explain`: a rendering of why a transformation was or was not admitted, never a separate reasoning engine.
+- **Record and consequence** - the audit log (what was admitted, under which rules) and the outbox (post-commit effects a transformation emitted): a consequence log, never a workflow engine.
+
+No supporting concept may grow into an independent subsystem - a workflow engine, a projection or query engine, a general query language, host functions, a solver runtime, an analytics layer. Those are the [non-goals](#non-goals); this hierarchy is *why* they are non-goals. The test for any proposed construct is one line: **does it serve claims, invariants, and transformations - or compete with them?**
+
 ## The boundary
 
 The line is not "core vs application." It is **governed truth vs everything else**.
