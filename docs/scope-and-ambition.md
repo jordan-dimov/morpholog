@@ -28,7 +28,7 @@ A useful sharpening of this line, especially around process-shaped concerns: **w
 
 ## Where compute lives
 
-The inside/outside boundary above answers what belongs in Morpholog. The next question is how an external system actually integrates - where heavy computation runs, and how it returns to the governed model. Morpholog answers this with a three-zone split.
+The boundary above says what belongs in Morpholog; the next question is how an external system integrates - where heavy computation runs, and how it returns to the governed model. The answer is a three-zone split.
 
 | Zone | What runs there | Examples |
 |---|---|---|
@@ -77,9 +77,7 @@ This single rule subsumes a large family of concepts that other systems implemen
 | Permissions / approvals / authority | `HasRole(actor, role)`, `ApprovalAuthorityFor(actor, threshold)` - claims |
 | Temporal qualification (event / effective / known time) | `OccurredOn(subject, date)`, `EffectiveFor(subject, period)`, `KnownAsOf(subject, time)` - claims |
 
-This is a **modelling discovery, not a licence to add seven subsystems.** Morpholog already has the core primitive - admitted claims governed by invariants - and the categories above are *ontologically located* in that primitive, not *implementationally solved* by it. Several of them will still require carefully designed language affordances and real runtime work (derived-claim materialisation, as-of evaluation strategies, indexing, invalidation, provenance bookkeeping). The discipline is that any new support must serve the claim/invariant model rather than becoming an independent subsystem alongside it.
-
-The corollary: feature proposals that introduce a new *subsystem* (a workflow engine, an IAM module, a BI layer, a projection framework as a separate abstraction) should be re-examined first as proposals to introduce a new *claim vocabulary* and, where genuinely necessary, a small, claim-serving runtime affordance. Most of them collapse along that axis.
+Each category is *located* in the core primitive - admitted claims governed by invariants - not solved by it: several still need carefully designed affordances and real runtime work (derived-claim materialisation, as-of strategies, indexing, invalidation, provenance). The discipline is that any new support serves the claim/invariant model rather than becoming a subsystem beside it. So a proposal that looks like a new subsystem - a workflow engine, an IAM module, a BI layer, a projection framework - is first re-examined as a proposal for a new *claim vocabulary* plus, where genuinely needed, a small claim-serving affordance. Most collapse along that axis.
 
 ## What the language actually needs
 
@@ -123,7 +121,7 @@ This single construct subsumes:
 
 Derived claims are the answer to "how does Morpholog own the read side without becoming a query engine?" - by making the read side a governed artefact rather than a free query surface.
 
-The first cut of derived claims landed with Example 5 (trial balance over the double-entry ledger): `DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, no materialisation, no recursion, not visible to invariants or transformations. Later questions - materialisation, invalidation, provenance, recursion through other derived claims, visibility to invariants - remain design-history territory; see `docs/design-history.md` for what Example 5 forced and what was explicitly deferred.
+The first cut of derived claims landed with the double-entry ledger example (trial balance): `DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, no materialisation, no recursion, not visible to invariants or transformations. Later questions - materialisation, invalidation, provenance, recursion through other derived claims, visibility to invariants - remain design-history territory; see [`design-history.md`](design-history.md) for what it forced and what was explicitly deferred.
 
 ### 3. As-of, as a single operator
 
@@ -230,7 +228,7 @@ A domain fits to the degree it has five properties, not by how complex its arith
 4. Audit and explanation carry monetary or legal weight.
 5. There are external effects after commit (a payment, a certificate, an instruction).
 
-Finance, KYC, insurance, clinical trials, and energy settlement score high - but so do trade finance, supply-chain custody, environmental-attribute claims (carbon credits, certificates of origin: "no green claim without admissible provenance"), healthcare eligibility, data-access governance, and the admission of AI-agent actions ("the agent may propose; only legitimate actions become official"). The diagnostic questions are always the same - *why was this allowed, who had the authority, what evidence existed at the time, what obligation did it create, what downstream effect did it emit, and what would have blocked it?* - which is the same observation as: **the legitimacy engine and the [explanation engine](roadmap.md) are one bet.** A domain becomes demonstrably compelling only once Morpholog can answer those questions about it.
+Finance, KYC, insurance, clinical trials, and energy settlement score high - but so do trade finance, supply-chain custody, environmental-attribute claims (carbon credits, certificates of origin: "no green claim without admissible provenance"), healthcare eligibility, data-access governance, and the admission of AI-agent actions ("the agent may propose; only legitimate actions become official"). The diagnostic questions are always the same - *why was this allowed, who had the authority, what evidence existed at the time, what obligation did it create, what downstream effect did it emit, and what would have blocked it?* - which is the same observation as: **the legitimacy engine and the explanation engine are one bet, and it has begun paying out.** `morpholog explain` already turns a rejected proposal into a missing-evidence checklist, naming each absent claim and the transformation that would supply it; `morpholog inspect guarantees` names what a model makes impossible - both read straight off the IR that decides admissibility, not a second system bolted alongside. A domain becomes compelling once Morpholog can answer those questions about it, and on the carbon-credit flagship it does. The [roadmap](roadmap.md) carries the rest of the legibility set.
 
 The boundary discipline holds across every one of these: Morpholog governs the *admission of the official-standing claim* - the permit is issued, the action approved, the credit retired - never the physical or computational act behind it (the switching hardware, the AI agent's reasoning and drift, the meter). Those stay outside and return as admitted evidence. It is the discipline that keeps "official state is everywhere" from eroding the inside/outside line.
 
@@ -247,7 +245,7 @@ Proven by:
 
 ### Level 2 - Governed standing, restatement, read-side projection, and authority
 
-The richer worked examples, each combining several of the patterns the language needs. The flagship is **[verified revenue](../examples/02_verified_revenue/)**: contested legitimacy in two woven patterns - *currentness with restatement* (the verifier corrects a figure; the original stays admitted; a singleton pointer moves; lineage records the change) and *admissibility-for-purpose* (different authorities grant standing for the same figure and can revoke it without touching the underlying claim; historical decisions survive a correction). The others span double-entry accounting with a trial-balance read side, approval authority, cumulative settlement against an aggregate limit, date-window validity, transition invariants, and KYC screening with declared outbox vocabulary. Each lives under [`examples/`](../examples/); [`design-history.md`](design-history.md) records which kernel primitive each forced and why.
+The richer worked examples, each combining several of the patterns the language needs. The flagship is **[verified revenue](../examples/02_verified_revenue/)**: contested legitimacy in two woven patterns - *currentness with restatement* (the verifier corrects a figure; the original stays admitted; a singleton pointer moves; lineage records the change) and *admissibility-for-purpose* (different authorities grant standing for the same figure and can revoke it without touching the underlying claim; historical decisions survive a correction). The others span double-entry accounting with a trial-balance read side, approval authority, cumulative settlement against an aggregate limit, date-window validity, transition invariants, KYC screening with declared outbox vocabulary, and carbon-credit provenance with retire-by-deadline obligations - the flagship the explanation engine points at. Each lives under [`examples/`](../examples/); [`design-history.md`](design-history.md) records which kernel primitive each forced and why.
 
 Alongside the examples, an authoring-surface refactor arc made the IR pleasant to author against - a public `dsl` module, `Stmt::BindOne` (collapsing the older `require + let + value_of` workaround), predicate and intent declarations with strict validation, structured `propose_with_trace`, predicate-scoped PG loading, a submodule split - without touching the kernel discipline. After it, a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with structurally inspectable execution.
 
@@ -259,7 +257,7 @@ The candidate affordances driven by Level 2 - predicate declarations, kind/type 
 
 The same primitive (claims), now reaching to the system's edges. External-computation results admitted as provenance claims; outbox intents acquire delivery/acknowledgement claims; actor authority extends to delegated and external actors.
 
-No example specified yet. This level should not be planned in detail until Level 2 has stabilised; pre-deciding it would violate the "smallest possible increment" discipline.
+No example specified yet, and none should be: planning Level 3 in detail before Level 2 stabilises would violate the smallest-increment discipline.
 
 ## Non-goals
 
@@ -272,7 +270,7 @@ These are floors. They do not get relaxed by accumulation of pressure; they get 
 - **No optimisation / solver runtime.** ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.
 - **No ad-hoc query DSL** beyond derived-claim queries and the as-of operator.
 - **No bypass flags** (`skip_validation`, `force_commit`, etc.). Exceptions, when needed, are first-class typed claims with full audit standing.
-- **No bespoke storage kernel.** Morpholog runs on PostgreSQL 17+ and leans, deliberately, on `SERIALIZABLE` isolation, JSONB, and atomic multi-table commit. The recurring suggestion - "if the language is truly minimal, compile it down to a standalone microkernel" - inverts the thesis. Atomic commit under serializable concurrency, crash recovery, and MVCC are the single hardest body of correctness code in computing; reimplementing them in a "lean" kernel would move millions of lines of un-battle-tested machinery *inside* the trust boundary, to win an elegance the product does not need. The minimalism that matters here is **surface** minimalism - the `.morph` language and the IR stay small - not **substrate** minimalism. The database is the correctness substrate, chosen on purpose, not an implementation detail to be outgrown.
+- **No bespoke storage kernel.** Morpholog runs on PostgreSQL 17+ and leans deliberately on `SERIALIZABLE` isolation, JSONB, and atomic multi-table commit. The recurring "if the language is truly minimal, compile it down to a standalone microkernel" inverts the thesis: atomic commit under serializable concurrency, crash recovery, and MVCC are the hardest correctness code in computing, and reimplementing them would move millions of lines of un-battle-tested machinery *inside* the trust boundary for an elegance the product does not need. The minimalism that matters is **surface** (the `.morph` language and IR stay small), not **substrate**. The database is the correctness substrate, chosen on purpose.
 
 ## Where this leaves us
 
