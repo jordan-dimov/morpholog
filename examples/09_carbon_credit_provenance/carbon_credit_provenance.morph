@@ -42,6 +42,12 @@
 -- from that moment on - but it does not reach back and erase credits that
 -- were legitimately issued while they were accredited. What was admitted
 -- stays admitted; only what you may do next changes.
+--
+-- Finally, some rules are about time. A scheme may oblige an account to
+-- retire enough credits by a deadline. Morpholog keeps no clock of its
+-- own, and that is deliberate: "now" is an outside fact, so a deadline is
+-- only ever checked when an outside scheduler hands the current date to a
+-- `sweep` transformation. The kernel decides; the coordinator says when.
 
 program carbon_credit_provenance
 
@@ -57,6 +63,11 @@ predicate Attestation(measurement: Subject, verifier: Subject)
 predicate Issued(credit: Subject, measurement: Subject, quantity: Decimal)
 predicate HeldBy(credit: Subject, account: Subject)
 predicate Retired(credit: Subject, account: Subject)
+-- A compliance obligation: `account` must retire `quantity` tonnes of
+-- credits by `due_on`. Its outcome is recorded as satisfied or breached.
+predicate Obligation(obligation: Subject, account: Subject, quantity: Decimal, due_on: Date)
+predicate ObligationSatisfied(obligation: Subject)
+predicate ObligationBreached(obligation: Subject)
 
 -- The states this model makes impossible, forever.
 
@@ -86,6 +97,15 @@ invariant single_custody:
 -- be transferred or retired again.
 invariant retirement_terminal:
     not (Retired(credit, ra) and HeldBy(credit, ha))
+
+-- An obligation has at most one set of terms. Pins the lookup the
+-- discharge and sweep transformations rely on.
+invariant at_most_one_obligation_per_id:
+    Obligation(o, a1, q1, d1) and Obligation(o, a2, q2, d2) implies (a1 = a2 and q1 = q2 and d1 = d2)
+
+-- An obligation is never both satisfied and breached at once.
+invariant obligation_not_both_satisfied_and_breached:
+    not (ObligationSatisfied(o) and ObligationBreached(o))
 
 -- The only ways state may change.
 
@@ -137,3 +157,29 @@ transformation retire_credit(credit, account):
     require HeldBy(credit, account)
     retract HeldBy(credit, account)
     admit Retired(credit, account)
+
+-- Obligations over time. A scheme raises one; retirement discharges it;
+-- and an outside scheduler's sweep records a breach once the deadline has
+-- passed. "Now" is the `current_date` the sweep is handed, never a clock
+-- inside the kernel.
+
+transformation raise_obligation(obligation, account, quantity, due_on):
+    admit Obligation(obligation, account, quantity, due_on)
+
+-- Discharge once the account has retired enough. The retired total sums
+-- the issued quantity of every credit the account has retired. A breached
+-- obligation cannot be discharged.
+transformation discharge_obligation(obligation):
+    bind Obligation(obligation, account, quantity, due_on)
+    require not ObligationBreached(obligation)
+    require sum(q | Retired(c, account) and Issued(c, m, q)) >= quantity
+    admit ObligationSatisfied(obligation)
+
+-- The outside-coordinator sweep. Past the due date, not already
+-- satisfied, and still under target: record the breach.
+transformation sweep_obligation(obligation, current_date):
+    bind Obligation(obligation, account, quantity, due_on)
+    require not ObligationSatisfied(obligation)
+    require current_date after due_on
+    require sum(q | Retired(c, account) and Issued(c, m, q)) < quantity
+    admit ObligationBreached(obligation)

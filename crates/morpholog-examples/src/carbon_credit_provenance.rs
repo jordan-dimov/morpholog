@@ -56,6 +56,22 @@ pub fn all_predicates() -> Vec<morpholog_core::PredicateDecl> {
             .subject("credit")
             .subject("account")
             .build(),
+        // A compliance obligation: `account` must retire `quantity`
+        // tonnes of credits by `due_on`.
+        predicate("Obligation")
+            .subject("obligation")
+            .subject("account")
+            .decimal("quantity")
+            .date("due_on")
+            .build(),
+        // The obligation has been discharged - enough retired in time.
+        predicate("ObligationSatisfied")
+            .subject("obligation")
+            .build(),
+        // The obligation was missed - past due and under target.
+        predicate("ObligationBreached")
+            .subject("obligation")
+            .build(),
     ]
 }
 
@@ -150,6 +166,48 @@ pub fn retirement_terminal() -> Invariant {
     }
 }
 
+/// At most one obligation per id. Pins the structural uniqueness that
+/// `discharge_obligation` and `sweep_obligation`'s
+/// `bind Obligation(obligation, ...)` depend on.
+pub fn at_most_one_obligation_per_id() -> Invariant {
+    Invariant {
+        name: "at_most_one_obligation_per_id".to_string(),
+        version: 1,
+        body: implies(
+            and(vec![
+                claim(
+                    "Obligation",
+                    vec![var("o"), var("a1"), var("q1"), var("d1")],
+                ),
+                claim(
+                    "Obligation",
+                    vec![var("o"), var("a2"), var("q2"), var("d2")],
+                ),
+            ]),
+            and(vec![
+                eq(term(var("a1")), term(var("a2"))),
+                eq(term(var("q1")), term(var("q2"))),
+                eq(term(var("d1")), term(var("d2"))),
+            ]),
+        ),
+    }
+}
+
+/// An obligation is never both satisfied and breached. The two outcomes
+/// are mutually exclusive - discharge gates on not-breached and the sweep
+/// gates on not-satisfied - and this makes the joint state uncommittable
+/// regardless of how it might be reached.
+pub fn obligation_not_both_satisfied_and_breached() -> Invariant {
+    Invariant {
+        name: "obligation_not_both_satisfied_and_breached".to_string(),
+        version: 1,
+        body: not(and(vec![
+            claim("ObligationSatisfied", vec![var("o")]),
+            claim("ObligationBreached", vec![var("o")]),
+        ])),
+    }
+}
+
 pub fn all_invariants() -> Vec<Invariant> {
     vec![
         at_most_one_verified_quantity_per_measurement(),
@@ -157,6 +215,8 @@ pub fn all_invariants() -> Vec<Invariant> {
         credit_backed_by_one_measurement(),
         single_custody(),
         retirement_terminal(),
+        at_most_one_obligation_per_id(),
+        obligation_not_both_satisfied_and_breached(),
     ]
 }
 
@@ -274,6 +334,98 @@ pub fn retire_credit() -> Transformation {
     }
 }
 
+// ============================================================
+// Obligations over time: raise, discharge, and the outside-coordinator
+// breach sweep. "Now" enters as an argument - the kernel has no clock.
+// ============================================================
+
+/// Raise a compliance obligation: `account` must retire `quantity` tonnes
+/// of credits by `due_on`.
+pub fn raise_obligation() -> Transformation {
+    Transformation {
+        name: "raise_obligation".to_string(),
+        parameters: params(&["obligation", "account", "quantity", "due_on"]),
+        body: vec![assert_(
+            "Obligation",
+            vec![
+                var("obligation"),
+                var("account"),
+                var("quantity"),
+                var("due_on"),
+            ],
+        )],
+    }
+}
+
+/// Discharge an obligation once the account has retired enough. The
+/// retired total sums the issued quantity of every credit the account has
+/// retired. A breached obligation cannot be discharged - the gate keeps
+/// the two outcomes mutually exclusive.
+pub fn discharge_obligation() -> Transformation {
+    Transformation {
+        name: "discharge_obligation".to_string(),
+        parameters: params(&["obligation"]),
+        body: vec![
+            bind_one(claim(
+                "Obligation",
+                vec![
+                    var("obligation"),
+                    var("account"),
+                    var("quantity"),
+                    var("due_on"),
+                ],
+            )),
+            require(not(claim("ObligationBreached", vec![var("obligation")]))),
+            require(ge(
+                sum(
+                    var("q"),
+                    and(vec![
+                        claim("Retired", vec![var("c"), var("account")]),
+                        claim("Issued", vec![var("c"), var("m"), var("q")]),
+                    ]),
+                ),
+                term(var("quantity")),
+            )),
+            assert_("ObligationSatisfied", vec![var("obligation")]),
+        ],
+    }
+}
+
+/// The outside-coordinator breach sweep. An external scheduler invokes
+/// this with the current date - the kernel keeps no clock of its own. An
+/// obligation past its due date, not already satisfied, whose account has
+/// not retired enough, is recorded as breached.
+pub fn sweep_obligation() -> Transformation {
+    Transformation {
+        name: "sweep_obligation".to_string(),
+        parameters: params(&["obligation", "current_date"]),
+        body: vec![
+            bind_one(claim(
+                "Obligation",
+                vec![
+                    var("obligation"),
+                    var("account"),
+                    var("quantity"),
+                    var("due_on"),
+                ],
+            )),
+            require(not(claim("ObligationSatisfied", vec![var("obligation")]))),
+            require(date_gt(term(var("current_date")), term(var("due_on")))),
+            require(lt(
+                sum(
+                    var("q"),
+                    and(vec![
+                        claim("Retired", vec![var("c"), var("account")]),
+                        claim("Issued", vec![var("c"), var("m"), var("q")]),
+                    ]),
+                ),
+                term(var("quantity")),
+            )),
+            assert_("ObligationBreached", vec![var("obligation")]),
+        ],
+    }
+}
+
 /// The carbon-credit provenance example as a [`morpholog_core::Program`].
 /// Stable identifier: `"carbon_credit_provenance"`.
 pub fn program() -> morpholog_core::Program {
@@ -290,6 +442,9 @@ pub fn program() -> morpholog_core::Program {
             issue_credit(),
             transfer_credit(),
             retire_credit(),
+            raise_obligation(),
+            discharge_obligation(),
+            sweep_obligation(),
         ],
         derived_claims: vec![],
     }
