@@ -1097,6 +1097,7 @@ dependencies = [
  "morpholog-core",
  "morpholog-test-support",
  "rust_decimal",
+ "serde_json",
 ]
 
 [[package]]

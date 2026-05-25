@@ -154,7 +154,9 @@ fn intent_args_serialise_as_a_json_array() {
 // {result, trace} wrapper.
 // ============================================================
 
-use morpholog_core::{BindOneOutcome, ForIterationTrace, RequireOutcome, TraceEntry};
+use morpholog_core::{
+    BindOneOutcome, ForIterationTrace, RenderedClaim, RequireOutcome, TraceEntry,
+};
 
 #[test]
 fn trace_entry_require_held_round_trips_with_tagged_shape() {
@@ -193,6 +195,7 @@ fn trace_entry_require_rejected_round_trips() {
         outcome: RequireOutcome::Rejected {
             reason: "require failed: Bar(y) did not hold over pre-state".to_string(),
             failing_sub_expression: None,
+            directly_missing_claims: vec![],
         },
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -218,11 +221,37 @@ fn trace_entry_require_rejected_round_trips_with_failing_sub_expression() {
         outcome: RequireOutcome::Rejected {
             reason: "require failed: and(Foo(x), Bar(y)) did not hold over pre-state".to_string(),
             failing_sub_expression: Some("Bar(y)".to_string()),
+            directly_missing_claims: vec![],
         },
     };
     let json = serde_json::to_string(&entry).unwrap();
     assert!(json.contains(r#""status":"rejected""#));
     assert!(json.contains(r#""failing_sub_expression":"Bar(y)""#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+/// A non-empty `directly_missing_claims` must round-trip with each
+/// claim's `predicate` and `rendered` present in JSON. Pins the wire
+/// shape of the structured missing-claim list the explanation engine
+/// reads.
+#[test]
+fn trace_entry_require_rejected_round_trips_with_directly_missing_claims() {
+    let entry = TraceEntry::Require {
+        expression: "MayApprove(actor, doc_type)".to_string(),
+        outcome: RequireOutcome::Rejected {
+            reason: "require failed: MayApprove(actor, doc_type) did not hold over pre-state"
+                .to_string(),
+            failing_sub_expression: None,
+            directly_missing_claims: vec![RenderedClaim {
+                predicate: "MayApprove".to_string(),
+                rendered: "MayApprove(alice, contract)".to_string(),
+            }],
+        },
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""predicate":"MayApprove""#));
+    assert!(json.contains(r#""rendered":"MayApprove(alice, contract)""#));
     let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, entry);
 }
@@ -251,6 +280,7 @@ fn trace_entry_bind_one_no_match_round_trips() {
         expression: "Policy(pid, limit)".to_string(),
         outcome: BindOneOutcome::NoMatch {
             failing_sub_expression: None,
+            directly_missing_claims: vec![],
         },
     };
     let json = serde_json::to_string(&entry).unwrap();

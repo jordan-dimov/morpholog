@@ -18,6 +18,7 @@ mod analysis;
 mod check;
 mod derive;
 mod eval;
+mod explain;
 mod ir;
 mod propose;
 mod state;
@@ -25,10 +26,14 @@ mod validate;
 
 pub use analysis::{
     predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_expr,
-    predicates_referenced_by_stmt,
+    predicates_referenced_by_stmt, transformations_asserting,
 };
 pub use derive::{enumerate_derived, eval_invariant};
-pub use eval::EvalError;
+pub use eval::{EvalError, RenderedClaim};
+pub use explain::{
+    ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
+    Rejection, TransitionRef, Verdict, explain,
+};
 pub use ir::{
     ArgDecl, Claim, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
     PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
@@ -2041,9 +2046,11 @@ mod tests {
             panic!("expected Completed");
         };
         let TraceEntry::BindOne {
-            outcome: BindOneOutcome::NoMatch {
-                failing_sub_expression,
-            },
+            outcome:
+                BindOneOutcome::NoMatch {
+                    failing_sub_expression,
+                    ..
+                },
             ..
         } = &trace[0]
         else {
@@ -2329,9 +2336,11 @@ mod tests {
             panic!("expected Completed");
         };
         let TraceEntry::BindOne {
-            outcome: BindOneOutcome::NoMatch {
-                failing_sub_expression,
-            },
+            outcome:
+                BindOneOutcome::NoMatch {
+                    failing_sub_expression,
+                    ..
+                },
             ..
         } = &trace[0]
         else {

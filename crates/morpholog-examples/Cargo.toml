@@ -13,6 +13,7 @@ morpholog-core = { path = "../morpholog-core" }
 jiff = { workspace = true }
 morpholog-test-support = { path = "../morpholog-test-support" }
 rust_decimal = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

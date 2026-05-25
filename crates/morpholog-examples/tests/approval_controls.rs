@@ -388,3 +388,37 @@ fn term_actor_unbound_error_is_position_independent() {
         .expect_err("Term::Actor outside transition scope must error regardless of arg order");
     assert!(matches!(err, EvalError::UnboundActor));
 }
+
+// ============================================================
+// Candidate-supplier lookup - the `explain` engine's one-hop
+// "what transformation could supply this missing claim?" analysis.
+// ============================================================
+
+#[test]
+fn transformations_asserting_names_the_sole_supplier_of_an_authority_claim() {
+    use morpholog_core::transformations_asserting;
+    let program = approval_controls::program();
+
+    // `approve_document` rejects when `MayApprove(actor, doc_type)` is
+    // absent; the candidate supplier of that claim is the grant.
+    assert_eq!(
+        transformations_asserting(&program, "MayApprove"),
+        vec!["grant_approval_authority"],
+    );
+    // The quantitative half mirrors it.
+    assert_eq!(
+        transformations_asserting(&program, "ApprovalLimit"),
+        vec!["grant_approval_limit"],
+    );
+}
+
+#[test]
+fn transformations_asserting_is_empty_for_an_unasserted_predicate() {
+    use morpholog_core::transformations_asserting;
+    let program = approval_controls::program();
+
+    // No transformation asserts a predicate the vocabulary never admits,
+    // so there is no candidate supplier to name. An empty list is the
+    // honest answer, not an error.
+    assert!(transformations_asserting(&program, "NoSuchPredicate").is_empty());
+}

@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::derive::eval_invariant;
 use crate::eval::{
-    EvalContext, EvalError, eval_value, find_failing_subexpr, find_matches, resolve_term,
-    unify_args,
+    EvalContext, EvalError, RenderedClaim, eval_value, find_failing_subexpr, find_matches,
+    resolve_term, unify_args, unsatisfied_positive_claims,
 };
 use crate::format;
 use crate::ir::{Claim, Intent, Invariant, Stmt, Term, Transformation};
@@ -179,6 +179,16 @@ pub enum RequireOutcome {
         /// expression, never prose - distinct from `reason`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failing_sub_expression: Option<String>,
+        /// The positive claim conjuncts directly responsible for the
+        /// rejection, structurally (see
+        /// [`crate::eval::RenderedClaim`] and
+        /// `unsatisfied_positive_claims`). Empty unless the gate is a
+        /// top-level claim or an `And` whose chain-killing conjunct is a
+        /// positive claim - so present blockers and comparator failures
+        /// carry nothing here. Feeds the explanation engine's
+        /// directly-missing-claims list.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        directly_missing_claims: Vec<RenderedClaim>,
     },
 }
 
@@ -199,6 +209,11 @@ pub enum BindOneOutcome {
         /// semantics as `RequireOutcome::Rejected.failing_sub_expression`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failing_sub_expression: Option<String>,
+        /// The positive claim conjuncts directly responsible for the
+        /// failed match. Same semantics as
+        /// `RequireOutcome::Rejected.directly_missing_claims`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        directly_missing_claims: Vec<RenderedClaim>,
     },
     MultipleMatches {
         count: usize,
@@ -400,11 +415,13 @@ pub(crate) fn execute_stmt(
                 let reason = format!("require failed: {rendered} did not hold over pre-state");
                 if trace.is_on() {
                     let failing = find_failing_subexpr(expr, &ctx);
+                    let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                     trace.push(TraceEntry::Require {
                         expression: rendered,
                         outcome: RequireOutcome::Rejected {
                             reason: reason.clone(),
                             failing_sub_expression: failing,
+                            directly_missing_claims,
                         },
                     });
                 }
@@ -435,10 +452,12 @@ pub(crate) fn execute_stmt(
                     let reason = format!("bind_one failed: {rendered} matched no candidates");
                     if trace.is_on() {
                         let failing = find_failing_subexpr(expr, &ctx);
+                        let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
                             expression: rendered,
                             outcome: BindOneOutcome::NoMatch {
                                 failing_sub_expression: failing,
+                                directly_missing_claims,
                             },
                         });
                     }
