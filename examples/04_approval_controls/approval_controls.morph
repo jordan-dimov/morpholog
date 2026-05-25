@@ -68,18 +68,18 @@ intent DocumentApprovedWithinLimit(doc_id: Subject, actor: Subject, amount: Deci
 
 -- Grant someone the authority to approve a kind of document. This adds
 -- the authority claim.
-transformation grant_approval_authority(actor, doc_type):
-    admit MayApprove(actor, doc_type)
-    emit ApprovalAuthorityGranted(actor, doc_type)
+transformation grant_approval_authority(principal, doc_type):
+    admit MayApprove(principal, doc_type)
+    emit ApprovalAuthorityGranted(principal, doc_type)
 
 
 -- Take that authority away. The gate insists the authority is actually
 -- held before it can be removed, then retracts it. Revoking only stops
 -- *future* approvals; documents already approved stay approved.
-transformation revoke_approval_authority(actor, doc_type):
-    require MayApprove(actor, doc_type)
-    retract MayApprove(actor, doc_type)
-    emit ApprovalAuthorityRevoked(actor, doc_type)
+transformation revoke_approval_authority(principal, doc_type):
+    require MayApprove(principal, doc_type)
+    retract MayApprove(principal, doc_type)
+    emit ApprovalAuthorityRevoked(principal, doc_type)
 
 
 -- Approve a document. The gate checks that whoever is proposing this -
@@ -99,17 +99,17 @@ transformation approve_document(doc_id, doc_type):
 -- Grant someone an approval ceiling for a kind of document - "may
 -- approve invoices up to this amount". The same person can be given
 -- ceilings for different document kinds.
-transformation grant_approval_limit(actor, doc_type, limit):
-    admit ApprovalLimit(actor, doc_type, limit)
-    emit ApprovalLimitGranted(actor, doc_type, limit)
+transformation grant_approval_limit(principal, doc_type, limit):
+    admit ApprovalLimit(principal, doc_type, limit)
+    emit ApprovalLimitGranted(principal, doc_type, limit)
 
 
 -- Remove a specific approval ceiling. The gate requires that exact
 -- grant to exist before it can be taken away.
-transformation revoke_approval_limit(actor, doc_type, limit):
-    require ApprovalLimit(actor, doc_type, limit)
-    retract ApprovalLimit(actor, doc_type, limit)
-    emit ApprovalLimitRevoked(actor, doc_type, limit)
+transformation revoke_approval_limit(principal, doc_type, limit):
+    require ApprovalLimit(principal, doc_type, limit)
+    retract ApprovalLimit(principal, doc_type, limit)
+    emit ApprovalLimitRevoked(principal, doc_type, limit)
 
 
 -- Approve a document for a given amount. The gate does two things at

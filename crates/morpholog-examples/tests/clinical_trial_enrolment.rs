@@ -25,8 +25,8 @@
 
 mod common;
 
-use common::{date, has_claim, must_accept, must_accept_as, propose_as, subj};
-use morpholog_core::{EvalValue, Invariant, Outcome, State};
+use common::{claim_instance, date, has_claim, must_accept, must_accept_as, propose_as, subj};
+use morpholog_core::{EvalValue, Invariant, Outcome, State, eval_invariant};
 use morpholog_examples::clinical_trial_enrolment::{
     self as cte, ROLE_RANDOMISE_PARTICIPANT, all_invariants,
 };
@@ -301,6 +301,68 @@ fn expired_consent_form_rejects() {
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn consent_after_randomisation_violates_the_invariant() {
+    // `randomise_participant`'s gate already refuses consent-after-
+    // randomisation for the normal path; the invariant makes it a standing
+    // guarantee over *all* admitted state, however it is reached. Here we
+    // check the invariant directly against a candidate state.
+    let inv = cte::consent_obtained_before_randomisation();
+
+    // Randomised on the 12th, but consent only obtained on the 15th.
+    let randomised_before_consent = State::from_claims(vec![
+        claim_instance(
+            "ParticipantRandomised",
+            &[
+                subj("p"),
+                subj("t"),
+                subj("proto"),
+                date("2026-03-12"),
+                subj("dr_smith"),
+            ],
+        ),
+        claim_instance(
+            "InformedConsentObtained",
+            &[
+                subj("p"),
+                subj("t"),
+                subj("icf"),
+                date("2026-03-15"),
+                subj("dr_smith"),
+            ],
+        ),
+    ]);
+    assert!(
+        !eval_invariant(&inv, &randomised_before_consent, None).unwrap(),
+        "randomisation before consent must violate the invariant",
+    );
+
+    // Consent on the 5th, randomised on the 12th: the invariant holds.
+    let consent_first = State::from_claims(vec![
+        claim_instance(
+            "ParticipantRandomised",
+            &[
+                subj("p"),
+                subj("t"),
+                subj("proto"),
+                date("2026-03-12"),
+                subj("dr_smith"),
+            ],
+        ),
+        claim_instance(
+            "InformedConsentObtained",
+            &[
+                subj("p"),
+                subj("t"),
+                subj("icf"),
+                date("2026-03-05"),
+                subj("dr_smith"),
+            ],
+        ),
+    ]);
+    assert!(eval_invariant(&inv, &consent_first, None).unwrap());
 }
 
 #[test]

@@ -83,7 +83,7 @@ intent ClaimPaymentRequested(settlement_id: Subject, amount: Decimal, actor: Sub
 -- hand-constructed payment with no one's sign-off is refused. Read
 -- `implies` as "whenever the left is true, the right must be too".
 invariant paid_implies_authorised:
-    SettlementPaid(_, claim, settlement, amount) implies SettlementAuthorised(claim, settlement, amount, _)
+    SettlementPaid(_, c, s, a) implies SettlementAuthorised(c, s, a, _)
 
 -- Every payment must sit against a policy that has a current headroom
 -- counter. This closes a loophole in the conservation rule below, which
@@ -92,10 +92,25 @@ invariant paid_implies_authorised:
 invariant paid_implies_headroom:
     SettlementPaid(p, _, _, _) implies (exists r: PolicyHeadroom(p, r))
 
+-- A policy id identifies one policy: two Policy claims sharing the id
+-- must agree on every field. Pins the structural uniqueness the
+-- unique-lookup gates depend on.
+invariant at_most_one_policy_per_id:
+    Policy(policy, a) and Policy(policy, b) implies a = b
+
+-- The same for a reported claim: one claim id, one set of terms.
+invariant at_most_one_claim_report_per_id:
+    ClaimReported(c, policy_a, amount_a) and ClaimReported(c, policy_b, amount_b) implies (policy_a = policy_b and amount_a = amount_b)
+
 -- A policy has at most one headroom counter at a time. Two competing
 -- values would mean two different answers to "how much is left?".
 invariant at_most_one_headroom_per_policy:
     PolicyHeadroom(policy, a) and PolicyHeadroom(policy, b) implies a = b
+
+-- A settlement id identifies one payment: two SettlementPaid claims
+-- sharing the settlement id must agree on policy, claim, and amount.
+invariant settlement_id_uniquely_identifies_payment:
+    SettlementPaid(policy_a, claim_a, s, amount_a) and SettlementPaid(policy_b, claim_b, s, amount_b) implies (policy_a = policy_b and claim_a = claim_b and amount_a = amount_b)
 
 -- The conservation law. This is the rule that compares the policy's
 -- state *before* a transaction to its state after: the headroom must go
@@ -134,9 +149,9 @@ transformation report_claim(claim_id, policy_id, claimed_amount):
     emit ClaimReported(claim_id)
 
 -- Grant a claims handler their personal settlement ceiling.
-transformation grant_settlement_authority(actor, limit):
-    admit SettlementAuthority(actor, limit)
-    emit SettlementAuthorityGranted(actor, limit)
+transformation grant_settlement_authority(principal, limit):
+    admit SettlementAuthority(principal, limit)
+    emit SettlementAuthorityGranted(principal, limit)
 
 -- Authorise a settlement against a reported claim - the heart of the
 -- example. It first looks up the claim, its policy, and the policy's

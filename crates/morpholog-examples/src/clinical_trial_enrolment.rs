@@ -125,6 +125,45 @@ pub fn participant_randomised_once_per_trial() -> Invariant {
     }
 }
 
+/// Consent before randomisation: a participant cannot be randomised
+/// unless informed consent was obtained on or before the randomisation
+/// date. The moral centre of the trial - enforced by the kernel, not
+/// merely described in prose.
+pub fn consent_obtained_before_randomisation() -> Invariant {
+    Invariant {
+        name: "consent_obtained_before_randomisation".to_string(),
+        version: 1,
+        body: implies(
+            claim(
+                "ParticipantRandomised",
+                vec![
+                    var("p"),
+                    var("t"),
+                    wildcard(),
+                    var("randomised_on"),
+                    wildcard(),
+                ],
+            ),
+            exists(
+                "consented_on",
+                and(vec![
+                    claim(
+                        "InformedConsentObtained",
+                        vec![
+                            var("p"),
+                            var("t"),
+                            wildcard(),
+                            var("consented_on"),
+                            wildcard(),
+                        ],
+                    ),
+                    date_le(term(var("consented_on")), term(var("randomised_on"))),
+                ]),
+            ),
+        ),
+    }
+}
+
 // ============================================================
 // Setup transformations - the minimum to make the load-bearing
 // transformation reachable. Each transformation asserts its
@@ -629,6 +668,7 @@ pub fn all_invariants() -> Vec<Invariant> {
         at_most_one_protocol_window_per_version(),
         at_most_one_consent_window_per_version(),
         participant_randomised_once_per_trial(),
+        consent_obtained_before_randomisation(),
     ]
 }
 

@@ -114,7 +114,8 @@ fn insurance_claim_settlement_program_has_expected_shape() {
 fn clinical_trial_enrolment_program_has_expected_shape() {
     let p = clinical_trial_enrolment::program();
     assert_eq!(p.name, "clinical_trial_enrolment");
-    assert_eq!(p.invariants.len(), 3);
+    assert_eq!(p.invariants.len(), 4);
+    assert!(p.invariant("consent_obtained_before_randomisation").is_some());
     assert_eq!(p.transformations.len(), 10);
 
     // Setup transformations.

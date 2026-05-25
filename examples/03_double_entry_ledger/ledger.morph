@@ -67,7 +67,7 @@ invariant balanced_posted_entry:
 -- An entry with no lines is meaningless paperwork. Every entry must
 -- have at least one line.
 invariant journal_entry_has_lines:
-    JournalEntry(entry, _, _) implies (exists line: JournalLine(entry, line, _, _))
+    JournalEntry(entry, _, _) implies JournalLine(entry, _, _, _)
 
 -- A correction history must stay a clean chain, not a fork: an entry
 -- can be superseded by at most one successor.
@@ -127,7 +127,7 @@ transformation restate_entry(
     debit_account, credit_account, amount
 ):
     require JournalEntry(prior_entry_id, _, period)
-    require not Supersedes(_, prior_entry_id)
+    require not (exists newer: Supersedes(newer, prior_entry_id))
     admit JournalEntry(new_entry_id, posting_date, period)
     admit JournalLine(new_entry_id, debit_account, amount, 0)
     admit JournalLine(new_entry_id, credit_account, 0, amount)

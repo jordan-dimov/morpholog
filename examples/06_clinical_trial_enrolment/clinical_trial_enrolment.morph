@@ -192,6 +192,7 @@ transformation record_consent(
 
 transformation record_eligibility_criterion(protocol_version, criterion_id, required_result):
     admit EligibilityCriterion(protocol_version, criterion_id, required_result)
+    emit EligibilityCriterionRecorded(protocol_version, criterion_id)
 
 transformation record_eligibility_assessment(
     participant_id,
@@ -201,6 +202,7 @@ transformation record_eligibility_assessment(
     expires_on
 ):
     admit EligibilityAssessment(participant_id, criterion_id, result, assessed_on, expires_on)
+    emit EligibilityAssessmentRecorded(participant_id, criterion_id)
 
 transformation open_important_protocol_deviation(participant_id, trial_id, deviation_id):
     require Trial(trial_id)
