@@ -2,7 +2,7 @@
 
 Design archaeology. Companion to [`scope-and-ambition.md`](scope-and-ambition.md) (forward-looking doctrine) and [`runtime-semantics.md`](runtime-semantics.md) (what the kernel means). This file records each design move and the worked example that forced it.
 
-The early entries are compressed. Detailed PR-by-PR retrospectives for the pre-parser arc lived here while the kernel was being shaped; once the parser arc started, the relevant rationale either moved into doctrine (and is referenced inline) or was distilled to a stub. The parser-arc entries below are kept at fuller detail because that work is still active and recent.
+The entries are compressed - each a Forced-by/Landed stub, with the per-PR detail and the considered-and-rejected alternatives left to git, and the rationale that became doctrine referenced inline. The one fuller passage is the parser-arc narrative below, kept whole because it orients a reader of the parser rather than recording a single move.
 
 ## Pre-parser-arc IR moves (compressed)
 
@@ -154,7 +154,7 @@ The arc is complete for v0: every worked example parses end-to-end. `morpholog r
 
 ## After the parser arc
 
-Post-parser kernel and tooling moves. Compressed to Forced-by/Landed stubs once they settled into history (the per-PR detail and the considered-and-rejected alternatives live in git); the recent legibility arc, from the explanation engine on, is kept at fuller detail while that work is active.
+Post-parser kernel and tooling moves, through the legibility arc, each distilled to a Forced-by/Landed stub once it settled (the per-PR detail and the considered-and-rejected alternatives live in git).
 
 ### `Expr::Or` predicate-shaped disjunction
 
@@ -214,80 +214,34 @@ Post-parser kernel and tooling moves. Compressed to Forced-by/Landed stubs once 
 
 ### The explanation engine: rejection as read-side trace interpretation
 
-**Forced by:** the legibility gap. The runtime could say *whether* a transition was admissible, but the buyer's question is *why not, and what is still missing*. The distilled future directions named this the highest-leverage move ("Morpholog as an explanation engine"), and `propose_with_trace` already carried the failure data - so the work was interpretation, not a new evaluator.
+**Forced by:** the legibility gap. The runtime could say *whether* a transition was admissible; the buyer's question is *why not, and what is still missing*. `propose_with_trace` already carried the failure data, so the work was interpretation, not a new evaluator.
 
-**Landed:** `morpholog_core::explain` returns a structured `Explanation` derived from the kernel trace - `Verdict::Admissible`, or a `Rejection` that is a gate (carrying the directly-missing positive claim conjuncts and, per missing predicate, the candidate transformations that assert it), an invariant violation, or a kernel error - rendered to deterministic claim-shaped prose or JSON, with no NLP. The diagnostic failure-walk gained `unsatisfied_positive_claims`, returning the unsatisfied positive claim conjuncts structurally (carried additively on `RequireOutcome::Rejected` / `BindOneOutcome::NoMatch`), and `analysis::transformations_asserting` is the one-hop supplier lookup. No IR primitive and no surface syntax: explanation is read-side analysis over the one executor's trace.
-
-**Considered and rejected:**
-
-- *Natural-language generation.* An explanation an auditor relies on must be reproducible and faithful to the exact failing claim; a probabilistic generator cannot be. The words come from predicate and transformation names plus fixed templates.
-- *Reporting "minimal" missing evidence now.* True minimality is a constrained search (abduction/repair), not a trace read. v0 reports the directly-missing positive claims only; the model speaks claims (`directly_missing_claims`), and the renderer reserves "evidence" for prose.
-
-**What stays out:**
-
-- Present blockers (`not X` where `X` holds), comparator failures, existential and disjunctive remedies, and bounded abduction - all later tiers; those render a faithful reason with an empty missing list. The CLI `explain` surface and a static `inspect guarantees` view are deferred.
+**Landed:** `morpholog_core::explain` returns a structured `Explanation` from the kernel trace - `Admissible`, or a `Rejection` that is a gate (the directly-missing positive claim conjuncts, plus per missing predicate the candidate transformations that assert it via `analysis::transformations_asserting`), an invariant violation, or a kernel error - rendered to deterministic claim-shaped prose or JSON, never NLP (an explanation an auditor relies on must be reproducible and faithful to the exact failing claim, which a probabilistic generator cannot be). The failure-walk gained `unsatisfied_positive_claims`, carried additively on the rejection trace. v0 is one-hop - directly-missing positive claims only; true minimality is a constrained search (abduction), deferred, and the model speaks claims, not "evidence".
 
 
 ### Carbon-credit provenance: the flagship that forced no primitive
 
-**Forced by:** nothing in the kernel - and that is the point. The carbon-credit / certificate-of-origin domain was chosen as the explanation engine's first real home because its failure mode is pure legitimacy: a green claim that became official without an admissible, current provenance chain. The test was whether the existing claim model could carry evidence-provenance with no new primitive.
+**Forced by:** nothing in the kernel - and that is the point. The carbon-credit / certificate-of-origin domain was chosen as the explanation engine's first home because its failure mode is pure legitimacy: a green claim that became official without an admissible, current provenance chain. The test was whether the claim model could carry evidence-provenance with no new primitive.
 
-**Landed:** the worked example (`carbon_credit_provenance`) models the whole provenance chain as ordinary claims about claims - `VerifiedMeasurement`, `Attestation`, `Accredited` - gating `issue_credit` on a verified measurement (binding its quantity), an attestation, and a *currently* accredited verifier. Double-counting in both directions (no two credits per measurement, no two measurements per credit), single custody, and terminal retirement are invariants; currentness is the verified-revenue pattern (revoking accreditation retracts standing via `retract`, blocking new issuance while leaving issued credits admitted). No kernel change was needed. The MRV computation stays outside and returns as the admitted `VerifiedMeasurement` quantity, holding the inside/outside boundary. The example exists to point the explanation engine at a real domain: a refused issuance names the missing `VerifiedMeasurement` / `Attestation` / `Accredited` claim and the transformation that would supply it.
-
-**Considered and rejected:**
-
-- *Forcing `Expr::Mul` via generation-times-factor.* That computation is the meter; governing it would cross the inside/outside line. Conservation checks, when needed, use the existing `sum` / comparators on admitted quantities.
-- *Conservation by sum across a batch.* Deferred behind a stated "one credit per measurement" simplification, so the legitimacy mechanics stay visible.
-
-**What stays out:**
-
-- Batch issuance (one credit backs one measurement here); obligations over time (retire-by-deadline) and a static `inspect guarantees` view, both of which will point at this model.
+**Landed:** `carbon_credit_provenance` models the whole chain as claims about claims - `VerifiedMeasurement`, `Attestation`, `Accredited` - gating `issue_credit` on a verified measurement (binding its quantity), an attestation, and a *currently* accredited verifier. Double-counting both directions, single custody, and terminal retirement are invariants; currentness is the verified-revenue `retract`-standing pattern (blocking new issuance while leaving issued credits admitted). No kernel change: the MRV computation stays outside and returns as the admitted `VerifiedMeasurement` quantity, holding the inside/outside boundary. `Expr::Mul` (generation-times-factor) was rejected as crossing that line - the computation is the meter.
 
 
 ### Obligations over time: the outside-coordinator sweep
 
-**Forced by:** the carbon domain's compliance half - a scheme obliges an account to retire enough credits by a deadline. This is the first worked example with a rule about *time*, and the kernel has no clock by design (no I/O, decidable core).
+**Forced by:** the carbon domain's compliance half - a scheme obliges an account to retire enough credits by a deadline. The first worked example with a rule about *time*, and the kernel has no clock by design (no I/O, decidable core).
 
-**Landed:** obligations modelled as ordinary claims (`Obligation(obligation, account, quantity, due_on)`, `ObligationSatisfied(obligation)`, `ObligationBreached(obligation)`), added to example 09. `raise_obligation` records one; `discharge_obligation(obligation, current_date)` admits satisfaction when, on or before the deadline, the account's retired total reaches target - discharge is date-aware too, so a late retirement cannot quietly satisfy a "by `due_on`" obligation; `sweep_obligation(obligation, current_date)` is the **outside-coordinator tick** - an external scheduler hands the current date in as an argument, and the kernel decides whether the obligation is breached (past due, not satisfied, under target). "Now" never lives in the kernel; this is the "Morpholog plus an Outside Coordinator" pattern from `outbox-sketch.md` made concrete. The `obligation_not_both_satisfied_and_breached` invariant keeps the two outcomes mutually exclusive. No kernel primitive was needed: the retired total is `sum(q | Retired(c, account) and Issued(c, m, q))` - confirming the evaluator's `Sum` handles a conjunction (join) body in a `require`, not only a single-claim body - and the deadline is the existing `after` date comparator over the date argument.
-
-**Considered and rejected:**
-
-- *A clock or `now()` primitive in the kernel.* It would break the no-I/O decidable core and make admissibility non-reproducible. Time enters as data, through the sweep's argument - never as a clock the kernel reads.
-- *Carrying a quantity on `Retired` to avoid the join.* Unnecessary once the join-in-`sum` was confirmed to work; `Retired(credit, account)` stays as it was.
-- *Deriving satisfaction as a derived claim.* Transformations read admitted claims, not derived views, so the gates compute the `sum` directly.
-
-**What stays out:**
-
-- Contrary-to-duty obligations (a secondary duty that activates when the first is breached), recurring or rolling deadlines, and a sweep that iterates all due obligations in one call (the coordinator drives iteration, one obligation per call).
+**Landed:** obligations as ordinary claims (`Obligation(obligation, account, quantity, due_on)`, `ObligationSatisfied`, `ObligationBreached`). `discharge_obligation(obligation, current_date)` admits satisfaction only when the retired total reaches target on or before the deadline (date-aware, so a late retirement cannot quietly satisfy); `sweep_obligation(obligation, current_date)` is the **outside-coordinator tick** - an external scheduler hands "now" in as an argument, never a clock the kernel reads (which would break the decidable core and make admissibility non-reproducible). `obligation_not_both_satisfied_and_breached` keeps the outcomes exclusive. No primitive: the retired total `sum(q | Retired(c, account) and Issued(c, m, q))` confirmed `Sum` handles a join body, and the deadline is the existing `after` comparator.
 
 
 ### `inspect guarantees`: the model's impossibilities, before it runs
 
-**Forced by:** the legibility brief's other half. `explain` answers "why was this rejected?"; a controller or regulator asks first "what does this model make impossible?". The carbon flagship - rich with `not(...)` invariants (terminal retirement, mutually-exclusive obligation outcomes) - made the answer worth surfacing as its own read.
+**Forced by:** the legibility brief's other half. `explain` answers "why was this rejected?"; a controller asks first "what does this model make impossible?". The carbon flagship, rich with `not(...)` invariants, made it worth its own read.
 
-**Landed:** `morpholog_core::guarantees(program)` returns one `Guarantee` per invariant - the rendered rule, plus a `forbids` clause naming the bad state only for `not(...)` invariants (whose inner expression *is* the forbidden state). `render_guarantees` renders it as deterministic prose; the `morpholog inspect guarantees <program>` CLI emits prose by default, `--json` for the structured form. Pure static read over any registered programme, no kernel or PG. Tested across the whole registry, not just carbon, so the derivation is demonstrably general rather than handcrafted.
-
-**Considered and rejected:**
-
-- *Deriving "bad state" for `implies`/comparator invariants too.* Only the `not(...)` shape has a mechanically obvious forbidden state; inferring one for an `implies` (a functional dependency) or a comparator would be semantic interpretation, not formatting. Those guarantees carry their rendered rule and no `forbids` clause - honest over impressive.
-- *Hand-written domain summaries ("a credit cannot be held twice").* That is prose the example author would write, not something derived; it would flatter the demo while hiding that the tool only reads invariant structure. The words come from invariant names and the formatter alone.
-
-**What stays out:**
-
-- Mutually-exclusive predicate *sets* derived from `implies`/`Neq`, transformation pre/post graphs, subject-flow profiles, and `generate controls` - the rest of the legibility set, each its own read when forced.
+**Landed:** `morpholog_core::guarantees(program)` returns one `Guarantee` per invariant - the rendered rule, plus a `forbids` clause naming the bad state only for `not(...)` invariants (whose inner expression *is* the forbidden state). `render_guarantees` emits prose; `morpholog inspect guarantees <program>` defaults to prose, `--json` for the structured form. Pure static read over any registered programme, tested across the whole registry so the derivation is general, not handcrafted. Deriving a forbidden state for `implies`/comparator invariants was rejected as semantic interpretation rather than formatting - those carry their rule and no `forbids`, honest over impressive.
 
 
 ### `morpholog explain`: the engine reachable from the command line
 
-**Forced by:** the explanation engine shipped as a library (`morpholog_core::explain`) with no way to ask the question from outside Rust. An operational checklist an auditor or controller reads needs a command, not an API the embedder calls.
+**Forced by:** the explanation engine shipped as a library with no way to ask the question from outside Rust. An operational checklist an auditor reads needs a command, not an API the embedder calls.
 
-**Landed:** `morpholog explain <file.morph> <transformation> --args <json> --actor <subject>` - the read-only counterpart of `run`. Same parse/validate front-end and same `Transition` codec; but instead of proposing, it loads the predicate-scoped pre-state, runs the kernel in-memory via `explain`, and renders the `Explanation` as claim-shaped prose (default) or JSON (`--json`). A new public `morpholog_postgres::load_scoped_state` does the read - the sibling of the load inside `propose_against_pg`, same `compute_load_scope`, but a plain pooled read rather than a SERIALIZABLE transaction, because explaining is answering a question, not committing a decision. No kernel or IR change; the surface sits above the parser, like the static-analysis pass.
-
-**Considered and rejected:**
-
-- *Built-in registry as the program source (like `propose` and `inspect`).* The `.morph`-file shape (like `run`) lets an author explain their own model, not only the shipped examples - which is where the operational value is. The built-in path is already covered by the other legibility reads.
-- *Exiting non-zero on a rejection verdict (like `run` / `propose`).* That conflates an advisory read with an action. The verdict does not affect the exit code - explain exits zero on both admissible and rejected, a rejection being a successful explanation carried in the output; only operational failures (parse/validation, bad args, unknown transformation, DB failure) exit non-zero. A script that wants the gate uses `run`.
-
-**What stays out:**
-
-- The rest of the legibility set (transformation pre/post graphs, subject-flow profiles, `generate controls`); and everything the engine itself defers (present blockers, comparator failures, abduction) - the CLI renders whatever the v0 engine produces, no more.
+**Landed:** `morpholog explain <file.morph> <transformation> --args <json> --actor <subject>` - the read-only counterpart of `run`. Same parse/validate front-end and `Transition` codec, but it loads the predicate-scoped pre-state, runs `explain` in-memory, and renders prose (default) or JSON (`--json`). A new public `morpholog_postgres::load_scoped_state` does the read - the sibling of the `propose_against_pg` load, but a plain pooled read, not a SERIALIZABLE transaction, because explaining is a question, not a commit. `.morph`-file source (not the built-in registry) was chosen so an author explains their own model; the verdict does not affect the exit code - zero on both admissible and rejected, only operational failures exit non-zero.
