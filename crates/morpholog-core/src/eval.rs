@@ -251,9 +251,9 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
             left,
             right,
         } => ordered_comparison(left, right, *op, *domain, ctx),
-        Expr::Neq(t1, t2) => {
-            let l = resolve_term(t1, ctx.bindings, ctx.actor)?;
-            let r = resolve_term(t2, ctx.bindings, ctx.actor)?;
+        Expr::Neq(lhs, rhs) => {
+            let l = eval_value(lhs, ctx)?;
+            let r = eval_value(rhs, ctx)?;
             Ok(if l != r {
                 vec![ctx.bindings.clone()]
             } else {

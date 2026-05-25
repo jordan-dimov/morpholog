@@ -2,7 +2,7 @@
 //!
 //! Covers: atoms (vars, literals, wildcards, actor, claim calls),
 //! arithmetic, comparators, boolean composition, precedence,
-//! associativity, the term-only restriction on `!=`.
+//! associativity, the term-only restriction on `in`.
 //!
 //! Deferred until later increments (not tested here): bool literals (`true` /
 //! `false`), date literals, subject literals, `in`, `exists`,
@@ -190,19 +190,24 @@ fn parses_eq() {
 #[test]
 fn parses_neq_between_variables() {
     let got = parse_expression("a != b").unwrap();
-    assert_eq!(got, Expr::Neq(var("a"), var("b")));
+    assert_eq!(
+        got,
+        Expr::Neq(Box::new(var_expr("a")), Box::new(var_expr("b")))
+    );
 }
 
 #[test]
-fn neq_rejects_arithmetic_lhs() {
-    // `Expr::Neq(Term, Term)` cannot represent `a + 1 != b`. The
-    // parser must surface a clean diagnostic, not silently
-    // produce ill-shaped IR.
-    let errs = parse_expression("a + 1 != b").expect_err("term-only restriction should fire");
-    assert!(
-        errs.iter()
-            .any(|d| d.message.contains("!=") && d.message.contains("terms")),
-        "expected a diagnostic about the term-only restriction; got: {errs:?}"
+fn neq_accepts_arithmetic_operand() {
+    // `!=` is symmetric with `=`: `Expr::Neq` takes full expressions, so
+    // `a + 1 != b` parses to `Neq(Add(a, 1), b)` rather than being
+    // rejected as it was when Neq operated on terms only.
+    let got = parse_expression("a + 1 != b").unwrap();
+    assert_eq!(
+        got,
+        Expr::Neq(
+            Box::new(Expr::Add(Box::new(var_expr("a")), Box::new(dec_expr("1")))),
+            Box::new(var_expr("b")),
+        )
     );
 }
 

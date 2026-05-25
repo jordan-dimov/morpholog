@@ -291,7 +291,7 @@ pub fn format_expr_inline(e: &Expr) -> String {
             compare_token(*op, *domain),
             primary(right)
         ),
-        Expr::Neq(t1, t2) => format!("{} != {}", format_term(t1), format_term(t2)),
+        Expr::Neq(lhs, rhs) => format!("{} != {}", primary(lhs), primary(rhs)),
         Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
         // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.

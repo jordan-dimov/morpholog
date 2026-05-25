@@ -419,7 +419,7 @@ impl CheckCtx<'_> {
                 self.check_equality_operands(left, right, "==", scope);
             }
             Expr::Neq(left, right) => {
-                self.check_equality_terms(left, right, "!=", scope);
+                self.check_equality_operands(left, right, "!=", scope);
             }
             Expr::In(element, collection) => {
                 // `In` is a generator-or-filter (mirrors
@@ -612,30 +612,6 @@ impl CheckCtx<'_> {
         let left_op = (self.infer_value_expr(left, scope), expr_var_name(left));
         let right_op = (self.infer_value_expr(right, scope), expr_var_name(right));
         self.check_equality(left_op, right_op, operator, scope);
-    }
-
-    fn check_equality_terms(
-        &mut self,
-        left: &Term,
-        right: &Term,
-        operator: &'static str,
-        scope: &mut Scope,
-    ) {
-        if let Term::Var(name) = left {
-            self.use_var(scope, name);
-        }
-        if let Term::Var(name) = right {
-            self.use_var(scope, name);
-        }
-        self.check_equality(
-            (resolved_term_kind(left, &scope.kinds), term_var_name(left)),
-            (
-                resolved_term_kind(right, &scope.kinds),
-                term_var_name(right),
-            ),
-            operator,
-            scope,
-        );
     }
 
     /// Infer the kind of a value-producing expression. A bare
@@ -908,13 +884,6 @@ fn expr_var_name(expr: &Expr) -> Option<&str> {
     }
 }
 
-fn term_var_name(term: &Term) -> Option<&str> {
-    match term {
-        Term::Var(name) => Some(name.as_str()),
-        _ => None,
-    }
-}
-
 /// Resolve a `Term`'s kind through the kind env: variables look up
 /// their current inferred kind; literals and `actor` return their
 /// inherent kind. Wildcard stays UnknownOrAny.
@@ -974,12 +943,13 @@ fn expr_mentions_actor(expr: &Expr) -> bool {
         Expr::ValueOf { args, default, .. } => {
             args.iter().any(is_actor) || default.as_ref().is_some_and(|d| expr_mentions_actor(d))
         }
-        Expr::Neq(a, b) | Expr::In(a, b) => is_actor(a) || is_actor(b),
+        Expr::In(a, b) => is_actor(a) || is_actor(b),
         Expr::Sum { value, body } => is_actor(value) || expr_mentions_actor(body),
         Expr::And(items) | Expr::Or(items) => items.iter().any(expr_mentions_actor),
         Expr::Not(e) | Expr::Pre(e) | Expr::Exists { body: e, .. } => expr_mentions_actor(e),
         Expr::Implies { left, right }
         | Expr::Eq(left, right)
+        | Expr::Neq(left, right)
         | Expr::Compare { left, right, .. }
         | Expr::Add(left, right)
         | Expr::Sub(left, right) => expr_mentions_actor(left) || expr_mentions_actor(right),

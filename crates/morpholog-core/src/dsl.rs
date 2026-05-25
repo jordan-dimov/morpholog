@@ -161,8 +161,12 @@ pub fn eq(lhs: Expr, rhs: Expr) -> Expr {
     Expr::Eq(Box::new(lhs), Box::new(rhs))
 }
 
+/// `Expr::Neq` over two terms - the common authoring case (comparing two
+/// variables or literals). The IR's `Neq` is symmetric with `Eq` and
+/// accepts full expressions; build `Expr::Neq` directly for the rarer
+/// expression-on-either-side case.
 pub fn neq(t1: Term, t2: Term) -> Expr {
-    Expr::Neq(t1, t2)
+    Expr::Neq(Box::new(Expr::Term(t1)), Box::new(Expr::Term(t2)))
 }
 
 pub fn le(lhs: Expr, rhs: Expr) -> Expr {

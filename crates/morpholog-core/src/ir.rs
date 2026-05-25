@@ -69,9 +69,14 @@ pub enum Expr {
     /// only the body - they diverge when the iteration set changes.
     Pre(Box<Expr>),
     Not(Box<Expr>),
-    Neq(Term, Term),
     Term(Term),
+    /// Value equality and inequality. Both operate on full expressions
+    /// (a bare `Term`, arithmetic, `Sum`, or `ValueOf`), evaluated to a
+    /// value and compared. Predicate-shaped: the unchanged binding set
+    /// when the (in)equality holds, empty otherwise. `Eq` and `Neq` are
+    /// symmetric - neither restricts its operands to bare terms.
     Eq(Box<Expr>, Box<Expr>),
+    Neq(Box<Expr>, Box<Expr>),
     /// Ordered comparison: an operator (`<=` `<` `>=` `>`) over an ordered
     /// domain (decimal or civil date). Predicate-shaped - the unchanged
     /// binding set when the comparison holds, empty otherwise.

@@ -72,7 +72,8 @@ fn arb_expr() -> impl Strategy<Value = Expr> {
     let leaf = prop_oneof![
         (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Expr::Claim { predicate, args }),
         arb_term().prop_map(Expr::Term),
-        (arb_term(), arb_term()).prop_map(|(a, b)| Expr::Neq(a, b)),
+        (arb_term(), arb_term())
+            .prop_map(|(a, b)| Expr::Neq(Box::new(Expr::Term(a)), Box::new(Expr::Term(b)))),
         (arb_term(), arb_term()).prop_map(|(a, b)| Expr::In(a, b)),
         (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Expr::ValueOf {
             predicate,

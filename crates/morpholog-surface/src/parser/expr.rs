@@ -92,9 +92,9 @@ where
         let date_lit = select! { Token::DateLit(s) => s };
         let subject_lit = select! { Token::SubjectLit(s) => s };
 
-        // A `Term` is the limited atom that claim-call args and `Neq` /
-        // `In` operands accept: variables (including the special
-        // `actor`), wildcards, and decimal / date / subject literals.
+        // A `Term` is the limited atom that claim-call args and `In`
+        // operands accept: variables (including the special `actor`),
+        // wildcards, and decimal / date / subject literals.
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
@@ -246,7 +246,7 @@ where
         //   - `=` -> Expr::Eq(Expr, Expr)
         //   - `<=` -> Expr::Compare { Le, Decimal, .. }
         //   - `on_or_before` -> Expr::Compare { Le, Date, .. }
-        //   - `!=` -> Expr::Neq(Term, Term)  - both sides must be Terms
+        //   - `!=` -> Expr::Neq(Expr, Expr)  - symmetric with `=`
         //   - `in` -> Expr::In(Term, Term)  - both sides must be Terms
         //
         // `<=` and `on_or_before` are distinct surface forms because the
@@ -291,21 +291,7 @@ where
                 Some((CmpOp::DateLt, rhs)) => compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs),
                 Some((CmpOp::DateGe, rhs)) => compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs),
                 Some((CmpOp::DateGt, rhs)) => compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs),
-                Some((CmpOp::Neq, rhs)) => {
-                    let span: SimpleSpan = e.span();
-                    let lhs_term = expr_as_term(&lhs);
-                    let rhs_term = expr_as_term(&rhs);
-                    match (lhs_term, rhs_term) {
-                        (Some(l), Some(r)) => Expr::Neq(l, r),
-                        _ => {
-                            emitter.emit(Rich::custom(
-                                span,
-                                "`!=` requires both sides to be terms (variable, wildcard, literal, or `actor`); arithmetic and other expressions are not allowed because the IR's Neq operates on terms only",
-                            ));
-                            Expr::Eq(Box::new(lhs), Box::new(rhs))
-                        }
-                    }
-                }
+                Some((CmpOp::Neq, rhs)) => Expr::Neq(Box::new(lhs), Box::new(rhs)),
                 Some((CmpOp::In, rhs)) => {
                     let span: SimpleSpan = e.span();
                     let lhs_term = expr_as_term(&lhs);
@@ -549,14 +535,13 @@ enum CmpOp {
     DateGe,
     DateGt,
     /// Membership comparator (`x in xs`) -> `Expr::In(Term, Term)`,
-    /// with the same term-only restriction as `Neq`. Distinct from the
-    /// structural `in` in `forall x in source: body`.
+    /// term-only on both sides (the IR's `In` operates on terms).
+    /// Distinct from the structural `in` in `forall x in source: body`.
     In,
 }
 
 /// Unwrap a term-shaped `Expr::Term(_)`, or `None` for any compound
-/// expression. Enforces the IR's term-only restriction on `Neq` and
-/// `In` operands.
+/// expression. Enforces the IR's term-only restriction on `In` operands.
 fn expr_as_term(e: &Expr) -> Option<Term> {
     match e {
         Expr::Term(t) => Some(t.clone()),

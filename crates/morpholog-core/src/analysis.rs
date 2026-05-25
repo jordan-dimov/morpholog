@@ -25,9 +25,9 @@ use crate::ir::{DerivedClaim, Expr, Program, Stmt};
 /// the kernel actually needs, and `enumerate_derived` would return
 /// an answer computed against an incomplete state.
 ///
-/// `Neq`, `Term`, and `In` take only `Term`s (variables, wildcards,
-/// or literals), none of which can reference a predicate; they
-/// contribute nothing.
+/// `Term` and `In` take only `Term`s (variables, wildcards, or
+/// literals), none of which can reference a predicate; they contribute
+/// nothing.
 pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
     match expr {
         Expr::Claim { predicate, .. } => {
@@ -54,6 +54,7 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
             predicates_referenced_by_expr(e, out);
         }
         Expr::Eq(l, r)
+        | Expr::Neq(l, r)
         | Expr::Compare {
             left: l, right: r, ..
         }
@@ -69,7 +70,7 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
             predicates_referenced_by_expr(source, out);
             predicates_referenced_by_expr(body, out);
         }
-        Expr::Neq(_, _) | Expr::Term(_) | Expr::In(_, _) => {
+        Expr::Term(_) | Expr::In(_, _) => {
             // No predicate references; operate on Terms only.
         }
     }

@@ -351,7 +351,10 @@ mod tests {
             // Variants carrying no predicate references: must contribute
             // nothing. The exhaustive set comparison below would catch
             // any spurious entry.
-            Expr::Neq(Term::Var("a".to_string()), Term::Var("b".to_string())),
+            Expr::Neq(
+                Box::new(Expr::Term(Term::Var("a".to_string()))),
+                Box::new(Expr::Term(Term::Var("b".to_string()))),
+            ),
             Expr::Term(Term::Var("z".to_string())),
             Expr::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
         ]);
