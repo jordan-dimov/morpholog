@@ -87,7 +87,7 @@ Comments and docs earn their place by the same subtraction test as code. This is
 
 - **A comment explains WHY; the code already says WHAT.** Before writing one, reach for a better name, a smaller function, or a type that makes it unnecessary. If deleting the comment would not confuse a future reader, delete it.
 - **rustdoc is the exception** - precise and complete on every public item, since it is the API contract. The WHY-not-WHAT bar is for inline `//` comments, not `///` docs.
-- **One concept, one home.** Each doc has a single role (see [Reference](#reference)); explain a thing where it belongs and link to it rather than restating it - a fact kept in two places drifts.
+- **One concept, one home.** Each doc has a single role (see [Reference](#reference)); explain a thing where it belongs and link to it rather than restating it - duplicated prose drifts out of sync.
 - **Audience prose evokes the why** (README, `docs/`, example READMEs): lead with the question Morpholog answers, not the feature list.
 - **History compresses as it ages.** `design-history.md` entries distil to Forced-by/Landed stubs once the work settles; git holds the per-PR detail.
 
