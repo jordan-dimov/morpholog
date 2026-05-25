@@ -680,8 +680,12 @@ fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
 /// the pre-state and post-state falsifies the rule.
 #[test]
 fn conservation_invariant_catches_payment_that_skips_headroom_update() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
-    use morpholog_core::dsl;
+    use morpholog_core::ir_builder;
 
     let pre = happy_pre();
 
@@ -691,62 +695,69 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     // aggregate); the conservation invariant must reject.
     let buggy = Transformation {
         name: "buggy_authorise_settlement".to_string(),
-        parameters: dsl::params(&["claim_id", "settlement_id", "amount"]),
+        parameters: ir_builder::params(&["claim_id", "settlement_id", "amount"]),
         body: vec![
-            dsl::bind_one(dsl::claim(
+            ir_builder::bind_one(ir_builder::claim(
                 "ClaimReported",
-                vec![dsl::var("claim_id"), dsl::var("policy_id"), dsl::wildcard()],
+                vec![
+                    ir_builder::var("claim_id"),
+                    ir_builder::var("policy_id"),
+                    ir_builder::wildcard(),
+                ],
             )),
-            dsl::bind_one(dsl::claim(
+            ir_builder::bind_one(ir_builder::claim(
                 "Policy",
-                vec![dsl::var("policy_id"), dsl::var("aggregate_limit")],
+                vec![
+                    ir_builder::var("policy_id"),
+                    ir_builder::var("aggregate_limit"),
+                ],
             )),
-            dsl::require(dsl::and(vec![
-                dsl::claim(
+            ir_builder::require(ir_builder::and(vec![
+                ir_builder::claim(
                     "SettlementAuthority",
-                    vec![dsl::actor(), dsl::var("actor_limit")],
+                    vec![ir_builder::actor(), ir_builder::var("actor_limit")],
                 ),
-                dsl::le(
-                    dsl::term(dsl::var("amount")),
-                    dsl::term(dsl::var("actor_limit")),
+                ir_builder::le(
+                    ir_builder::term(ir_builder::var("amount")),
+                    ir_builder::term(ir_builder::var("actor_limit")),
                 ),
             ])),
-            dsl::require(dsl::le(
-                dsl::add(
-                    dsl::sum(
-                        dsl::var("paid"),
-                        dsl::claim(
+            ir_builder::require(ir_builder::le(
+                ir_builder::add(
+                    ir_builder::sum(
+                        ir_builder::var("paid"),
+                        ir_builder::claim(
                             "SettlementPaid",
                             vec![
-                                dsl::var("policy_id"),
-                                dsl::wildcard(),
-                                dsl::wildcard(),
-                                dsl::var("paid"),
+                                ir_builder::var("policy_id"),
+                                ir_builder::wildcard(),
+                                ir_builder::wildcard(),
+                                ir_builder::var("paid"),
                             ],
                         ),
                     ),
-                    dsl::term(dsl::var("amount")),
+                    ir_builder::term(ir_builder::var("amount")),
                 ),
-                dsl::term(dsl::var("aggregate_limit")),
+                ir_builder::term(ir_builder::var("aggregate_limit")),
             )),
             // Conspicuously missing: the let/retract/assert chain
             // that maintains PolicyHeadroom.
-            dsl::assert_(
+            ir_builder::assert_(
                 "SettlementAuthorised",
                 vec![
-                    dsl::var("claim_id"),
-                    dsl::var("settlement_id"),
-                    dsl::var("amount"),
-                    dsl::actor(),
+                    ir_builder::var("claim_id"),
+                    ir_builder::var("settlement_id"),
+                    ir_builder::var("amount"),
+                    ir_builder::actor(),
                 ],
             ),
-            dsl::assert_(
+            ir_builder::assert_(
                 "SettlementPaid",
                 vec![
-                    dsl::var("policy_id"),
-                    dsl::var("claim_id"),
-                    dsl::var("settlement_id"),
-                    dsl::var("amount"),
+                    ir_builder::var("policy_id"),
+                    ir_builder::var("claim_id"),
+                    ir_builder::var("settlement_id"),
+                    ir_builder::var("amount"),
                 ],
             ),
         ],
@@ -787,7 +798,7 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
 #[test]
 fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     use morpholog_core::Transformation;
-    use morpholog_core::dsl;
+    use morpholog_core::ir_builder;
 
     // Pre-state: policy_001 with 100k headroom, two reported
     // claims (so two payments can be admitted in the buggy
@@ -807,70 +818,79 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     // conservation invariant catches the discrepancy.
     let buggy = Transformation {
         name: "buggy_multi_payment".to_string(),
-        parameters: dsl::params(&["amount"]),
+        parameters: ir_builder::params(&["amount"]),
         body: vec![
-            dsl::bind_one(dsl::claim(
+            ir_builder::bind_one(ir_builder::claim(
                 "PolicyHeadroom",
-                vec![dsl::subj("policy_001"), dsl::var("current_headroom")],
+                vec![
+                    ir_builder::subj("policy_001"),
+                    ir_builder::var("current_headroom"),
+                ],
             )),
-            dsl::require(dsl::claim(
+            ir_builder::require(ir_builder::claim(
                 "SettlementAuthority",
-                vec![dsl::actor(), dsl::wildcard()],
+                vec![ir_builder::actor(), ir_builder::wildcard()],
             )),
-            dsl::let_(
+            ir_builder::let_(
                 "new_headroom",
-                dsl::sub(
-                    dsl::term(dsl::var("current_headroom")),
-                    dsl::term(dsl::var("amount")),
+                ir_builder::sub(
+                    ir_builder::term(ir_builder::var("current_headroom")),
+                    ir_builder::term(ir_builder::var("amount")),
                 ),
             ),
-            dsl::retract(
+            ir_builder::retract(
                 "PolicyHeadroom",
-                vec![dsl::subj("policy_001"), dsl::var("current_headroom")],
+                vec![
+                    ir_builder::subj("policy_001"),
+                    ir_builder::var("current_headroom"),
+                ],
             ),
-            dsl::assert_(
+            ir_builder::assert_(
                 "PolicyHeadroom",
-                vec![dsl::subj("policy_001"), dsl::var("new_headroom")],
+                vec![
+                    ir_builder::subj("policy_001"),
+                    ir_builder::var("new_headroom"),
+                ],
             ),
             // Two SettlementAuthorised + SettlementPaid pairs, both
             // for `amount`. The authorisations satisfy
             // paid_implies_authorised; the two SettlementPaid claims
             // are the structural bug - they total 2*amount but only
             // 1*amount of headroom is consumed.
-            dsl::assert_(
+            ir_builder::assert_(
                 "SettlementAuthorised",
                 vec![
-                    dsl::subj("claim_a"),
-                    dsl::subj("settlement_a"),
-                    dsl::var("amount"),
-                    dsl::actor(),
+                    ir_builder::subj("claim_a"),
+                    ir_builder::subj("settlement_a"),
+                    ir_builder::var("amount"),
+                    ir_builder::actor(),
                 ],
             ),
-            dsl::assert_(
+            ir_builder::assert_(
                 "SettlementPaid",
                 vec![
-                    dsl::subj("policy_001"),
-                    dsl::subj("claim_a"),
-                    dsl::subj("settlement_a"),
-                    dsl::var("amount"),
+                    ir_builder::subj("policy_001"),
+                    ir_builder::subj("claim_a"),
+                    ir_builder::subj("settlement_a"),
+                    ir_builder::var("amount"),
                 ],
             ),
-            dsl::assert_(
+            ir_builder::assert_(
                 "SettlementAuthorised",
                 vec![
-                    dsl::subj("claim_b"),
-                    dsl::subj("settlement_b"),
-                    dsl::var("amount"),
-                    dsl::actor(),
+                    ir_builder::subj("claim_b"),
+                    ir_builder::subj("settlement_b"),
+                    ir_builder::var("amount"),
+                    ir_builder::actor(),
                 ],
             ),
-            dsl::assert_(
+            ir_builder::assert_(
                 "SettlementPaid",
                 vec![
-                    dsl::subj("policy_001"),
-                    dsl::subj("claim_b"),
-                    dsl::subj("settlement_b"),
-                    dsl::var("amount"),
+                    ir_builder::subj("policy_001"),
+                    ir_builder::subj("claim_b"),
+                    ir_builder::subj("settlement_b"),
+                    ir_builder::var("amount"),
                 ],
             ),
         ],

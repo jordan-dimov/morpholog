@@ -8,16 +8,24 @@
 //! empty missing-claims list, invariant violations and kernel errors use
 //! their own rejection shapes, and the JSON and prose surfaces are
 //! deterministic.
+//!
+//! Test layers: the flagship and boundary cases run against the real
+//! `approval_controls` example; small bespoke scenarios (a sanctions
+//! blocker, a missing supplier, an invariant violation) are authored as
+//! inline `.morph` and parsed, so they read as models rather than IR
+//! struct-construction. The "transformation minus one statement"
+//! invariant-teeth tests (chess, insurance) are a different layer -
+//! deliberately adversarial, constructing shapes a correct programme
+//! never would, where the Rust IR builders are the right tool.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
 use common::{claim_instance, dec, subj};
-use morpholog_core::{
-    GateKind, Program, Rejection, State, Transformation, Transition, Verdict, dsl, explain,
-};
+use morpholog_core::{GateKind, Rejection, State, Transition, Verdict, explain};
 use morpholog_examples::approval_controls;
+use morpholog_surface::parse_program;
 
 fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> Transition {
     Transition {
@@ -148,27 +156,18 @@ fn present_blocker_carries_no_directly_missing_claim() {
     // require not Sanctioned(customer); Sanctioned(alice) holds, so the
     // gate fails on a present blocker - which v0 reports as a faithful
     // rejection, not a missing claim.
-    let program = Program {
-        name: "blocker_demo".to_string(),
-        predicates: vec![
-            dsl::predicate("Sanctioned").subject("customer").build(),
-            dsl::predicate("Onboarded").subject("customer").build(),
-        ],
-        intents: vec![],
-        invariants: vec![],
-        transformations: vec![Transformation {
-            name: "onboard".to_string(),
-            parameters: dsl::params(&["customer"]),
-            body: vec![
-                dsl::require(dsl::not(dsl::claim(
-                    "Sanctioned",
-                    vec![dsl::var("customer")],
-                ))),
-                dsl::assert_("Onboarded", vec![dsl::var("customer")]),
-            ],
-        }],
-        derived_claims: vec![],
-    };
+    let program = parse_program(
+        "program blocker_demo
+
+predicate Sanctioned(customer: Subject)
+predicate Onboarded(customer: Subject)
+
+transformation onboard(customer):
+    require not Sanctioned(customer)
+    admit Onboarded(customer)
+",
+    )
+    .expect("blocker_demo must parse");
     let state = State::from_claims(vec![claim_instance("Sanctioned", &[subj("alice")])]);
     let t = transition("onboard", vec![subj("alice")], "officer");
 
@@ -193,24 +192,18 @@ fn present_blocker_carries_no_directly_missing_claim() {
 fn missing_claim_with_no_supplier_renders_cleanly() {
     // `issue` requires `Accredited(actor)`, which no transformation in the
     // model asserts - so the candidate-supplier list is honestly empty.
-    let program = Program {
-        name: "no_supplier_demo".to_string(),
-        predicates: vec![
-            dsl::predicate("Accredited").subject("who").build(),
-            dsl::predicate("Certificate").subject("cert").build(),
-        ],
-        intents: vec![],
-        invariants: vec![],
-        transformations: vec![Transformation {
-            name: "issue".to_string(),
-            parameters: dsl::params(&["cert"]),
-            body: vec![
-                dsl::require(dsl::claim("Accredited", vec![dsl::actor()])),
-                dsl::assert_("Certificate", vec![dsl::var("cert")]),
-            ],
-        }],
-        derived_claims: vec![],
-    };
+    let program = parse_program(
+        "program no_supplier_demo
+
+predicate Accredited(who: Subject)
+predicate Certificate(cert: Subject)
+
+transformation issue(cert):
+    require Accredited(actor)
+    admit Certificate(cert)
+",
+    )
+    .expect("no_supplier_demo must parse");
     let t = transition("issue", vec![subj("cert-1")], "officer");
 
     let explanation = explain(&program, &t, &State::default());
@@ -242,29 +235,20 @@ fn missing_claim_with_no_supplier_renders_cleanly() {
 fn invariant_violation_uses_the_invariant_rejection_shape() {
     // Every Flagged customer must have a Permit. `flag` asserts Flagged
     // without a Permit, so the candidate state violates the invariant.
-    let program = Program {
-        name: "invariant_demo".to_string(),
-        predicates: vec![
-            dsl::predicate("Flagged").subject("customer").build(),
-            dsl::predicate("Permit").subject("customer").build(),
-        ],
-        intents: vec![],
-        invariants: vec![morpholog_core::Invariant {
-            name: "flagged_requires_permit".to_string(),
-            version: 1,
-            body: dsl::forall(
-                "c",
-                dsl::claim("Flagged", vec![dsl::var("c")]),
-                dsl::claim("Permit", vec![dsl::var("c")]),
-            ),
-        }],
-        transformations: vec![Transformation {
-            name: "flag".to_string(),
-            parameters: dsl::params(&["customer"]),
-            body: vec![dsl::assert_("Flagged", vec![dsl::var("customer")])],
-        }],
-        derived_claims: vec![],
-    };
+    let program = parse_program(
+        "program invariant_demo
+
+predicate Flagged(customer: Subject)
+predicate Permit(customer: Subject)
+
+invariant flagged_requires_permit:
+    forall c in Flagged(c): Permit(c)
+
+transformation flag(customer):
+    admit Flagged(customer)
+",
+    )
+    .expect("invariant_demo must parse");
     let t = transition("flag", vec![subj("alice")], "officer");
 
     let explanation = explain(&program, &t, &State::default());

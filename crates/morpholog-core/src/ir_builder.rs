@@ -1,22 +1,24 @@
-//! Constructors for building Morpholog programs in Rust, the v0
-//! authoring surface where the parser does not yet reach.
+//! A Rust construction kit for the kernel IR - **not** the Morpholog
+//! language. The product surface is `.morph`; the worked examples are
+//! authored there and parsed, and the parser is the only thing in the
+//! product that builds IR. These builders exist for tests: assembling
+//! precise edge cases and adversarial or malformed shapes (the kind a
+//! parser would never emit) directly, where authoring a `.morph` file
+//! would be the wrong tool.
 //!
-//! The kernel IR is deliberately low-level - every variant is one
-//! thing, no syntactic sugar - so a hand-authored transformation body
-//! reads like raw struct construction. These thin wrappers give that
-//! same construction a readable shape:
+//! The kernel IR is deliberately low-level - every variant is one thing,
+//! no syntactic sugar - so hand-constructing a transformation body reads
+//! like raw struct construction. These thin wrappers give it a readable
+//! shape:
 //!
 //! ```ignore
-//! use morpholog_core::dsl::*;
+//! use morpholog_core::ir_builder::*;
 //!
 //! require(and(vec![
 //!     claim("Policy", vec![var("policy_id"), wildcard()]),
 //!     le(term(var("amount")), term(var("limit"))),
 //! ]))
 //! ```
-//!
-//! The kernel never sees them; every worked example, test, and
-//! external user assembles IR by hand.
 //!
 //! Naming conventions:
 //! - Term literals are short: `subj`, `dec`, `date`. They return `Term`,

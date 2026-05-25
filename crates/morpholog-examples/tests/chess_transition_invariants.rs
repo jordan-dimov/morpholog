@@ -98,8 +98,12 @@ fn capturing_a_king_is_rejected() {
 /// `sum(1 | PieceAt(...))`.
 #[test]
 fn piece_count_drift_is_rejected() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
-    use morpholog_core::dsl;
+    use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
@@ -110,28 +114,45 @@ fn piece_count_drift_is_rejected() {
     // correctly, so the census invariant is the one that must fire.
     let drifting_move = Transformation {
         name: "drifting_move".to_string(),
-        parameters: dsl::params(&["src", "dst", "new_turn"]),
+        parameters: ir_builder::params(&["src", "dst", "new_turn"]),
         body: vec![
-            dsl::bind_one(dsl::claim(
+            ir_builder::bind_one(ir_builder::claim(
                 "PieceAt",
-                vec![dsl::var("src"), dsl::var("pt"), dsl::var("pc")],
+                vec![
+                    ir_builder::var("src"),
+                    ir_builder::var("pt"),
+                    ir_builder::var("pc"),
+                ],
             )),
-            dsl::bind_one(dsl::claim("CurrentTurn", vec![dsl::var("turn")])),
-            dsl::bind_one(dsl::claim("MoveCount", vec![dsl::var("m")])),
-            dsl::require(dsl::neq(dsl::var("new_turn"), dsl::var("turn"))),
-            dsl::let_(
+            ir_builder::bind_one(ir_builder::claim(
+                "CurrentTurn",
+                vec![ir_builder::var("turn")],
+            )),
+            ir_builder::bind_one(ir_builder::claim("MoveCount", vec![ir_builder::var("m")])),
+            ir_builder::require(ir_builder::neq(
+                ir_builder::var("new_turn"),
+                ir_builder::var("turn"),
+            )),
+            ir_builder::let_(
                 "next_m",
-                dsl::add(dsl::term(dsl::var("m")), dsl::term(dsl::dec("1"))),
+                ir_builder::add(
+                    ir_builder::term(ir_builder::var("m")),
+                    ir_builder::term(ir_builder::dec("1")),
+                ),
             ),
-            dsl::retract("CurrentTurn", vec![dsl::var("turn")]),
-            dsl::retract("MoveCount", vec![dsl::var("m")]),
+            ir_builder::retract("CurrentTurn", vec![ir_builder::var("turn")]),
+            ir_builder::retract("MoveCount", vec![ir_builder::var("m")]),
             // Conspicuously missing: retract of the piece at `src`.
-            dsl::assert_(
+            ir_builder::assert_(
                 "PieceAt",
-                vec![dsl::var("dst"), dsl::var("pt"), dsl::var("pc")],
+                vec![
+                    ir_builder::var("dst"),
+                    ir_builder::var("pt"),
+                    ir_builder::var("pc"),
+                ],
             ),
-            dsl::assert_("CurrentTurn", vec![dsl::var("new_turn")]),
-            dsl::assert_("MoveCount", vec![dsl::var("next_m")]),
+            ir_builder::assert_("CurrentTurn", vec![ir_builder::var("new_turn")]),
+            ir_builder::assert_("MoveCount", vec![ir_builder::var("next_m")]),
         ],
     };
     program.transformations.push(drifting_move);
@@ -167,30 +188,43 @@ fn piece_count_drift_is_rejected() {
 /// refused.
 #[test]
 fn dropping_the_piece_counter_is_rejected() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
-    use morpholog_core::dsl;
+    use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
     let counterless_move = Transformation {
         name: "counterless_move".to_string(),
-        parameters: dsl::params(&["new_turn"]),
+        parameters: ir_builder::params(&["new_turn"]),
         body: vec![
-            dsl::bind_one(dsl::claim("CurrentTurn", vec![dsl::var("turn")])),
-            dsl::bind_one(dsl::claim("MoveCount", vec![dsl::var("m")])),
-            dsl::bind_one(dsl::claim("PieceCount", vec![dsl::var("p")])),
-            dsl::require(dsl::neq(dsl::var("new_turn"), dsl::var("turn"))),
-            dsl::let_(
+            ir_builder::bind_one(ir_builder::claim(
+                "CurrentTurn",
+                vec![ir_builder::var("turn")],
+            )),
+            ir_builder::bind_one(ir_builder::claim("MoveCount", vec![ir_builder::var("m")])),
+            ir_builder::bind_one(ir_builder::claim("PieceCount", vec![ir_builder::var("p")])),
+            ir_builder::require(ir_builder::neq(
+                ir_builder::var("new_turn"),
+                ir_builder::var("turn"),
+            )),
+            ir_builder::let_(
                 "next_m",
-                dsl::add(dsl::term(dsl::var("m")), dsl::term(dsl::dec("1"))),
+                ir_builder::add(
+                    ir_builder::term(ir_builder::var("m")),
+                    ir_builder::term(ir_builder::dec("1")),
+                ),
             ),
-            dsl::retract("CurrentTurn", vec![dsl::var("turn")]),
-            dsl::retract("MoveCount", vec![dsl::var("m")]),
-            dsl::retract("PieceCount", vec![dsl::var("p")]),
+            ir_builder::retract("CurrentTurn", vec![ir_builder::var("turn")]),
+            ir_builder::retract("MoveCount", vec![ir_builder::var("m")]),
+            ir_builder::retract("PieceCount", vec![ir_builder::var("p")]),
             // Conspicuously missing: re-admit of PieceCount.
-            dsl::assert_("CurrentTurn", vec![dsl::var("new_turn")]),
-            dsl::assert_("MoveCount", vec![dsl::var("next_m")]),
+            ir_builder::assert_("CurrentTurn", vec![ir_builder::var("new_turn")]),
+            ir_builder::assert_("MoveCount", vec![ir_builder::var("next_m")]),
         ],
     };
     program.transformations.push(counterless_move);
@@ -297,8 +331,12 @@ fn quiet_move_after_opening_succeeds() {
 
 #[test]
 fn transition_invariant_catches_missing_move_count_bump() {
+    // Adversarial (IR-builder) test: constructs the real transition minus
+    // one statement to prove an invariant has teeth - a kernel-teeth test,
+    // not a business story, so the Rust IR builder is the right tool here,
+    // not `.morph`.
     use morpholog_core::Transformation;
-    use morpholog_core::dsl;
+    use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
@@ -308,42 +346,51 @@ fn transition_invariant_catches_missing_move_count_bump() {
     // candidate state. The transition invariant must catch this.
     let buggy_move = Transformation {
         name: "buggy_quiet_move".to_string(),
-        parameters: dsl::params(&["src", "dst", "new_turn"]),
+        parameters: ir_builder::params(&["src", "dst", "new_turn"]),
         body: vec![
-            dsl::bind_one(dsl::claim(
+            ir_builder::bind_one(ir_builder::claim(
                 "PieceAt",
                 vec![
-                    dsl::var("src"),
-                    dsl::var("piece_type"),
-                    dsl::var("piece_color"),
+                    ir_builder::var("src"),
+                    ir_builder::var("piece_type"),
+                    ir_builder::var("piece_color"),
                 ],
             )),
-            dsl::bind_one(dsl::claim("CurrentTurn", vec![dsl::var("current_turn")])),
-            dsl::require(dsl::eq(
-                dsl::term(dsl::var("piece_color")),
-                dsl::term(dsl::var("current_turn")),
+            ir_builder::bind_one(ir_builder::claim(
+                "CurrentTurn",
+                vec![ir_builder::var("current_turn")],
             )),
-            dsl::require(dsl::neq(dsl::var("new_turn"), dsl::var("current_turn"))),
-            dsl::retract(
+            ir_builder::require(ir_builder::eq(
+                ir_builder::term(ir_builder::var("piece_color")),
+                ir_builder::term(ir_builder::var("current_turn")),
+            )),
+            ir_builder::require(ir_builder::neq(
+                ir_builder::var("new_turn"),
+                ir_builder::var("current_turn"),
+            )),
+            ir_builder::retract(
                 "PieceAt",
                 vec![
-                    dsl::var("src"),
-                    dsl::var("piece_type"),
-                    dsl::var("piece_color"),
+                    ir_builder::var("src"),
+                    ir_builder::var("piece_type"),
+                    ir_builder::var("piece_color"),
                 ],
             ),
-            dsl::retract("CurrentTurn", vec![dsl::var("current_turn")]),
-            dsl::assert_(
+            ir_builder::retract("CurrentTurn", vec![ir_builder::var("current_turn")]),
+            ir_builder::assert_(
                 "PieceAt",
                 vec![
-                    dsl::var("dst"),
-                    dsl::var("piece_type"),
-                    dsl::var("piece_color"),
+                    ir_builder::var("dst"),
+                    ir_builder::var("piece_type"),
+                    ir_builder::var("piece_color"),
                 ],
             ),
-            dsl::assert_("CurrentTurn", vec![dsl::var("new_turn")]),
+            ir_builder::assert_("CurrentTurn", vec![ir_builder::var("new_turn")]),
             // Conspicuously missing: the MoveCount retract + assert.
-            dsl::emit("PieceMoved", vec![dsl::var("src"), dsl::var("dst")]),
+            ir_builder::emit(
+                "PieceMoved",
+                vec![ir_builder::var("src"), ir_builder::var("dst")],
+            ),
         ],
     };
     program.transformations.push(buggy_move);

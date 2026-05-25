@@ -11,8 +11,8 @@
 //! async must not infect this crate. Worked-example IR lives in the
 //! `morpholog-examples` crate.
 
-pub mod dsl;
 pub mod format;
+pub mod ir_builder;
 
 mod analysis;
 mod check;
@@ -402,7 +402,7 @@ mod tests {
     /// `Stmt::Assert`'s output predicate.
     #[test]
     fn predicates_read_by_stmt_excludes_assert_includes_retract_and_reads() {
-        use dsl::*;
+        use ir_builder::*;
         let body = vec![
             require(claim("P_require", vec![var("x")])),
             bind_one(claim("P_bind", vec![var("y"), var("z")])),
@@ -963,7 +963,7 @@ mod tests {
     /// for use by subsequent statements.
     #[test]
     fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
@@ -1001,7 +1001,7 @@ mod tests {
     /// debugging is possible from the reason alone.
     #[test]
     fn bind_one_with_zero_matches_rejects_with_named_predicate() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = single_stmt_transformation(
             "extract_missing",
@@ -1028,7 +1028,7 @@ mod tests {
     /// admitted ambiguous state.
     #[test]
     fn bind_one_with_multiple_matches_is_kernel_error() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "Policy".to_string(),
@@ -1070,7 +1070,7 @@ mod tests {
     /// pattern matches only the row carrying that policy_id.
     #[test]
     fn bind_one_with_pre_bound_var_constrains_match() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "Policy".to_string(),
@@ -1121,7 +1121,7 @@ mod tests {
     /// binding, or its bind_one would narrow to the wrong row.
     #[test]
     fn bind_one_inside_for_body_composes() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "LineAmount".to_string(),
@@ -1188,7 +1188,7 @@ mod tests {
     /// transition in scope). Authority-lookup patterns depend on this.
     #[test]
     fn bind_one_with_actor_in_pattern() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Authority".to_string(),
             args: vec![
@@ -1227,7 +1227,7 @@ mod tests {
     /// contract.
     #[test]
     fn bind_one_rejects_value_expr_as_not_predicate() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = single_stmt_transformation(
             "misuse_value_expr",
@@ -1254,7 +1254,7 @@ mod tests {
     /// matches by default. Per-test mutations exercise each validator
     /// branch.
     fn one_claim_program() -> Program {
-        use dsl::*;
+        use ir_builder::*;
         Program {
             name: "tiny".to_string(),
             predicates: vec![predicate("Echo").subject("id").decimal("amount").build()],
@@ -1277,7 +1277,7 @@ mod tests {
 
     #[test]
     fn validate_reports_undeclared_predicate_in_transformation_body() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         p.transformations[0]
             .body
@@ -1295,7 +1295,7 @@ mod tests {
 
     #[test]
     fn validate_reports_arity_mismatch_in_transformation_body() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         // Echo is declared with arity 2; calling with 1 arg trips
         // ArityMismatch.
@@ -1318,7 +1318,7 @@ mod tests {
 
     #[test]
     fn validate_reports_arity_mismatch_in_invariant_body() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         p.invariants.push(Invariant {
             name: "bad_inv".to_string(),
@@ -1345,7 +1345,7 @@ mod tests {
 
     #[test]
     fn validate_reports_duplicate_predicate_decl() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         p.predicates
             .push(predicate("Echo").subject("a").subject("b").build());
@@ -1362,7 +1362,7 @@ mod tests {
 
     #[test]
     fn validate_reports_undeclared_derived_predicate() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         p.derived_claims.push(DerivedClaim {
             predicate: "Computed".to_string(),
@@ -1386,7 +1386,7 @@ mod tests {
 
     #[test]
     fn validate_reports_derived_claim_arity_mismatch_against_declared_predicate() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         // Declare Computed with arity 3 but build it with keys=1,
         // values=1 (total arity 2 - one short).
@@ -1426,7 +1426,7 @@ mod tests {
     /// The validator returns every error, not just the first.
     #[test]
     fn validate_returns_all_errors_not_just_the_first() {
-        use dsl::*;
+        use ir_builder::*;
         let mut p = one_claim_program();
         p.transformations[0].body.push(assert_("MissingA", vec![]));
         p.transformations[0].body.push(assert_("MissingB", vec![]));
@@ -1472,7 +1472,7 @@ mod tests {
     /// Accepted.
     #[test]
     fn propose_with_trace_records_every_statement_on_accept() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
@@ -1520,7 +1520,7 @@ mod tests {
     /// instead of pattern-matching on reason strings.
     #[test]
     fn propose_with_trace_records_failing_require_with_rendered_expression() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = Transformation {
             name: "needs_policy".to_string(),
@@ -1552,7 +1552,7 @@ mod tests {
     /// expression.
     #[test]
     fn propose_with_trace_records_bind_one_no_match() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = Transformation {
             name: "lookup_missing".to_string(),
@@ -1581,7 +1581,7 @@ mod tests {
     /// means the trace shows the new authoritative context, not a delta.
     #[test]
     fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
@@ -1619,7 +1619,7 @@ mod tests {
     /// exactly the case the trace-on-both-paths contract prevents.
     #[test]
     fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "Policy".to_string(),
@@ -1664,7 +1664,7 @@ mod tests {
     /// show what was removed.
     #[test]
     fn propose_with_trace_records_retract_with_actual_claims() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "MayApprove".to_string(),
@@ -1698,7 +1698,7 @@ mod tests {
     /// can attribute a failing iteration to its element.
     #[test]
     fn propose_with_trace_records_for_with_per_iteration_items() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "LineAmount".to_string(),
@@ -1753,7 +1753,7 @@ mod tests {
     /// rejection produces the entry plus an Outcome::Rejected.
     #[test]
     fn propose_with_trace_records_invariant_check_and_failure() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = Transformation {
             name: "fires_invariant".to_string(),
@@ -1802,7 +1802,7 @@ mod tests {
     /// they ever diverged, this would catch it.
     #[test]
     fn propose_and_propose_with_trace_produce_identical_outcomes() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
@@ -1856,7 +1856,7 @@ mod tests {
     /// renders the failing conjunct, not the whole And.
     #[test]
     fn failure_walk_and_points_at_first_failing_conjunct() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "A".to_string(),
             args: vec![EvalValue::Subject("x".to_string())],
@@ -1891,7 +1891,7 @@ mod tests {
     /// inner failing conjunct.
     #[test]
     fn failure_walk_and_recurses_through_nested_and() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "A".to_string(),
             args: vec![EvalValue::Subject("x".to_string())],
@@ -1936,7 +1936,7 @@ mod tests {
     /// walker points at right.
     #[test]
     fn failure_walk_implies_points_at_right_when_left_holds() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Trigger".to_string(),
             args: vec![EvalValue::Subject("x".to_string())],
@@ -1973,7 +1973,7 @@ mod tests {
     /// at least one source binding: walker drills into the body.
     #[test]
     fn failure_walk_forall_drills_into_body() {
-        use dsl::*;
+        use ir_builder::*;
         // Source: a collection [x, y]. Body: claim "AllGood(line)".
         // State has AllGood(x) but not AllGood(y). The forall fails
         // at iteration y; walker should point at the body, not the
@@ -2020,7 +2020,7 @@ mod tests {
     /// models. Returning None is the safe choice in v0.
     #[test]
     fn failure_walk_not_returns_none() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Forbidden".to_string(),
             args: vec![EvalValue::Subject("x".to_string())],
@@ -2065,7 +2065,7 @@ mod tests {
     /// in `failing_sub_expression` adds no information.
     #[test]
     fn failure_walk_leaf_claim_returns_none() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = Transformation {
             name: "needs_missing".to_string(),
@@ -2105,7 +2105,7 @@ mod tests {
     /// up the field at all.
     #[test]
     fn failure_walk_bind_one_no_match_carries_field() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = Transformation {
             name: "lookup_missing".to_string(),
@@ -2145,7 +2145,7 @@ mod tests {
     /// context - even though no x value satisfies both.
     #[test]
     fn failure_walk_and_threads_bindings_through_conjuncts() {
-        use dsl::*;
+        use ir_builder::*;
         // A(a1) holds, B(b2) holds, but no x satisfies BOTH A(x) and
         // B(x).
         let state = State::from_claims(vec![
@@ -2192,7 +2192,7 @@ mod tests {
     /// returns None.
     #[test]
     fn failure_walk_implies_with_failing_left_returns_none() {
-        use dsl::*;
+        use ir_builder::*;
         // Trigger does not hold for x. Implies is vacuously true at
         // every iteration. But we need the implies to actually fail
         // overall to trigger the walker - so wrap it in an And with
@@ -2239,7 +2239,7 @@ mod tests {
     /// drills recursively into the failing inner sub-expression.
     #[test]
     fn failure_walk_implies_recurses_into_compound_right() {
-        use dsl::*;
+        use ir_builder::*;
         // Trigger(x) holds; right is `And(StepA(x), StepB(x))`;
         // StepA holds, StepB fails. Walker should drill past Implies
         // and past the inner And to StepB.
@@ -2291,7 +2291,7 @@ mod tests {
     /// under the failing source binding.
     #[test]
     fn failure_walk_forall_recurses_into_compound_body() {
-        use dsl::*;
+        use ir_builder::*;
         // Source: [x, y]. Body: And(A(line), B(line)). A holds for
         // both x and y; B only holds for x. Walker should drill into
         // the And and identify B as the failing conjunct under the y
@@ -2350,7 +2350,7 @@ mod tests {
     /// looked for" rather than "what failed". Returns None.
     #[test]
     fn failure_walk_exists_returns_none() {
-        use dsl::*;
+        use ir_builder::*;
         let state = State::default();
         let t = Transformation {
             name: "needs_some_x".to_string(),
@@ -2386,7 +2386,7 @@ mod tests {
     /// path is wired up symmetrically.
     #[test]
     fn failure_walk_bind_one_drills_into_compound_expression() {
-        use dsl::*;
+        use ir_builder::*;
         // BindOne expects a unique match for And(Approved(x),
         // Active(x)). Approved holds for x; Active does not. The
         // walker should drill into the And and identify Active.
