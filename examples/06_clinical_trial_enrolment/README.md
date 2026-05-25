@@ -33,7 +33,7 @@ The regulator three years later can ask:
 
 ## The program
 
-See [`clinical_trial_enrolment.morph`](clinical_trial_enrolment.morph) for the illustrative surface syntax.
+See [`clinical_trial_enrolment.morph`](clinical_trial_enrolment.morph) for the surface syntax.
 
 ### Claims
 

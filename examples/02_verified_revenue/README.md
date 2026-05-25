@@ -20,7 +20,7 @@ After correction, the prior verification remains queryable as history but cannot
 
 ## The program
 
-See [`verified_revenue.morph`](verified_revenue.morph) for the illustrative surface syntax.
+See [`verified_revenue.morph`](verified_revenue.morph) for the surface syntax.
 
 ### Claims
 

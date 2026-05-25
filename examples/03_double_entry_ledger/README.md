@@ -12,7 +12,7 @@ At any moment, an auditor can ask for the trial balance - debits and credits tot
 
 ## The program
 
-See [`ledger.morph`](ledger.morph) for the illustrative surface syntax.
+See [`ledger.morph`](ledger.morph) for the surface syntax.
 
 ### Claims
 

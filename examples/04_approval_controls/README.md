@@ -14,7 +14,7 @@ Across both: revocation of authority prevents *future* approvals. It does not in
 
 ## The program
 
-See [`approval_controls.morph`](approval_controls.morph) for the illustrative surface syntax.
+See [`approval_controls.morph`](approval_controls.morph) for the surface syntax.
 
 ### Claims
 
