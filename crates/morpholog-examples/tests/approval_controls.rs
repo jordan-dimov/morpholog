@@ -9,7 +9,7 @@
 //!   cannot impersonate another, revocation preserves history.
 //!
 //! - **Quantitative authority** (`ApprovalLimit`, `approve_within_limit`):
-//!   the same shape with `Expr::Le` on amount-against-limit, boundary
+//!   the same shape with a decimal `Expr::Compare` on amount-against-limit, boundary
 //!   equality, stacked grants, per-doc-type scoping, and the
 //!   ill-typed-limit doctrine.
 //!
@@ -313,8 +313,9 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
 fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     // Doctrine: ill-typed admitted claims are structural corruption,
     // not business rejection. An `ApprovalLimit($actor, doc_type, X)`
-    // where `X` is not a decimal causes `Expr::Le(amount, limit)` to
-    // raise `EvalError::TypeMismatch`. Until typed predicates land,
+    // where `X` is not a decimal causes the decimal `Expr::Compare`
+    // (amount <= limit) to raise `EvalError::TypeMismatch`. Until typed
+    // predicates land,
     // this example's callers are trusted to admit decimal limits.
     let pre = State::from_claims(vec![ClaimInstance {
         predicate: "ApprovalLimit".to_string(),
@@ -341,8 +342,8 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     match err {
         EvalError::TypeMismatch(msg) => {
             assert!(
-                msg.contains("Le"),
-                "TypeMismatch should mention Le; got `{msg}`",
+                msg.contains("decimal operands"),
+                "TypeMismatch should mention the decimal-operand requirement; got `{msg}`",
             );
         }
         other => panic!("expected TypeMismatch, got {other:?}"),

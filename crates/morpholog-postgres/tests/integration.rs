@@ -1793,7 +1793,7 @@ async fn duplicate_intent_in_one_transformation_surfaces_named_error() {
 }
 
 // ============================================================
-// Approval controls - durable proof that Term::Actor and Expr::Le flow
+// Approval controls - durable proof that Term::Actor and a decimal Expr::Compare flow
 // through propose_against_pg into the audit log and the asserted
 // Approval / LimitedApproval claims. One scenario walks both the
 // unconditional and quantitative authority shapes.
@@ -1889,7 +1889,7 @@ async fn approval_controls_full_chain_through_pg() {
     .expect("grant_approval_limit should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 6. jordan approves a 750 invoice; Expr::Le admits. Pin the full
+    // 6. jordan approves a 750 invoice; the decimal Expr::Compare admits. Pin the full
     // round-trip: receipt actor, asserted claim, emitted intent
     // staged to the outbox, and the audit row's actor column.
     let outcome = common::propose_pg_as(

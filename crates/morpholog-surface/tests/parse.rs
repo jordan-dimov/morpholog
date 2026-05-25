@@ -247,9 +247,16 @@ invariant within_limit:
     sum(amount | SettlementPaid(claim, amount)) + proposed <= limit
 "#;
     let program = parse_program(source).expect("parse should succeed");
-    use morpholog_core::Expr;
+    use morpholog_core::{CompareOp, Expr, OrderedDomain};
     let inv = &program.invariants[0];
-    assert!(matches!(&inv.body, Expr::Le(_, _)));
+    assert!(matches!(
+        &inv.body,
+        Expr::Compare {
+            op: CompareOp::Le,
+            domain: OrderedDomain::Decimal,
+            ..
+        }
+    ));
 }
 
 #[test]

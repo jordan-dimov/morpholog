@@ -376,14 +376,7 @@ fn expr_exceeds_depth(expr: &Expr, budget: usize) -> bool {
         }
         Expr::Implies { left, right }
         | Expr::Eq(left, right)
-        | Expr::Le(left, right)
-        | Expr::Lt(left, right)
-        | Expr::Ge(left, right)
-        | Expr::Gt(left, right)
-        | Expr::DateLe(left, right)
-        | Expr::DateLt(left, right)
-        | Expr::DateGe(left, right)
-        | Expr::DateGt(left, right)
+        | Expr::Compare { left, right, .. }
         | Expr::Sub(left, right)
         | Expr::Add(left, right) => {
             expr_exceeds_depth(left, budget) || expr_exceeds_depth(right, budget)

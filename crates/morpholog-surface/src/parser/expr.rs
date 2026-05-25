@@ -7,7 +7,19 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Expr, Term, Value};
+use morpholog_core::{CompareOp, Expr, OrderedDomain, Term, Value};
+
+/// Build an `Expr::Compare` from a factored operator and domain. The
+/// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
+/// factored shape here; the inverse mapping is `format::compare_token`.
+fn compare(op: CompareOp, domain: OrderedDomain, lhs: Expr, rhs: Expr) -> Expr {
+    Expr::Compare {
+        op,
+        domain,
+        left: Box::new(lhs),
+        right: Box::new(rhs),
+    }
+}
 
 use crate::diagnostics::Diagnostic;
 use crate::lexer::{Token, lex, token_stream};
@@ -232,15 +244,15 @@ where
         //
         // Surface forms and their IR lowering:
         //   - `=` -> Expr::Eq(Expr, Expr)
-        //   - `<=` -> Expr::Le(Expr, Expr)   (decimal)
-        //   - `on_or_before` -> Expr::DateLe(Expr, Expr)   (civil date)
+        //   - `<=` -> Expr::Compare { Le, Decimal, .. }
+        //   - `on_or_before` -> Expr::Compare { Le, Date, .. }
         //   - `!=` -> Expr::Neq(Term, Term)  - both sides must be Terms
         //   - `in` -> Expr::In(Term, Term)  - both sides must be Terms
         //
         // `<=` and `on_or_before` are distinct surface forms because the
-        // kernel keeps `Expr::Le` and `Expr::DateLe` as separate IR
-        // primitives; the surface refuses to overload `<=` by operand
-        // kind.
+        // comparison's domain is carried explicitly in `Expr::Compare`;
+        // the surface picks it by keyword rather than overloading one
+        // operator by operand kind.
         //
         // For `!=` and `in` we accept any Expr on either side, then
         // require a bare `Expr::Term(t)`, emitting a clean diagnostic
@@ -271,14 +283,14 @@ where
             match rhs_opt {
                 None => lhs,
                 Some((CmpOp::Eq, rhs)) => Expr::Eq(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::Le, rhs)) => Expr::Le(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::Lt, rhs)) => Expr::Lt(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::Ge, rhs)) => Expr::Ge(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::Gt, rhs)) => Expr::Gt(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::DateLe, rhs)) => Expr::DateLe(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::DateLt, rhs)) => Expr::DateLt(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::DateGe, rhs)) => Expr::DateGe(Box::new(lhs), Box::new(rhs)),
-                Some((CmpOp::DateGt, rhs)) => Expr::DateGt(Box::new(lhs), Box::new(rhs)),
+                Some((CmpOp::Le, rhs)) => compare(CompareOp::Le, OrderedDomain::Decimal, lhs, rhs),
+                Some((CmpOp::Lt, rhs)) => compare(CompareOp::Lt, OrderedDomain::Decimal, lhs, rhs),
+                Some((CmpOp::Ge, rhs)) => compare(CompareOp::Ge, OrderedDomain::Decimal, lhs, rhs),
+                Some((CmpOp::Gt, rhs)) => compare(CompareOp::Gt, OrderedDomain::Decimal, lhs, rhs),
+                Some((CmpOp::DateLe, rhs)) => compare(CompareOp::Le, OrderedDomain::Date, lhs, rhs),
+                Some((CmpOp::DateLt, rhs)) => compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs),
+                Some((CmpOp::DateGe, rhs)) => compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs),
+                Some((CmpOp::DateGt, rhs)) => compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs),
                 Some((CmpOp::Neq, rhs)) => {
                     let span: SimpleSpan = e.span();
                     let lhs_term = expr_as_term(&lhs);
@@ -520,17 +532,18 @@ where
 enum CmpOp {
     Eq,
     Neq,
-    /// Decimal comparators (`<=` `<` `>=` `>`) -> `Expr::Le`/`Lt`/`Ge`/
-    /// `Gt`. Operands must be `EvalValue::Decimal` (checked at runtime).
+    /// Decimal comparators (`<=` `<` `>=` `>`) -> `Expr::Compare` with the
+    /// `Decimal` domain. Operands must be `EvalValue::Decimal` (checked at
+    /// runtime).
     Le,
     Lt,
     Ge,
     Gt,
     /// Civil-date comparators (`on_or_before` `before` `on_or_after`
-    /// `after`) -> `Expr::DateLe`/`DateLt`/`DateGe`/`DateGt`. Operands
-    /// must be `EvalValue::Date` (checked at runtime). `before` and
-    /// `after` are matched contextually (in comparator position only),
-    /// so they remain usable as ordinary variable names elsewhere.
+    /// `after`) -> `Expr::Compare` with the `Date` domain. Operands must
+    /// be `EvalValue::Date` (checked at runtime). `before` and `after`
+    /// are matched contextually (in comparator position only), so they
+    /// remain usable as ordinary variable names elsewhere.
     DateLe,
     DateLt,
     DateGe,

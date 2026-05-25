@@ -26,7 +26,20 @@
 //! - `actor()` and `wildcard()` are nullary constructors for
 //!   `Term::Actor` and `Term::Wildcard`.
 
-use crate::{ArgDecl, Claim, Expr, Intent, PredicateArgKind, PredicateDecl, Stmt, Term, Value};
+use crate::{
+    ArgDecl, Claim, CompareOp, Expr, Intent, OrderedDomain, PredicateArgKind, PredicateDecl, Stmt,
+    Term, Value,
+};
+
+/// Build an [`Expr::Compare`] for the comparator constructors below.
+fn compare(op: CompareOp, domain: OrderedDomain, lhs: Expr, rhs: Expr) -> Expr {
+    Expr::Compare {
+        op,
+        domain,
+        left: Box::new(lhs),
+        right: Box::new(rhs),
+    }
+}
 
 // ============================================================
 // Term constructors
@@ -153,35 +166,35 @@ pub fn neq(t1: Term, t2: Term) -> Expr {
 }
 
 pub fn le(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Le(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Le, OrderedDomain::Decimal, lhs, rhs)
 }
 
 pub fn lt(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Lt(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Lt, OrderedDomain::Decimal, lhs, rhs)
 }
 
 pub fn ge(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Ge(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Ge, OrderedDomain::Decimal, lhs, rhs)
 }
 
 pub fn gt(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Gt(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Gt, OrderedDomain::Decimal, lhs, rhs)
 }
 
 pub fn date_le(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::DateLe(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Le, OrderedDomain::Date, lhs, rhs)
 }
 
 pub fn date_lt(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::DateLt(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs)
 }
 
 pub fn date_ge(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::DateGe(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs)
 }
 
 pub fn date_gt(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::DateGt(Box::new(lhs), Box::new(rhs))
+    compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs)
 }
 
 pub fn sub(lhs: Expr, rhs: Expr) -> Expr {

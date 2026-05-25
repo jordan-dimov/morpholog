@@ -18,8 +18,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{
-    ArgDecl, Claim, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
-    PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, ValidationError, Value,
+    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation,
+    ValidationError, Value,
 };
 use proptest::prelude::*;
 
@@ -91,9 +92,18 @@ fn arb_expr() -> impl Strategy<Value = Expr> {
                 right: Box::new(r),
             }),
             (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Eq(Box::new(l), Box::new(r))),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Le(Box::new(l), Box::new(r))),
-            (inner.clone(), inner.clone())
-                .prop_map(|(l, r)| Expr::DateLe(Box::new(l), Box::new(r))),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Compare {
+                op: CompareOp::Le,
+                domain: OrderedDomain::Decimal,
+                left: Box::new(l),
+                right: Box::new(r),
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Compare {
+                op: CompareOp::Le,
+                domain: OrderedDomain::Date,
+                left: Box::new(l),
+                right: Box::new(r),
+            }),
             (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Add(Box::new(l), Box::new(r))),
             (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Sub(Box::new(l), Box::new(r))),
             (arb_var_name(), inner.clone()).prop_map(|(binding, body)| Expr::Exists {
@@ -275,7 +285,12 @@ fn nest_expr(node: usize, depth: usize, leaf: Expr) -> Expr {
                 value: Term::Wildcard,
                 body: Box::new(e),
             },
-            7 => Expr::Le(Box::new(e), filler()),
+            7 => Expr::Compare {
+                op: CompareOp::Le,
+                domain: OrderedDomain::Decimal,
+                left: Box::new(e),
+                right: filler(),
+            },
             8 => Expr::Forall {
                 binding: "x".to_string(),
                 source: filler(),

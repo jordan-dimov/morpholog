@@ -54,14 +54,9 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
             predicates_referenced_by_expr(e, out);
         }
         Expr::Eq(l, r)
-        | Expr::Le(l, r)
-        | Expr::Lt(l, r)
-        | Expr::Ge(l, r)
-        | Expr::Gt(l, r)
-        | Expr::DateLe(l, r)
-        | Expr::DateLt(l, r)
-        | Expr::DateGe(l, r)
-        | Expr::DateGt(l, r)
+        | Expr::Compare {
+            left: l, right: r, ..
+        }
         | Expr::Sub(l, r)
         | Expr::Add(l, r) => {
             predicates_referenced_by_expr(l, out);
