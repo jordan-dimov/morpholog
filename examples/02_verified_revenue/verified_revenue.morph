@@ -168,7 +168,7 @@ transformation grant_standing(
 ):
     require IndependentlyVerifiedRevenue(_, _, _, verification_id)
     require CurrentVerification(_, _, verification_id)
-    require not StandingRevoked(verification_id, purpose, _)
+    require not (exists r: StandingRevoked(verification_id, purpose, r))
     require not AdmissibleFor(verification_id, purpose)
     admit StandingGrantedBy(verification_id, purpose, authority, grant_id)
     admit AdmissibleFor(verification_id, purpose)
