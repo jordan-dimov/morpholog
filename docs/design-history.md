@@ -154,146 +154,62 @@ The arc is complete for v0: every worked example parses end-to-end. `morpholog r
 
 ## After the parser arc
 
-Recent moves, kept at fuller detail.
+Post-parser kernel and tooling moves. Compressed to Forced-by/Landed stubs once they settled into history (the per-PR detail and the considered-and-rejected alternatives live in git); the recent legibility arc, from the explanation engine on, is kept at fuller detail while that work is active.
 
 ### `Expr::Or` predicate-shaped disjunction
 
-**Forced ahead of an example.** Second ahead-of-example deviation in the codebase, after [`Transition.actor`](#transition-value-object-and-auditactor). The chess transition-invariants example landed in the next PR uses `Or` for `SingleCapturePerMove` (`after = before or after = before - 1`); landing it standalone kept that PR's design conversation focused on `Pre`. Independent rationale: every other predicate-shaped composer (`And`, `Not`, `Implies`, `Exists`, `Forall`) is first-class. De Morgan's `not (not A and not B)` works but punishes the natural surface form for a minimalism that was never the point.
+**Forced by:** chess `SingleCapturePerMove` (`after = before or after = before - 1`); landed a PR ahead of chess to keep that PR focused on `Pre`. Independent rationale: every other predicate-shaped composer was already first-class, and De Morgan's `not (not A and not B)` punishes the natural surface form.
 
-**Landed:** `Expr::Or(Vec<Expr>)` mirroring `Expr::And`'s flattened shape. `find_disjunction` concatenates each branch's binding extensions, no deduplication (matches `find_conjunction`'s convention). Surface keyword `or` between `and` and `implies` (standard precedence). `find_failing_subexpr` returns `None` for `Or` - when a disjunction fails, every branch failed; picking one to blame would mislead.
+**Landed:** `Expr::Or(Vec<Expr>)` mirroring `And`'s flattened shape; `find_disjunction` concatenates branch bindings (no dedup, matching `find_conjunction`); surface `or` at standard precedence. `find_failing_subexpr` returns `None` for `Or` - when a disjunction fails every branch failed, so blaming one would mislead.
 
 
 ### `Expr::Pre` transition-invariant primitive
 
-**Forced by:** the chess transition-invariants example, after Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post. State invariants (over one state) and transition invariants (over a pre/post pair) are distinct kinds; the kernel could only express the first. "MoveCount advanced by one" or "PieceCount fell by zero or one" needs both states.
+**Forced by:** the chess transition-invariants example (after Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post). State invariants (over one state) and transition invariants (over a pre/post pair) are distinct kinds; "MoveCount advanced by one" needs both states. Chess was chosen over a business retrofit because no existing example had admitted operational state to compare across the transition.
 
-Chess was chosen as forcing example over a business retrofit: the ledger has no admitted balance predicate (only the `TrialBalanceRow` derived claim, which invariants can't see); a per-journal conservation rule would duplicate `balanced_posted_entry`; a clean retrofit needed admitted operational state, which is its own design move. Insurance retrofit followed in the next PR.
-
-**Landed:** `Expr::Pre(Box<Expr>)` - a wrapper that opts a subtree into pre-state evaluation; the default outside remains the candidate state. Chosen over TLA+'s primed-variable style because Morpholog has only one state at a time by design; the wrapper inverts that: post is default, pre is opt-in. Three knock-on benefits: zero migration (existing invariants unchanged), composes with `Sum` / `ValueOf` / quantifiers without IR surgery on them, and preserves the deliberate non-commutativity of `pre(forall ...)` vs `forall ... pre(...)`.
-
-`EvalError::PreStateUnavailable` is the diagnostic when `Pre` is reached without a pre-state in scope (derived-claim body, transformation `require`, standalone evaluator call, inner of nested `pre`). Phrased about evaluation context rather than AST position so future contexts that carry both states (transformation postconditions, trace assertions) can share the primitive without IR change. No new invariant kind in the IR - state vs transition is descriptive, derivable from the body.
-
-**Considered and rejected:** an `EvalContext` struct refactor before adding `Pre`. ChatGPT pushed for it; rejected on subtraction grounds (one new context value is three away from the abstraction earning itself). The next PR added a second contextual arg and the refactor became honestly forced.
+**Landed:** `Expr::Pre(Box<Expr>)` - a wrapper opting a subtree into pre-state evaluation; post stays the default, pre is opt-in (the inverse of TLA+ priming, because Morpholog has one state at a time by design). Zero migration, composes with `Sum`/`ValueOf`/quantifiers, and preserves the non-commutativity of `pre(forall ...)` vs `forall ... pre(...)`. `EvalError::PreStateUnavailable` when `Pre` is reached with no pre-state in scope; phrased about evaluation context, not AST position, so future both-state contexts share it. The deferred `EvalContext` refactor was rejected here on subtraction grounds and landed one PR later, once a second contextual arg forced it.
 
 
 ### Insurance retrofit: `PolicyHeadroom` conservation via `pre(...)`
 
-**Forced by:** closing the loop on the `Expr::Pre` PR's deferred business case. Insurance was chosen over ledger (ChatGPT's call): the example already lives around aggregate-cap discipline, `Policy` is a natural sibling to a new operational counter, and the ledger retrofit would need a wider remodel.
+**Forced by:** closing the `Expr::Pre` PR's deferred business case with a real conservation rule. Insurance was chosen over the ledger because it already lives around aggregate-cap discipline and the ledger retrofit would need a wider remodel.
 
-**Landed:** new admitted predicate `PolicyHeadroom(policy_id, remaining)` paired with `at_most_one_headroom_per_policy` for structural uniqueness and `paid_implies_headroom` for existence (the latter added in response to Copilot's review - the conservation invariant's pre/post guard is vacuously true when no headroom claim exists for a policy). `issue_policy` admits initial headroom = aggregate_limit alongside `Policy`. `authorise_settlement` reads current headroom via `bind_one`, retracts it, and asserts the decremented one; the existing aggregate-limit `require` is kept (admission gate, distinct role from conservation).
-
-Transition invariant `headroom_consumed_by_payment`: per-policy delta conservation, `after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))`. An earlier per-row draft (`after = before - amt`, one binding tuple per new payment) was caught as too weak in ChatGPT's review: a multi-payment transition admitting two same-amount settlements while decrementing headroom once would pass each per-row equation while consuming twice the headroom it credits. The sum form catches that and the rest of the delta-conservation bug family.
-
-**`EvalContext` evaluator refactor (bundled, first commit).** With `Pre` landed the evaluator had two contextual args (`pre_state`, `actor`) plus state and bindings; `find_matches` carried five parameters. `EvalContext<'a> { state, pre_state, bindings, actor }` with `with_bindings` and `enter_pre` helpers collapses recursive call shape and folds the "enter a Pre subtree" pattern into one method. No behaviour change; preserved across sync and PG test surfaces.
-
-**What stays out:**
-
-- A `PolicyHeadroom(p, r) implies r >= 0` state invariant. Not added; the existing require's admission gate plus the conservation invariant cover the business case. Would land if a worked example forces a non-require path to headroom mutation.
-- A retrofit onto the ledger. The structural reshape would be wider; deferred until a worked example actively needs it.
+**Landed:** admitted `PolicyHeadroom(policy_id, remaining)` with `at_most_one_headroom_per_policy` (uniqueness) and `paid_implies_headroom` (existence, so the conservation guard is not vacuous); `authorise_settlement` reads headroom via `bind_one`, retracts it, and asserts the decremented one. Transition invariant `headroom_consumed_by_payment` uses the sum-of-new-payments delta form - `after = before - sum(amt | SettlementPaid(...) and not pre(SettlementPaid(...)))` - not a per-row equation: the per-row draft passed each row while a multi-payment transition with two same-amount settlements consumed headroom twice (caught in review). Bundled the `EvalContext { state, pre_state, bindings, actor }` evaluator refactor, now honestly forced by `Pre`'s second contextual arg.
 
 
 ### Enriched `morpholog check`: kind/type compatibility
 
-**Forced by:** the input/output boundary work shifted the leverage. With non-Rust integrators able to hand Morpholog a `.morph` file and get a deterministic outcome back, authoring trustworthiness became the bottleneck. Decimal-in-Subject-slot, `<=` against a date, arithmetic on a subject literal, `Eq` between incompatible kinds - all only surfaced at runtime as `EvalError::TypeMismatch`.
+**Forced by:** the input/output boundary made authoring trustworthiness the bottleneck. Decimal-in-subject-slot, `<=` against a date, arithmetic on a subject literal all only surfaced at runtime as `EvalError::TypeMismatch`.
 
-**Landed:** `morpholog_core::kindcheck` module; `validate_program` now merges its output with the structural pass into a single `Vec<ValidationError>`. Four new variants (`PredicateArgKindMismatch`, `OperandKindMismatch`, `VariableKindConflict`, `ExpectedValueExpression`) share the existing CLI emission path. Inference: `InferredKind { UnknownOrAny, Known(PredicateArgKind) }` with refine-on-observation. `Any` stays unconstrained (a variable seen first through `Any` refines on its next concrete use); the alternative ("`Any` everywhere lets later uses slip through") was rejected for losing the most valuable refinement pattern.
-
-The walker mirrors the runtime quartet: `Require` against a cloned env (no export), `BindOne`/`Let` against the live env. `Sum`, `Forall`, `Exists` shadow their binding via `KindEnv::with_shadow` so the loop-local name cannot collide with an outer variable of the same name; refinements to *other* variables in the body leak through normally. Without that fidelity the kind checker would either reject correct shadowing or pass programmes the runtime rejects.
-
-**Considered and rejected:**
-
-- A symmetric `ExpectedPredicateExpression` variant for value-shaped-at-predicate-position. Deferred without a forcing example; the runtime still catches it as `NotPredicate`, and Layer 2 (unbound-variable detection) is the natural home.
-- Bundling Sum/ValueOf with comparators. Sum's binding-flow story is its own slice.
-- A `--strict` flag for hint-grade output (unused declarations, sum-binding-not-in-body, fuzzy suggestions). That is Layer 4; Layer 1's job is the runtime-error mirror, no more.
-
-**What stays out:**
-
-- Source spans on `ValidationError`. The IR drops parser spans on lowering; threading them through is its own design conversation.
-- Element-kind correlation for `Collection`-typed variables. The current `In` check pins the source side to `Collection` but does not yet propagate element kinds to body bindings.
+**Landed:** `morpholog_core::kindcheck`, merged with the structural pass into one `Vec<ValidationError>`. Kind inference refines on observation (`Any` stays unconstrained until a concrete use - the "`Any` everywhere" alternative was rejected for losing the most valuable refinement pattern). The walker mirrors the runtime quartet (`Require` against a cloned env, `BindOne`/`Let` against the live one) and shadows `Sum`/`Forall`/`Exists` binders via `KindEnv::with_shadow` so a loop-local cannot collide with an outer variable, without which it would reject correct shadowing or pass programmes the runtime rejects.
 
 
 ### `IntentDecl`: outbox vocabulary as a declared first-class kind
 
-**Forced by:** the KYC sanctions/PEP screening example, where every interesting moment fires an intent to a distinct downstream consumer - `ScreeningRequested` to the external provider, `MatchRaised` to the analyst queue, `CustomerOnboarded` to core banking, `CustomerRejected` to compliance reporting. Misspelling any of those is a real failure mode: a mistyped `SARFiled` would silently route to nowhere, no analyst would ever see it, and the regulatory breach is invisible until a downstream auditor notices the gap. Predicates already had `PredicateDecl`; intents were still stringly-typed, and the kindcheck layer skipped `Stmt::Emit` entirely.
+**Forced by:** the KYC example, where a mistyped `emit SARFiled(...)` would silently route to nowhere - no analyst sees it, and the regulatory breach is invisible until a downstream auditor notices the gap. Predicates had `PredicateDecl`; intents were still stringly-typed and kindcheck skipped `Stmt::Emit`.
 
-**Landed:** `IntentDecl { name, args: Vec<ArgDecl> }` mirroring `PredicateDecl`; `Program.intents: Vec<IntentDecl>`; parser surface `intent X(args)`; formatter round-trip; structural validation (undeclared / arity / duplicates) tagged via the new `VocabularyKind { Predicate, Intent }` enum; kindcheck wiring for `Stmt::Emit` that calls the same arg-kind checker as `Stmt::Assert` but against the intent vocabulary. Strict from day one: every `emit X(args)` must target a declared intent. Every pre-existing worked example gained intent declarations.
-
-The `VocabularyKind` enum was the foundational move. Predicates and intents share the same diagnostic shapes - undeclared reference, arity mismatch, duplicate declaration, arg-kind mismatch - so rather than parallel intent-specific variants, the existing predicate variants were renamed (e.g. `UndeclaredPredicate` -> `Undeclared { vocabulary, name, context }`) and parameterised. The two vocabularies share those diagnostics today; a third declared vocabulary would slot in without further renaming. `PredicateArgDecl` was simultaneously renamed to `ArgDecl` since the struct is structurally generic - the "Predicate" prefix would read as wrong the moment `IntentDecl` reused it.
-
-**Considered and rejected:**
-
-- *Reusing the predicate namespace for intent shapes.* Predicates describe admitted claim vocabulary; intents describe outbox-effect vocabulary. Both pass through the same kindcheck mechanics but the distinction is load-bearing in the audit trail.
-- *Four new intent-specific error variants.* Larger surface for the same diagnostic shape.
-- *Optional / opt-in IntentDecl for v0.* Lower migration cost short-term, but the whole point of the layer is that misspellings fail validation.
-
-**What stays out:**
-
-- An `inspect intents` CLI subcommand mirroring `inspect predicates`. Useful but not load-bearing; deferred until the legibility tooling work picks it up alongside the other inspectors.
+**Landed:** `IntentDecl` mirroring `PredicateDecl`; `Program.intents`; surface `intent X(args)`; strict from day one (every `emit` targets a declared intent). The foundational move was the `VocabularyKind { Predicate, Intent }` enum: the two vocabularies share every diagnostic shape, so the predicate-specific error variants were generalised (`UndeclaredPredicate` -> `Undeclared { vocabulary, name, context }`) rather than duplicated, and `PredicateArgDecl` became `ArgDecl`. A third declared vocabulary would slot in without further renaming.
 
 
 ### Static-analysis pass: one visitor, binding flow, actor context, and a depth floor
 
-**Forced by:** the kind/type-compatibility check had landed as a second walker bolted next to the structural pass, and the checks due next - unbound variables, the value/predicate shape mirror, actor-in-wrong-context - all needed the same traversal and the same notion of "what is in scope here". Running them as separate walks would mean re-deriving binding scope each time and drifting from the runtime's binding rules each time. The forcing function was honest: the moment a second binding-aware check came due, the two-walker shape stopped paying.
+**Forced by:** the kind check had landed as a second walker beside the structural pass, and the next checks (unbound variables, value/predicate shape, actor context) all needed the same traversal and scope notion. A second binding-aware check made the two-walker shape stop paying - separate walks would each re-derive scope and drift from the runtime's binding rules.
 
-**Landed:** the `kindcheck` module became `check`, and `validate_program` is now a duplicate-declaration pass plus a single `check_program` traversal - the structural, kind, binding-flow, shape, and actor-context checks all ride one walk over each body. The visitor (`CheckCtx`) carries the declared vocabularies and accumulates errors; a `Scope { kinds: KindEnv, bound: BoundEnv }` threads kind inference and runtime-binding state together, cloned at the same boundaries (`require`, `sum`, `for`, `or`-branches) so the quartet's non-export rules fall out of the structure rather than from special-casing.
-
-Unbound-variable detection (`UnboundVariable`) follows the evaluator exactly, which is where the subtlety lived. Two rules had to match `find_conjunction`/`find_disjunction` precisely or they would reject correct programmes:
-
-- A disjunction exports only the *intersection* of names its branches bind. The runtime threads each conjunct's witness into the next, so after an `or` a name is guaranteed bound only if every branch bound it. The KYC `(clean or adjudicated_clear) and (on_date on_or_before expires)` invariant relies on this: both branches bind `expires`, so it reaches the comparator. A "branches export nothing" rule flagged it; a "first branch exports" rule would pass programmes the runtime rejects.
-- `in` is a generator, not a use. `sum(x | line in lines and LineAmount(line, x))` leaves `line` unbound at the `in`, and the runtime binds it to each item; treating the element as a use flagged the settlement-netting example.
-
-Both were caught by running the check over every worked example as the regression gate - a false positive there breaks `program.validate()` on real `.morph` source, so "zero example regressions" was the bar, above the unit tests.
-
-`ExpectedPredicateExpression` landed here too, where the kind-compatibility entry predicted it would: the mirror of `ExpectedValueExpression`, reusing the same `short_expr_shape` label, flagging a value-producing expression at a predicate position before the kernel raises `NotPredicate`. Actor-in-wrong-context (`ActorNotAvailable`) flags `Term::Actor` in an invariant or derived-claim body - the static face of `EvalError::UnboundActor`.
-
-Separately, `Program::validate` gained a nesting-depth floor (`NestingTooDeep`). The recursive evaluator and the check walk both descend one stack frame per nesting level, so a pathologically deep body - a long `not not ...` chain, deeply nested `for`s - could exhaust the stack during `propose`. The guard runs first and short-circuits, because the walk it protects is itself recursive; its own depth measure spends a fixed budget and bails the instant it runs out, so it cannot overflow on the input it exists to reject. This is the enforceable form of "validate untrusted IR before proposing it": `propose` does no programme-level check of its own and trusts the IR it is handed.
-
-On the persistence side, the duplicate-intent collision - one transformation emitting the same intent twice, colliding on the deterministic outbox idempotency key - is now `PgError::DuplicateIntent` rather than an opaque `PgError::Database`, so a caller can tell a modelling bug from a transient database error without string-matching.
-
-**Considered and rejected:**
-
-- *Keeping the two-walker shape and adding more walkers.* Each binding-aware check would re-derive scope and risk its own drift from the runtime. One traversal over one scope was the subtraction.
-- *Populating `BoundEnv` during the unification commit, before unbound-variable detection forced it.* The unification was proved to preserve behaviour first; the bound-env field was added only when the next layer forced it.
-- *A parser-side input-depth guard in the same change.* The `propose` path commits state and is the documented untrusted-IR contract, and it is now covered; the `.morph` parser is a weaker threat in v0 (you author your own files), and chumsky exposes no recursion-depth hook, so the guard would be a grammar-coupled heuristic. Deferred.
-- *An allowlist over the bench's SQL.* On review every bench statement is a static query string with bound parameters and bounds-checked integer conversions - no dynamic SQL to harden, and an allowlist would have been structure without a problem.
-
-**What stays out:**
-
-- `--strict` lint-grade hints (unused declarations, `sum(x | body)` with `x` absent from `body`, fuzzy "did you mean?" suggestions). The remaining check layer; this work's job was the runtime-error mirror.
-- Source spans on diagnostics. Unchanged: the IR still drops parser spans on lowering.
+**Landed:** `kindcheck` became `check`; `validate_program` is now a duplicate-declaration pass plus one `check_program` traversal carrying a `Scope { kinds, bound }`, cloned at the quartet's boundaries (`require`, `sum`, `for`, `or`-branches) so the non-export rules fall out of structure. Unbound-variable detection follows the evaluator exactly, where the subtlety lived: a disjunction exports only the *intersection* of names its branches bind (the KYC `(clean or adjudicated_clear) and ... expires` invariant relies on it), and `in` is a generator not a use - both caught by running the check over every worked example as the regression gate. Added `ExpectedPredicateExpression`, actor-in-wrong-context (`ActorNotAvailable`), a nesting-depth floor (`NestingTooDeep` - the enforceable form of "validate untrusted IR before proposing it", since `propose` trusts the IR it is handed), and `PgError::DuplicateIntent` to separate a modelling bug from a transient DB error.
 
 
 ### Counting via a constant `sum` target (and dropping `Sum.binding`)
 
-**Forced by:** the chess example wanted to count - "how many pieces are on the board?", "how many kings does white have?" - and nothing in the kernel could express it. The doctrine had already flagged the relaxation (`sum`'s target was "restricted to a variable in v0; relax when a worked example forces it"); a material census was that example.
+**Forced by:** the chess example wanted to count pieces, and nothing in the kernel could express it. The doctrine had already flagged relaxing `sum`'s variable-only target when an example forced it.
 
-**Landed:** the surface `sum` target now accepts a decimal literal as well as a variable, so `sum(1 | body)` counts the bindings the body produces. The evaluator already resolved the target term once per match, so a literal target sums 1 each time - counting needed no evaluator change, only a parser relaxation and a formatter that renders the target from the term. Chess gained `piece_count_matches_board` (the hand-kept `PieceCount` must equal `sum(1 | PieceAt(...))`, so the counter can never drift from the board), `exactly_one_white_king` / `exactly_one_black_king` (count `= 1`, which forbids capturing a king - strictly stronger than the at-most-one rule it replaced), and an at-most-eight-pawns-per-colour bound. So chess now forces counting in addition to `Expr::Or` and `Expr::Pre`.
-
-The same change retired `Expr::Sum`'s `binding` field. It duplicated the target variable's name, the evaluator ignored it, and the formatter carried an `assert!(value == Var(binding))` with a "cannot round-trip" caveat. Once the formatter rendered the target from `value`, `binding` was vestigial - a loose end the counting work exposed and removed.
-
-**Considered and rejected:**
-
-- *A dedicated `Expr::Count` primitive.* Redundant with `sum(1 | body)`; the doctrine's anticipated move was to relax `sum`, not add a sibling that does the same arithmetic.
-
-**What stays out:**
-
-- A general expression as a `sum` target (`sum(debit - credit | ...)`). The IR's `value: Term` holds only a term; an expression target awaits an example that needs it.
+**Landed:** the `sum` target now accepts a decimal literal, so `sum(1 | body)` counts bindings - no evaluator change (the target was already resolved per match), only a parser relaxation and a formatter that renders the target from the term. Chess gained `piece_count_matches_board`, exact-one-king per colour (count `= 1`, which forbids capturing a king), and a pawn bound. The same change retired the vestigial `Expr::Sum.binding` field, which duplicated the target name and was ignored by the evaluator. A dedicated `Expr::Count` was rejected as redundant with `sum(1 | body)`.
 
 
 ### The full comparator set per kind
 
-**Forced by:** ergonomics, not a worked example - the deliberate exception to "forced by example". The kernel had one comparator per kind (`Le` decimal, `DateLe` civil date) on the theory that the strict forms are derivable (`a > b` is `not (a <= b)`; `a >= b` is `b <= a`), so they were "sugar, not capability". That reasoning was wrong, for a reason the derivation hides: the kernel has no `>` to render, so the formatter would print `amount > limit` back as `not (amount <= limit)` everywhere it shows a programme - `parse`, `inspect`, diagnostics. Derivability buys nothing for *legibility*, and legibility for the auditor reading the formatted output is a core value. `not (a <= b)` is the third design principle's "the easy case is verbose, so the shape is wrong" smell.
+**Forced by:** legibility, not a worked example - the deliberate exception. The strict forms are derivable (`a > b` is `not(a <= b)`), but the kernel has no `>` to render, so the formatter would print `amount > limit` back as `not (amount <= limit)` everywhere it shows a programme. Derivability buys nothing for legibility, which for the auditor reading formatted output is a core value - the third principle's "the easy case is verbose, so the shape is wrong" smell.
 
-**Landed:** `Expr::Lt`/`Ge`/`Gt` (decimal, surface `<` `>=` `>`) and `Expr::DateLt`/`DateGe`/`DateGt` (civil date, surface `before` `on_or_after` `after`), each first-class so it renders and round-trips as written. The evaluator's two duplicated comparator arms became `decimal_comparison`/`date_comparison` helpers parameterised by an `admit` closure - the abstraction the fourth-through-eighth case finally forced. `before` and `after` are matched contextually in comparator position rather than reserved as keywords, because the chess and insurance examples already use `before`/`after` as variable names; reserving such common words would be its own ergonomic tax.
-
-**Considered and rejected:**
-
-- *Surface sugar that desugars `>` to `not(<=)`.* Smallest change, but it loses the legibility that is the entire point: the formatter would un-write the user's `>`. First-class variants are what make the surface form survive a round-trip.
-- *Reserving `before`/`after` as keywords.* Would have forced renames in existing examples and blocked two common variable names for everyone. Contextual matching avoids the tax.
-
-**What stays out:**
-
-- Date arithmetic and intervals (adding a duration to a date, interval length). The comparator set is complete; arithmetic on dates awaits an example.
+**Landed:** `Expr::Lt`/`Ge`/`Gt` (decimal `<` `>=` `>`) and `DateLt`/`DateGe`/`DateGt` (civil `before` `on_or_after` `after`), each first-class so it round-trips as written. The two duplicated comparator arms became `decimal_comparison`/`date_comparison` helpers parameterised by an `admit` closure - the abstraction the fourth-through-eighth case finally forced. `before`/`after` are matched contextually rather than reserved, because existing examples use them as variable names.
 
 
 ### The explanation engine: rejection as read-side trace interpretation
