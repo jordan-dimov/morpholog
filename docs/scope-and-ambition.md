@@ -12,7 +12,7 @@ Everything else - UI, reporting, analytics, optimisation, market data ingestion,
 
 ## The constitution
 
-The product is four lines:
+The whole product:
 
 1. The world is a set of admitted **claims**.
 2. The only way claims change is through a **transformation**.
