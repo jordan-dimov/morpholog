@@ -359,3 +359,19 @@ The same change retired `Expr::Sum`'s `binding` field. It duplicated the target 
 **What stays out:**
 
 - Mutually-exclusive predicate *sets* derived from `implies`/`Neq`, transformation pre/post graphs, subject-flow profiles, and `generate controls` - the rest of the legibility set, each its own read when forced.
+
+
+### `morpholog explain`: the engine reachable from the command line
+
+**Forced by:** the explanation engine shipped as a library (`morpholog_core::explain`) with no way to ask the question from outside Rust. An operational checklist an auditor or controller reads needs a command, not an API the embedder calls.
+
+**Landed:** `morpholog explain <file.morph> <transformation> --args <json> --actor <subject>` - the read-only counterpart of `run`. Same parse/validate front-end and same `Transition` codec; but instead of proposing, it loads the predicate-scoped pre-state, runs the kernel in-memory via `explain`, and renders the `Explanation` as claim-shaped prose (default) or JSON (`--json`). A new public `morpholog_postgres::load_scoped_state` does the read - the sibling of the load inside `propose_against_pg`, same `compute_load_scope`, but a plain pooled read rather than a SERIALIZABLE transaction, because explaining is answering a question, not committing a decision. No kernel or IR change; the surface sits above the parser, like the static-analysis pass.
+
+**Considered and rejected:**
+
+- *Built-in registry as the program source (like `propose` and `inspect`).* The `.morph`-file shape (like `run`) lets an author explain their own model, not only the shipped examples - which is where the operational value is. The built-in path is already covered by the other legibility reads.
+- *Exiting non-zero on a rejection verdict (like `run` / `propose`).* That conflates an advisory read with an action. explain always exits zero: a rejection is a successful explanation, carried in the output. A script that wants the gate uses `run`.
+
+**What stays out:**
+
+- The rest of the legibility set (transformation pre/post graphs, subject-flow profiles, `generate controls`); and everything the engine itself defers (present blockers, comparator failures, abduction) - the CLI renders whatever the v0 engine produces, no more.

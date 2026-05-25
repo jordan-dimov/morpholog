@@ -653,6 +653,29 @@ pub async fn list_claims_for_predicates(
         .collect()
 }
 
+/// Load the current scoped pre-state a transformation would see, the
+/// read-only counterpart of the load inside [`propose_against_pg`].
+/// Scopes to exactly the predicates the transformation body reads and
+/// the invariants reference (see `compute_load_scope`); claims outside
+/// that scope cannot affect the verdict, so they are not fetched.
+///
+/// Unlike `propose_against_pg`, this issues a plain pooled read, not a
+/// SERIALIZABLE transaction: the caller is explaining what *would*
+/// happen, not committing a decision, so the right semantics is a
+/// point-in-time snapshot, not a serialization point.
+///
+/// Used by `morpholog explain` to run the kernel in-memory against live
+/// state without opening a write transaction.
+pub async fn load_scoped_state(
+    pool: &PgPool,
+    transformation: &Transformation,
+    invariants: &[Invariant],
+) -> Result<State, PgError> {
+    let scope = compute_load_scope(transformation, invariants);
+    let claims = list_claims_for_predicates(pool, &scope).await?;
+    Ok(State::from_claims(claims))
+}
+
 /// Return every committed audit row from `morpholog.audit`, ordered by
 /// `(committed_at, transition_id)`: causal commit order with the
 /// time-ordered UUIDv7 PRIMARY KEY as the stable tie-break.

@@ -16,7 +16,7 @@ use morpholog_examples::{
 };
 use morpholog_postgres::{
     PgProposalOutcome, PgTracedOutcome, compute_idempotency_key, list_audit_rows, list_claims,
-    list_derived, list_pending_outbox,
+    list_derived, list_pending_outbox, load_scoped_state,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -2200,5 +2200,43 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         usage_rows[0].args,
         vec![subj("policy_001"), dec(100_000)],
         "PolicyLimitUsage should show £100k consumed",
+    );
+}
+
+/// `load_scoped_state` - the read-only pre-state load behind `explain` -
+/// must apply the same predicate scope as `propose_against_pg`: claims a
+/// transformation could never read are not fetched, so an explanation
+/// runs the kernel against exactly the state a real proposal would see.
+#[tokio::test]
+async fn load_scoped_state_loads_only_in_scope_predicates() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    // One claim the netting transformation actually reads, and one of a
+    // predicate nothing in the programme references.
+    insert_pre_state(
+        &pool,
+        vec![
+            claim("ApprovedSettlementLine", vec![subj("l1")]),
+            claim("UnrelatedNoise", vec![subj("x")]),
+        ],
+    )
+    .await;
+
+    let state = load_scoped_state(
+        &pool,
+        &settlement_netting::create_net_settlement(),
+        &settlement_netting::all_invariants(),
+    )
+    .await
+    .expect("load_scoped_state should not error");
+
+    assert!(
+        common::has_claim(&state, "ApprovedSettlementLine", &[subj("l1")]),
+        "in-scope claim should be loaded"
+    );
+    assert!(
+        !common::has_claim(&state, "UnrelatedNoise", &[subj("x")]),
+        "out-of-scope claim must not be loaded"
     );
 }

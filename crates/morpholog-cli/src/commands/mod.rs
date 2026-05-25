@@ -19,6 +19,7 @@ use serde::Serialize;
 use std::path::Path;
 
 pub(crate) mod check;
+pub(crate) mod explain;
 pub(crate) mod inspect;
 pub(crate) mod outbox;
 pub(crate) mod parse;
