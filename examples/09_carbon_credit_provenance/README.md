@@ -30,6 +30,8 @@ See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the i
 | `Issued(credit, measurement, quantity)` | the credit's official standing, backed by one measurement |
 | `HeldBy(credit, account)` | current custody |
 | `Retired(credit, account)` | the credit has been cancelled - terminal |
+| `Obligation(obligation, account, quantity, due_on)` | the account must retire `quantity` tonnes by `due_on` |
+| `ObligationSatisfied(obligation)` / `ObligationBreached(obligation)` | the obligation's outcome |
 
 ### Invariants - what this model makes impossible
 
@@ -40,10 +42,12 @@ See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the i
 | `credit_backed_by_one_measurement` | one credit backed by two different measurements |
 | `single_custody` | one credit held by two accounts at once |
 | `retirement_terminal` | a credit that is both retired and still held |
+| `at_most_one_obligation_per_id` | one obligation id with two different sets of terms |
+| `obligation_not_both_satisfied_and_breached` | an obligation that is both satisfied and breached |
 
 ### Transformations
 
-`grant_accreditation` / `revoke_accreditation`, `verify_measurement`, `attest_measurement`, `issue_credit`, `transfer_credit`, `retire_credit`. The legitimacy gate lives in `issue_credit`: it binds the quantity from a verified measurement and requires both an attestation and a *currently* accredited verifier before any credit becomes official.
+`grant_accreditation` / `revoke_accreditation`, `verify_measurement`, `attest_measurement`, `issue_credit`, `transfer_credit`, `retire_credit`, plus `raise_obligation`, `discharge_obligation`, and `sweep_obligation`. The legitimacy gate lives in `issue_credit`: it binds the quantity from a verified measurement and requires both an attestation and a *currently* accredited verifier before any credit becomes official.
 
 ## What `explain` shows
 
@@ -60,6 +64,12 @@ Directly missing claims:
 ```
 
 The same engine distinguishes a missing `VerifiedMeasurement`, a missing `Attestation`, and a missing `Accredited` - each with its own supplier - while a double-issuance is reported as an invariant violation, and an attempt to transfer or re-retire a retired credit is a faithful gate rejection with nothing missing (the credit is blocked, not lacking evidence).
+
+## Obligations over time
+
+A compliance scheme can oblige an account to retire enough credits by a deadline: `raise_obligation(obligation, account, quantity, due_on)`. Retirement discharges it - `discharge_obligation(obligation, current_date)` admits `ObligationSatisfied(obligation)` when, *on or before the deadline*, the account's retired total (summed across the credits it has retired) reaches the target. Discharge is date-aware too: a late retirement cannot quietly satisfy a "by `due_on`" obligation.
+
+Morpholog keeps no clock. A deadline is about *now*, and "now" is known only outside the system - so neither discharge nor breach invents it: both take `current_date` from the outside scheduler. A breach is recorded when `sweep_obligation(obligation, current_date)` finds an obligation past the due date, not already decided, and still under target. This is the "Morpholog plus an Outside Coordinator" pattern: the kernel decides admissibility; the coordinator supplies the passage of time. The `obligation_not_both_satisfied_and_breached` invariant guarantees the two outcomes can never coexist, in whatever order things happen.
 
 ## How to run it
 
@@ -83,4 +93,4 @@ Provenance is modelled as ordinary **claims about claims** - `VerifiedMeasuremen
 
 This example models one credit as backed by one measurement. Real registries may split a project period into many units or batches. We keep one-credit-per-measurement here so the legitimacy mechanics stay visible: `no_double_issuance` refuses two credits backed by the same measurement, and `credit_backed_by_one_measurement` refuses one credit backed by two - together pinning the credit-to-measurement correspondence one to one, so double-counting is impossible in either direction. Conservation across a batch (total issued against a measured quantity) is a later extension, not a change to the legitimacy story.
 
-Obligations over time (an entity must retire enough credits by a deadline) and a `morpholog inspect guarantees` view that lists what a model forbids are deferred to follow-up work; this example is the domain they will point at.
+A `morpholog inspect guarantees` view that lists what a model forbids is deferred to a follow-up; this example is the domain it will point at.
