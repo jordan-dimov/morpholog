@@ -4,7 +4,8 @@
 //! The contract being tested:
 //!
 //! ```text
-//! parse_program(format_program(parse_program(src))) == parse_program(src)
+//! let p = parse_program(src).unwrap();   // the source must parse first
+//! parse_program(&format_program(&p)) == Ok(p)
 //! ```
 //!
 //! This is the closing property test for the parser arc. It ties the
