@@ -10,7 +10,7 @@ In a conventional system you would write application code to check those rules, 
 
 ## The program
 
-See [`netting.morph`](netting.morph) for the (illustrative) surface syntax.
+See [`netting.morph`](netting.morph) for the surface syntax.
 
 Three invariants:
 

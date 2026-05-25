@@ -18,7 +18,7 @@ It does **not** govern the measurement. The MRV maths - generation x emission fa
 
 ## The program
 
-See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the illustrative surface syntax and a guided tour of the domain.
+See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the surface syntax and a guided tour of the domain.
 
 ### Claims
 

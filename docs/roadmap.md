@@ -68,15 +68,8 @@ Each lands when an example actually demands the shape. None are pre-decided.
 
 ## Deliberately out of scope (revisit only with explicit reason)
 
-Floors, not preferences. Reasons live in [`scope-and-ambition.md`](scope-and-ambition.md)'s "Non-goals" section.
+The doctrinal floors - no entities/classes/services/ORM, no workflow engine, no arbitrary computation inside transformations, no BI engine, no solver runtime, no ad-hoc query DSL, no bypass flags ever - all hold here; they and their reasons live in [`scope-and-ambition.md`](scope-and-ambition.md)'s Non-goals and are not re-listed. The deferrals specific to the operational plan:
 
-- No entities, classes, services, or ORM in the surface language. Subjects are opaque; predicates attach to subjects; that is the entire object model.
-- No general workflow engine. Lifecycle is conjunctions of admitted claims, eventually derived claims. Morpholog is not Camunda and must not grow toward it.
-- No arbitrary computation inside transformations. Pure expressions over admitted claims, plus assertions, retractions, intents.
-- No BI / analytics / reporting engine. Derived claims govern reproducible read-side outputs; everything else lives outside.
-- No optimisation / solver runtime. ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.
-- No ad-hoc query DSL beyond derived-claim queries and the as-of operator.
-- **No bypass flags ever** (`skip_validation`, `force_commit`). Exceptions are first-class typed claims with full audit standing.
 - No self-hosting. Morpholog governs business state; the compiler is Rust.
 - Tree-sitter / LSP grammars: the parser is the forcing pressure. Deferred until an authoring workflow puts real demand on them.
 

@@ -78,9 +78,18 @@ These are project rules, not style preferences:
 - **`#[forbid(unsafe_code)]`** at the workspace level. No exceptions.
 - **Decimal-first** for business values. Never `f64`/`f32` in financial arithmetic. The codebase uses `rust_decimal` and maps it to PostgreSQL `numeric`.
 - **UUIDs are always v7** and opaque to the surface language.
-- **Comments explain WHY, never WHAT.** The bar is "would removing this confuse a future reader?" - if not, delete it.
 - **ASCII-only dashes** in `.md`, `.rs`, and `.morph` files. Never em-dash (U+2014) or en-dash (U+2013). The precommit script enforces this. Em-dashes render unreliably across terminals and clutter `grep` / `diff`.
 - **No bypass flags ever.** Anything resembling `skip_validation`, `force_commit`, or `--no-verify`-style escape hatches is rejected at review. Exceptions are first-class typed claims with full audit standing.
+
+## Comments and prose
+
+Comments and docs earn their place by the same subtraction test as code. This is a review pass, not a gate: "chatty" and "self-documenting" are judgment calls, not lints, which is why they live here and not in `precommit.sh` - a comment-density check would only punish the thorough rustdoc the next point asks for.
+
+- **A comment explains WHY; the code already says WHAT.** Before writing one, reach for a better name, a smaller function, or a type that makes it unnecessary. If deleting the comment would not confuse a future reader, delete it.
+- **rustdoc is the exception** - precise and complete on every public item, since it is the API contract. The WHY-not-WHAT bar is for inline `//` comments, not `///` docs.
+- **One concept, one home.** Each doc has a single role (see [Reference](#reference)); explain a thing where it belongs and link to it rather than restating it - duplicated prose drifts out of sync.
+- **Audience prose evokes the why** (README, `docs/`, example READMEs): lead with the question Morpholog answers, not the feature list.
+- **History compresses as it ages.** `design-history.md` entries distil to Forced-by/Landed stubs once the work settles; git holds the per-PR detail.
 
 ## Adding code
 
