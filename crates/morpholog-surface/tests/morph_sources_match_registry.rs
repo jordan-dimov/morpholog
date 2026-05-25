@@ -147,6 +147,26 @@ fn describe_drift(parsed: &Program, registry: &Program) -> String {
                 .collect(),
             &mut lines,
         );
+        order(
+            "intents",
+            parsed.intents.iter().map(|i| i.name.as_str()).collect(),
+            registry.intents.iter().map(|i| i.name.as_str()).collect(),
+            &mut lines,
+        );
+        order(
+            "derived claims",
+            parsed
+                .derived_claims
+                .iter()
+                .map(|d| d.predicate.as_str())
+                .collect(),
+            registry
+                .derived_claims
+                .iter()
+                .map(|d| d.predicate.as_str())
+                .collect(),
+            &mut lines,
+        );
         for p in &registry.predicates {
             if parsed.predicates.iter().any(|x| x.name == p.name && x != p) {
                 lines.push(format!("  predicate `{}` declaration differs", p.name));
@@ -170,6 +190,29 @@ fn describe_drift(parsed: &Program, registry: &Program) -> String {
                 lines.push(format!("  transformation `{}` body differs", t.name));
             }
         }
+        for i in &registry.intents {
+            if parsed.intents.iter().any(|x| x.name == i.name && x != i) {
+                lines.push(format!("  intent `{}` declaration differs", i.name));
+            }
+        }
+        for d in &registry.derived_claims {
+            if parsed
+                .derived_claims
+                .iter()
+                .any(|x| x.predicate == d.predicate && x != d)
+            {
+                lines.push(format!("  derived claim `{}` differs", d.predicate));
+            }
+        }
+    }
+    // Never return an empty account: `Program` equality failed, so
+    // *something* differs even if no field-level check localised it.
+    if lines.is_empty() {
+        lines.push(
+            "  programs differ, but no field-level difference was localised \
+             (check argument declarations)"
+                .to_string(),
+        );
     }
     lines.join("\n")
 }
@@ -195,8 +238,13 @@ fn parsed_example_sources() -> BTreeMap<String, Program> {
             }
             let source = fs::read_to_string(&path).expect("read .morph source");
             let program = parse_program(&source).unwrap_or_else(|diagnostics| {
-                let msgs: Vec<String> = diagnostics.iter().map(|d| d.message.clone()).collect();
-                panic!("{} failed to parse:\n{}", path.display(), msgs.join("\n"));
+                let name = path.display().to_string();
+                // Render with span/source context, exactly as the CLI does.
+                let rendered: String = diagnostics
+                    .iter()
+                    .map(|d| d.render(&name, &source))
+                    .collect();
+                panic!("{name} failed to parse:\n{rendered}");
             });
             assert!(
                 out.insert(program.name.clone(), program).is_none(),
