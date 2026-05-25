@@ -42,6 +42,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         }
         Inspect::Derived(args) => inspect_derived(args).await,
         Inspect::Predicates(args) => inspect_predicates(args),
+        Inspect::Guarantees(args) => inspect_guarantees(args),
     }
 }
 
@@ -126,4 +127,36 @@ fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> 
             )
         })?;
     print_json(&program.predicates)
+}
+
+/// Show what a built-in program makes impossible: its guarantees, one per
+/// invariant. Static and read-only - no database. Prose by default;
+/// `--json` emits the structured form.
+fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
+    let programs = morpholog_examples::all_programs();
+    let program = programs
+        .iter()
+        .find(|p| p.name == args.program)
+        .ok_or_else(|| {
+            let available = programs
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "program `{}` not found. Available built-in programs: {}",
+                args.program,
+                available
+            )
+        })?;
+    let guarantees = morpholog_core::guarantees(program);
+    if args.json {
+        print_json(&guarantees)
+    } else {
+        println!(
+            "{}",
+            morpholog_core::render_guarantees(&program.name, &guarantees)
+        );
+        Ok(())
+    }
 }

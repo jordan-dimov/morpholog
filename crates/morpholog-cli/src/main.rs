@@ -220,6 +220,11 @@ pub(crate) enum Inspect {
     /// are static programme metadata, the same data `Program::validate`
     /// checks references against.
     Predicates(InspectPredicatesArgs),
+    /// Show the states a built-in program makes impossible - one entry
+    /// per invariant, naming the forbidden state where it is
+    /// mechanically obvious. Read-only and static: no database, no
+    /// state. Prose by default; `--json` for the structured form.
+    Guarantees(InspectGuaranteesArgs),
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
@@ -228,6 +233,18 @@ pub(crate) enum Inspect {
 pub(crate) struct InspectPredicatesArgs {
     /// Built-in program name (e.g. `double_entry_ledger`).
     pub(crate) program: String,
+}
+
+/// Arguments for `inspect guarantees`. Like `inspect predicates`, a
+/// static read over a built-in program; `--json` switches the prose view
+/// for the structured form.
+#[derive(clap::Args, Debug)]
+pub(crate) struct InspectGuaranteesArgs {
+    /// Built-in program name (e.g. `carbon_credit_provenance`).
+    pub(crate) program: String,
+    /// Emit the structured JSON form instead of prose.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 /// Arguments for `inspect claims`. Like the shared `InspectArgs` plus
@@ -458,6 +475,9 @@ mod tests {
             }
             Inspect::Predicates(_) => {
                 panic!("inspect predicates does not take a database URL")
+            }
+            Inspect::Guarantees(_) => {
+                panic!("inspect guarantees does not take a database URL")
             }
         }
     }

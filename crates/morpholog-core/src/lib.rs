@@ -19,6 +19,7 @@ mod check;
 mod derive;
 mod eval;
 mod explain;
+mod guarantees;
 mod ir;
 mod propose;
 mod state;
@@ -34,6 +35,7 @@ pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
     Rejection, TransitionRef, Verdict, explain,
 };
+pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, Claim, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
     PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
