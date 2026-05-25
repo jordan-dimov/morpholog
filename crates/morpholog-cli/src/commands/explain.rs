@@ -7,10 +7,12 @@
 //! `morpholog_core::explain`, and renders the resulting `Explanation` as
 //! claim-shaped prose (default) or as the structured JSON object.
 //!
-//! It never writes, and it always exits zero. Explaining a transition is
-//! answering a question, not taking an action: a rejection verdict is a
-//! successful explanation - it lives in the output, not in the exit code.
-//! A script that wants the gate uses `run`.
+//! It never writes, and the verdict never changes the exit code: explain
+//! exits zero on both admissible and rejected verdicts, because explaining
+//! a transition is answering a question, not taking an action. Only
+//! operational failures - a parse or validation error, malformed `--args`,
+//! an unknown transformation, a database failure - exit non-zero. A script
+//! that wants the gate uses `run`.
 
 use anyhow::{Context, anyhow};
 use morpholog_core::{EvalValue, Transition, explain};

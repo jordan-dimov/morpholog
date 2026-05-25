@@ -370,7 +370,7 @@ The same change retired `Expr::Sum`'s `binding` field. It duplicated the target 
 **Considered and rejected:**
 
 - *Built-in registry as the program source (like `propose` and `inspect`).* The `.morph`-file shape (like `run`) lets an author explain their own model, not only the shipped examples - which is where the operational value is. The built-in path is already covered by the other legibility reads.
-- *Exiting non-zero on a rejection verdict (like `run` / `propose`).* That conflates an advisory read with an action. explain always exits zero: a rejection is a successful explanation, carried in the output. A script that wants the gate uses `run`.
+- *Exiting non-zero on a rejection verdict (like `run` / `propose`).* That conflates an advisory read with an action. The verdict does not affect the exit code - explain exits zero on both admissible and rejected, a rejection being a successful explanation carried in the output; only operational failures (parse/validation, bad args, unknown transformation, DB failure) exit non-zero. A script that wants the gate uses `run`.
 
 **What stays out:**
 

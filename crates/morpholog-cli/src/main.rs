@@ -87,8 +87,10 @@ enum Command {
     /// pre-state, then renders the structured explanation - the gate that
     /// failed and the directly-missing claims, the violated invariant, or
     /// admissibility - as claim-shaped prose, or as JSON with `--json`.
-    /// Read-only: it always exits zero, since a rejection verdict is a
-    /// successful explanation, not a tool failure.
+    /// Read-only: the verdict does not affect the exit code (zero on both
+    /// admissible and rejected). Only operational failures - parse or
+    /// validation errors, bad `--args`, an unknown transformation, a
+    /// database failure - exit non-zero.
     Explain(ExplainArgs),
 
     /// Drive the outbox state machine from outside Rust. Lets a
@@ -449,7 +451,8 @@ pub(crate) struct ExplainArgs {
     pub(crate) transformation: String,
 
     /// JSON array of arguments matching the transformation's parameter
-    /// list. Same codec as `run --args`.
+    /// list, in the same tagged codec as `run --args` - e.g.
+    /// `[{"type":"subject","value":"c1"},{"type":"decimal","value":"100"}]`.
     #[arg(long)]
     pub(crate) args: String,
 
