@@ -342,4 +342,20 @@ The same change retired `Expr::Sum`'s `binding` field. It duplicated the target 
 
 **What stays out:**
 
-- Contrary-to-duty obligations (a secondary duty that activates when the first is breached), recurring or rolling deadlines, and a sweep that iterates all due obligations in one call (the coordinator drives iteration, one obligation per call). A static `inspect guarantees` view is still the next surface.
+- Contrary-to-duty obligations (a secondary duty that activates when the first is breached), recurring or rolling deadlines, and a sweep that iterates all due obligations in one call (the coordinator drives iteration, one obligation per call).
+
+
+### `inspect guarantees`: the model's impossibilities, before it runs
+
+**Forced by:** the legibility brief's other half. `explain` answers "why was this rejected?"; a controller or regulator asks first "what does this model make impossible?". The carbon flagship - rich with `not(...)` invariants (terminal retirement, mutually-exclusive obligation outcomes) - made the answer worth surfacing as its own read.
+
+**Landed:** `morpholog_core::guarantees(program)` returns one `Guarantee` per invariant - the rendered rule, plus a `forbids` clause naming the bad state only for `not(...)` invariants (whose inner expression *is* the forbidden state). `render_guarantees` renders it as deterministic prose; the `morpholog inspect guarantees <program>` CLI emits prose by default, `--json` for the structured form. Pure static read over any registered programme, no kernel or PG. Tested across the whole registry, not just carbon, so the derivation is demonstrably general rather than handcrafted.
+
+**Considered and rejected:**
+
+- *Deriving "bad state" for `implies`/comparator invariants too.* Only the `not(...)` shape has a mechanically obvious forbidden state; inferring one for an `implies` (a functional dependency) or a comparator would be semantic interpretation, not formatting. Those guarantees carry their rendered rule and no `forbids` clause - honest over impressive.
+- *Hand-written domain summaries ("a credit cannot be held twice").* That is prose the example author would write, not something derived; it would flatter the demo while hiding that the tool only reads invariant structure. The words come from invariant names and the formatter alone.
+
+**What stays out:**
+
+- Mutually-exclusive predicate *sets* derived from `implies`/`Neq`, transformation pre/post graphs, subject-flow profiles, and `generate controls` - the rest of the legibility set, each its own read when forced.
