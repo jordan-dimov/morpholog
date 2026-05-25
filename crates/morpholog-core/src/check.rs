@@ -416,7 +416,7 @@ impl CheckCtx<'_> {
                 self.check_operand_kind(right, kind, token, scope);
             }
             Expr::Eq(left, right) => {
-                self.check_equality_operands(left, right, "==", scope);
+                self.check_equality_operands(left, right, "=", scope);
             }
             Expr::Neq(left, right) => {
                 self.check_equality_operands(left, right, "!=", scope);
@@ -1807,7 +1807,7 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert!(matches!(
             errs[0],
-            ValidationError::EqualityKindMismatch { operator: "==", .. }
+            ValidationError::EqualityKindMismatch { operator: "=", .. }
         ));
     }
 
