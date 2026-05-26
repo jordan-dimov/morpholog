@@ -172,7 +172,7 @@ where
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map(|(name, args)| Prop::Claim {
-                predicate: name,
+                predicate: name.into(),
                 args,
             });
 
@@ -436,7 +436,7 @@ where
                 .map(ForallSource::Prop),
             forall_bare_source.map(|(name, args)| match args {
                 Some(args) => ForallSource::Prop(Prop::Claim {
-                    predicate: name,
+                    predicate: name.into(),
                     args,
                 }),
                 None => ForallSource::BareTerm(if name == "actor" {
@@ -609,7 +609,7 @@ where
             )
             .then(just(Token::KwDefault).ignore_then(value.clone()).or_not())
             .map(|((predicate, args), default)| ValueExpr::ValueOf {
-                predicate,
+                predicate: predicate.into(),
                 args,
                 default: default.map(Box::new),
             });

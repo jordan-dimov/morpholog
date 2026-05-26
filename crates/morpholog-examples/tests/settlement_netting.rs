@@ -127,15 +127,15 @@ fn for_body_contains_bind_one_and_two_asserts() {
 fn netting_state(amount: i64) -> State {
     State::from_claims(vec![
         ClaimInstance {
-            predicate: "NetSettlement".to_string(),
+            predicate: "NetSettlement".into(),
             args: vec![subj("net1"), subj("party_a"), subj("party_b"), dec(amount)],
         },
         ClaimInstance {
-            predicate: "SettlementLine".to_string(),
+            predicate: "SettlementLine".into(),
             args: vec![subj("l1"), subj("net1"), dec(60)],
         },
         ClaimInstance {
-            predicate: "SettlementLine".to_string(),
+            predicate: "SettlementLine".into(),
             args: vec![subj("l2"), subj("net1"), dec(40)],
         },
     ])
@@ -171,27 +171,27 @@ fn net_amount_equals_lines_fails_when_amount_mismatches() {
 fn netting_pre_state(extra: Vec<ClaimInstance>) -> State {
     let mut claims = vec![
         ClaimInstance {
-            predicate: "ApprovedSettlementLine".to_string(),
+            predicate: "ApprovedSettlementLine".into(),
             args: vec![subj("l1")],
         },
         ClaimInstance {
-            predicate: "Between".to_string(),
+            predicate: "Between".into(),
             args: vec![subj("l1"), subj("party_a"), subj("party_b")],
         },
         ClaimInstance {
-            predicate: "LineAmount".to_string(),
+            predicate: "LineAmount".into(),
             args: vec![subj("l1"), dec(60)],
         },
         ClaimInstance {
-            predicate: "ApprovedSettlementLine".to_string(),
+            predicate: "ApprovedSettlementLine".into(),
             args: vec![subj("l2")],
         },
         ClaimInstance {
-            predicate: "Between".to_string(),
+            predicate: "Between".into(),
             args: vec![subj("l2"), subj("party_a"), subj("party_b")],
         },
         ClaimInstance {
-            predicate: "LineAmount".to_string(),
+            predicate: "LineAmount".into(),
             args: vec![subj("l2"), dec(40)],
         },
     ];
@@ -238,7 +238,7 @@ fn propose_accepts_well_formed_netting() {
     // Exactly one NetSettlement assertion with the expected total.
     let net_settlement = asserted_claims
         .iter()
-        .find(|f| f.predicate == "NetSettlement")
+        .find(|f| f.predicate.as_str() == "NetSettlement")
         .expect("should have asserted a NetSettlement");
     assert_eq!(net_settlement.args[3], dec(100));
 }
@@ -256,7 +256,7 @@ fn propose_rejects_when_line_already_netted() {
         RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
     let extra = vec![ClaimInstance {
-        predicate: "Netted".to_string(),
+        predicate: "Netted".into(),
         args: vec![subj("l1")],
     }];
     let pre = netting_pre_state(extra);
@@ -308,7 +308,7 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     // check passes, the transformation stages a second SettlementLine
     // for l1, and the invariant catches it on the candidate state.
     let extra = vec![ClaimInstance {
-        predicate: "SettlementLine".to_string(),
+        predicate: "SettlementLine".into(),
         args: vec![subj("l1"), subj("old_net"), dec(60)],
     }];
     let pre = netting_pre_state(extra);

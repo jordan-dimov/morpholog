@@ -166,11 +166,11 @@ fn second_clean_result_retracts_first_and_takes_pointer() {
     );
 
     let pointer_b = state.claims().iter().any(|c| {
-        c.predicate == "CurrentScreening"
+        c.predicate.as_str() == "CurrentScreening"
             && c.args == vec![subj(alice), subj(SANCTIONS), subj("scr_b")]
     });
     let pointer_a = state.claims().iter().any(|c| {
-        c.predicate == "CurrentScreening"
+        c.predicate.as_str() == "CurrentScreening"
             && c.args == vec![subj(alice), subj(SANCTIONS), subj("scr_a")]
     });
     assert!(pointer_b, "newer screening must own the pointer");

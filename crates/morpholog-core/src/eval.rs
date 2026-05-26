@@ -185,7 +185,7 @@ fn apply_cmp<T: PartialOrd>(op: CompareOp, a: T, b: T) -> bool {
 
 pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
     match p {
-        Prop::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
+        Prop::Claim { predicate, args } => find_claim_matches(predicate.as_str(), args, ctx),
         Prop::And(props) => find_conjunction(props, ctx),
         Prop::Or(props) => find_disjunction(props, ctx),
         Prop::Not(inner) => {
@@ -505,7 +505,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             args,
             default,
         } => {
-            let matches = find_claim_matches(predicate, args, ctx)?;
+            let matches = find_claim_matches(predicate.as_str(), args, ctx)?;
             match matches.len() {
                 1 => {
                     let pos = args
@@ -516,19 +516,19 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         })?;
                     let claim = ctx
                         .state
-                        .claims_for(predicate)
+                        .claims_for(predicate.as_str())
                         .find(|f| {
                             f.args.len() == args.len()
                                 && unify_args(args, &f.args, ctx.bindings, ctx.actor).is_some()
                         })
-                        .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.clone()))?;
+                        .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.to_string()))?;
                     Ok(claim.args[pos].clone())
                 }
                 0 => match default {
                     Some(d) => eval_value(d, ctx),
-                    None => Err(EvalError::ValueOfZeroMatches(predicate.clone())),
+                    None => Err(EvalError::ValueOfZeroMatches(predicate.to_string())),
                 },
-                _ => Err(EvalError::ValueOfMultipleMatches(predicate.clone())),
+                _ => Err(EvalError::ValueOfMultipleMatches(predicate.to_string())),
             }
         }
     }
@@ -757,7 +757,7 @@ fn render_claim(prop: &Prop, ctx: &EvalContext<'_>) -> RenderedClaim {
     };
     let rendered_args: Vec<String> = args.iter().map(|t| render_term(t, ctx)).collect();
     RenderedClaim {
-        predicate: predicate.clone(),
+        predicate: predicate.to_string(),
         rendered: format!("{}({})", predicate, rendered_args.join(", ")),
     }
 }

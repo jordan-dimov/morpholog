@@ -298,7 +298,7 @@ fn lone_journal_entry_without_lines_violates_invariant() {
     // invariant directly against a hand-crafted state that no
     // legitimate path could reach.
     let state = State::from_claims(vec![ClaimInstance {
-        predicate: "JournalEntry".to_string(),
+        predicate: "JournalEntry".into(),
         args: vec![subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
     }]);
     let inv = double_entry_ledger::journal_entry_has_lines();

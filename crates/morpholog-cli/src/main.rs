@@ -902,7 +902,7 @@ mod tests {
             transition_id: Uuid::nil(),
             actor: Subject::from("jordan"),
             asserted_claims: vec![ClaimInstance {
-                predicate: "Foo".to_string(),
+                predicate: "Foo".into(),
                 args: vec![],
             }],
             retracted_claims: vec![],

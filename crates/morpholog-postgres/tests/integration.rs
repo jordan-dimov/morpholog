@@ -57,7 +57,7 @@ async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
              VALUES ($1, $2, $3)",
         )
-        .bind(&claim.predicate)
+        .bind(claim.predicate.as_str())
         .bind(&args_json)
         .bind(fixture_transition)
         .execute(pool)
@@ -68,7 +68,7 @@ async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
 
 fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
     ClaimInstance {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args,
     }
 }
@@ -545,7 +545,7 @@ fn retract_marker_transformation() -> Transformation {
         name: "retract_marker".to_string(),
         parameters: vec!["subject".into()],
         body: vec![Stmt::Retract {
-            predicate: "Marker".to_string(),
+            predicate: "Marker".into(),
             args: vec![var("subject")],
         }],
     }
@@ -586,7 +586,7 @@ async fn retraction_deletes_targeted_row_and_preserves_others() {
 
     assert!(asserted_claims.is_empty());
     assert_eq!(retracted_claims.len(), 1);
-    assert_eq!(retracted_claims[0].predicate, "Marker");
+    assert_eq!(retracted_claims[0].predicate.as_str(), "Marker");
     assert_eq!(retracted_claims[0].args, vec![subj("y")]);
     assert!(emitted_intents.is_empty());
 
@@ -1288,9 +1288,9 @@ async fn list_claims_returns_admitted_claims_in_stable_order() {
     // All three share an asserted_at (same transition), so the
     // predicate-then-args tie-break orders them: JournalEntry before
     // JournalLine, then the two lines by `arguments::text`.
-    assert_eq!(claims[0].predicate, "JournalEntry");
-    assert_eq!(claims[1].predicate, "JournalLine");
-    assert_eq!(claims[2].predicate, "JournalLine");
+    assert_eq!(claims[0].predicate.as_str(), "JournalEntry");
+    assert_eq!(claims[1].predicate.as_str(), "JournalLine");
+    assert_eq!(claims[2].predicate.as_str(), "JournalLine");
 
     // JournalEntry's args round-trip through the codec.
     assert_eq!(
@@ -1372,7 +1372,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     let second = &audit[1];
     assert_eq!(second.arguments, vec![ledger_period()]);
     assert_eq!(second.asserted_claims.len(), 1);
-    assert_eq!(second.asserted_claims[0].predicate, "PeriodClosed");
+    assert_eq!(second.asserted_claims[0].predicate.as_str(), "PeriodClosed");
     assert_eq!(second.emitted_intents[0].name, "PeriodClosed");
 }
 
@@ -1485,11 +1485,11 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
         rows,
         vec![
             ClaimInstance {
-                predicate: "TrialBalanceRow".to_string(),
+                predicate: "TrialBalanceRow".into(),
                 args: vec![subj("account_cash"), dec(150)],
             },
             ClaimInstance {
-                predicate: "TrialBalanceRow".to_string(),
+                predicate: "TrialBalanceRow".into(),
                 args: vec![subj("account_revenue"), dec(-150)],
             },
         ],
@@ -1506,7 +1506,9 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
         "list_derived must not write claims back to the table"
     );
     assert!(
-        !claims.iter().any(|c| c.predicate == "TrialBalanceRow"),
+        !claims
+            .iter()
+            .any(|c| c.predicate.as_str() == "TrialBalanceRow"),
         "derived rows must not be admitted as claims"
     );
 }
@@ -1596,11 +1598,11 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
         rows,
         vec![
             ClaimInstance {
-                predicate: "TrialBalanceRow".to_string(),
+                predicate: "TrialBalanceRow".into(),
                 args: vec![subj("account_cash"), dec(100)],
             },
             ClaimInstance {
-                predicate: "TrialBalanceRow".to_string(),
+                predicate: "TrialBalanceRow".into(),
                 args: vec![subj("account_revenue"), dec(-100)],
             },
         ],
@@ -1638,7 +1640,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     // claims still contains only the pre-state PeriodClosed.
     let claims = list_claims(&pool).await.unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0].predicate, "PeriodClosed");
+    assert_eq!(claims[0].predicate.as_str(), "PeriodClosed");
 
     // audit and outbox are empty - rejected transformations leave no
     // governed trace.
@@ -1845,8 +1847,12 @@ async fn approval_controls_full_chain_through_pg() {
         panic!("expected Committed, got {outcome:?}");
     };
     assert_eq!(receipt_actor, Subject::from("jordan"));
-    assert!(asserted_claims.iter().any(|c| c.predicate == "Approval"
-        && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
+    assert!(
+        asserted_claims
+            .iter()
+            .any(|c| c.predicate.as_str() == "Approval"
+                && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")])
+    );
 
     // 3. The audit row's actor column matches.
     let audit_rows = list_audit_rows(&pool).await.unwrap();
@@ -1921,7 +1927,7 @@ async fn approval_controls_full_chain_through_pg() {
     assert!(
         asserted_claims
             .iter()
-            .any(|c| c.predicate == "LimitedApproval"
+            .any(|c| c.predicate.as_str() == "LimitedApproval"
                 && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")])
     );
     assert!(
@@ -1968,15 +1974,23 @@ async fn approval_controls_full_chain_through_pg() {
     // ---------- Durable cross-cuts ----------
 
     let claims = list_claims(&pool).await.unwrap();
-    assert!(claims.iter().any(|c| c.predicate == "Approval"
+    assert!(claims.iter().any(|c| c.predicate.as_str() == "Approval"
         && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
-    assert!(claims.iter().any(|c| c.predicate == "LimitedApproval"
-        && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")]));
+    assert!(
+        claims
+            .iter()
+            .any(|c| c.predicate.as_str() == "LimitedApproval"
+                && c.args == vec![subj("inv_001"), subj("invoice"), dec(750), subj("jordan")])
+    );
     // The two rejected attempts left no trace.
-    assert!(!claims.iter().any(|c| c.predicate == "Approval"
+    assert!(!claims.iter().any(|c| c.predicate.as_str() == "Approval"
         && c.args == vec![subj("doc_002"), subj("vendor_onboarding"), subj("alice")]));
-    assert!(!claims.iter().any(|c| c.predicate == "LimitedApproval"
-        && c.args == vec![subj("inv_over"), subj("invoice"), dec(2000), subj("jordan")]));
+    assert!(
+        !claims
+            .iter()
+            .any(|c| c.predicate.as_str() == "LimitedApproval"
+                && c.args == vec![subj("inv_over"), subj("invoice"), dec(2000), subj("jordan")])
+    );
 
     // ---------- Require-vs-invariant: history survives revocation ----------
 
@@ -1991,12 +2005,16 @@ async fn approval_controls_full_chain_through_pg() {
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
     let claims_after_revoke = list_claims(&pool).await.unwrap();
-    assert!(claims_after_revoke.iter().any(|c| c.predicate == "Approval"
-        && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
+    assert!(
+        claims_after_revoke
+            .iter()
+            .any(|c| c.predicate.as_str() == "Approval"
+                && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")])
+    );
     assert!(
         !claims_after_revoke
             .iter()
-            .any(|c| c.predicate == "MayApprove"
+            .any(|c| c.predicate.as_str() == "MayApprove"
                 && c.args == vec![subj("jordan"), subj("vendor_onboarding")])
     );
 }
@@ -2079,7 +2097,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     assert!(
         asserted_claims
             .iter()
-            .any(|c| c.predicate == "SettlementAuthorised"
+            .any(|c| c.predicate.as_str() == "SettlementAuthorised"
                 && c.args
                     == vec![
                         subj("claim_001"),
@@ -2091,7 +2109,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     assert!(
         asserted_claims
             .iter()
-            .any(|c| c.predicate == "SettlementPaid"
+            .any(|c| c.predicate.as_str() == "SettlementPaid"
                 && c.args
                     == vec![
                         subj("policy_001"),
@@ -2127,13 +2145,13 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     assert!(
         claims_after_first
             .iter()
-            .any(|c| c.predicate == "PolicyHeadroom"
+            .any(|c| c.predicate.as_str() == "PolicyHeadroom"
                 && c.args == vec![subj("policy_001"), dec(40_000)]),
         "PolicyHeadroom should be 40k after the £60k settlement; \
          got: {:?}",
         claims_after_first
             .iter()
-            .filter(|c| c.predicate == "PolicyHeadroom")
+            .filter(|c| c.predicate.as_str() == "PolicyHeadroom")
             .collect::<Vec<_>>()
     );
 
@@ -2154,7 +2172,8 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     assert!(
         claims_after_second
             .iter()
-            .any(|c| c.predicate == "PolicyHeadroom" && c.args == vec![subj("policy_001"), dec(0)]),
+            .any(|c| c.predicate.as_str() == "PolicyHeadroom"
+                && c.args == vec![subj("policy_001"), dec(0)]),
         "PolicyHeadroom should be 0 after the policy is exhausted"
     );
 

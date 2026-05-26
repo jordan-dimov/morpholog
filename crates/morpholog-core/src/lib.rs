@@ -50,8 +50,8 @@ pub use explain::{
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term,
-    Transformation, Value, ValueExpr, Var,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Subject,
+    Term, Transformation, Value, ValueExpr, Var,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -204,22 +204,22 @@ mod tests {
     #[test]
     fn claims_for_returns_only_matching_predicate() {
         let a1 = ClaimInstance {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![EvalValue::Subject("a1".into())],
         };
         let b1 = ClaimInstance {
-            predicate: "B".to_string(),
+            predicate: "B".into(),
             args: vec![EvalValue::Decimal(Decimal::new(42, 0))],
         };
         let a2 = ClaimInstance {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![EvalValue::Subject("a2".into())],
         };
         let state = State::from_claims(vec![a1.clone(), b1.clone(), a2.clone()]);
 
         let a_rows: Vec<&ClaimInstance> = state.claims_for("A").collect();
         assert_eq!(a_rows.len(), 2, "two A claims admitted");
-        assert!(a_rows.iter().all(|c| c.predicate == "A"));
+        assert!(a_rows.iter().all(|c| c.predicate.as_str() == "A"));
         assert!(a_rows.contains(&&a1));
         assert!(a_rows.contains(&&a2));
 
@@ -250,14 +250,14 @@ mod tests {
     #[test]
     fn claim_indices_for_arg_narrows_by_predicate_position_and_value() {
         let line_for_entry_a = ClaimInstance {
-            predicate: "JournalLine".to_string(),
+            predicate: "JournalLine".into(),
             args: vec![
                 EvalValue::Subject("entry_a".into()),
                 EvalValue::Subject("account_cash".into()),
             ],
         };
         let line_for_entry_b = ClaimInstance {
-            predicate: "JournalLine".to_string(),
+            predicate: "JournalLine".into(),
             args: vec![
                 EvalValue::Subject("entry_b".into()),
                 EvalValue::Subject("account_cash".into()),
@@ -266,7 +266,7 @@ mod tests {
         // Same value at position 0 but different predicate; must not
         // pollute the JournalLine[0=entry_a] bucket.
         let je_for_entry_a = ClaimInstance {
-            predicate: "JournalEntry".to_string(),
+            predicate: "JournalEntry".into(),
             args: vec![EvalValue::Subject("entry_a".into())],
         };
         let state = State::from_claims(vec![
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn predicates_referenced_by_prop_covers_every_variant() {
         let claim = |p: &str| Prop::Claim {
-            predicate: p.to_string(),
+            predicate: p.into(),
             args: vec![],
         };
         // A value expression that plants one predicate name (a `Sum`
@@ -365,7 +365,7 @@ mod tests {
         let mut got = BTreeSet::new();
         predicates_referenced_by_prop(&prop, &mut got);
 
-        let expected: BTreeSet<String> = [
+        let expected: BTreeSet<PredicateName> = [
             "P_implies_left",
             "P_implies_right",
             "P_exists_body",
@@ -383,7 +383,7 @@ mod tests {
             "P_pre_inner",
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(|s| PredicateName::from(*s))
         .collect();
 
         assert_eq!(
@@ -399,11 +399,11 @@ mod tests {
     #[test]
     fn predicates_referenced_by_value_covers_every_variant() {
         let claim = |p: &str| Prop::Claim {
-            predicate: p.to_string(),
+            predicate: p.into(),
             args: vec![],
         };
         let value_of = |p: &str, default: Option<ValueExpr>| ValueExpr::ValueOf {
-            predicate: p.to_string(),
+            predicate: p.into(),
             args: vec![Term::Wildcard],
             default: default.map(Box::new),
         };
@@ -426,10 +426,11 @@ mod tests {
         let mut got = BTreeSet::new();
         predicates_referenced_by_value(&expr, &mut got);
 
-        let expected: BTreeSet<String> = ["P_sum_body", "P_valueof_self", "P_valueof_default"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let expected: BTreeSet<PredicateName> =
+            ["P_sum_body", "P_valueof_self", "P_valueof_default"]
+                .iter()
+                .map(|s| PredicateName::from(*s))
+                .collect();
 
         assert_eq!(
             got, expected,
@@ -462,10 +463,10 @@ mod tests {
         for stmt in &body {
             predicates_read_by_stmt(stmt, &mut got);
         }
-        let expected: BTreeSet<String> =
+        let expected: BTreeSet<PredicateName> =
             ["P_require", "P_bind", "P_let", "P_retract", "P_for_inner"]
                 .iter()
-                .map(|s| s.to_string())
+                .map(|s| PredicateName::from(*s))
                 .collect();
         assert_eq!(
             got, expected,
@@ -477,7 +478,7 @@ mod tests {
             predicates_referenced_by_stmt(stmt, &mut broad);
         }
         assert!(
-            broad.contains("P_assert"),
+            broad.contains(&PredicateName::from("P_assert")),
             "broad walker must include Assert; got: {broad:?}"
         );
     }
@@ -680,21 +681,21 @@ mod tests {
     #[test]
     fn date_literal_unifies_with_matching_date_arg() {
         let claim = ClaimInstance {
-            predicate: "OnDate".to_string(),
+            predicate: "OnDate".into(),
             args: vec![EvalValue::Date(
                 "2026-03-12".parse::<Date>().expect("hand-built ISO date"),
             )],
         };
         let state = State::from_claims(vec![claim]);
         let expr = Prop::Claim {
-            predicate: "OnDate".to_string(),
+            predicate: "OnDate".into(),
             args: vec![Term::Literal(Value::Date("2026-03-12".to_string()))],
         };
         let matches = find_matches(&expr, &ctx(&state, &Bindings::new())).unwrap();
         assert_eq!(matches.len(), 1, "literal date arg must unify");
 
         let other = Prop::Claim {
-            predicate: "OnDate".to_string(),
+            predicate: "OnDate".into(),
             args: vec![Term::Literal(Value::Date("2026-03-13".to_string()))],
         };
         let none = find_matches(&other, &ctx(&state, &Bindings::new())).unwrap();
@@ -758,29 +759,29 @@ mod tests {
         // predicate so a branch's extensions are distinguishable.
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "A".to_string(),
+                predicate: "A".into(),
                 args: vec![EvalValue::Subject("a1".into())],
             },
             ClaimInstance {
-                predicate: "A".to_string(),
+                predicate: "A".into(),
                 args: vec![EvalValue::Subject("a2".into())],
             },
             ClaimInstance {
-                predicate: "B".to_string(),
+                predicate: "B".into(),
                 args: vec![EvalValue::Subject("b1".into())],
             },
         ]);
 
         let a_x = Prop::Claim {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![Term::Var("x".into())],
         };
         let b_x = Prop::Claim {
-            predicate: "B".to_string(),
+            predicate: "B".into(),
             args: vec![Term::Var("x".into())],
         };
         let c_x = Prop::Claim {
-            predicate: "C".to_string(),
+            predicate: "C".into(),
             args: vec![Term::Var("x".into())],
         };
 
@@ -845,11 +846,11 @@ mod tests {
     fn pre_flips_predicate_lookup_to_pre_state() {
         // pre_state has Counter(1); post (candidate) has Counter(2).
         let pre = State::from_claims(vec![ClaimInstance {
-            predicate: "Counter".to_string(),
+            predicate: "Counter".into(),
             args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(1))],
         }]);
         let post = State::from_claims(vec![ClaimInstance {
-            predicate: "Counter".to_string(),
+            predicate: "Counter".into(),
             args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(2))],
         }]);
 
@@ -857,11 +858,11 @@ mod tests {
         let body = Prop::Implies {
             left: Box::new(Prop::And(vec![
                 Prop::Claim {
-                    predicate: "Counter".to_string(),
+                    predicate: "Counter".into(),
                     args: vec![Term::Var("n".into())],
                 },
                 Prop::Pre(Box::new(Prop::Claim {
-                    predicate: "Counter".to_string(),
+                    predicate: "Counter".into(),
                     args: vec![Term::Var("m".into())],
                 })),
             ])),
@@ -886,7 +887,7 @@ mod tests {
         // Now post has Counter(5): with pre still Counter(1), the
         // rule `n = m + 1` reduces to `5 = 2`, which must reject.
         let bad_post = State::from_claims(vec![ClaimInstance {
-            predicate: "Counter".to_string(),
+            predicate: "Counter".into(),
             args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(5))],
         }]);
         let matches =
@@ -905,7 +906,7 @@ mod tests {
     fn pre_without_pre_state_errors_pre_state_unavailable() {
         let post = State::from_claims(vec![]);
         let body = Prop::Pre(Box::new(Prop::Claim {
-            predicate: "Anything".to_string(),
+            predicate: "Anything".into(),
             args: vec![],
         }));
         let err = find_matches(&body, &ctx(&post, &Bindings::new())).expect_err("must error");
@@ -920,7 +921,7 @@ mod tests {
         let pre = State::from_claims(vec![]);
         let post = State::from_claims(vec![]);
         let body = Prop::Pre(Box::new(Prop::Pre(Box::new(Prop::Claim {
-            predicate: "Anything".to_string(),
+            predicate: "Anything".into(),
             args: vec![],
         }))));
         let err = find_matches(&body, &ctx_with_pre(&post, &pre, &Bindings::new()))
@@ -939,11 +940,11 @@ mod tests {
         let pre = State::from_claims(vec![]);
         let post = State::from_claims(vec![
             ClaimInstance {
-                predicate: "Account".to_string(),
+                predicate: "Account".into(),
                 args: vec![EvalValue::Subject("a1".into())],
             },
             ClaimInstance {
-                predicate: "Balance".to_string(),
+                predicate: "Balance".into(),
                 args: vec![EvalValue::Subject("a1".into())],
             },
         ]);
@@ -954,11 +955,11 @@ mod tests {
         let outside = Prop::Pre(Box::new(Prop::Forall {
             binding: "a".into(),
             source: Box::new(Prop::Claim {
-                predicate: "Account".to_string(),
+                predicate: "Account".into(),
                 args: vec![Term::Var("a".into())],
             }),
             body: Box::new(Prop::Claim {
-                predicate: "Balance".to_string(),
+                predicate: "Balance".into(),
                 args: vec![Term::Var("a".into())],
             }),
         }));
@@ -975,11 +976,11 @@ mod tests {
         let inside = Prop::Forall {
             binding: "a".into(),
             source: Box::new(Prop::Claim {
-                predicate: "Account".to_string(),
+                predicate: "Account".into(),
                 args: vec![Term::Var("a".into())],
             }),
             body: Box::new(Prop::Pre(Box::new(Prop::Claim {
-                predicate: "Balance".to_string(),
+                predicate: "Balance".into(),
                 args: vec![Term::Var("a".into())],
             }))),
         };
@@ -1025,7 +1026,7 @@ mod tests {
     fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Policy".to_string(),
+            predicate: "Policy".into(),
             args: vec![
                 EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
@@ -1045,7 +1046,7 @@ mod tests {
             panic!("expected Accepted");
         };
         assert_eq!(asserted_claims.len(), 1);
-        assert_eq!(asserted_claims[0].predicate, "Echo");
+        assert_eq!(asserted_claims[0].predicate.as_str(), "Echo");
         assert_eq!(
             asserted_claims[0].args,
             vec![
@@ -1091,14 +1092,14 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "Policy".to_string(),
+                predicate: "Policy".into(),
                 args: vec![
                     EvalValue::Subject("p1".into()),
                     EvalValue::Decimal(Decimal::new(100, 0)),
                 ],
             },
             ClaimInstance {
-                predicate: "Policy".to_string(),
+                predicate: "Policy".into(),
                 args: vec![
                     EvalValue::Subject("p2".into()),
                     EvalValue::Decimal(Decimal::new(200, 0)),
@@ -1133,14 +1134,14 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "Policy".to_string(),
+                predicate: "Policy".into(),
                 args: vec![
                     EvalValue::Subject("p1".into()),
                     EvalValue::Decimal(Decimal::new(100, 0)),
                 ],
             },
             ClaimInstance {
-                predicate: "Policy".to_string(),
+                predicate: "Policy".into(),
                 args: vec![
                     EvalValue::Subject("p2".into()),
                     EvalValue::Decimal(Decimal::new(200, 0)),
@@ -1184,14 +1185,14 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "LineAmount".to_string(),
+                predicate: "LineAmount".into(),
                 args: vec![
                     EvalValue::Subject("L1".into()),
                     EvalValue::Decimal(Decimal::new(60, 0)),
                 ],
             },
             ClaimInstance {
-                predicate: "LineAmount".to_string(),
+                predicate: "LineAmount".into(),
                 args: vec![
                     EvalValue::Subject("L2".into()),
                     EvalValue::Decimal(Decimal::new(40, 0)),
@@ -1244,7 +1245,7 @@ mod tests {
     fn bind_one_with_actor_in_pattern() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Authority".to_string(),
+            predicate: "Authority".into(),
             args: vec![
                 EvalValue::Subject("dr_smith".into()),
                 EvalValue::Decimal(Decimal::new(50_000, 0)),
@@ -1403,7 +1404,7 @@ mod tests {
         use ir_builder::*;
         let mut p = one_claim_program();
         p.derived_claims.push(DerivedClaim {
-            predicate: "Computed".to_string(),
+            predicate: "Computed".into(),
             keys: vec!["id".into()],
             values: vec![DerivedValue {
                 name: "n".to_string(),
@@ -1436,7 +1437,7 @@ mod tests {
                 .build(),
         );
         p.derived_claims.push(DerivedClaim {
-            predicate: "Computed".to_string(),
+            predicate: "Computed".into(),
             keys: vec!["id".into()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
@@ -1512,7 +1513,7 @@ mod tests {
     fn propose_with_trace_records_every_statement_on_accept() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Policy".to_string(),
+            predicate: "Policy".into(),
             args: vec![
                 EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
@@ -1621,7 +1622,7 @@ mod tests {
     fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Policy".to_string(),
+            predicate: "Policy".into(),
             args: vec![
                 EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
@@ -1660,14 +1661,14 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "Policy".to_string(),
+                predicate: "Policy".into(),
                 args: vec![
                     EvalValue::Subject("p1".into()),
                     EvalValue::Decimal(Decimal::new(100, 0)),
                 ],
             },
             ClaimInstance {
-                predicate: "Policy".to_string(),
+                predicate: "Policy".into(),
                 args: vec![
                     EvalValue::Subject("p2".into()),
                     EvalValue::Decimal(Decimal::new(200, 0)),
@@ -1705,11 +1706,11 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "MayApprove".to_string(),
+                predicate: "MayApprove".into(),
                 args: vec![EvalValue::Subject("alice".into())],
             },
             ClaimInstance {
-                predicate: "MayApprove".to_string(),
+                predicate: "MayApprove".into(),
                 args: vec![EvalValue::Subject("bob".into())],
             },
         ]);
@@ -1739,14 +1740,14 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "LineAmount".to_string(),
+                predicate: "LineAmount".into(),
                 args: vec![
                     EvalValue::Subject("L1".into()),
                     EvalValue::Decimal(Decimal::new(60, 0)),
                 ],
             },
             ClaimInstance {
-                predicate: "LineAmount".to_string(),
+                predicate: "LineAmount".into(),
                 args: vec![
                     EvalValue::Subject("L2".into()),
                     EvalValue::Decimal(Decimal::new(40, 0)),
@@ -1842,7 +1843,7 @@ mod tests {
     fn propose_and_propose_with_trace_produce_identical_outcomes() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Policy".to_string(),
+            predicate: "Policy".into(),
             args: vec![
                 EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
@@ -1896,7 +1897,7 @@ mod tests {
     fn failure_walk_and_points_at_first_failing_conjunct() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // A holds (x is in state); B does not (no Bs in state).
@@ -1931,7 +1932,7 @@ mod tests {
     fn failure_walk_and_recurses_through_nested_and() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // Outer And: [A, And(A, MissingPredicate)]. The nested And
@@ -1976,7 +1977,7 @@ mod tests {
     fn failure_walk_implies_points_at_right_when_left_holds() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Trigger".to_string(),
+            predicate: "Trigger".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // Trigger(x) -> Required(x). Trigger holds, Required does not.
@@ -2011,7 +2012,7 @@ mod tests {
         // at iteration y; walker should point at the body, not the
         // whole forall.
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "AllGood".to_string(),
+            predicate: "AllGood".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
         let t = Transformation {
@@ -2054,7 +2055,7 @@ mod tests {
     fn failure_walk_not_returns_none() {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Forbidden".to_string(),
+            predicate: "Forbidden".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // `not(Forbidden(x))` fails because Forbidden(x) holds.
@@ -2182,11 +2183,11 @@ mod tests {
         // B(x).
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "A".to_string(),
+                predicate: "A".into(),
                 args: vec![EvalValue::Subject("a1".into())],
             },
             ClaimInstance {
-                predicate: "B".to_string(),
+                predicate: "B".into(),
                 args: vec![EvalValue::Subject("b2".into())],
             },
         ]);
@@ -2274,11 +2275,11 @@ mod tests {
         // and past the inner And to StepB.
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "Trigger".to_string(),
+                predicate: "Trigger".into(),
                 args: vec![EvalValue::Subject("x".into())],
             },
             ClaimInstance {
-                predicate: "StepA".to_string(),
+                predicate: "StepA".into(),
                 args: vec![EvalValue::Subject("x".into())],
             },
         ]);
@@ -2318,15 +2319,15 @@ mod tests {
         // iteration.
         let state = State::from_claims(vec![
             ClaimInstance {
-                predicate: "A".to_string(),
+                predicate: "A".into(),
                 args: vec![EvalValue::Subject("x".into())],
             },
             ClaimInstance {
-                predicate: "A".to_string(),
+                predicate: "A".into(),
                 args: vec![EvalValue::Subject("y".into())],
             },
             ClaimInstance {
-                predicate: "B".to_string(),
+                predicate: "B".into(),
                 args: vec![EvalValue::Subject("x".into())],
             },
         ]);
@@ -2411,7 +2412,7 @@ mod tests {
         // Active(x)). Approved holds for x; Active does not. The
         // walker should drill into the And and identify Active.
         let state = State::from_claims(vec![ClaimInstance {
-            predicate: "Approved".to_string(),
+            predicate: "Approved".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
         let t = Transformation {

@@ -113,9 +113,15 @@ where
             .map(Stmt::Require);
 
         // bind <claim_pattern>
-        let bind_stmt = just(Token::KwBind)
-            .ignore_then(claim_pattern.clone())
-            .map(|(predicate, args)| Stmt::BindOne(Prop::Claim { predicate, args }));
+        let bind_stmt =
+            just(Token::KwBind)
+                .ignore_then(claim_pattern.clone())
+                .map(|(predicate, args)| {
+                    Stmt::BindOne(Prop::Claim {
+                        predicate: predicate.into(),
+                        args,
+                    })
+                });
 
         // admit <claim_pattern>
         //
@@ -136,7 +142,10 @@ where
                         "wildcard `_` is not allowed in `admit`: admitting a claim requires every argument to be concrete; the kernel rejects wildcard-admits as `wildcard not allowed in assert`",
                     ));
                 }
-                Stmt::Assert(Claim { predicate, args })
+                Stmt::Assert(Claim {
+                    predicate: predicate.into(),
+                    args,
+                })
             });
 
         // retract <claim_pattern>
@@ -147,7 +156,10 @@ where
         // second). No surface-level wildcard restriction.
         let retract_stmt = just(Token::KwRetract)
             .ignore_then(claim_pattern.clone())
-            .map(|(predicate, args)| Stmt::Retract { predicate, args });
+            .map(|(predicate, args)| Stmt::Retract {
+                predicate: predicate.into(),
+                args,
+            });
 
         // emit <claim_pattern>
         //

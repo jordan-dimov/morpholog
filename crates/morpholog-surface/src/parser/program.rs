@@ -262,7 +262,13 @@ where
         )
         .map_with(|(name, args), e| {
             let span: SimpleSpan = e.span();
-            TopLevelDecl::Predicate(PredicateDecl { name, args }, span.start()..span.end())
+            TopLevelDecl::Predicate(
+                PredicateDecl {
+                    name: name.into(),
+                    args,
+                },
+                span.start()..span.end(),
+            )
         });
 
     // intent_decl ::= "intent" Ident "(" arg_list? ")"
@@ -381,7 +387,7 @@ where
             let span: SimpleSpan = e.span();
             TopLevelDecl::Derived(
                 DerivedClaim {
-                    predicate,
+                    predicate: predicate.into(),
                     keys: keys.into_iter().map(Var::from).collect(),
                     values,
                     domain,

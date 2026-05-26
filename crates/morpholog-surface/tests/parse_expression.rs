@@ -87,7 +87,7 @@ fn parses_claim_call_no_args() {
     assert_eq!(
         got,
         Prop::Claim {
-            predicate: "Marker".to_string(),
+            predicate: "Marker".into(),
             args: vec![],
         }
     );
@@ -99,7 +99,7 @@ fn parses_claim_call_with_args() {
     assert_eq!(
         got,
         Prop::Claim {
-            predicate: "Policy".to_string(),
+            predicate: "Policy".into(),
             args: vec![var("policy_id"), var("limit")],
         }
     );
@@ -111,7 +111,7 @@ fn parses_claim_call_with_actor() {
     assert_eq!(
         got,
         Prop::Claim {
-            predicate: "MayApprove".to_string(),
+            predicate: "MayApprove".into(),
             args: vec![Term::Actor, var("doc_type")],
         }
     );
@@ -123,7 +123,7 @@ fn parses_claim_call_with_wildcards_and_literals() {
     assert_eq!(
         got,
         Prop::Claim {
-            predicate: "ClaimReported".to_string(),
+            predicate: "ClaimReported".into(),
             args: vec![var("claim_id"), Term::Wildcard, dec("100")],
         }
     );
@@ -247,7 +247,7 @@ fn parses_not_over_claim() {
     assert_eq!(
         got,
         Prop::Not(Box::new(Prop::Claim {
-            predicate: "Netted".to_string(),
+            predicate: "Netted".into(),
             args: vec![var("line")],
         }))
     );
@@ -259,7 +259,7 @@ fn double_negation() {
     assert_eq!(
         got,
         Prop::Not(Box::new(Prop::Not(Box::new(Prop::Claim {
-            predicate: "Done".to_string(),
+            predicate: "Done".into(),
             args: vec![var("x")],
         }))))
     );
@@ -270,11 +270,11 @@ fn parses_and_two_operands() {
     let got = parse_expression("A(x) and B(x)").unwrap();
     let expected = Prop::And(vec![
         Prop::Claim {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![var("x")],
         },
         Prop::Claim {
-            predicate: "B".to_string(),
+            predicate: "B".into(),
             args: vec![var("x")],
         },
     ]);
@@ -335,11 +335,11 @@ fn parses_or_two_operands() {
     let got = parse_expression("A(x) or B(x)").unwrap();
     let expected = Prop::Or(vec![
         Prop::Claim {
-            predicate: "A".to_string(),
+            predicate: "A".into(),
             args: vec![var("x")],
         },
         Prop::Claim {
-            predicate: "B".to_string(),
+            predicate: "B".into(),
             args: vec![var("x")],
         },
     ]);
@@ -399,7 +399,7 @@ fn not_binds_tighter_than_or() {
 fn parses_pre_over_claim() {
     let got = parse_expression("pre(Balance(a, b))").unwrap();
     let expected = Prop::Pre(Box::new(Prop::Claim {
-        predicate: "Balance".to_string(),
+        predicate: "Balance".into(),
         args: vec![var("a"), var("b")],
     }));
     assert_eq!(got, expected);
@@ -530,7 +530,7 @@ fn realistic_netting_require_fragment() {
         Prop::Claim {
             ref predicate,
             ..
-        } if predicate == "ApprovedSettlementLine"
+        } if predicate.as_str() == "ApprovedSettlementLine"
     ));
     assert!(matches!(ops[1], Prop::Not(_)));
 }
@@ -602,7 +602,7 @@ fn date_literal_in_claim_args() {
     let Prop::Claim { predicate, args } = got else {
         panic!("expected Claim");
     };
-    assert_eq!(predicate, "EffectiveFrom");
+    assert_eq!(predicate.as_str(), "EffectiveFrom");
     assert_eq!(args[0], Term::Var("verification".into()));
     assert_eq!(
         args[1],
@@ -616,7 +616,7 @@ fn subject_literal_in_claim_args() {
     let Prop::Claim { predicate, args } = got else {
         panic!("expected Claim");
     };
-    assert_eq!(predicate, "Purpose");
+    assert_eq!(predicate.as_str(), "Purpose");
     assert_eq!(args[0], Term::Var("asset".into()));
     assert_eq!(
         args[1],
@@ -656,7 +656,7 @@ fn parses_exists_with_simple_body() {
         Prop::Exists {
             binding: "x".into(),
             body: Box::new(Prop::Claim {
-                predicate: "Foo".to_string(),
+                predicate: "Foo".into(),
                 args: vec![Term::Var("x".into())],
             }),
         }
@@ -715,7 +715,7 @@ fn forall_with_claim_source_used_as_is() {
     // Source is a claim, used as-is (not wrapped in In).
     assert!(matches!(*source, Prop::Claim { .. }));
     if let Prop::Claim { predicate, .. } = *source {
-        assert_eq!(predicate, "ClaimReported");
+        assert_eq!(predicate.as_str(), "ClaimReported");
     }
     assert!(matches!(*body, Prop::Claim { .. }));
 }
@@ -895,7 +895,7 @@ fn parses_value_without_default() {
     else {
         panic!("expected ValueOf");
     };
-    assert_eq!(predicate, "Policy");
+    assert_eq!(predicate.as_str(), "Policy");
     assert_eq!(args.len(), 2);
     assert_eq!(args[0], Term::Var("policy_id".into()));
     assert_eq!(args[1], Term::Wildcard);
@@ -911,7 +911,7 @@ fn parses_value_with_default() {
     else {
         panic!("expected ValueOf");
     };
-    assert_eq!(predicate, "Policy");
+    assert_eq!(predicate.as_str(), "Policy");
     let default = default.expect("expected default expr");
     assert_eq!(*default, dec_value("0"));
 }

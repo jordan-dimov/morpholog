@@ -100,11 +100,11 @@ pub fn coll(items: Vec<EvalValue>) -> EvalValue {
 // ============================================================
 
 /// Build a [`ClaimInstance`] from a predicate name and an arg slice.
-/// Convenience over `ClaimInstance { predicate: pred.to_string(),
+/// Convenience over `ClaimInstance { predicate: predicate.into(),
 /// args: args.to_vec() }` at the call site.
 pub fn claim_instance(predicate: &str, args: &[EvalValue]) -> ClaimInstance {
     ClaimInstance {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args: args.to_vec(),
     }
 }

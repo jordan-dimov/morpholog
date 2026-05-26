@@ -10,9 +10,9 @@ pub mod testing;
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{
-    ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
-    Subject, TraceEntry, TracedProposal, Transformation, Transition, enumerate_derived,
-    predicates_referenced_by_derived, propose, propose_with_trace,
+    ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome,
+    PredicateName, State, Subject, TraceEntry, TracedProposal, Transformation, Transition,
+    enumerate_derived, predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -309,18 +309,21 @@ fn classify(err: sqlx::Error) -> PgError {
 /// `State`.
 async fn load_state(
     tx: &mut Transaction<'_, Postgres>,
-    scope: &[String],
+    scope: &[PredicateName],
 ) -> Result<State, PgError> {
     if scope.is_empty() {
         return Ok(State::default());
     }
 
+    // PredicateName is opaque to sqlx; bind the names as text for the
+    // `predicate_name` text column's `ANY(...)` filter.
+    let scope: Vec<&str> = scope.iter().map(PredicateName::as_str).collect();
     let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          WHERE predicate_name = ANY($1)",
     )
-    .bind(scope)
+    .bind(&scope)
     .fetch_all(&mut **tx)
     .await
     .map_err(classify)?;
@@ -328,7 +331,10 @@ async fn load_state(
     let mut claims = Vec::with_capacity(rows.len());
     for (predicate, args_json) in rows {
         let args: Vec<EvalValue> = serde_json::from_value(args_json)?;
-        claims.push(ClaimInstance { predicate, args });
+        claims.push(ClaimInstance {
+            predicate: PredicateName::from(predicate),
+            args,
+        });
     }
     Ok(State::from_claims(claims))
 }
@@ -347,7 +353,10 @@ async fn load_state(
 /// set: the assert stages a new claim rather than reading existing
 /// ones. An invariant that also references it is picked up via the
 /// invariant walker.
-fn compute_load_scope(transformation: &Transformation, invariants: &[Invariant]) -> Vec<String> {
+fn compute_load_scope(
+    transformation: &Transformation,
+    invariants: &[Invariant],
+) -> Vec<PredicateName> {
     let mut scope = std::collections::BTreeSet::new();
     for stmt in &transformation.body {
         morpholog_core::predicates_read_by_stmt(stmt, &mut scope);
@@ -388,7 +397,7 @@ async fn write_accepted(
     // persistent-state mismatch (concurrent interference, which SSI
     // catches later, or a pre-state snapshot that disagrees with the
     // live table).
-    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut seen: HashSet<(PredicateName, String)> = HashSet::new();
     for claim in retracted_claims {
         let args_repr = serde_json::to_string(&claim.args)?;
         let key = (claim.predicate.clone(), args_repr);
@@ -399,7 +408,7 @@ async fn write_accepted(
         let result = sqlx::query(
             "DELETE FROM morpholog.claims WHERE predicate_name = $1 AND arguments = $2",
         )
-        .bind(&claim.predicate)
+        .bind(claim.predicate.as_str())
         .bind(&args_json)
         .execute(&mut **tx)
         .await
@@ -423,7 +432,7 @@ async fn write_accepted(
              VALUES ($1, $2, $3)
              ON CONFLICT (predicate_name, arguments) DO NOTHING",
         )
-        .bind(&claim.predicate)
+        .bind(claim.predicate.as_str())
         .bind(&args_json)
         .bind(transition_id)
         .execute(&mut **tx)
@@ -615,7 +624,7 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     rows.into_iter()
         .map(|(predicate, args_json)| {
             Ok(ClaimInstance {
-                predicate,
+                predicate: PredicateName::from(predicate),
                 args: serde_json::from_value(args_json)?,
             })
         })
@@ -653,7 +662,7 @@ pub async fn list_claims_for_predicates(
     rows.into_iter()
         .map(|(predicate, args_json)| {
             Ok(ClaimInstance {
-                predicate,
+                predicate: PredicateName::from(predicate),
                 args: serde_json::from_value(args_json)?,
             })
         })
@@ -678,7 +687,10 @@ pub async fn load_scoped_state(
     transformation: &Transformation,
     invariants: &[Invariant],
 ) -> Result<State, PgError> {
-    let scope = compute_load_scope(transformation, invariants);
+    let scope: Vec<String> = compute_load_scope(transformation, invariants)
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect();
     let claims = list_claims_for_predicates(pool, &scope).await?;
     Ok(State::from_claims(claims))
 }
@@ -1480,6 +1492,7 @@ pub async fn list_derived(
 ) -> Result<Vec<ClaimInstance>, PgError> {
     let footprint: Vec<String> = predicates_referenced_by_derived(derived)
         .into_iter()
+        .map(|p| p.to_string())
         .collect();
     let claims = list_claims_for_predicates(pool, &footprint).await?;
     let state = State::from_claims(claims);
@@ -1597,6 +1610,7 @@ pub async fn list_derived_at(
 ) -> Result<Vec<ClaimInstance>, PgError> {
     let footprint: Vec<String> = predicates_referenced_by_derived(derived)
         .into_iter()
+        .map(|p| p.to_string())
         .collect();
     let state = reconstruct_state_at_for_predicates(pool, transition_id, &footprint).await?;
     let rows = enumerate_derived(derived, &state)?;
@@ -1658,13 +1672,13 @@ async fn reconstruct_inner(
         // Within each transition: retractions first, then assertions.
         // Matches build_candidate_state in the kernel.
         for r in &retracted {
-            if !predicate_in_scope_set(&r.predicate, scope_set.as_ref()) {
+            if !predicate_in_scope_set(r.predicate.as_str(), scope_set.as_ref()) {
                 continue;
             }
             replay.retract(r);
         }
         for a in &asserted {
-            if !predicate_in_scope_set(&a.predicate, scope_set.as_ref()) {
+            if !predicate_in_scope_set(a.predicate.as_str(), scope_set.as_ref()) {
                 continue;
             }
             replay.assert(a);

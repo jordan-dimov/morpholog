@@ -27,15 +27,15 @@
 
 use morpholog_core::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
-    ValidationError, Value, ValueExpr, Var,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Term,
+    Transformation, ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
 // ---------- leaf generators ----------
 
-fn arb_pred_name() -> impl Strategy<Value = String> {
-    "[A-Z][a-zA-Z0-9_]{0,8}".prop_map(|s| s)
+fn arb_pred_name() -> impl Strategy<Value = PredicateName> {
+    "[A-Z][a-zA-Z0-9_]{0,8}".prop_map(PredicateName::from)
 }
 
 fn arb_var_name() -> impl Strategy<Value = String> {
@@ -182,7 +182,10 @@ fn arb_stmt() -> impl Strategy<Value = Stmt> {
             .prop_map(|(predicate, args)| Stmt::Assert(Claim { predicate, args })),
         (arb_pred_name(), arb_args())
             .prop_map(|(predicate, args)| Stmt::Retract { predicate, args }),
-        (arb_pred_name(), arb_args()).prop_map(|(name, args)| Stmt::Emit(Intent { name, args })),
+        (arb_pred_name(), arb_args()).prop_map(|(name, args)| Stmt::Emit(Intent {
+            name: name.to_string(),
+            args
+        })),
     ];
     // `for` is the only statement that nests statements.
     leaf.prop_recursive(3, 16, 3, |inner| {
@@ -214,12 +217,15 @@ fn arb_pred_decl() -> impl Strategy<Value = PredicateDecl> {
 }
 
 fn arb_intent_decl() -> impl Strategy<Value = IntentDecl> {
-    (arb_pred_name(), arb_decl_args()).prop_map(|(name, args)| IntentDecl { name, args })
+    (arb_pred_name(), arb_decl_args()).prop_map(|(name, args)| IntentDecl {
+        name: name.to_string(),
+        args,
+    })
 }
 
 fn arb_invariant() -> impl Strategy<Value = Invariant> {
     (arb_pred_name(), arb_prop()).prop_map(|(name, body)| Invariant {
-        name,
+        name: name.to_string(),
         version: 1,
         body,
     })
@@ -232,7 +238,7 @@ fn arb_transformation() -> impl Strategy<Value = Transformation> {
         prop::collection::vec(arb_stmt(), 0..4),
     )
         .prop_map(|(name, parameters, body)| Transformation {
-            name,
+            name: name.to_string(),
             parameters: parameters.into_iter().map(Var::from).collect(),
             body,
         })
@@ -318,7 +324,7 @@ fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
             4 => Prop::Implies {
                 left: Box::new(e),
                 right: Box::new(Prop::Claim {
-                    predicate: "A".to_string(),
+                    predicate: "A".into(),
                     args: vec![],
                 }),
             },
@@ -329,7 +335,7 @@ fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
             _ => Prop::Forall {
                 binding: "x".into(),
                 source: Box::new(Prop::Claim {
-                    predicate: "A".to_string(),
+                    predicate: "A".into(),
                     args: vec![],
                 }),
                 body: Box::new(e),
@@ -354,7 +360,7 @@ fn nest_value(node: usize, depth: usize) -> Prop {
             0 => ValueExpr::Add(Box::new(e), filler()),
             1 => ValueExpr::Sub(Box::new(e), filler()),
             _ => ValueExpr::ValueOf {
-                predicate: "P".to_string(),
+                predicate: "P".into(),
                 args: vec![],
                 default: Some(Box::new(e)),
             },
@@ -380,7 +386,7 @@ fn deeply_nested_propositions_are_rejected_not_overflowed() {
             node,
             DEPTH,
             Prop::Claim {
-                predicate: "A".to_string(),
+                predicate: "A".into(),
                 args: vec![],
             },
         );
@@ -442,7 +448,7 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
     // covers; `for` is the only statement that nests statements.
     const DEPTH: usize = 1024;
     let mut body = vec![Stmt::Assert(Claim {
-        predicate: "A".to_string(),
+        predicate: "A".into(),
         args: vec![],
     })];
     for _ in 0..DEPTH {

@@ -318,7 +318,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     // predicates land,
     // this example's callers are trusted to admit decimal limits.
     let pre = State::from_claims(vec![ClaimInstance {
-        predicate: "ApprovalLimit".to_string(),
+        predicate: "ApprovalLimit".into(),
         args: vec![
             subj("jordan"),
             subj("invoice"),
@@ -360,7 +360,7 @@ fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
         name: "improperly_uses_actor".to_string(),
         version: 1,
         body: Prop::Claim {
-            predicate: "AnyPredicate".to_string(),
+            predicate: "AnyPredicate".into(),
             args: vec![Term::Actor],
         },
     };
@@ -378,7 +378,7 @@ fn term_actor_unbound_error_is_position_independent() {
         name: "actor_masked_by_earlier_missing_literal".to_string(),
         version: 1,
         body: Prop::Claim {
-            predicate: "AnyPredicate".to_string(),
+            predicate: "AnyPredicate".into(),
             args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
         },
     };

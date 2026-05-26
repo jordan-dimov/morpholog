@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ir::{DerivedClaim, Program, Prop, Stmt, ValueExpr};
+use crate::ir::{DerivedClaim, PredicateName, Program, Prop, Stmt, ValueExpr};
 
 /// Return the set of predicate names a proposition references anywhere
 /// in its tree. Used by the PostgreSQL adapter's read path to load only
@@ -29,7 +29,7 @@ use crate::ir::{DerivedClaim, Program, Prop, Stmt, ValueExpr};
 /// which can reference a predicate; it contributes nothing. Comparator
 /// operands are value expressions, walked by
 /// [`predicates_referenced_by_value`].
-pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<String>) {
+pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<PredicateName>) {
     match prop {
         Prop::Claim { predicate, .. } => {
             out.insert(predicate.clone());
@@ -72,7 +72,7 @@ pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<String>) {
 /// Exhaustive over `ValueExpr` for the same honesty reason as the
 /// proposition walker. `Term` takes only a `Term` and contributes
 /// nothing.
-pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
+pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<PredicateName>) {
     match expr {
         ValueExpr::ValueOf {
             predicate, default, ..
@@ -104,7 +104,7 @@ pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<Strin
 /// included: that names the OUTPUT predicate of the enumeration,
 /// which the kernel never reads from state. Including it would tell
 /// callers to load claims they have no use for.
-pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<String> {
+pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
     predicates_referenced_by_prop(&derived.domain, &mut out);
     for v in &derived.values {
@@ -137,7 +137,7 @@ pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<Stri
 ///
 /// `Stmt::LetNewSubject` contributes nothing - it mints a fresh
 /// subject identifier without consulting state.
-pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
+pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
     match stmt {
         Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, out),
         Stmt::Let { value, .. } => predicates_referenced_by_value(value, out),
@@ -186,7 +186,7 @@ pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
 /// Exhaustive match for the same reason as
 /// `predicates_referenced_by_stmt`: a future `Stmt` variant must
 /// declare its read behaviour explicitly.
-pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
+pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
     match stmt {
         Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, out),
         Stmt::Let { value, .. } => predicates_referenced_by_value(value, out),
@@ -244,7 +244,7 @@ pub fn transformations_asserting(program: &Program, predicate: &str) -> Vec<Stri
 /// invisible to `explain`.
 fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
     match stmt {
-        Stmt::Assert(claim) => claim.predicate == predicate,
+        Stmt::Assert(claim) => claim.predicate.as_str() == predicate,
         Stmt::For { body, .. } => body.iter().any(|s| stmt_asserts(s, predicate)),
         Stmt::Require(_)
         | Stmt::BindOne(_)

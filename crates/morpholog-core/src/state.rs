@@ -12,7 +12,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::ir::{Subject, Var};
+use crate::ir::{PredicateName, Subject, Var};
 
 /// A runtime value flowing through evaluation. Distinct from the IR's
 /// `Value` (which holds literals only).
@@ -49,7 +49,7 @@ pub enum EvalValue {
 /// test pins this contract.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClaimInstance {
-    pub predicate: String,
+    pub predicate: PredicateName,
     pub args: Vec<EvalValue>,
 }
 
@@ -71,7 +71,7 @@ pub struct ClaimInstance {
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct State {
     claims: Vec<ClaimInstance>,
-    by_predicate: HashMap<String, PredicateIndex>,
+    by_predicate: HashMap<PredicateName, PredicateIndex>,
 }
 
 /// Per-predicate index entry stored on [`State`]. Holds the
@@ -107,7 +107,7 @@ impl State {
     /// indexes are immutable thereafter; the State itself is
     /// immutable.
     pub fn from_claims(claims: Vec<ClaimInstance>) -> Self {
-        let mut by_predicate: HashMap<String, PredicateIndex> = HashMap::new();
+        let mut by_predicate: HashMap<PredicateName, PredicateIndex> = HashMap::new();
         for (i, c) in claims.iter().enumerate() {
             let entry = by_predicate.entry(c.predicate.clone()).or_default();
             entry.all.push(i);
@@ -139,7 +139,7 @@ impl State {
         predicate: &str,
     ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
         self.by_predicate
-            .get(predicate)
+            .get(&PredicateName::from(predicate))
             .map(|idx| idx.all.iter().map(|&i| &self.claims[i]))
             .into_iter()
             .flatten()
@@ -160,7 +160,7 @@ impl State {
         value: &EvalValue,
     ) -> Option<&[usize]> {
         self.by_predicate
-            .get(predicate)
+            .get(&PredicateName::from(predicate))
             .and_then(|idx| idx.by_arg.get(position))
             .and_then(|m| m.get(value))
             .map(|v| v.as_slice())

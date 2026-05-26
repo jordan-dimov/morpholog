@@ -316,7 +316,7 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
         if too_deep {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::DerivedClaim {
-                    predicate: d.predicate.clone(),
+                    predicate: d.predicate.to_string(),
                 },
             });
         }

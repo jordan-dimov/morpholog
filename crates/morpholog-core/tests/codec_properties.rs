@@ -12,7 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use jiff::civil::Date;
-use morpholog_core::{ClaimInstance, EvalValue, IntentInstance};
+use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, PredicateName};
 use proptest::prelude::*;
 use rust_decimal::Decimal;
 
@@ -65,8 +65,8 @@ fn arb_eval_value() -> impl Strategy<Value = EvalValue> {
     )
 }
 
-fn arb_predicate_name() -> impl Strategy<Value = String> {
-    "[A-Z][a-zA-Z0-9_]{0,24}".prop_map(|s| s)
+fn arb_predicate_name() -> impl Strategy<Value = PredicateName> {
+    "[A-Z][a-zA-Z0-9_]{0,24}".prop_map(PredicateName::from)
 }
 
 fn arb_intent_name() -> impl Strategy<Value = String> {

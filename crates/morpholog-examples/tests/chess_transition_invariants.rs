@@ -290,26 +290,28 @@ fn quiet_move_after_opening_succeeds() {
     assert!(
         next.claims()
             .iter()
-            .any(|c| { c.predicate == "MoveCount" && c.args == vec![dec(1)] }),
+            .any(|c| { c.predicate.as_str() == "MoveCount" && c.args == vec![dec(1)] }),
         "MoveCount must be 1 after one move"
     );
     // The turn flipped.
     assert!(
         next.claims()
             .iter()
-            .any(|c| { c.predicate == "CurrentTurn" && c.args == vec![subj("black")] }),
+            .any(|c| { c.predicate.as_str() == "CurrentTurn" && c.args == vec![subj("black")] }),
         "CurrentTurn must be black after white moves"
     );
     // The pawn relocated.
     assert!(
         next.claims().iter().any(|c| {
-            c.predicate == "PieceAt" && c.args == vec![subj("e4"), subj("pawn"), subj("white")]
+            c.predicate.as_str() == "PieceAt"
+                && c.args == vec![subj("e4"), subj("pawn"), subj("white")]
         }),
         "pawn must be at e4 after the move"
     );
     assert!(
         !next.claims().iter().any(|c| {
-            c.predicate == "PieceAt" && c.args == vec![subj("e2"), subj("pawn"), subj("white")]
+            c.predicate.as_str() == "PieceAt"
+                && c.args == vec![subj("e2"), subj("pawn"), subj("white")]
         }),
         "pawn must no longer be at e2"
     );

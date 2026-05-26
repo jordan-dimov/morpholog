@@ -98,7 +98,7 @@ fn trial_balance_over_simple_ledger_enumerates_one_row_per_account() {
     ];
     for (account, balance) in expected {
         let expected_row = ClaimInstance {
-            predicate: "TrialBalanceRow".to_string(),
+            predicate: "TrialBalanceRow".into(),
             args: vec![subj(account), dec(balance)],
         };
         assert!(
@@ -192,12 +192,12 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     use morpholog_core::Value;
 
     let state = State::from_claims(vec![ClaimInstance {
-        predicate: "Tag".to_string(),
+        predicate: "Tag".into(),
         args: vec![subj("only")],
     }]);
 
     let derived_decimal_ok = DerivedClaim {
-        predicate: "DecimalSub".to_string(),
+        predicate: "DecimalSub".into(),
         keys: vec!["k".into()],
         values: vec![DerivedValue {
             name: "result".to_string(),
@@ -211,7 +211,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
             ),
         }],
         domain: Prop::Claim {
-            predicate: "Tag".to_string(),
+            predicate: "Tag".into(),
             args: vec![Term::Var("k".into())],
         },
     };
@@ -222,7 +222,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
 
     // Subtracting a subject from a decimal should be a TypeMismatch.
     let derived_type_error = DerivedClaim {
-        predicate: "TypeError".to_string(),
+        predicate: "TypeError".into(),
         keys: vec!["k".into()],
         values: vec![DerivedValue {
             name: "result".to_string(),
@@ -236,7 +236,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
             ),
         }],
         domain: Prop::Claim {
-            predicate: "Tag".to_string(),
+            predicate: "Tag".into(),
             args: vec![Term::Var("k".into())],
         },
     };
@@ -256,12 +256,15 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
 /// optimization: the PG adapter knows to skip the JournalEntry rows.
 #[test]
 fn predicates_referenced_by_trial_balance_derived_excludes_unused_predicates() {
-    use morpholog_core::predicates_referenced_by_derived;
+    use morpholog_core::{PredicateName, predicates_referenced_by_derived};
     use std::collections::BTreeSet;
 
     let derived = double_entry_ledger::trial_balance_row();
     let footprint = predicates_referenced_by_derived(&derived);
-    let expected: BTreeSet<String> = ["JournalLine"].iter().map(|s| s.to_string()).collect();
+    let expected: BTreeSet<PredicateName> = ["JournalLine"]
+        .iter()
+        .map(|s| PredicateName::from(*s))
+        .collect();
     assert_eq!(
         footprint, expected,
         "trial_balance_row reads only JournalLine; the derived's own \
