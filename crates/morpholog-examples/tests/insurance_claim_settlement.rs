@@ -695,7 +695,7 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     // gates still hold (alex has 50k authority; 30k <= 100k
     // aggregate); the conservation invariant must reject.
     let buggy = Transformation {
-        name: "buggy_authorise_settlement".to_string(),
+        name: "buggy_authorise_settlement".into(),
         parameters: ir_builder::params(&["claim_id", "settlement_id", "amount"]),
         body: vec![
             ir_builder::bind_one(ir_builder::claim(
@@ -818,7 +818,7 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     // in pre-state at evaluation time. Only the sum-based
     // conservation invariant catches the discrepancy.
     let buggy = Transformation {
-        name: "buggy_multi_payment".to_string(),
+        name: "buggy_multi_payment".into(),
         parameters: ir_builder::params(&["amount"]),
         body: vec![
             ir_builder::bind_one(ir_builder::claim(

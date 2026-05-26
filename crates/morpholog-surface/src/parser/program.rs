@@ -318,7 +318,7 @@ where
             let span: SimpleSpan = e.span();
             TopLevelDecl::Invariant(
                 Invariant {
-                    name,
+                    name: name.into(),
                     version: 1,
                     body,
                 },
@@ -353,7 +353,7 @@ where
             let span: SimpleSpan = e.span();
             TopLevelDecl::Transformation(
                 Transformation {
-                    name,
+                    name: name.into(),
                     parameters: parameters.into_iter().map(Var::from).collect(),
                     body,
                 },

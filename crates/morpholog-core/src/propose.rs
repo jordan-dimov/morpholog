@@ -20,7 +20,10 @@ use crate::eval::{
     resolve_term, unify_args, unsatisfied_positive_claims,
 };
 use crate::format;
-use crate::ir::{Claim, Intent, Invariant, Stmt, Subject, Term, Transformation, Var};
+use crate::ir::{
+    Claim, Intent, Invariant, InvariantName, Stmt, Subject, Term, Transformation,
+    TransformationName, Var,
+};
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
 /// A proposed state transition. Evaluated, accepted-or-rejected, and
@@ -36,7 +39,7 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 ///   renders as a tagged [`EvalValue::Subject`] (see [`crate::actor_repr`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
-    pub transformation_name: String,
+    pub transformation_name: TransformationName,
     pub args: Vec<EvalValue>,
     #[serde(with = "crate::actor_repr")]
     pub actor: Subject,
@@ -147,7 +150,7 @@ pub enum TraceEntry {
     /// outcome. A failing invariant produces this entry plus an
     /// `Outcome::Rejected` in the surrounding `TracedProposal`.
     InvariantCheck {
-        name: String,
+        name: InvariantName,
         expression: String,
         held: bool,
     },

@@ -294,7 +294,7 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
         if prop_exceeds_depth(&inv.body, MAX_EXPR_DEPTH) {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Invariant {
-                    name: inv.name.clone(),
+                    name: inv.name.to_string(),
                 },
             });
         }
@@ -303,7 +303,7 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
         if t.body.iter().any(|s| stmt_exceeds_depth(s, MAX_EXPR_DEPTH)) {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Transformation {
-                    name: t.name.clone(),
+                    name: t.name.to_string(),
                 },
             });
         }
@@ -450,7 +450,7 @@ mod tests {
 
     fn empty_program() -> Program {
         Program {
-            name: "t".to_string(),
+            name: "t".into(),
             predicates: vec![],
             intents: vec![],
             invariants: vec![],
@@ -471,7 +471,7 @@ mod tests {
         }
         let mut p = empty_program();
         p.invariants = vec![Invariant {
-            name: "deep".to_string(),
+            name: "deep".into(),
             version: 1,
             body,
         }];
@@ -499,7 +499,7 @@ mod tests {
         }
         let mut p = empty_program();
         p.transformations = vec![Transformation {
-            name: "deep".to_string(),
+            name: "deep".into(),
             parameters: params(&["c"]),
             body: inner,
         }];
@@ -525,7 +525,7 @@ mod tests {
         let mut p = empty_program();
         p.predicates = vec![predicate("A").build()];
         p.invariants = vec![Invariant {
-            name: "shallow".to_string(),
+            name: "shallow".into(),
             version: 1,
             body: not(not(not(claim("A", vec![])))),
         }];

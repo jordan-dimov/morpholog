@@ -225,7 +225,7 @@ fn arb_intent_decl() -> impl Strategy<Value = IntentDecl> {
 
 fn arb_invariant() -> impl Strategy<Value = Invariant> {
     (arb_pred_name(), arb_prop()).prop_map(|(name, body)| Invariant {
-        name: name.to_string(),
+        name: name.as_str().into(),
         version: 1,
         body,
     })
@@ -238,7 +238,7 @@ fn arb_transformation() -> impl Strategy<Value = Transformation> {
         prop::collection::vec(arb_stmt(), 0..4),
     )
         .prop_map(|(name, parameters, body)| Transformation {
-            name: name.to_string(),
+            name: name.as_str().into(),
             parameters: parameters.into_iter().map(Var::from).collect(),
             body,
         })
@@ -272,7 +272,7 @@ fn arb_program() -> impl Strategy<Value = Program> {
     )
         .prop_map(
             |(predicates, intents, invariants, transformations, derived_claims)| Program {
-                name: "fuzz".to_string(),
+                name: "fuzz".into(),
                 predicates,
                 intents,
                 invariants,
@@ -391,11 +391,11 @@ fn deeply_nested_propositions_are_rejected_not_overflowed() {
             },
         );
         let p = Program {
-            name: "deep".to_string(),
+            name: "deep".into(),
             predicates: vec![],
             intents: vec![],
             invariants: vec![Invariant {
-                name: "i".to_string(),
+                name: "i".into(),
                 version: 1,
                 body,
             }],
@@ -420,11 +420,11 @@ fn deeply_nested_value_expressions_are_rejected_not_overflowed() {
     for node in 0..3 {
         let body = nest_value(node, DEPTH);
         let p = Program {
-            name: "deep".to_string(),
+            name: "deep".into(),
             predicates: vec![],
             intents: vec![],
             invariants: vec![Invariant {
-                name: "i".to_string(),
+                name: "i".into(),
                 version: 1,
                 body,
             }],
@@ -459,12 +459,12 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
         }];
     }
     let p = Program {
-        name: "deep".to_string(),
+        name: "deep".into(),
         predicates: vec![],
         intents: vec![],
         invariants: vec![],
         transformations: vec![Transformation {
-            name: "t".to_string(),
+            name: "t".into(),
             parameters: vec!["c".into()],
             body,
         }],

@@ -113,7 +113,7 @@ fn piece_count_drift_is_rejected() {
     // PieceCount stays at 32. MoveCount and CurrentTurn are handled
     // correctly, so the census invariant is the one that must fire.
     let drifting_move = Transformation {
-        name: "drifting_move".to_string(),
+        name: "drifting_move".into(),
         parameters: ir_builder::params(&["src", "dst", "new_turn"]),
         body: vec![
             ir_builder::bind_one(ir_builder::claim(
@@ -199,7 +199,7 @@ fn dropping_the_piece_counter_is_rejected() {
     let state = run_start_game(&program);
 
     let counterless_move = Transformation {
-        name: "counterless_move".to_string(),
+        name: "counterless_move".into(),
         parameters: ir_builder::params(&["new_turn"]),
         body: vec![
             ir_builder::bind_one(ir_builder::claim(
@@ -347,7 +347,7 @@ fn transition_invariant_catches_missing_move_count_bump() {
     // MoveCount. The move count claim is left untouched in the
     // candidate state. The transition invariant must catch this.
     let buggy_move = Transformation {
-        name: "buggy_quiet_move".to_string(),
+        name: "buggy_quiet_move".into(),
         parameters: ir_builder::params(&["src", "dst", "new_turn"]),
         body: vec![
             ir_builder::bind_one(ir_builder::claim(

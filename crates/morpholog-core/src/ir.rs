@@ -159,6 +159,72 @@ impl std::fmt::Display for IntentName {
     }
 }
 
+/// An opaque transformation name - the identifier of a declared transformation,
+/// and the name a [`crate::Transition`] proposes against. Distinct at the type
+/// level from an invariant name and every other identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TransformationName(String);
+
+impl TransformationName {
+    /// Borrow the name. Use at the edges (formatting, persistence), not to
+    /// route transformation names through string APIs.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TransformationName {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for TransformationName {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for TransformationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// An opaque invariant name - the identifier of a declared invariant, carried
+/// into the audit log and the trace's invariant-check entries. Distinct at the
+/// type level from a transformation name and every other identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct InvariantName(String);
+
+impl InvariantName {
+    /// Borrow the name. Use at the edges (formatting, persistence), not to
+    /// route invariant names through string APIs.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for InvariantName {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for InvariantName {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for InvariantName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Equality against a string literal for the opaque identifier newtypes,
 /// symmetric so both `name == "Foo"` and `"Foo" == name` (and `assert_eq!` in
 /// either order) work without exposing the inner string for general use -
@@ -194,6 +260,8 @@ impl_eq_str!(Subject);
 impl_eq_str!(Var);
 impl_eq_str!(PredicateName);
 impl_eq_str!(IntentName);
+impl_eq_str!(TransformationName);
+impl_eq_str!(InvariantName);
 
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
@@ -206,7 +274,7 @@ impl_eq_str!(IntentName);
 /// would be painful; the empty cost of carrying it now is cheap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invariant {
-    pub name: String,
+    pub name: InvariantName,
     pub version: u32,
     pub body: Prop,
 }
@@ -472,7 +540,7 @@ pub enum Stmt {
 /// snapshot. Writes are staged and become real only at commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transformation {
-    pub name: String,
+    pub name: TransformationName,
     pub parameters: Vec<Var>,
     pub body: Vec<Stmt>,
 }

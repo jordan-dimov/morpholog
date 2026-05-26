@@ -232,7 +232,7 @@ pub fn transformations_asserting(program: &Program, predicate: &str) -> Vec<Stri
         .transformations
         .iter()
         .filter(|t| t.body.iter().any(|s| stmt_asserts(s, predicate)))
-        .map(|t| t.name.clone())
+        .map(|t| t.name.to_string())
         .collect()
 }
 

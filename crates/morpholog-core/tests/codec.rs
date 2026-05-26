@@ -152,7 +152,7 @@ fn intent_args_serialise_as_a_json_array() {
 #[test]
 fn transition_actor_round_trips_as_tagged_subject() {
     let t = Transition {
-        transformation_name: "do_it".to_string(),
+        transformation_name: "do_it".into(),
         args: vec![],
         actor: Subject::from("alice"),
     };
@@ -372,7 +372,7 @@ fn trace_entry_for_with_per_iteration_items_round_trips() {
 #[test]
 fn trace_entry_invariant_check_round_trips() {
     let entry = TraceEntry::InvariantCheck {
-        name: "balanced_posted_entry".to_string(),
+        name: "balanced_posted_entry".into(),
         expression: "implies(JournalEntry(...), ...)".to_string(),
         held: false,
     };
