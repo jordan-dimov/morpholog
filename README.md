@@ -1,12 +1,10 @@
 # Morpholog
 
-*A language and runtime for business systems where a record's legitimacy must be provable, not just stored: you declare the rules records must obey, and the runtime refuses to commit anything that would break one.*
+Morpholog is a language and runtime for business systems where a record's legitimacy must be provable, not just stored.
 
-There comes a moment in every serious business when someone - an auditor, a regulator, a board director who has not been having a great quarter - asks you to *prove* a number. Why is it what it is. Who decided it should be. What it looked like before the restatement. Whether the rule it had to satisfy actually held at the moment it was admitted.
+You write the rules your records must obey as invariants. The only way state changes is a transformation, and it commits only if every invariant still holds. The runtime makes invalid business state impossible to write down - and keeps an audit trail that proves why each change was allowed.
 
-In most systems, those answers come from detective work. You pull logs, reconcile parallel files, ask the people who happened to be on call.
-
-Morpholog answers them differently. It treats records as **admitted claims** - statements admitted into the system under specific authority at a specific moment, never as freestanding truth. The same number can carry different *standing* - whether it may be relied on, and for what - for different decisions, granted and revoked by different authorities. The verifier can correct the figure; the original stays in the books and the corrected figure becomes current. **Decisions admitted under valid standing remain valid records even when that standing is later revoked** - the legitimacy of a *past* decision was established when it was made. Every change is checked against the rules atomically; nothing sticks unless every rule holds; the audit log carries enough provenance to reconstruct any past moment - no bitemporal columns, no shadow tables.
+Underneath, Morpholog treats records not as freestanding facts but as **admitted claims** - statements admitted under specific authority at a specific moment. The same number can carry different *standing* - whether it may be relied on, and for what - for different decisions, granted and revoked by different authorities. A verifier can correct a figure without erasing it: the original stays in the books and the corrected figure becomes current. **Decisions admitted under valid standing remain valid records even when that standing is later revoked** - the legitimacy of a *past* decision was established when it was made. The audit log carries enough provenance to reconstruct any past moment - no bitemporal columns, no shadow tables.
 
 The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
 
