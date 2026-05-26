@@ -10,6 +10,8 @@ Morpholog answers them differently. It treats records as **admitted claims** - s
 
 The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
 
+That gate runs forward as well as back. Whatever decides what to do next - a person, an optimiser, a heuristic, an AI model - only ever *proposes* a change; the runtime is what admits it or refuses. So the thing making the decision does not have to be trusted. You can put untrusted intelligence to work precisely because legitimacy is enforced outside it, never asked of it.
+
 ## The questions you can answer
 
 - *Why does this report differ from the one we filed last quarter?*

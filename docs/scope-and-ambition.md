@@ -19,6 +19,8 @@ The whole product:
 3. Every transformation must preserve every active **invariant**.
 4. Therefore bad state cannot be committed.
 
+A corollary worth stating outright, because much of the value now lives there: since admissibility is decided by the invariants and not by whatever produced the proposal, the proposer does not have to be trusted. A person, a solver, a heuristic, a model, a genetic search - each only suggests a candidate next state; the runtime admits or refuses it on the same terms. This is what lets a business put untrusted intelligence to work: admissibility is enforced outside the intelligence, not entrusted to it.
+
 Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class constructs over it - the rules and the actions. The other declarations a programme carries (`predicate`, `intent`, `derived`) are vocabulary and read-side, in the supporting tier below; none is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
 
 - **Vocabulary** - `predicate` and `intent` declarations: the shapes claims and outbox effects may take.
