@@ -532,7 +532,7 @@ pub(crate) fn execute_stmt(
             // retracted claims, not a count.
             if trace.is_on() {
                 let mut retracted_here: Vec<ClaimInstance> = vec![];
-                for claim in pre_state.claims_for(predicate.as_str()) {
+                for claim in pre_state.claims_for_name(predicate) {
                     if claim.args.len() != args.len() {
                         continue;
                     }
@@ -546,7 +546,7 @@ pub(crate) fn execute_stmt(
                 });
                 retracted.extend(retracted_here);
             } else {
-                for claim in pre_state.claims_for(predicate.as_str()) {
+                for claim in pre_state.claims_for_name(predicate) {
                     if claim.args.len() != args.len() {
                         continue;
                     }
