@@ -40,3 +40,7 @@ pub fn confirm_trade() -> Transformation {
 pub fn correct_official_price() -> Transformation {
     crate::transformation(&PROGRAM, "correct_official_price")
 }
+
+pub fn settle_trade() -> Transformation {
+    crate::transformation(&PROGRAM, "settle_trade")
+}
