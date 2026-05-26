@@ -145,6 +145,20 @@ impl State {
             .flatten()
     }
 
+    /// Like [`State::claims_for`] but takes an owned-typed name, so the
+    /// hot evaluator path - which already holds a `PredicateName` from
+    /// the IR - looks up without allocating one per call.
+    pub(crate) fn claims_for_name<'a>(
+        &'a self,
+        predicate: &PredicateName,
+    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        self.by_predicate
+            .get(predicate)
+            .map(|idx| idx.all.iter().map(|&i| &self.claims[i]))
+            .into_iter()
+            .flatten()
+    }
+
     /// Indices into `claims()` for every claim where `predicate`
     /// matches AND `args[position] == value`. `O(1)` lookup. Returns
     /// `None` when no claim of this predicate has this value at this
@@ -155,12 +169,12 @@ impl State {
     /// variable already bound in the surrounding context).
     pub(crate) fn claim_indices_for_arg(
         &self,
-        predicate: &str,
+        predicate: &PredicateName,
         position: usize,
         value: &EvalValue,
     ) -> Option<&[usize]> {
         self.by_predicate
-            .get(&PredicateName::from(predicate))
+            .get(predicate)
             .and_then(|idx| idx.by_arg.get(position))
             .and_then(|m| m.get(value))
             .map(|v| v.as_slice())

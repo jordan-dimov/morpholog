@@ -19,7 +19,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::ir::{CompareOp, OrderedDomain, Prop, Subject, Term, Value, ValueExpr};
+use crate::ir::{CompareOp, OrderedDomain, PredicateName, Prop, Subject, Term, Value, ValueExpr};
 use crate::state::{Bindings, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -185,7 +185,7 @@ fn apply_cmp<T: PartialOrd>(op: CompareOp, a: T, b: T) -> bool {
 
 pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
     match p {
-        Prop::Claim { predicate, args } => find_claim_matches(predicate.as_str(), args, ctx),
+        Prop::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
         Prop::And(props) => find_conjunction(props, ctx),
         Prop::Or(props) => find_disjunction(props, ctx),
         Prop::Not(inner) => {
@@ -267,7 +267,7 @@ pub(crate) fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
 }
 
 pub(crate) fn find_claim_matches(
-    predicate: &str,
+    predicate: &PredicateName,
     args: &[Term],
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
@@ -331,7 +331,7 @@ pub(crate) fn find_claim_matches(
             }
         }
     } else {
-        for claim in state.claims_for(predicate) {
+        for claim in state.claims_for_name(predicate) {
             if claim.args.len() != args.len() {
                 continue;
             }
@@ -505,7 +505,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             args,
             default,
         } => {
-            let matches = find_claim_matches(predicate.as_str(), args, ctx)?;
+            let matches = find_claim_matches(predicate, args, ctx)?;
             match matches.len() {
                 1 => {
                     let pos = args
@@ -516,7 +516,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         })?;
                     let claim = ctx
                         .state
-                        .claims_for(predicate.as_str())
+                        .claims_for_name(predicate)
                         .find(|f| {
                             f.args.len() == args.len()
                                 && unify_args(args, &f.args, ctx.bindings, ctx.actor).is_some()

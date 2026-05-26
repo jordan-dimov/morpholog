@@ -277,7 +277,7 @@ mod tests {
 
         let entry_a = EvalValue::Subject("entry_a".into());
         let positions = state
-            .claim_indices_for_arg("JournalLine", 0, &entry_a)
+            .claim_indices_for_arg(&"JournalLine".into(), 0, &entry_a)
             .expect("entry_a appears at JournalLine[0]");
         let claims: Vec<&ClaimInstance> = positions.iter().map(|&i| state.claim_at(i)).collect();
         assert_eq!(
@@ -289,14 +289,14 @@ mod tests {
         let unknown = EvalValue::Subject("entry_z".into());
         assert!(
             state
-                .claim_indices_for_arg("JournalLine", 0, &unknown)
+                .claim_indices_for_arg(&"JournalLine".into(), 0, &unknown)
                 .is_none(),
             "absent value returns None, signalling empty intersection"
         );
 
         let cash = EvalValue::Subject("account_cash".into());
         let cash_positions = state
-            .claim_indices_for_arg("JournalLine", 1, &cash)
+            .claim_indices_for_arg(&"JournalLine".into(), 1, &cash)
             .expect("account_cash appears at JournalLine[1]");
         assert_eq!(
             cash_positions.len(),
