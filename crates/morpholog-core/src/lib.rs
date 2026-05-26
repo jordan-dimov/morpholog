@@ -11,10 +11,15 @@
 //! async must not infect this crate. Worked-example IR lives in the
 //! `morpholog-examples` crate.
 //!
-//! The kernel is the trust boundary: it must reject malformed input with
-//! a typed error, never a panic, and it never touches floating point
-//! (business values are decimal). These two `warn`s make both mechanical.
-//! Test code is exempt via `.clippy.toml` (`allow-panic-in-tests`).
+//! The kernel is the trust boundary: its evaluation and proposal paths
+//! reject malformed input with a typed `EvalError`, never a `panic!`, and
+//! it never touches floating point (business values are decimal). The
+//! `warn`s below keep both mechanical - `panic!` stays out of non-test
+//! code and float arithmetic is a compile error. (Internal guards still
+//! `assert!` / `unreachable!` on structurally-impossible IR; those are
+//! programmer-error checks on already-validated data, not the input path,
+//! and `clippy::panic` covers neither.) Test code is exempt via
+//! `.clippy.toml` (`allow-panic-in-tests`).
 #![warn(clippy::panic, clippy::float_arithmetic)]
 
 pub mod format;
