@@ -22,246 +22,114 @@ use serde::{Deserialize, Serialize};
 
 use crate::validate::{ValidationError, validate_program};
 
-/// An opaque subject identifier - Morpholog's one primitive noun. Predicates
-/// attach to subjects, but there are no types *over* a subject and nothing in
-/// the surface language inspects its structure. The newtype (rather than a
-/// bare `String`) keeps a subject distinct at the type level from a predicate
-/// name, a variable, or any other string the kernel handles.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Subject(String);
+/// Defines an opaque identifier newtype over `String`. Every kernel identifier
+/// kind (subjects, variables, predicate / intent / transformation / invariant
+/// names) is one of these: `#[serde(transparent)]`, `From<String>` /
+/// `From<&str>` / `Display` / `as_str`, and a symmetric `PartialEq<str>` so a
+/// literal compares either way - but deliberately no `Deref` / `AsRef` /
+/// `Borrow`, so the inner string never leaks into general string APIs and the
+/// kinds stay un-confusable at the type level.
+macro_rules! opaque_id {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
 
-impl Subject {
-    /// Borrow the underlying opaque identifier. Use sparingly - at the edges
-    /// (formatting, persistence), not to route subjects through string APIs.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+        impl $name {
+            /// Borrow the underlying identifier. Use at the edges (formatting,
+            /// persistence, key lookup), not to route it through string APIs.
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
 
-impl From<String> for Subject {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
+        impl From<String> for $name {
+            fn from(s: String) -> Self {
+                Self(s)
+            }
+        }
 
-impl From<&str> for Subject {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
+        impl From<&str> for $name {
+            fn from(s: &str) -> Self {
+                Self(s.to_string())
+            }
+        }
 
-impl std::fmt::Display for Subject {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
 
-/// A bound variable - a name introduced by a comprehension binder
-/// (`forall` / `exists` / `for`), a `let`, or matched by a `Term::Var`, and
-/// resolved against the [`crate::EvalValue`] bindings during evaluation. The
-/// newtype keeps a variable distinct at the type level from a predicate name
-/// or any other string the kernel handles; `Ord` is derived because bindings
-/// are reported in a stable order (sorted by variable name) in the trace.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Var(String);
-
-impl Var {
-    /// Borrow the variable's name. Use at the edges (formatting, lookup-key
-    /// display), not to route variables through string APIs.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for Var {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for Var {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl std::fmt::Display for Var {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// An opaque predicate name - the identifier of a claim predicate. Distinct
-/// at the type level from a subject id, a bound variable, an intent name, or
-/// a declaration name, so the compiler keeps the kernel's nouns un-confusable.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct PredicateName(String);
-
-impl PredicateName {
-    /// Borrow the name. Use at the edges (formatting, persistence, building a
-    /// SQL predicate filter), not to route predicate names through string APIs.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for PredicateName {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for PredicateName {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl std::fmt::Display for PredicateName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// An opaque intent name - the identifier of an outbox intent type. Distinct
-/// at the type level from a predicate name (the other declared vocabulary) and
-/// from every other identifier the kernel handles.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct IntentName(String);
-
-impl IntentName {
-    /// Borrow the name. Use at the edges (formatting, persistence, the outbox
-    /// idempotency-key hash), not to route intent names through string APIs.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for IntentName {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for IntentName {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl std::fmt::Display for IntentName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// An opaque transformation name - the identifier of a declared transformation,
-/// and the name a [`crate::Transition`] proposes against. Distinct at the type
-/// level from an invariant name and every other identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TransformationName(String);
-
-impl TransformationName {
-    /// Borrow the name. Use at the edges (formatting, persistence), not to
-    /// route transformation names through string APIs.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for TransformationName {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for TransformationName {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl std::fmt::Display for TransformationName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// An opaque invariant name - the identifier of a declared invariant, carried
-/// into the audit log and the trace's invariant-check entries. Distinct at the
-/// type level from a transformation name and every other identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct InvariantName(String);
-
-impl InvariantName {
-    /// Borrow the name. Use at the edges (formatting, persistence), not to
-    /// route invariant names through string APIs.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for InvariantName {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for InvariantName {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl std::fmt::Display for InvariantName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// Equality against a string literal for the opaque identifier newtypes,
-/// symmetric so both `name == "Foo"` and `"Foo" == name` (and `assert_eq!` in
-/// either order) work without exposing the inner string for general use -
-/// distinct from `Deref`/`AsRef`/`Borrow`, which would let the newtype
-/// masquerade as a `&str` everywhere. Comparison to a literal is safe and
-/// legible; it does not weaken cross-type distinctness (an `IntentName` still
-/// cannot be compared to a `PredicateName`).
-macro_rules! impl_eq_str {
-    ($t:ty) => {
-        impl PartialEq<str> for $t {
+        impl PartialEq<str> for $name {
             fn eq(&self, other: &str) -> bool {
                 self.as_str() == other
             }
         }
-        impl PartialEq<&str> for $t {
+        impl PartialEq<&str> for $name {
             fn eq(&self, other: &&str) -> bool {
                 self.as_str() == *other
             }
         }
-        impl PartialEq<$t> for str {
-            fn eq(&self, other: &$t) -> bool {
+        impl PartialEq<$name> for str {
+            fn eq(&self, other: &$name) -> bool {
                 self == other.as_str()
             }
         }
-        impl PartialEq<$t> for &str {
-            fn eq(&self, other: &$t) -> bool {
+        impl PartialEq<$name> for &str {
+            fn eq(&self, other: &$name) -> bool {
                 *self == other.as_str()
             }
         }
     };
 }
-impl_eq_str!(Subject);
-impl_eq_str!(Var);
-impl_eq_str!(PredicateName);
-impl_eq_str!(IntentName);
-impl_eq_str!(TransformationName);
-impl_eq_str!(InvariantName);
+
+opaque_id! {
+    /// An opaque subject identifier - Morpholog's one primitive noun. Predicates
+    /// attach to subjects, but there are no types *over* a subject and nothing in
+    /// the surface language inspects its structure, so the newtype keeps a subject
+    /// distinct at the type level from a predicate name, a variable, or any other
+    /// string the kernel handles.
+    Subject
+}
+
+opaque_id! {
+    /// A bound variable - a name introduced by a comprehension binder
+    /// (`forall` / `exists` / `for`), a `let`, or matched by a `Term::Var`, and
+    /// resolved against the [`crate::EvalValue`] bindings during evaluation.
+    /// Bindings are reported sorted by variable name in the trace, so the
+    /// derived `Ord` is load-bearing here (not merely uniform with the others).
+    Var
+}
+
+opaque_id! {
+    /// An opaque predicate name - the identifier of a claim predicate. Distinct
+    /// at the type level from a subject id, a bound variable, an intent name, or
+    /// a declaration name, so the compiler keeps the kernel's nouns un-confusable.
+    PredicateName
+}
+
+opaque_id! {
+    /// An opaque intent name - the identifier of an outbox intent type. Distinct
+    /// at the type level from a predicate name (the other declared vocabulary) and
+    /// from every other identifier the kernel handles.
+    IntentName
+}
+
+opaque_id! {
+    /// An opaque transformation name - the identifier of a declared transformation,
+    /// and the name a [`crate::Transition`] proposes against. Distinct at the type
+    /// level from an invariant name and every other identifier.
+    TransformationName
+}
+
+opaque_id! {
+    /// An opaque invariant name - the identifier of a declared invariant, carried
+    /// into the audit log and the trace's invariant-check entries. Distinct at the
+    /// type level from a transformation name and every other identifier.
+    InvariantName
+}
 
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
