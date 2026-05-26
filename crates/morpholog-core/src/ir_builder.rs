@@ -296,7 +296,7 @@ pub fn retract(predicate: &str, args: Vec<Term>) -> Stmt {
 
 pub fn emit(name: &str, args: Vec<Term>) -> Stmt {
     Stmt::Emit(Intent {
-        name: name.to_string(),
+        name: name.into(),
         args,
     })
 }
@@ -445,7 +445,7 @@ impl IntentDeclBuilder {
 
     pub fn build(self) -> crate::IntentDecl {
         crate::IntentDecl {
-            name: self.name,
+            name: self.name.into(),
             args: self.args,
         }
     }

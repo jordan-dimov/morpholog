@@ -369,7 +369,7 @@ fn format_claim(c: &Claim) -> String {
 }
 
 fn format_intent(i: &Intent) -> String {
-    format_predicate_call(&i.name, &i.args)
+    format_predicate_call(i.name.as_str(), &i.args)
 }
 
 fn format_term(t: &Term) -> String {

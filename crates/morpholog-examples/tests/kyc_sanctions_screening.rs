@@ -458,7 +458,7 @@ fn request_screening_emits_screening_requested_intent() {
     assert!(
         emitted_intents
             .iter()
-            .any(|i| i.name == "ScreeningRequested"),
+            .any(|i| i.name.as_str() == "ScreeningRequested"),
         "expected ScreeningRequested intent; got {emitted_intents:?}"
     );
 }
@@ -485,7 +485,7 @@ fn onboarding_emits_customer_onboarded_intent() {
     assert!(
         emitted_intents
             .iter()
-            .any(|i| i.name == "CustomerOnboarded"),
+            .any(|i| i.name.as_str() == "CustomerOnboarded"),
         "expected CustomerOnboarded intent; got {emitted_intents:?}"
     );
 }
@@ -515,7 +515,9 @@ fn reject_customer_emits_customer_rejected_intent() {
         panic!("expected accept; got {outcome:?}");
     };
     assert!(
-        emitted_intents.iter().any(|i| i.name == "CustomerRejected"),
+        emitted_intents
+            .iter()
+            .any(|i| i.name.as_str() == "CustomerRejected"),
         "expected CustomerRejected intent; got {emitted_intents:?}"
     );
 }
@@ -561,7 +563,9 @@ fn record_match_emits_match_raised_intent() {
         panic!("expected accept; got {outcome:?}");
     };
     assert!(
-        emitted_intents.iter().any(|i| i.name == "MatchRaised"),
+        emitted_intents
+            .iter()
+            .any(|i| i.name.as_str() == "MatchRaised"),
         "expected MatchRaised intent; got {emitted_intents:?}"
     );
 }

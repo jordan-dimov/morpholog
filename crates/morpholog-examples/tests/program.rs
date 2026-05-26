@@ -24,7 +24,7 @@ use morpholog_examples::{
 #[test]
 fn settlement_netting_program_has_expected_shape() {
     let p = settlement_netting::program();
-    assert_eq!(p.name, "settlement_netting");
+    assert_eq!(p.name.as_str(), "settlement_netting");
     assert_eq!(p.invariants.len(), 3);
     assert_eq!(p.transformations.len(), 1);
 
@@ -39,7 +39,7 @@ fn settlement_netting_program_has_expected_shape() {
 #[test]
 fn verified_revenue_program_has_expected_shape() {
     let p = verified_revenue::program();
-    assert_eq!(p.name, "verified_revenue");
+    assert_eq!(p.name.as_str(), "verified_revenue");
     assert_eq!(p.invariants.len(), 4);
     assert_eq!(p.transformations.len(), 6);
 
@@ -72,7 +72,7 @@ fn verified_revenue_program_has_expected_shape() {
 #[test]
 fn double_entry_ledger_program_has_expected_shape() {
     let p = double_entry_ledger::program();
-    assert_eq!(p.name, "double_entry_ledger");
+    assert_eq!(p.name.as_str(), "double_entry_ledger");
     assert_eq!(p.invariants.len(), 3);
     assert_eq!(p.transformations.len(), 4);
 
@@ -89,7 +89,7 @@ fn double_entry_ledger_program_has_expected_shape() {
 #[test]
 fn insurance_claim_settlement_program_has_expected_shape() {
     let p = insurance_claim_settlement::program();
-    assert_eq!(p.name, "insurance_claim_settlement");
+    assert_eq!(p.name.as_str(), "insurance_claim_settlement");
     assert_eq!(p.invariants.len(), 7);
     assert_eq!(p.transformations.len(), 4);
 
@@ -113,7 +113,7 @@ fn insurance_claim_settlement_program_has_expected_shape() {
 #[test]
 fn clinical_trial_enrolment_program_has_expected_shape() {
     let p = clinical_trial_enrolment::program();
-    assert_eq!(p.name, "clinical_trial_enrolment");
+    assert_eq!(p.name.as_str(), "clinical_trial_enrolment");
     assert_eq!(p.invariants.len(), 4);
     assert!(
         p.invariant("consent_obtained_before_randomisation")

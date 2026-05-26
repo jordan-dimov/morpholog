@@ -259,7 +259,7 @@ transformation flag(customer):
             explanation.verdict
         );
     };
-    assert_eq!(inv.name, "flagged_requires_permit");
+    assert_eq!(inv.name.as_str(), "flagged_requires_permit");
     assert!(explanation.render().contains("Would violate invariant"));
 }
 

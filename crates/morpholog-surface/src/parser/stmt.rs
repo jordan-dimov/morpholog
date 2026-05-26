@@ -181,7 +181,10 @@ where
                         "wildcard `_` is not allowed in `emit`: an intent's arguments must all be concrete values; the kernel rejects wildcard-emits as `wildcard not allowed in emit`",
                     ));
                 }
-                Stmt::Emit(Intent { name, args })
+                Stmt::Emit(Intent {
+                    name: name.into(),
+                    args,
+                })
             });
 
         // let <name> = <rhs>

@@ -83,7 +83,7 @@ fn claim_instance_round_trips_through_json_with_mixed_args() {
 #[test]
 fn intent_instance_round_trips_through_json() {
     let i = IntentInstance {
-        name: "NetSettlementCreated".to_string(),
+        name: "NetSettlementCreated".into(),
         args: vec![subj("net1")],
     };
     let json = serde_json::to_string(&i).unwrap();
@@ -127,7 +127,7 @@ fn intent_args_serialise_as_a_json_array() {
     // constraint `jsonb_typeof(arguments) = 'array'`. The PG adapter
     // writes only the `args` field of an IntentInstance into that column.
     let i = IntentInstance {
-        name: "NetSettlementCreated".to_string(),
+        name: "NetSettlementCreated".into(),
         args: vec![subj("net1"), dec(100)],
     };
     let args_json = serde_json::to_string(&i.args).unwrap();
@@ -411,7 +411,7 @@ fn trace_entry_let_let_new_subject_assert_retract_emit_round_trip() {
         },
         TraceEntry::Emit {
             intent: IntentInstance {
-                name: "Notified".to_string(),
+                name: "Notified".into(),
                 args: vec![subj("a")],
             },
         },

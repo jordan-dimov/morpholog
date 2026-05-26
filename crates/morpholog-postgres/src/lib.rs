@@ -485,7 +485,7 @@ async fn write_accepted(
         )
         .bind(intent_id)
         .bind(transition_id)
-        .bind(&intent.name)
+        .bind(intent.name.as_str())
         .bind(&args_json)
         .bind(&idempotency_key)
         .execute(&mut **tx)
@@ -523,7 +523,7 @@ pub fn compute_idempotency_key(
     let mut hasher = Sha256::new();
     hasher.update(transition_id.as_bytes());
     hasher.update(b"\0");
-    hasher.update(intent.name.as_bytes());
+    hasher.update(intent.name.as_str().as_bytes());
     hasher.update(b"\0");
     hasher.update(&args_bytes);
     Ok(format!("{:x}", hasher.finalize()))

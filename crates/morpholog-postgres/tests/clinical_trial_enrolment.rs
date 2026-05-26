@@ -173,7 +173,7 @@ async fn randomise_participant_happy_path_through_pg() {
         "randomise_participant asserts exactly ParticipantRandomised"
     );
     assert_eq!(emitted_intents.len(), 1);
-    assert_eq!(emitted_intents[0].name, "ParticipantRandomised");
+    assert_eq!(emitted_intents[0].name.as_str(), "ParticipantRandomised");
 
     // Read the ParticipantRandomised claim back through the read
     // path; the date arg must survive the JSONB round-trip exactly.
