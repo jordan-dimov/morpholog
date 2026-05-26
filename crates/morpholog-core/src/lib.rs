@@ -51,7 +51,7 @@ pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
     OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term,
-    Transformation, Value, ValueExpr,
+    Transformation, Value, ValueExpr, Var,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
