@@ -75,7 +75,10 @@ predicate TradeSettled(trade: Subject, settled_qty: Decimal, settlement_id: Subj
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits - a trade was captured, an authority granted, a trade
--- confirmed.
+-- confirmed, an official price corrected. The settlement-request intent
+-- is the one that asks a downstream system to actually move the money
+-- and the commodity: Morpholog records that the settlement is
+-- legitimate and leaves the execution of it outside.
 intent TradeCapturedAdmitted(trade: Subject)
 intent ConfirmAuthorityGranted(principal: Subject, commodity: Subject)
 intent TradeConfirmedAdmitted(trade: Subject, confirmation_id: Subject, official_price_id: Subject)
