@@ -36,3 +36,7 @@ pub fn grant_confirm_authority() -> Transformation {
 pub fn confirm_trade() -> Transformation {
     crate::transformation(&PROGRAM, "confirm_trade")
 }
+
+pub fn correct_official_price() -> Transformation {
+    crate::transformation(&PROGRAM, "correct_official_price")
+}

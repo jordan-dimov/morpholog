@@ -10,9 +10,9 @@
 -- for it. Before anyone settles money against the trade, a separate
 -- desk - the middle office - independently *confirms* it against the
 -- counterparty's own record, and the price they confirm becomes the
--- official one. The trade then *settles*. (Correction of an official
--- price and settlement itself arrive in later slices of this example;
--- capture and confirmation are modelled here.)
+-- official one. The trade then *settles*. (Settlement itself arrives in
+-- a later slice of this example; capture, confirmation, and correction
+-- of an official price are modelled here.)
 --
 -- Two ideas do the real work, and this example is built around both.
 --
@@ -29,7 +29,12 @@
 -- is the official one, marked by a pointer to the figure currently in
 -- force, and settlement will rely on that. Existence and
 -- admissibility-for-settlement are different things: a captured price
--- exists without ever being settleable.
+-- exists without ever being settleable. If the middle office later
+-- finds it set the wrong official price, it corrects it the honest way:
+-- the old figure stays on the record, a corrected figure is admitted
+-- alongside it, and the in-force pointer moves to the new one - so
+-- "what was the official price on the day we acted?" always has a
+-- truthful answer.
 --
 -- Here is how Morpholog thinks about this. It does not store "facts" -
 -- it stores *claims* it has agreed to admit because they obey the
@@ -55,20 +60,24 @@ program trade_lifecycle
 -- confirmation event against the counterparty. `OfficialPrice` is an
 -- official price figure; `CurrentOfficialPrice` is the retractable
 -- pointer naming which official figure is in force for the trade right
--- now - the one moving part, which a later price correction will move.
+-- now - the one moving part, which a price correction moves.
+-- `Supersedes` records the lineage when one official figure replaces
+-- another.
 predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject, quantity: Decimal, delivery_period: Subject)
 predicate CapturedPrice(trade: Subject, price: Decimal)
 predicate MayConfirm(principal: Subject, commodity: Subject)
 predicate TradeConfirmed(trade: Subject, counterparty: Subject, confirmation_id: Subject)
 predicate OfficialPrice(trade: Subject, price: Decimal, official_price_id: Subject)
 predicate CurrentOfficialPrice(trade: Subject, official_price_id: Subject)
+predicate Supersedes(new_official_price_id: Subject, prior_official_price_id: Subject)
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits - a trade was captured, an authority granted, a trade
 -- confirmed.
 intent TradeCapturedAdmitted(trade: Subject)
 intent ConfirmAuthorityGranted(principal: Subject, commodity: Subject)
-intent TradeConfirmedAdmitted(trade: Subject, confirmation_id: Subject)
+intent TradeConfirmedAdmitted(trade: Subject, confirmation_id: Subject, official_price_id: Subject)
+intent OfficialPriceCorrected(trade: Subject, new_official_price_id: Subject, prior_official_price_id: Subject)
 
 
 -- The rules that must always hold. Any change that would leave the
@@ -86,6 +95,18 @@ invariant current_official_price_has_a_figure:
 -- the same trade cannot coexist.
 invariant at_most_one_current_official_price:
     CurrentOfficialPrice(trade, a) and CurrentOfficialPrice(trade, b) implies a = b
+
+-- An official price always belongs to a trade that was actually
+-- captured. Together with the rule above, this gives a clean provenance
+-- chain: the in-force pointer names a real figure, and that figure
+-- names a real trade.
+invariant official_price_has_captured_trade:
+    OfficialPrice(trade, _, _) implies TradeCaptured(trade, _, _, _, _)
+
+-- The correction history stays a clean chain, never a fork: an official
+-- price figure can be superseded by at most one direct successor.
+invariant at_most_one_direct_successor:
+    Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
 -- The only ways state may change. A transformation proposes a set of
@@ -129,4 +150,23 @@ transformation confirm_trade(trade, counterparty, confirmation_id, official_pric
     admit TradeConfirmed(trade, counterparty, confirmation_id)
     admit OfficialPrice(trade, confirmed_price, official_price_id)
     admit CurrentOfficialPrice(trade, official_price_id)
-    emit TradeConfirmedAdmitted(trade, confirmation_id)
+    emit TradeConfirmedAdmitted(trade, confirmation_id, official_price_id)
+
+-- Correct an official price the honest way. The old figure stays on the
+-- record; a corrected figure is admitted alongside it; the in-force
+-- pointer moves to the new figure; a lineage link records that the new
+-- one supersedes the old. The gates require confirmation authority for
+-- the trade's commodity, that the prior figure is the one currently in
+-- force, and that it has not already been superseded, so the correction
+-- chain never forks. A settlement already made under the prior official
+-- price is left untouched - it stays a true record of what was settled
+-- that day; the correction governs only what may be settled next.
+transformation correct_official_price(trade, prior_official_price_id, new_official_price_id, corrected_price):
+    require TradeCaptured(trade, commodity, _, _, _) and MayConfirm(actor, commodity)
+    require CurrentOfficialPrice(trade, prior_official_price_id)
+    require not Supersedes(_, prior_official_price_id)
+    admit OfficialPrice(trade, corrected_price, new_official_price_id)
+    admit Supersedes(new_official_price_id, prior_official_price_id)
+    retract CurrentOfficialPrice(trade, prior_official_price_id)
+    admit CurrentOfficialPrice(trade, new_official_price_id)
+    emit OfficialPriceCorrected(trade, new_official_price_id, prior_official_price_id)
