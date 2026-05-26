@@ -41,3 +41,9 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+# A stub left in shipped code is a bug; neither has a legitimate use in
+# tests either. `panic` is the sharper guard but fires on test-helper
+# assertions, so it is scoped to the kernel crate root instead (a panic
+# on adversarial input there is a liability, not a bug report).
+todo = "warn"
+unimplemented = "warn"

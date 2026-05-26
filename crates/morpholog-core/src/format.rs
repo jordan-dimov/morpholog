@@ -406,7 +406,6 @@ fn indent(depth: usize) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     //! Tests pin the *shape* of the rendered output - specific tokens
     //! it must contain - not byte-for-byte equality, except where a

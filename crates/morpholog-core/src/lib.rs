@@ -10,6 +10,12 @@
 //! `morpholog-postgres` crate and wraps this kernel as an async boundary;
 //! async must not infect this crate. Worked-example IR lives in the
 //! `morpholog-examples` crate.
+//!
+//! The kernel is the trust boundary: it must reject malformed input with
+//! a typed error, never a panic, and it never touches floating point
+//! (business values are decimal). These two `warn`s make both mechanical.
+//! Test code is exempt via `.clippy.toml` (`allow-panic-in-tests`).
+#![warn(clippy::panic, clippy::float_arithmetic)]
 
 pub mod format;
 pub mod ir_builder;
@@ -49,7 +55,6 @@ pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
 pub use validate::{ValidationContext, ValidationError, VocabularyKind};
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     //! Kernel-internal unit tests that depend on private items
     //! (`unify_args`, `resolve_term`, `Bindings`). Tests against the
