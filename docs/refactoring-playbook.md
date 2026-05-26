@@ -99,7 +99,7 @@ are cleared, the residual is a handful of genuine judgement sites (the codec, a
 boundary, an ordering). That is where careful review concentrates, not the
 mechanical hundred.
 
-## Do it yourself; delegate only the genuinely-uniform mass
+## Prefer compiler-driven migration; delegate only uniform rewrites
 
 The `Subject` and `actor` slices were delegated to a sub-agent that hand-edited
 ~135 and ~50 sites - large, unreviewable diffs. The `Var` slice was done solo
