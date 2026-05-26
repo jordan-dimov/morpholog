@@ -43,8 +43,8 @@
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Subject, Transformation,
-    Transition, propose,
+    ClaimInstance, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State, Subject,
+    Transformation, Transition, propose,
 };
 use rust_decimal::Decimal;
 
@@ -105,6 +105,15 @@ pub fn coll(items: Vec<EvalValue>) -> EvalValue {
 pub fn claim_instance(predicate: &str, args: &[EvalValue]) -> ClaimInstance {
     ClaimInstance {
         predicate: predicate.into(),
+        args: args.to_vec(),
+    }
+}
+
+/// Build an [`IntentInstance`] from an intent name and an arg slice.
+/// The emit-vocabulary mirror of [`claim_instance`].
+pub fn intent_instance(name: &str, args: &[EvalValue]) -> IntentInstance {
+    IntentInstance {
+        name: name.into(),
         args: args.to_vec(),
     }
 }

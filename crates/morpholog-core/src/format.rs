@@ -430,28 +430,21 @@ mod tests {
 
     #[test]
     fn format_program_starts_with_program_header() {
-        let p = Program {
-            predicates: vec![],
-            name: "demo".into(),
-            intents: vec![],
-            invariants: vec![],
-            transformations: vec![],
-            derived_claims: vec![],
-        };
+        let p = program("demo").build();
         let s = format_program(&p);
         assert!(s.starts_with("program demo"));
     }
 
     #[test]
     fn format_transformation_shows_parameter_list_and_body_indented() {
-        let t = Transformation {
-            name: "open_trial".into(),
-            parameters: params(&["trial_id"]),
-            body: vec![
+        let t = transformation(
+            "open_trial",
+            params(&["trial_id"]),
+            vec![
                 assert_("Trial", vec![var("trial_id")]),
                 emit("TrialOpened", vec![var("trial_id")]),
             ],
-        };
+        );
         let s = format_transformation(&t);
         assert!(s.contains("transformation open_trial(trial_id):"));
         assert!(s.contains("  admit Trial(trial_id)"));
@@ -493,17 +486,12 @@ mod tests {
     /// stack consecutively with no intervening blank lines.
     #[test]
     fn format_program_renders_predicates_section_consecutively() {
-        let p = Program {
-            name: "tiny".into(),
-            predicates: vec![
+        let p = program("tiny")
+            .predicates(vec![
                 predicate("Foo").subject("a").build(),
                 predicate("Bar").decimal("n").build(),
-            ],
-            intents: vec![],
-            invariants: vec![],
-            transformations: vec![],
-            derived_claims: vec![],
-        };
+            ])
+            .build();
         let s = format_program(&p);
         // Exact bytes: header, blank line, two predicate lines, nothing else.
         assert_eq!(
@@ -608,18 +596,9 @@ mod tests {
     /// separator).
     #[test]
     fn format_program_output_ends_with_newline() {
-        let p = Program {
-            predicates: vec![],
-            name: "demo".into(),
-            intents: vec![],
-            invariants: vec![],
-            transformations: vec![Transformation {
-                name: "noop".into(),
-                parameters: vec![],
-                body: vec![],
-            }],
-            derived_claims: vec![],
-        };
+        let p = program("demo")
+            .transformations(vec![transformation("noop", vec![], vec![])])
+            .build();
         let s = format_program(&p);
         assert!(s.ends_with('\n'), "expected trailing newline; got: {s:?}");
     }

@@ -102,7 +102,6 @@ fn piece_count_drift_is_rejected() {
     // one statement to prove an invariant has teeth - a kernel-teeth test,
     // not a business story, so the Rust IR builder is the right tool here,
     // not `.morph`.
-    use morpholog_core::Transformation;
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
@@ -112,10 +111,10 @@ fn piece_count_drift_is_rejected() {
     // to retract it from the source - so the board gains a piece while
     // PieceCount stays at 32. MoveCount and CurrentTurn are handled
     // correctly, so the census invariant is the one that must fire.
-    let drifting_move = Transformation {
-        name: "drifting_move".into(),
-        parameters: ir_builder::params(&["src", "dst", "new_turn"]),
-        body: vec![
+    let drifting_move = ir_builder::transformation(
+        "drifting_move",
+        ir_builder::params(&["src", "dst", "new_turn"]),
+        vec![
             ir_builder::bind_one(ir_builder::claim(
                 "PieceAt",
                 vec![
@@ -154,7 +153,7 @@ fn piece_count_drift_is_rejected() {
             ir_builder::assert_("CurrentTurn", vec![ir_builder::var("new_turn")]),
             ir_builder::assert_("MoveCount", vec![ir_builder::var("next_m")]),
         ],
-    };
+    );
     program.transformations.push(drifting_move);
     let drifting = program
         .transformation("drifting_move")
@@ -192,16 +191,15 @@ fn dropping_the_piece_counter_is_rejected() {
     // one statement to prove an invariant has teeth - a kernel-teeth test,
     // not a business story, so the Rust IR builder is the right tool here,
     // not `.morph`.
-    use morpholog_core::Transformation;
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    let counterless_move = Transformation {
-        name: "counterless_move".into(),
-        parameters: ir_builder::params(&["new_turn"]),
-        body: vec![
+    let counterless_move = ir_builder::transformation(
+        "counterless_move",
+        ir_builder::params(&["new_turn"]),
+        vec![
             ir_builder::bind_one(ir_builder::claim(
                 "CurrentTurn",
                 vec![ir_builder::var("turn")],
@@ -226,7 +224,7 @@ fn dropping_the_piece_counter_is_rejected() {
             ir_builder::assert_("CurrentTurn", vec![ir_builder::var("new_turn")]),
             ir_builder::assert_("MoveCount", vec![ir_builder::var("next_m")]),
         ],
-    };
+    );
     program.transformations.push(counterless_move);
     let counterless = program
         .transformation("counterless_move")
@@ -337,7 +335,6 @@ fn transition_invariant_catches_missing_move_count_bump() {
     // one statement to prove an invariant has teeth - a kernel-teeth test,
     // not a business story, so the Rust IR builder is the right tool here,
     // not `.morph`.
-    use morpholog_core::Transformation;
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
@@ -346,10 +343,10 @@ fn transition_invariant_catches_missing_move_count_bump() {
     // A buggy quiet_move that does everything except advance
     // MoveCount. The move count claim is left untouched in the
     // candidate state. The transition invariant must catch this.
-    let buggy_move = Transformation {
-        name: "buggy_quiet_move".into(),
-        parameters: ir_builder::params(&["src", "dst", "new_turn"]),
-        body: vec![
+    let buggy_move = ir_builder::transformation(
+        "buggy_quiet_move",
+        ir_builder::params(&["src", "dst", "new_turn"]),
+        vec![
             ir_builder::bind_one(ir_builder::claim(
                 "PieceAt",
                 vec![
@@ -394,7 +391,7 @@ fn transition_invariant_catches_missing_move_count_bump() {
                 vec![ir_builder::var("src"), ir_builder::var("dst")],
             ),
         ],
-    };
+    );
     program.transformations.push(buggy_move);
 
     let buggy = program

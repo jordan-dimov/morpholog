@@ -25,8 +25,8 @@ use morpholog_postgres::{
 // actually missing the import.
 #[allow(unused_imports)]
 pub use morpholog_test_support::{
-    bool_, claim_instance, coll, date, dec, dec_str, has_claim, role, subj, test_actor,
-    test_transition,
+    bool_, claim_instance, coll, date, dec, dec_str, has_claim, intent_instance, role, subj,
+    test_actor, test_transition,
 };
 
 /// Convenience for tests that previously called `propose_against_pg`

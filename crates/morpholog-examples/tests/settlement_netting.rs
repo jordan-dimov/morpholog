@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{dec, subj};
+use common::{claim_instance, dec, subj};
 use morpholog_core::{
     ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, Subject, ValueExpr, eval_invariant,
 };
@@ -123,18 +123,12 @@ fn for_body_contains_bind_one_and_two_asserts() {
 
 fn netting_state(amount: i64) -> State {
     State::from_claims(vec![
-        ClaimInstance {
-            predicate: "NetSettlement".into(),
-            args: vec![subj("net1"), subj("party_a"), subj("party_b"), dec(amount)],
-        },
-        ClaimInstance {
-            predicate: "SettlementLine".into(),
-            args: vec![subj("l1"), subj("net1"), dec(60)],
-        },
-        ClaimInstance {
-            predicate: "SettlementLine".into(),
-            args: vec![subj("l2"), subj("net1"), dec(40)],
-        },
+        claim_instance(
+            "NetSettlement",
+            &[subj("net1"), subj("party_a"), subj("party_b"), dec(amount)],
+        ),
+        claim_instance("SettlementLine", &[subj("l1"), subj("net1"), dec(60)]),
+        claim_instance("SettlementLine", &[subj("l2"), subj("net1"), dec(40)]),
     ])
 }
 
@@ -167,30 +161,12 @@ fn net_amount_equals_lines_fails_when_amount_mismatches() {
 /// violation).
 fn netting_pre_state(extra: Vec<ClaimInstance>) -> State {
     let mut claims = vec![
-        ClaimInstance {
-            predicate: "ApprovedSettlementLine".into(),
-            args: vec![subj("l1")],
-        },
-        ClaimInstance {
-            predicate: "Between".into(),
-            args: vec![subj("l1"), subj("party_a"), subj("party_b")],
-        },
-        ClaimInstance {
-            predicate: "LineAmount".into(),
-            args: vec![subj("l1"), dec(60)],
-        },
-        ClaimInstance {
-            predicate: "ApprovedSettlementLine".into(),
-            args: vec![subj("l2")],
-        },
-        ClaimInstance {
-            predicate: "Between".into(),
-            args: vec![subj("l2"), subj("party_a"), subj("party_b")],
-        },
-        ClaimInstance {
-            predicate: "LineAmount".into(),
-            args: vec![subj("l2"), dec(40)],
-        },
+        claim_instance("ApprovedSettlementLine", &[subj("l1")]),
+        claim_instance("Between", &[subj("l1"), subj("party_a"), subj("party_b")]),
+        claim_instance("LineAmount", &[subj("l1"), dec(60)]),
+        claim_instance("ApprovedSettlementLine", &[subj("l2")]),
+        claim_instance("Between", &[subj("l2"), subj("party_a"), subj("party_b")]),
+        claim_instance("LineAmount", &[subj("l2"), dec(40)]),
     ];
     claims.extend(extra);
     State::from_claims(claims)
@@ -252,10 +228,7 @@ fn propose_rejects_when_line_already_netted() {
     use morpholog_core::{
         RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
-    let extra = vec![ClaimInstance {
-        predicate: "Netted".into(),
-        args: vec![subj("l1")],
-    }];
+    let extra = vec![claim_instance("Netted", &[subj("l1")])];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
     let transition = Transition {
@@ -304,10 +277,10 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     // is missing from pre-state (inconsistent legacy data). The require
     // check passes, the transformation stages a second SettlementLine
     // for l1, and the invariant catches it on the candidate state.
-    let extra = vec![ClaimInstance {
-        predicate: "SettlementLine".into(),
-        args: vec![subj("l1"), subj("old_net"), dec(60)],
-    }];
+    let extra = vec![claim_instance(
+        "SettlementLine",
+        &[subj("l1"), subj("old_net"), dec(60)],
+    )];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
     let outcome = common::propose_with_test_actor(

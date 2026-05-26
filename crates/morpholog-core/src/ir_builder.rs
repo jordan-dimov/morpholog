@@ -484,15 +484,6 @@ pub fn transformation(name: &str, parameters: Vec<Var>, body: Vec<Stmt>) -> Tran
     }
 }
 
-/// Build an [`Intent`] (the emit payload). For the `Stmt::Emit` wrapper
-/// use [`emit`]; this is for constructing a bare `Intent`.
-pub fn intent(name: &str, args: Vec<Term>) -> Intent {
-    Intent {
-        name: name.into(),
-        args,
-    }
-}
-
 /// Builder for a [`Program`]. Set the non-empty sections and finish with
 /// `.build()`; omitted sections default to empty.
 #[must_use]

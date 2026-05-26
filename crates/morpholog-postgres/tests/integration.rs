@@ -9,6 +9,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use morpholog_core::ir_builder::transformation;
 use morpholog_core::{
     ClaimInstance, EvalValue, IntentInstance, Stmt, Subject, Term, Transformation,
 };
@@ -24,7 +25,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 mod common;
-use common::{dec, subj};
+use common::{claim_instance, dec, intent_instance, subj};
 
 // ============================================================
 // Test infrastructure
@@ -67,10 +68,7 @@ async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
 }
 
 fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
-    ClaimInstance {
-        predicate: predicate.into(),
-        args,
-    }
+    claim_instance(predicate, &args)
 }
 
 fn netting_pre_state_claims() -> Vec<ClaimInstance> {
@@ -529,10 +527,7 @@ fn idempotency_key_matches_golden_hash() {
     // Do NOT recompute via the production helper - the point is to
     // catch formula drift, including delimiter changes.
     let transition_id = Uuid::nil();
-    let intent = IntentInstance {
-        name: "TestIntent".into(),
-        args: vec![EvalValue::Subject("net1".into())],
-    };
+    let intent = intent_instance("TestIntent", &[EvalValue::Subject("net1".into())]);
 
     let expected = "c32fd9040f866912cfc522571e851ee6240c9e5d19a39db9e50ac7834fd2341f";
     let actual = compute_idempotency_key(transition_id, &intent).unwrap();
@@ -541,14 +536,14 @@ fn idempotency_key_matches_golden_hash() {
 
 fn retract_marker_transformation() -> Transformation {
     let var = |s: &str| Term::Var(s.into());
-    Transformation {
-        name: "retract_marker".into(),
-        parameters: vec!["subject".into()],
-        body: vec![Stmt::Retract {
+    transformation(
+        "retract_marker",
+        vec!["subject".into()],
+        vec![Stmt::Retract {
             predicate: "Marker".into(),
             args: vec![var("subject")],
         }],
-    }
+    )
 }
 
 #[tokio::test]
@@ -1484,14 +1479,8 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
     assert_eq!(
         rows,
         vec![
-            ClaimInstance {
-                predicate: "TrialBalanceRow".into(),
-                args: vec![subj("account_cash"), dec(150)],
-            },
-            ClaimInstance {
-                predicate: "TrialBalanceRow".into(),
-                args: vec![subj("account_revenue"), dec(-150)],
-            },
+            claim_instance("TrialBalanceRow", &[subj("account_cash"), dec(150)]),
+            claim_instance("TrialBalanceRow", &[subj("account_revenue"), dec(-150)]),
         ],
         "trial balance over two posted entries must list each account once \
          with debits-minus-credits balance"
@@ -1597,14 +1586,8 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
     assert_eq!(
         rows,
         vec![
-            ClaimInstance {
-                predicate: "TrialBalanceRow".into(),
-                args: vec![subj("account_cash"), dec(100)],
-            },
-            ClaimInstance {
-                predicate: "TrialBalanceRow".into(),
-                args: vec![subj("account_revenue"), dec(-100)],
-            },
+            claim_instance("TrialBalanceRow", &[subj("account_cash"), dec(100)]),
+            claim_instance("TrialBalanceRow", &[subj("account_revenue"), dec(-100)]),
         ],
         "predicate-scoped loading must return the same derived rows whether \
          or not unrelated noise claims are present"
@@ -1763,15 +1746,15 @@ async fn audit_read_rejects_non_subject_actor() {
 /// Emits the identical intent twice, forcing both outbox rows onto the
 /// same deterministic idempotency key.
 fn double_emit_transformation() -> Transformation {
-    use morpholog_core::ir_builder::{emit, subj as lit_subj};
-    Transformation {
-        name: "double_emit".into(),
-        parameters: vec![],
-        body: vec![
+    use morpholog_core::ir_builder::{emit, subj as lit_subj, transformation};
+    transformation(
+        "double_emit",
+        vec![],
+        vec![
             emit("Ping", vec![lit_subj("p")]),
             emit("Ping", vec![lit_subj("p")]),
         ],
-    }
+    )
 }
 
 #[tokio::test]

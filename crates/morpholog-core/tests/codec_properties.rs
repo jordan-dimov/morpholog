@@ -13,6 +13,7 @@
 
 use jiff::civil::Date;
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, PredicateName};
+use morpholog_test_support::{claim_instance, intent_instance};
 use proptest::prelude::*;
 use rust_decimal::Decimal;
 
@@ -93,7 +94,7 @@ proptest! {
         predicate in arb_predicate_name(),
         args in prop::collection::vec(arb_eval_value(), 0..6),
     ) {
-        let c = ClaimInstance { predicate, args };
+        let c = claim_instance(predicate.as_str(), &args);
         let json = serde_json::to_string(&c).unwrap();
         let parsed: ClaimInstance = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(parsed, c);
@@ -106,10 +107,7 @@ proptest! {
         name in arb_intent_name(),
         args in prop::collection::vec(arb_eval_value(), 0..6),
     ) {
-        let i = IntentInstance {
-            name: name.into(),
-            args,
-        };
+        let i = intent_instance(&name, &args);
         let json = serde_json::to_string(&i).unwrap();
         let parsed: IntentInstance = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(parsed, i);

@@ -445,18 +445,10 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Invariant, Transformation};
     use crate::ir_builder::*;
 
     fn empty_program() -> Program {
-        Program {
-            name: "t".into(),
-            predicates: vec![],
-            intents: vec![],
-            invariants: vec![],
-            transformations: vec![],
-            derived_claims: vec![],
-        }
+        program("t").build()
     }
 
     #[test]
@@ -470,11 +462,7 @@ mod tests {
             body = not(body);
         }
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "deep".into(),
-            version: 1,
-            body,
-        }];
+        p.invariants = vec![invariant("deep", body)];
         let errs = p
             .validate()
             .expect_err("over-deep invariant must be rejected");
@@ -498,11 +486,7 @@ mod tests {
             inner = vec![for_("z", term(var("c")), inner)];
         }
         let mut p = empty_program();
-        p.transformations = vec![Transformation {
-            name: "deep".into(),
-            parameters: params(&["c"]),
-            body: inner,
-        }];
+        p.transformations = vec![transformation("deep", params(&["c"]), inner)];
         let errs = p
             .validate()
             .expect_err("over-deep for-nesting must be rejected");
@@ -524,11 +508,7 @@ mod tests {
         // adds no spurious error to a clean programme).
         let mut p = empty_program();
         p.predicates = vec![predicate("A").build()];
-        p.invariants = vec![Invariant {
-            name: "shallow".into(),
-            version: 1,
-            body: not(not(not(claim("A", vec![])))),
-        }];
+        p.invariants = vec![invariant("shallow", not(not(not(claim("A", vec![])))))];
         assert!(
             p.validate().is_ok(),
             "shallow nesting must validate cleanly"

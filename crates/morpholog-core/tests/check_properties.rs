@@ -25,10 +25,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use morpholog_core::ir_builder::*;
 use morpholog_core::{
-    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Term,
-    Transformation, ValidationError, Value, ValueExpr, Var,
+    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, IntentDecl, Invariant, OrderedDomain,
+    PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Term, Transformation,
+    ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
@@ -182,10 +183,7 @@ fn arb_stmt() -> impl Strategy<Value = Stmt> {
             .prop_map(|(predicate, args)| Stmt::Assert(Claim { predicate, args })),
         (arb_pred_name(), arb_args())
             .prop_map(|(predicate, args)| Stmt::Retract { predicate, args }),
-        (arb_pred_name(), arb_args()).prop_map(|(name, args)| Stmt::Emit(Intent {
-            name: name.as_str().into(),
-            args
-        })),
+        (arb_pred_name(), arb_args()).prop_map(|(name, args)| emit(name.as_str(), args)),
     ];
     // `for` is the only statement that nests statements.
     leaf.prop_recursive(3, 16, 3, |inner| {
@@ -224,11 +222,7 @@ fn arb_intent_decl() -> impl Strategy<Value = IntentDecl> {
 }
 
 fn arb_invariant() -> impl Strategy<Value = Invariant> {
-    (arb_pred_name(), arb_prop()).prop_map(|(name, body)| Invariant {
-        name: name.as_str().into(),
-        version: 1,
-        body,
-    })
+    (arb_pred_name(), arb_prop()).prop_map(|(name, body)| invariant(name.as_str(), body))
 }
 
 fn arb_transformation() -> impl Strategy<Value = Transformation> {
@@ -237,10 +231,12 @@ fn arb_transformation() -> impl Strategy<Value = Transformation> {
         prop::collection::vec(arb_var_name(), 0..4),
         prop::collection::vec(arb_stmt(), 0..4),
     )
-        .prop_map(|(name, parameters, body)| Transformation {
-            name: name.as_str().into(),
-            parameters: parameters.into_iter().map(Var::from).collect(),
-            body,
+        .prop_map(|(name, parameters, body)| {
+            transformation(
+                name.as_str(),
+                parameters.into_iter().map(Var::from).collect(),
+                body,
+            )
         })
 }
 
@@ -271,13 +267,14 @@ fn arb_program() -> impl Strategy<Value = Program> {
         prop::collection::vec(arb_derived_claim(), 0..2),
     )
         .prop_map(
-            |(predicates, intents, invariants, transformations, derived_claims)| Program {
-                name: "fuzz".into(),
-                predicates,
-                intents,
-                invariants,
-                transformations,
-                derived_claims,
+            |(predicates, intents, invariants, transformations, derived_claims)| {
+                program("fuzz")
+                    .predicates(predicates)
+                    .intents(intents)
+                    .invariants(invariants)
+                    .transformations(transformations)
+                    .derived_claims(derived_claims)
+                    .build()
             },
         )
 }
@@ -390,18 +387,9 @@ fn deeply_nested_propositions_are_rejected_not_overflowed() {
                 args: vec![],
             },
         );
-        let p = Program {
-            name: "deep".into(),
-            predicates: vec![],
-            intents: vec![],
-            invariants: vec![Invariant {
-                name: "i".into(),
-                version: 1,
-                body,
-            }],
-            transformations: vec![],
-            derived_claims: vec![],
-        };
+        let p = program("deep")
+            .invariants(vec![invariant("i", body)])
+            .build();
         let errs = p.validate().expect_err("deep nesting must be rejected");
         assert!(
             errs.iter()
@@ -419,18 +407,9 @@ fn deeply_nested_value_expressions_are_rejected_not_overflowed() {
     const DEPTH: usize = 1024;
     for node in 0..3 {
         let body = nest_value(node, DEPTH);
-        let p = Program {
-            name: "deep".into(),
-            predicates: vec![],
-            intents: vec![],
-            invariants: vec![Invariant {
-                name: "i".into(),
-                version: 1,
-                body,
-            }],
-            transformations: vec![],
-            derived_claims: vec![],
-        };
+        let p = program("deep")
+            .invariants(vec![invariant("i", body)])
+            .build();
         let errs = p
             .validate()
             .expect_err("deep value nesting must be rejected");
@@ -458,18 +437,9 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
             body,
         }];
     }
-    let p = Program {
-        name: "deep".into(),
-        predicates: vec![],
-        intents: vec![],
-        invariants: vec![],
-        transformations: vec![Transformation {
-            name: "t".into(),
-            parameters: vec!["c".into()],
-            body,
-        }],
-        derived_claims: vec![],
-    };
+    let p = program("deep")
+        .transformations(vec![transformation("t", vec!["c".into()], body)])
+        .build();
     let errs = p.validate().expect_err("deep for-nesting must be rejected");
     assert!(
         errs.iter()
