@@ -217,8 +217,8 @@ invariant something: Foo(x)
     assert_eq!(inv.name, "something");
     assert_eq!(inv.version, 1);
     // Body is the claim Foo(x).
-    use morpholog_core::Expr;
-    assert!(matches!(&inv.body, Expr::Claim { .. }));
+    use morpholog_core::Prop;
+    assert!(matches!(&inv.body, Prop::Claim { .. }));
 }
 
 #[test]
@@ -233,9 +233,9 @@ invariant all_lines_unnetted:
 "#;
     let program = parse_program(source).expect("parse should succeed");
     assert_eq!(program.invariants.len(), 1);
-    use morpholog_core::Expr;
+    use morpholog_core::Prop;
     let inv = &program.invariants[0];
-    assert!(matches!(&inv.body, Expr::Forall { .. }));
+    assert!(matches!(&inv.body, Prop::Forall { .. }));
 }
 
 #[test]
@@ -247,11 +247,11 @@ invariant within_limit:
     sum(amount | SettlementPaid(claim, amount)) + proposed <= limit
 "#;
     let program = parse_program(source).expect("parse should succeed");
-    use morpholog_core::{CompareOp, Expr, OrderedDomain};
+    use morpholog_core::{CompareOp, OrderedDomain, Prop};
     let inv = &program.invariants[0];
     assert!(matches!(
         &inv.body,
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Le,
             domain: OrderedDomain::Decimal,
             ..
@@ -538,11 +538,11 @@ fn reserved_keyword_cannot_be_transformation_name() {
 // PR #62 review tightenings
 // ============================================================
 
-/// `bind` accepts only a claim pattern. Arbitrary expressions
-/// (booleans, arithmetic, value lookups, etc.) are rejected at
-/// the surface even though `Stmt::BindOne` can technically hold
-/// any `Expr` in the kernel. See `parser/stmt.rs` module-level
-/// doc for the doctrine rationale.
+/// `bind` accepts only a claim pattern. Arbitrary propositions
+/// (booleans, comparisons, etc.) are rejected at the surface even
+/// though `Stmt::BindOne` can technically hold any `Prop` in the
+/// kernel. See `parser/stmt.rs` module-level doc for the doctrine
+/// rationale.
 #[test]
 fn bind_rejects_boolean_expression() {
     let source = "program demo\n\
@@ -578,12 +578,12 @@ fn bind_accepts_claim_pattern() {
                   transformation t(x):\n\
                   \x20\x20\x20\x20bind Foo(x, y, _)\n";
     let program = parse_program(source).expect("claim-pattern bind should parse");
-    use morpholog_core::{Expr, Stmt};
+    use morpholog_core::{Prop, Stmt};
     let body = &program.transformations[0].body;
     assert_eq!(body.len(), 1);
-    let Stmt::BindOne(Expr::Claim { predicate, args }) = &body[0] else {
+    let Stmt::BindOne(Prop::Claim { predicate, args }) = &body[0] else {
         panic!(
-            "expected Stmt::BindOne(Expr::Claim {{ .. }}); got {:?}",
+            "expected Stmt::BindOne(Prop::Claim {{ .. }}); got {:?}",
             body[0]
         );
     };

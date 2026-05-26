@@ -16,7 +16,7 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
 
     // Invariant bodies are projected as rendered strings because
-    // `Expr` doesn't derive `Serialize`. Predicate declarations carry
+    // `Prop` doesn't derive `Serialize`. Predicate declarations carry
     // `Serialize` and roundtrip into structured JSON as before.
     let invariants_payload: Vec<serde_json::Value> = program
         .invariants
@@ -25,14 +25,14 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
             serde_json::json!({
                 "name": &inv.name,
                 "version": inv.version,
-                "body": morpholog_core::format::format_expr_inline(&inv.body),
+                "body": morpholog_core::format::format_prop_inline(&inv.body),
             })
         })
         .collect();
 
     // Transformation bodies are projected as rendered strings for the
-    // same reason as invariant bodies: `Stmt` and `Expr` don't yet
-    // derive `Serialize`.
+    // same reason as invariant bodies: `Stmt`, `Prop`, and `ValueExpr`
+    // don't yet derive `Serialize`.
     let transformations_payload: Vec<serde_json::Value> = program
         .transformations
         .iter()
@@ -62,14 +62,14 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
                 .map(|v| {
                     serde_json::json!({
                         "name": &v.name,
-                        "expr": morpholog_core::format::format_expr_inline(&v.expr),
+                        "expr": morpholog_core::format::format_value_inline(&v.expr),
                     })
                 })
                 .collect();
             serde_json::json!({
                 "predicate": &d.predicate,
                 "keys": &d.keys,
-                "over": morpholog_core::format::format_expr_inline(&d.domain),
+                "over": morpholog_core::format::format_prop_inline(&d.domain),
                 "values": values,
             })
         })

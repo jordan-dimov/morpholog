@@ -1,10 +1,13 @@
 //! The in-memory evaluator.
 //!
-//! `find_matches` walks an [`Expr`] against a [`State`] and a binding
-//! context, returning either the set of extended binding contexts that
-//! satisfy the expression (predicate-shaped use) or a kernel error. Its
-//! crate-private helpers are also called from [`crate::propose`] and
-//! [`crate::derive`].
+//! `find_matches` walks a [`Prop`] against a [`State`] and a binding
+//! context, returning the set of extended binding contexts that satisfy
+//! the proposition, or a kernel error. `eval_value` walks a [`ValueExpr`]
+//! and returns the single value it computes, or a kernel error. Each is
+//! total over its sort - there is no wrong-shape arm, because the IR
+//! makes a value expression at a predicate position (or the reverse)
+//! unrepresentable. Their crate-private helpers are also called from
+//! [`crate::propose`] and [`crate::derive`].
 //!
 //! `EvalError` is raised when an expression is structurally ill-formed
 //! (type mismatches, missing variables, ValueOf cardinality violations).
@@ -16,7 +19,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::ir::{CompareOp, Expr, OrderedDomain, Term, Value};
+use crate::ir::{CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
 use crate::state::{Bindings, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -32,17 +35,10 @@ pub enum EvalError {
     /// another (e.g. arithmetic on a subject, membership on a non-
     /// collection, etc.).
     TypeMismatch(String),
-    /// An expression that must be predicate-shaped (boolean-valued)
-    /// was used in a position that cannot interpret it.
-    NotPredicate,
-    /// An expression that must be value-producing was used in a
-    /// position that requires a value (e.g. as a `let` right-hand side
-    /// or a sum target).
-    NotValue,
-    /// `Expr::ValueOf(predicate, args)` matched zero claims and no
+    /// `ValueExpr::ValueOf(predicate, args)` matched zero claims and no
     /// `default` was supplied.
     ValueOfZeroMatches(String),
-    /// `Expr::ValueOf(predicate, args)` matched more than one claim;
+    /// `ValueExpr::ValueOf(predicate, args)` matched more than one claim;
     /// the functional-lookup contract requires exactly one match.
     ValueOfMultipleMatches(String),
     /// `Term::Actor` was referenced with no transition in scope (the
@@ -51,7 +47,7 @@ pub enum EvalError {
     /// a proposing transition. Authority checks belong in `require`, not
     /// invariants; this error makes that doctrine enforceable.
     UnboundActor,
-    /// `Expr::Pre` was reached with no pre-state in scope: derived-claim
+    /// `Prop::Pre` was reached with no pre-state in scope: derived-claim
     /// bodies, transformation `require`s, the inner of nested `pre`, or
     /// an `EvalContext` built with `pre_state: None`. Phrased about
     /// evaluation context, not AST position, so future contexts that
@@ -64,8 +60,6 @@ impl std::fmt::Display for EvalError {
         match self {
             EvalError::UnboundVariable(name) => write!(f, "unbound variable: {name}"),
             EvalError::TypeMismatch(msg) => write!(f, "type mismatch: {msg}"),
-            EvalError::NotPredicate => write!(f, "expression is not a predicate"),
-            EvalError::NotValue => write!(f, "expression is not value-producing"),
             EvalError::ValueOfZeroMatches(p) => {
                 write!(f, "value({p}, _): zero matches")
             }
@@ -78,7 +72,7 @@ impl std::fmt::Display for EvalError {
             ),
             EvalError::PreStateUnavailable => write!(
                 f,
-                "Expr::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
+                "Prop::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
             ),
         }
     }
@@ -132,7 +126,7 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    /// Enter an `Expr::Pre` subtree: state becomes the previous
+    /// Enter a `Prop::Pre` subtree: state becomes the previous
     /// pre-state, pre-state is cleared. `None` if no pre-state was
     /// in scope; caller surfaces `PreStateUnavailable`.
     pub(crate) fn enter_pre(&self) -> Option<Self> {
@@ -150,8 +144,8 @@ impl<'a> EvalContext<'a> {
 /// `op` decides whether the comparison holds. Predicate-shaped: the
 /// unchanged bindings when it holds, empty otherwise.
 fn ordered_comparison(
-    left: &Expr,
-    right: &Expr,
+    left: &ValueExpr,
+    right: &ValueExpr,
     op: CompareOp,
     domain: OrderedDomain,
     ctx: &EvalContext<'_>,
@@ -189,12 +183,12 @@ fn apply_cmp<T: PartialOrd>(op: CompareOp, a: T, b: T) -> bool {
     }
 }
 
-pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
-    match e {
-        Expr::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
-        Expr::And(exprs) => find_conjunction(exprs, ctx),
-        Expr::Or(exprs) => find_disjunction(exprs, ctx),
-        Expr::Not(inner) => {
+pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
+    match p {
+        Prop::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
+        Prop::And(props) => find_conjunction(props, ctx),
+        Prop::Or(props) => find_disjunction(props, ctx),
+        Prop::Not(inner) => {
             let m = find_matches(inner, ctx)?;
             Ok(if m.is_empty() {
                 vec![ctx.bindings.clone()]
@@ -202,11 +196,11 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
                 vec![]
             })
         }
-        Expr::Pre(inner) => {
+        Prop::Pre(inner) => {
             let pre_ctx = ctx.enter_pre().ok_or(EvalError::PreStateUnavailable)?;
             find_matches(inner, &pre_ctx)
         }
-        Expr::Implies { left, right } => {
+        Prop::Implies { left, right } => {
             let lm = find_matches(left, ctx)?;
             for m in lm {
                 if find_matches(right, &ctx.with_bindings(&m))?.is_empty() {
@@ -215,7 +209,7 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
             }
             Ok(vec![ctx.bindings.clone()])
         }
-        Expr::Exists { binding: _, body } => {
+        Prop::Exists { binding: _, body } => {
             let m = find_matches(body, ctx)?;
             Ok(if m.is_empty() {
                 vec![]
@@ -223,7 +217,7 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
                 vec![ctx.bindings.clone()]
             })
         }
-        Expr::Forall {
+        Prop::Forall {
             binding: _,
             source,
             body,
@@ -236,7 +230,7 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
             }
             Ok(vec![ctx.bindings.clone()])
         }
-        Expr::Eq(lhs, rhs) => {
+        Prop::Eq(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
             let r = eval_value(rhs, ctx)?;
             Ok(if l == r {
@@ -245,13 +239,13 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
                 vec![]
             })
         }
-        Expr::Compare {
+        Prop::Compare {
             op,
             domain,
             left,
             right,
         } => ordered_comparison(left, right, *op, *domain, ctx),
-        Expr::Neq(lhs, rhs) => {
+        Prop::Neq(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
             let r = eval_value(rhs, ctx)?;
             Ok(if l != r {
@@ -260,12 +254,7 @@ pub(crate) fn find_matches(e: &Expr, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
                 vec![]
             })
         }
-        Expr::In(elem, coll) => find_in_matches(elem, coll, ctx),
-        Expr::Term(_)
-        | Expr::Sub(_, _)
-        | Expr::Add(_, _)
-        | Expr::Sum { .. }
-        | Expr::ValueOf { .. } => Err(EvalError::NotPredicate),
+        Prop::In(elem, coll) => find_in_matches(elem, coll, ctx),
     }
 }
 
@@ -401,14 +390,14 @@ pub(crate) fn unify_args(
 }
 
 pub(crate) fn find_conjunction(
-    exprs: &[Expr],
+    props: &[Prop],
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut current = vec![ctx.bindings.clone()];
-    for expr in exprs {
+    for prop in props {
         let mut next = vec![];
         for b in &current {
-            next.extend(find_matches(expr, &ctx.with_bindings(b))?);
+            next.extend(find_matches(prop, &ctx.with_bindings(b))?);
         }
         if next.is_empty() {
             return Ok(vec![]);
@@ -424,12 +413,12 @@ pub(crate) fn find_conjunction(
 /// same extension, both copies appear, mirroring `find_conjunction`'s
 /// multiplicity-preserving convention.
 pub(crate) fn find_disjunction(
-    exprs: &[Expr],
+    props: &[Prop],
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let mut out = vec![];
-    for expr in exprs {
-        out.extend(find_matches(expr, ctx)?);
+    for prop in props {
+        out.extend(find_matches(prop, ctx)?);
     }
     Ok(out)
 }
@@ -477,10 +466,10 @@ pub(crate) fn find_in_matches(
     }
 }
 
-pub(crate) fn eval_value(e: &Expr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
+pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
     match e {
-        Expr::Term(t) => resolve_term(t, ctx.bindings, ctx.actor),
-        Expr::Sub(lhs, rhs) => {
+        ValueExpr::Term(t) => resolve_term(t, ctx.bindings, ctx.actor),
+        ValueExpr::Sub(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
             let r = eval_value(rhs, ctx)?;
             match (l, r) {
@@ -490,7 +479,7 @@ pub(crate) fn eval_value(e: &Expr, ctx: &EvalContext<'_>) -> Result<EvalValue, E
                 )),
             }
         }
-        Expr::Add(lhs, rhs) => {
+        ValueExpr::Add(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
             let r = eval_value(rhs, ctx)?;
             match (l, r) {
@@ -500,7 +489,7 @@ pub(crate) fn eval_value(e: &Expr, ctx: &EvalContext<'_>) -> Result<EvalValue, E
                 )),
             }
         }
-        Expr::Sum { value, body } => {
+        ValueExpr::Sum { value, body } => {
             let matches = find_matches(body, ctx)?;
             let mut total = Decimal::ZERO;
             for m in matches {
@@ -511,7 +500,7 @@ pub(crate) fn eval_value(e: &Expr, ctx: &EvalContext<'_>) -> Result<EvalValue, E
             }
             Ok(EvalValue::Decimal(total))
         }
-        Expr::ValueOf {
+        ValueExpr::ValueOf {
             predicate,
             args,
             default,
@@ -542,7 +531,6 @@ pub(crate) fn eval_value(e: &Expr, ctx: &EvalContext<'_>) -> Result<EvalValue, E
                 _ => Err(EvalError::ValueOfMultipleMatches(predicate.clone())),
             }
         }
-        _ => Err(EvalError::NotValue),
     }
 }
 
@@ -570,9 +558,9 @@ pub(crate) fn resolve_term(
     }
 }
 
-/// On a failing predicate-shaped expression, return the most specific
-/// sub-expression responsible, rendered via
-/// [`crate::format::format_expr_inline`]. Returns `None` when no
+/// On a failing proposition, return the most specific sub-proposition
+/// responsible, rendered via
+/// [`crate::format::format_prop_inline`]. Returns `None` when no
 /// drill-down meaningfully applies.
 ///
 /// Called from [`crate::propose::execute_stmt`] on the rejection
@@ -594,9 +582,9 @@ pub(crate) fn resolve_term(
 ///   failure means no member satisfied; `Or` failure means every
 ///   branch failed.
 /// - Leaf expressions: return `None`, already as specific as possible.
-pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option<String> {
-    match expr {
-        Expr::And(conjuncts) => {
+pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option<String> {
+    match prop {
+        Prop::And(conjuncts) => {
             // Thread bindings through conjuncts as `find_conjunction`
             // does: each runs against the contexts the previous produced.
             // Evaluating each against the original `bindings` would miss
@@ -615,14 +603,14 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
                     let failing_bindings = current.first().unwrap_or(ctx.bindings);
                     return Some(
                         find_failing_subexpr(c, &ctx.with_bindings(failing_bindings))
-                            .unwrap_or_else(|| crate::format::format_expr_inline(c)),
+                            .unwrap_or_else(|| crate::format::format_prop_inline(c)),
                     );
                 }
                 current = next;
             }
             None
         }
-        Expr::Implies { left, right } => {
+        Prop::Implies { left, right } => {
             let left_matches = find_matches(left, ctx).ok()?;
             if left_matches.is_empty() {
                 // Vacuously true when left fails; return None as safety.
@@ -636,13 +624,13 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
                 if right_matches.is_empty() {
                     return Some(
                         find_failing_subexpr(right, &ext_ctx)
-                            .unwrap_or_else(|| crate::format::format_expr_inline(right)),
+                            .unwrap_or_else(|| crate::format::format_prop_inline(right)),
                     );
                 }
             }
             None
         }
-        Expr::Forall {
+        Prop::Forall {
             binding: _,
             source,
             body,
@@ -658,27 +646,22 @@ pub(crate) fn find_failing_subexpr(expr: &Expr, ctx: &EvalContext<'_>) -> Option
                 if body_matches.is_empty() {
                     return Some(
                         find_failing_subexpr(body, &ext_ctx)
-                            .unwrap_or_else(|| crate::format::format_expr_inline(body)),
+                            .unwrap_or_else(|| crate::format::format_prop_inline(body)),
                     );
                 }
             }
             None
         }
         // No useful drill-down for these:
-        Expr::Not(_)
-        | Expr::Or(_)
-        | Expr::Pre(_)
-        | Expr::Exists { .. }
-        | Expr::Claim { .. }
-        | Expr::Compare { .. }
-        | Expr::Eq(..)
-        | Expr::Neq(..)
-        | Expr::In(..)
-        | Expr::Term(..)
-        | Expr::Sub(..)
-        | Expr::Add(..)
-        | Expr::Sum { .. }
-        | Expr::ValueOf { .. } => None,
+        Prop::Not(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Exists { .. }
+        | Prop::Claim { .. }
+        | Prop::Compare { .. }
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::In(..) => None,
     }
 }
 
@@ -706,8 +689,8 @@ pub struct RenderedClaim {
 ///
 /// Scope is deliberately narrow in v0:
 ///
-/// - a top-level [`Expr::Claim`] that did not match -> that claim;
-/// - a top-level [`Expr::And`] -> the first conjunct that kills the
+/// - a top-level [`Prop::Claim`] that did not match -> that claim;
+/// - a top-level [`Prop::And`] -> the first conjunct that kills the
 ///   chain, *if and only if* it is itself a positive `Claim`.
 ///
 /// Everything else returns empty: `Or`, `Not`, `Exists`, `Implies`,
@@ -721,17 +704,17 @@ pub struct RenderedClaim {
 /// Called only on the rejection branch, like `find_failing_subexpr`, so
 /// the success path pays nothing.
 pub(crate) fn unsatisfied_positive_claims(
-    expr: &Expr,
+    prop: &Prop,
     ctx: &EvalContext<'_>,
 ) -> Vec<RenderedClaim> {
-    match expr {
-        Expr::Claim { .. } => match find_matches(expr, ctx) {
+    match prop {
+        Prop::Claim { .. } => match find_matches(prop, ctx) {
             // Reached only because the gate failed; guard anyway so this
             // never reports a claim that actually matched.
-            Ok(m) if m.is_empty() => vec![render_claim(expr, ctx)],
+            Ok(m) if m.is_empty() => vec![render_claim(prop, ctx)],
             _ => vec![],
         },
-        Expr::And(conjuncts) => {
+        Prop::And(conjuncts) => {
             let mut current: Vec<Bindings> = vec![ctx.bindings.clone()];
             for c in conjuncts {
                 let mut next: Vec<Bindings> = Vec::new();
@@ -748,7 +731,7 @@ pub(crate) fn unsatisfied_positive_claims(
                     // itself a positive claim; a comparator/`not`/etc.
                     // failure has no directly-missing claim in v0.
                     let failing_bindings = current.first().unwrap_or(ctx.bindings);
-                    if matches!(c, Expr::Claim { .. }) {
+                    if matches!(c, Prop::Claim { .. }) {
                         return vec![render_claim(c, &ctx.with_bindings(failing_bindings))];
                     }
                     return vec![];
@@ -761,14 +744,14 @@ pub(crate) fn unsatisfied_positive_claims(
     }
 }
 
-/// Render an `Expr::Claim` with its arguments resolved under `ctx`'s
+/// Render a `Prop::Claim` with its arguments resolved under `ctx`'s
 /// live bindings - `MayApprove(alice, contract)`, not
 /// `MayApprove(actor, doc_type)`. A term that does not resolve (an
 /// unbound variable) falls back to its symbolic form. Panics if handed a
 /// non-`Claim`; the only callers pass a `Claim`.
-fn render_claim(expr: &Expr, ctx: &EvalContext<'_>) -> RenderedClaim {
-    let Expr::Claim { predicate, args } = expr else {
-        unreachable!("render_claim is only called on Expr::Claim")
+fn render_claim(prop: &Prop, ctx: &EvalContext<'_>) -> RenderedClaim {
+    let Prop::Claim { predicate, args } = prop else {
+        unreachable!("render_claim is only called on Prop::Claim")
     };
     let rendered_args: Vec<String> = args.iter().map(|t| render_term(t, ctx)).collect();
     RenderedClaim {

@@ -14,7 +14,9 @@
 mod common;
 
 use common::{dec, subj};
-use morpholog_core::{ClaimInstance, EvalValue, Expr, Outcome, State, Stmt, eval_invariant};
+use morpholog_core::{
+    ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, ValueExpr, eval_invariant,
+};
 use morpholog_examples::settlement_netting;
 
 // ============================================================
@@ -35,7 +37,7 @@ fn invariant_has_expected_top_level_shape() {
     let inv = settlement_netting::net_settlement_has_lines();
     assert_eq!(inv.name, "net_settlement_has_lines");
     assert_eq!(inv.version, 1);
-    assert!(matches!(inv.body, Expr::Implies { .. }));
+    assert!(matches!(inv.body, Prop::Implies { .. }));
 }
 
 #[test]
@@ -51,11 +53,11 @@ fn no_double_netting_has_expected_shape() {
     let inv = settlement_netting::no_double_netting();
     assert_eq!(inv.name, "no_double_netting");
     assert_eq!(inv.version, 1);
-    let Expr::Implies { left, right } = inv.body else {
+    let Prop::Implies { left, right } = inv.body else {
         panic!("body should be Implies");
     };
-    assert!(matches!(*left, Expr::Claim { .. }));
-    assert!(matches!(*right, Expr::Not(_)));
+    assert!(matches!(*left, Prop::Claim { .. }));
+    assert!(matches!(*right, Prop::Not(_)));
 }
 
 #[test]
@@ -70,15 +72,15 @@ fn net_amount_equals_lines_round_trips() {
 fn net_amount_equals_lines_has_expected_shape() {
     let inv = settlement_netting::net_amount_equals_lines();
     assert_eq!(inv.name, "net_amount_equals_lines");
-    let Expr::Implies { left, right } = inv.body else {
+    let Prop::Implies { left, right } = inv.body else {
         panic!("body should be Implies");
     };
-    assert!(matches!(*left, Expr::Claim { .. }));
-    let Expr::Eq(lhs, rhs) = *right else {
+    assert!(matches!(*left, Prop::Claim { .. }));
+    let Prop::Eq(lhs, rhs) = *right else {
         panic!("right should be Eq");
     };
-    assert!(matches!(*lhs, Expr::Term(_)));
-    assert!(matches!(*rhs, Expr::Sum { .. }));
+    assert!(matches!(*lhs, ValueExpr::Term(_)));
+    assert!(matches!(*rhs, ValueExpr::Sum { .. }));
 }
 
 #[test]

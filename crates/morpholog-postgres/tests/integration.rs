@@ -1793,7 +1793,7 @@ async fn duplicate_intent_in_one_transformation_surfaces_named_error() {
 }
 
 // ============================================================
-// Approval controls - durable proof that Term::Actor and a decimal Expr::Compare flow
+// Approval controls - durable proof that Term::Actor and a decimal Prop::Compare flow
 // through propose_against_pg into the audit log and the asserted
 // Approval / LimitedApproval claims. One scenario walks both the
 // unconditional and quantitative authority shapes.
@@ -1889,7 +1889,7 @@ async fn approval_controls_full_chain_through_pg() {
     .expect("grant_approval_limit should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 6. jordan approves a 750 invoice; the decimal Expr::Compare admits. Pin the full
+    // 6. jordan approves a 750 invoice; the decimal Prop::Compare admits. Pin the full
     // round-trip: receipt actor, asserted claim, emitted intent
     // staged to the outbox, and the audit row's actor column.
     let outcome = common::propose_pg_as(
@@ -2004,7 +2004,7 @@ async fn approval_controls_full_chain_through_pg() {
 /// grant, a first under-cap settlement (admitted), a boundary-equality
 /// settlement that exactly fills the aggregate (admitted), an over-cap
 /// attempt (rejected, no audit/outbox), and the `PolicyLimitUsage`
-/// derived claim read back. Pins the `Expr::Add` aggregate under
+/// derived claim read back. Pins the `ValueExpr::Add` aggregate under
 /// durable commit semantics.
 #[tokio::test]
 async fn insurance_claim_settlement_full_chain_through_pg() {

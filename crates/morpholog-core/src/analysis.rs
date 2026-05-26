@@ -4,20 +4,20 @@
 //! programme's predicate vocabulary without running it.
 //!
 //! Every walker uses an **exhaustive** match (no `_` arm) so that a
-//! future `Expr` or `Stmt` variant cannot silently fall through and
-//! cause the read path to load an incomplete claim set.
+//! future `Prop`, `ValueExpr`, or `Stmt` variant cannot silently fall
+//! through and cause the read path to load an incomplete claim set.
 
 use std::collections::BTreeSet;
 
-use crate::ir::{DerivedClaim, Expr, Program, Stmt};
+use crate::ir::{DerivedClaim, Program, Prop, Stmt, ValueExpr};
 
-/// Return the set of predicate names this expression references
-/// anywhere in its tree. Used by the PostgreSQL adapter's read path
-/// to load only the claims a derived-claim enumeration needs,
-/// instead of fetching the whole `morpholog.claims` table.
+/// Return the set of predicate names a proposition references anywhere
+/// in its tree. Used by the PostgreSQL adapter's read path to load only
+/// the claims a derived-claim enumeration needs, instead of fetching the
+/// whole `morpholog.claims` table.
 ///
-/// The match below is **exhaustive over `Expr` variants on purpose**
-/// (no `_` arm). If a future PR adds a new `Expr` variant, the
+/// The match below is **exhaustive over `Prop` variants on purpose**
+/// (no `_` arm). If a future PR adds a new `Prop` variant, the
 /// compiler will refuse this function until the new variant is
 /// handled. That compile-time check is what keeps the analysis
 /// honest: a missed variant here would silently produce
@@ -25,53 +25,72 @@ use crate::ir::{DerivedClaim, Expr, Program, Stmt};
 /// the kernel actually needs, and `enumerate_derived` would return
 /// an answer computed against an incomplete state.
 ///
-/// `Term` and `In` take only `Term`s (variables, wildcards, or
-/// literals), none of which can reference a predicate; they contribute
-/// nothing.
-pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
-    match expr {
-        Expr::Claim { predicate, .. } => {
+/// `In` takes only `Term`s (variables, wildcards, or literals), none of
+/// which can reference a predicate; it contributes nothing. Comparator
+/// operands are value expressions, walked by
+/// [`predicates_referenced_by_value`].
+pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<String>) {
+    match prop {
+        Prop::Claim { predicate, .. } => {
             out.insert(predicate.clone());
         }
-        Expr::ValueOf {
+        Prop::Implies { left, right } => {
+            predicates_referenced_by_prop(left, out);
+            predicates_referenced_by_prop(right, out);
+        }
+        Prop::And(props) | Prop::Or(props) => {
+            for p in props {
+                predicates_referenced_by_prop(p, out);
+            }
+        }
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
+            predicates_referenced_by_prop(p, out);
+        }
+        Prop::Eq(l, r)
+        | Prop::Neq(l, r)
+        | Prop::Compare {
+            left: l, right: r, ..
+        } => {
+            predicates_referenced_by_value(l, out);
+            predicates_referenced_by_value(r, out);
+        }
+        Prop::Forall { source, body, .. } => {
+            predicates_referenced_by_prop(source, out);
+            predicates_referenced_by_prop(body, out);
+        }
+        Prop::In(_, _) => {
+            // No predicate references; operates on Terms only.
+        }
+    }
+}
+
+/// Return the set of predicate names a value expression references
+/// anywhere in its tree. The value-sort companion to
+/// [`predicates_referenced_by_prop`]; the two recurse into each other
+/// because the sorts are mutually recursive (`Sum`'s body is a `Prop`).
+///
+/// Exhaustive over `ValueExpr` for the same honesty reason as the
+/// proposition walker. `Term` takes only a `Term` and contributes
+/// nothing.
+pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
+    match expr {
+        ValueExpr::ValueOf {
             predicate, default, ..
         } => {
             out.insert(predicate.clone());
             if let Some(d) = default {
-                predicates_referenced_by_expr(d, out);
+                predicates_referenced_by_value(d, out);
             }
         }
-        Expr::Implies { left, right } => {
-            predicates_referenced_by_expr(left, out);
-            predicates_referenced_by_expr(right, out);
+        ValueExpr::Sub(l, r) | ValueExpr::Add(l, r) => {
+            predicates_referenced_by_value(l, out);
+            predicates_referenced_by_value(r, out);
         }
-        Expr::And(exprs) | Expr::Or(exprs) => {
-            for e in exprs {
-                predicates_referenced_by_expr(e, out);
-            }
+        ValueExpr::Sum { body, .. } => {
+            predicates_referenced_by_prop(body, out);
         }
-        Expr::Not(e) | Expr::Exists { body: e, .. } | Expr::Pre(e) => {
-            predicates_referenced_by_expr(e, out);
-        }
-        Expr::Eq(l, r)
-        | Expr::Neq(l, r)
-        | Expr::Compare {
-            left: l, right: r, ..
-        }
-        | Expr::Sub(l, r)
-        | Expr::Add(l, r) => {
-            predicates_referenced_by_expr(l, out);
-            predicates_referenced_by_expr(r, out);
-        }
-        Expr::Sum { body, .. } => {
-            predicates_referenced_by_expr(body, out);
-        }
-        Expr::Forall { source, body, .. } => {
-            predicates_referenced_by_expr(source, out);
-            predicates_referenced_by_expr(body, out);
-        }
-        Expr::Term(_) | Expr::In(_, _) => {
-            // No predicate references; operate on Terms only.
+        ValueExpr::Term(_) => {
+            // No predicate references; operates on a Term only.
         }
     }
 }
@@ -87,15 +106,15 @@ pub fn predicates_referenced_by_expr(expr: &Expr, out: &mut BTreeSet<String>) {
 /// callers to load claims they have no use for.
 pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    predicates_referenced_by_expr(&derived.domain, &mut out);
+    predicates_referenced_by_prop(&derived.domain, &mut out);
     for v in &derived.values {
-        predicates_referenced_by_expr(&v.expr, &mut out);
+        predicates_referenced_by_value(&v.expr, &mut out);
     }
     out
 }
 
 /// Return every predicate name a statement references in its tree.
-/// Symmetric with [`predicates_referenced_by_expr`] but operates at
+/// Symmetric with [`predicates_referenced_by_prop`] but operates at
 /// the statement level. This walker is the **broad** set; it includes
 /// predicates the statement *reads from pre-state* (Require, BindOne,
 /// Let-value, For-collection, Retract pattern) and predicates the
@@ -120,8 +139,8 @@ pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<Stri
 /// subject identifier without consulting state.
 pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
     match stmt {
-        Stmt::Require(e) | Stmt::BindOne(e) => predicates_referenced_by_expr(e, out),
-        Stmt::Let { value, .. } => predicates_referenced_by_expr(value, out),
+        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, out),
+        Stmt::Let { value, .. } => predicates_referenced_by_value(value, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(c) => {
             out.insert(c.predicate.clone());
@@ -132,7 +151,7 @@ pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
         Stmt::For {
             collection, body, ..
         } => {
-            predicates_referenced_by_expr(collection, out);
+            predicates_referenced_by_value(collection, out);
             for inner in body {
                 predicates_referenced_by_stmt(inner, out);
             }
@@ -169,8 +188,8 @@ pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
 /// declare its read behaviour explicitly.
 pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
     match stmt {
-        Stmt::Require(e) | Stmt::BindOne(e) => predicates_referenced_by_expr(e, out),
-        Stmt::Let { value, .. } => predicates_referenced_by_expr(value, out),
+        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, out),
+        Stmt::Let { value, .. } => predicates_referenced_by_value(value, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(_) => {
             // Write-only: the asserted claim is staged as output, not
@@ -185,7 +204,7 @@ pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
         Stmt::For {
             collection, body, ..
         } => {
-            predicates_referenced_by_expr(collection, out);
+            predicates_referenced_by_value(collection, out);
             for inner in body {
                 predicates_read_by_stmt(inner, out);
             }

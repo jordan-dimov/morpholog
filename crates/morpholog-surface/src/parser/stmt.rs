@@ -20,7 +20,7 @@
 //! Surface verb / IR mapping (the predicate + args pair is the
 //! same shape across four verbs; the verb decides the wrapper):
 //!
-//! - `bind Foo(args)`    -> `Stmt::BindOne(Expr::Claim { .. })`
+//! - `bind Foo(args)`    -> `Stmt::BindOne(Prop::Claim { .. })`
 //! - `admit Foo(args)`   -> `Stmt::Assert(Claim { predicate, args })`
 //! - `retract Foo(args)` -> `Stmt::Retract { predicate, args }`
 //! - `emit Foo(args)`    -> `Stmt::Emit(Intent { name, args })`
@@ -31,7 +31,7 @@
 //! Why `bind`/`admit`/`retract`/`emit` share the claim-pattern
 //! restriction: each verb operates on a single claim shape; the
 //! meaningful authoring form is `Verb Name(args)`. The IR's
-//! `Stmt::BindOne` could carry any `Expr`, but the surface stays
+//! `Stmt::BindOne` could carry any `Prop`, but the surface stays
 //! narrower per Position A doctrine - surface less permissive
 //! than IR when the meaningful authoring form is narrower.
 //!
@@ -52,11 +52,11 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Claim, Expr, Intent, PredicateArgKind, Stmt, Term, Value};
+use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, Value, ValueExpr};
 
 use crate::lexer::Token;
 
-use super::expr::expression_parser;
+use super::expr::{expression_parser, value_expr_parser};
 
 /// Build a parser for a single statement.
 ///
@@ -68,7 +68,11 @@ pub(super) fn statement_parser<'a, I>() -> impl Parser<'a, I, Stmt, extra::Err<R
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    let expression = expression_parser();
+    // `require` bodies are propositions; `let` values and `for`
+    // collections are value expressions. The two sorts have separate
+    // parsers, used in their respective statement positions below.
+    let proposition = expression_parser();
+    let value_expr = value_expr_parser();
 
     recursive(|statement| {
         let ident = select! { Token::Ident(s) => s };
@@ -103,15 +107,15 @@ where
         let claim_pattern =
             ident.then(term_list.delimited_by(just(Token::LParen), just(Token::RParen)));
 
-        // require <expression>
+        // require <proposition>
         let require_stmt = just(Token::KwRequire)
-            .ignore_then(expression.clone())
+            .ignore_then(proposition.clone())
             .map(Stmt::Require);
 
         // bind <claim_pattern>
         let bind_stmt = just(Token::KwBind)
             .ignore_then(claim_pattern.clone())
-            .map(|(predicate, args)| Stmt::BindOne(Expr::Claim { predicate, args }));
+            .map(|(predicate, args)| Stmt::BindOne(Prop::Claim { predicate, args }));
 
         // admit <claim_pattern>
         //
@@ -186,7 +190,7 @@ where
 
         let let_rhs = choice((
             new_subject_rhs.map(|()| LetRhs::NewSubject),
-            expression.clone().map(LetRhs::Expr),
+            value_expr.clone().map(LetRhs::Value),
         ));
 
         let let_stmt = just(Token::KwLet)
@@ -195,16 +199,15 @@ where
             .then(let_rhs)
             .map(|(name, rhs)| match rhs {
                 LetRhs::NewSubject => Stmt::LetNewSubject { name },
-                LetRhs::Expr(value) => Stmt::Let { name, value },
+                LetRhs::Value(value) => Stmt::Let { name, value },
             });
 
-        // for <name> in <expression> : Indent statement+ Dedent
+        // for <name> in <value-expression> : Indent statement+ Dedent
         //
-        // The collection is parsed as a full expression. The kernel's
-        // `Stmt::For.collection` is an `Expr`; whatever it evaluates
+        // The collection is parsed as a value expression. The kernel's
+        // `Stmt::For.collection` is a `ValueExpr`; whatever it evaluates
         // to must be an `EvalValue::Collection` at runtime, but the
-        // surface accepts any expression - matches how `forall`'s
-        // source is parsed.
+        // surface accepts any value expression.
         //
         // The body is `Indent statement+ Dedent`, identical in shape
         // to the transformation body itself. `statement` is the
@@ -212,7 +215,7 @@ where
         let for_stmt = just(Token::KwFor)
             .ignore_then(ident)
             .then_ignore(just(Token::KwIn))
-            .then(expression.clone())
+            .then(value_expr.clone())
             .then_ignore(just(Token::Colon))
             .then_ignore(just(Token::Indent))
             .then(
@@ -246,5 +249,5 @@ where
 /// expression) drive the choice.
 enum LetRhs {
     NewSubject,
-    Expr(morpholog_core::Expr),
+    Value(ValueExpr),
 }

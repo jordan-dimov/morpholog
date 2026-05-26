@@ -8,10 +8,14 @@
 //! - **binding flow** - a name consumed where a bound value is
 //!   required must have been bound first, following the runtime
 //!   quartet's export rules (`EvalError::UnboundVariable`);
-//! - **shape** - a value-producing expression at a predicate position,
-//!   or the reverse (`EvalError::NotPredicate` / `NotValue`);
 //! - **actor context** - `Term::Actor` in an invariant or derived body,
 //!   where no proposing transition is in scope (`UnboundActor`).
+//!
+//! The predicate-vs-value shape boundary is no longer policed here: the
+//! IR's two sorts ([`Prop`] and [`ValueExpr`]) make a value expression
+//! at a predicate position - or the reverse - unrepresentable, so the
+//! walk splits by sort ([`CheckCtx::walk_prop`] and
+//! [`CheckCtx::infer_value`]) instead of checking shape at each node.
 //!
 //! A [`Scope`] threads kind inference and runtime-binding state
 //! together, cloned at the boundaries (`require`, `sum`, `for`,
@@ -28,7 +32,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::format::compare_token;
-use crate::ir::{Expr, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Value};
+use crate::ir::{
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value, ValueExpr,
+};
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
 /// Inferred kind of a value during static analysis. Distinct from
@@ -226,13 +232,13 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         cx.context = ValidationContext::Invariant {
             name: inv.name.clone(),
         };
-        if expr_mentions_actor(&inv.body) {
+        if prop_mentions_actor(&inv.body) {
             let context = cx.context.clone();
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
         let mut scope = Scope::new();
-        cx.walk_predicate_expr(&inv.body, &mut scope);
+        cx.walk_prop(&inv.body, &mut scope);
     }
 
     for transformation in &program.transformations {
@@ -256,8 +262,8 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         cx.context = ValidationContext::DerivedClaim {
             predicate: derived.predicate.clone(),
         };
-        if expr_mentions_actor(&derived.domain)
-            || derived.values.iter().any(|v| expr_mentions_actor(&v.expr))
+        if prop_mentions_actor(&derived.domain)
+            || derived.values.iter().any(|v| value_mentions_actor(&v.expr))
         {
             let context = cx.context.clone();
             cx.errors
@@ -267,11 +273,11 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         // value expressions are inferred against the same scope, so
         // they see those bindings.
         let mut scope = Scope::new();
-        cx.walk_predicate_expr(&derived.domain, &mut scope);
+        cx.walk_prop(&derived.domain, &mut scope);
         let value_kinds: Vec<InferredKind> = derived
             .values
             .iter()
-            .map(|v| cx.infer_value_expr(&v.expr, &mut scope))
+            .map(|v| cx.infer_value(&v.expr, &mut scope))
             .collect();
 
         // Output args check: the runtime emits claims of the form
@@ -327,24 +333,24 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
 }
 
 impl CheckCtx<'_> {
-    /// Walk a predicate-shaped expression. Threads the scope
-    /// through composition (`And`, `Implies`, `Pre`); `Or`
-    /// branches walk a clone so neither a refinement nor a binding
-    /// in one branch reaches another. A claim here is in `Match`
-    /// position - its variables become bound.
-    fn walk_predicate_expr(&mut self, expr: &Expr, scope: &mut Scope) {
-        match expr {
-            Expr::Claim { predicate, args } => {
+    /// Walk a proposition. Threads the scope through composition
+    /// (`And`, `Implies`, `Pre`); `Or` branches walk a clone so
+    /// neither a refinement nor a binding in one branch reaches
+    /// another. A claim here is in `Match` position - its variables
+    /// become bound.
+    fn walk_prop(&mut self, prop: &Prop, scope: &mut Scope) {
+        match prop {
+            Prop::Claim { predicate, args } => {
                 self.check_predicate_ref(predicate, args, RefMode::Match, scope);
             }
-            Expr::And(items) => {
+            Prop::And(items) => {
                 // Conjuncts thread the scope forward: each branch
                 // sees bindings and refinements from earlier ones.
                 for item in items {
-                    self.walk_predicate_expr(item, scope);
+                    self.walk_prop(item, scope);
                 }
             }
-            Expr::Or(items) => {
+            Prop::Or(items) => {
                 // Disjuncts evaluate against the same base context
                 // (mirrors `find_disjunction`): a branch's binding or
                 // refinement must not leak to a sibling branch. But
@@ -358,7 +364,7 @@ impl CheckCtx<'_> {
                 let mut merged: Option<BoundEnv> = None;
                 for item in items {
                     let mut branch = scope.clone();
-                    self.walk_predicate_expr(item, &mut branch);
+                    self.walk_prop(item, &mut branch);
                     merged = Some(match merged {
                         None => branch.bound,
                         Some(mut acc) => {
@@ -371,22 +377,22 @@ impl CheckCtx<'_> {
                     scope.bound = merged;
                 }
             }
-            Expr::Not(inner) | Expr::Pre(inner) => {
-                self.walk_predicate_expr(inner, scope);
+            Prop::Not(inner) | Prop::Pre(inner) => {
+                self.walk_prop(inner, scope);
             }
-            Expr::Implies { left, right } => {
-                self.walk_predicate_expr(left, scope);
-                self.walk_predicate_expr(right, scope);
+            Prop::Implies { left, right } => {
+                self.walk_prop(left, scope);
+                self.walk_prop(right, scope);
             }
-            Expr::Exists { binding, body } => {
+            Prop::Exists { binding, body } => {
                 // The binding is introduced by the quantifier;
                 // mark it bound before the body. No shadowing of an
                 // outer variable of the same name (the runtime
                 // unifies); binding it again is idempotent.
                 scope.bound.bind(binding);
-                self.walk_predicate_expr(body, scope);
+                self.walk_prop(body, scope);
             }
-            Expr::Forall {
+            Prop::Forall {
                 binding,
                 source,
                 body,
@@ -398,10 +404,10 @@ impl CheckCtx<'_> {
                 // name may stay visible to a sibling conjunct rather
                 // than risk a false positive by scoping it away.
                 scope.bound.bind(binding);
-                self.walk_predicate_expr(source, scope);
-                self.walk_predicate_expr(body, scope);
+                self.walk_prop(source, scope);
+                self.walk_prop(body, scope);
             }
-            Expr::Compare {
+            Prop::Compare {
                 op,
                 domain,
                 left,
@@ -415,13 +421,13 @@ impl CheckCtx<'_> {
                 self.check_operand_kind(left, kind, token, scope);
                 self.check_operand_kind(right, kind, token, scope);
             }
-            Expr::Eq(left, right) => {
+            Prop::Eq(left, right) => {
                 self.check_equality_operands(left, right, "=", scope);
             }
-            Expr::Neq(left, right) => {
+            Prop::Neq(left, right) => {
                 self.check_equality_operands(left, right, "!=", scope);
             }
-            Expr::In(element, collection) => {
+            Prop::In(element, collection) => {
                 // `In` is a generator-or-filter (mirrors
                 // `find_in_matches`): an unbound element variable is
                 // bound to each collection item; a bound one filters.
@@ -457,21 +463,6 @@ impl CheckCtx<'_> {
                     }
                 }
             }
-            // A value-producing expression at a predicate position
-            // matches nothing; the runtime raises NotPredicate. The
-            // mirror of ExpectedValueExpression.
-            Expr::Term(_)
-            | Expr::Add(_, _)
-            | Expr::Sub(_, _)
-            | Expr::Sum { .. }
-            | Expr::ValueOf { .. } => {
-                let context = self.context.clone();
-                self.errors
-                    .push(ValidationError::ExpectedPredicateExpression {
-                        context,
-                        expression: short_expr_shape(expr),
-                    });
-            }
         }
     }
 
@@ -488,15 +479,15 @@ impl CheckCtx<'_> {
     ///   in a scoped clone.
     fn walk_stmt(&mut self, stmt: &Stmt, scope: &mut Scope) {
         match stmt {
-            Stmt::Require(expr) => {
+            Stmt::Require(prop) => {
                 let mut scoped = scope.clone();
-                self.walk_predicate_expr(expr, &mut scoped);
+                self.walk_prop(prop, &mut scoped);
             }
-            Stmt::BindOne(expr) => {
-                self.walk_predicate_expr(expr, scope);
+            Stmt::BindOne(prop) => {
+                self.walk_prop(prop, scope);
             }
             Stmt::Let { name, value } => {
-                let value_kind = self.infer_value_expr(value, scope);
+                let value_kind = self.infer_value(value, scope);
                 scope.bound.bind(name);
                 self.observe_or_report(scope, name, value_kind);
             }
@@ -538,17 +529,17 @@ impl CheckCtx<'_> {
     /// kind and emits `OperandKindMismatch` on disagreement.
     fn check_operand_kind(
         &mut self,
-        operand: &Expr,
+        operand: &ValueExpr,
         expected: PredicateArgKind,
         operator: &'static str,
         scope: &mut Scope,
     ) {
-        if let Expr::Term(Term::Var(name)) = operand {
+        if let ValueExpr::Term(Term::Var(name)) = operand {
             self.use_var(scope, name);
             self.observe_or_report(scope, name, InferredKind::Known(expected));
             return;
         }
-        let inferred = self.infer_value_expr(operand, scope);
+        let inferred = self.infer_value(operand, scope);
         if let InferredKind::Known(actual) = inferred
             && !kinds_compatible(expected, actual)
         {
@@ -566,8 +557,8 @@ impl CheckCtx<'_> {
     /// a `Known` kind they must be compatible; when one is a bare
     /// variable and the other contributes a concrete kind, the
     /// variable refines to it. `Subject == Decimal` is a kind
-    /// error, never a coercion. Backs both `Eq` (Expr operands)
-    /// and `Neq` (Term operands).
+    /// error, never a coercion. Backs both `Eq` and `Neq` (both
+    /// take `ValueExpr` operands).
     fn check_equality(
         &mut self,
         left: EqualityOperand<'_>,
@@ -603,34 +594,32 @@ impl CheckCtx<'_> {
 
     fn check_equality_operands(
         &mut self,
-        left: &Expr,
-        right: &Expr,
+        left: &ValueExpr,
+        right: &ValueExpr,
         operator: &'static str,
         scope: &mut Scope,
     ) {
-        // `infer_value_expr` use-checks a bare-variable operand.
-        let left_op = (self.infer_value_expr(left, scope), expr_var_name(left));
-        let right_op = (self.infer_value_expr(right, scope), expr_var_name(right));
+        // `infer_value` use-checks a bare-variable operand.
+        let left_op = (self.infer_value(left, scope), value_var_name(left));
+        let right_op = (self.infer_value(right, scope), value_var_name(right));
         self.check_equality(left_op, right_op, operator, scope);
     }
 
-    /// Infer the kind of a value-producing expression. A bare
-    /// variable is a use (must be bound); literals carry their
-    /// kind; `Add`/`Sub` recursively check Decimal operands and
-    /// return Decimal; `Sum` returns Decimal after a body-first
-    /// walk under a cloned scope; `ValueOf` returns its wildcard
-    /// slot's declared kind. A predicate-shaped expression at a
-    /// value position surfaces as `ExpectedValueExpression`.
-    fn infer_value_expr(&mut self, expr: &Expr, scope: &mut Scope) -> InferredKind {
+    /// Infer the kind of a value expression. A bare variable is a use
+    /// (must be bound); literals carry their kind; `Add`/`Sub`
+    /// recursively check Decimal operands and return Decimal; `Sum`
+    /// returns Decimal after a body-first walk under a cloned scope;
+    /// `ValueOf` returns its wildcard slot's declared kind.
+    fn infer_value(&mut self, expr: &ValueExpr, scope: &mut Scope) -> InferredKind {
         match expr {
-            Expr::Term(term) => {
+            ValueExpr::Term(term) => {
                 if let Term::Var(name) = term {
                     self.use_var(scope, name);
                 }
                 resolved_term_kind(term, &scope.kinds)
             }
-            Expr::Add(left, right) | Expr::Sub(left, right) => {
-                let operator = if matches!(expr, Expr::Add(_, _)) {
+            ValueExpr::Add(left, right) | ValueExpr::Sub(left, right) => {
+                let operator = if matches!(expr, ValueExpr::Add(_, _)) {
                     "+"
                 } else {
                     "-"
@@ -639,14 +628,14 @@ impl CheckCtx<'_> {
                 self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
-            Expr::Sum { value, body } => {
+            ValueExpr::Sum { value, body } => {
                 // Body-first inference on a cloned scope so body-
                 // bound names (the iteration binding, plus any
                 // others the body introduces) do not leak into the
                 // surrounding expression. Outer bindings stay
                 // visible via the clone. Sum's result is Decimal.
                 let mut scoped = scope.clone();
-                self.walk_predicate_expr(body, &mut scoped);
+                self.walk_prop(body, &mut scoped);
                 if let Term::Var(name) = value {
                     self.use_var(&scoped, name);
                 }
@@ -664,7 +653,7 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
-            Expr::ValueOf {
+            ValueExpr::ValueOf {
                 predicate,
                 args,
                 default,
@@ -674,7 +663,7 @@ impl CheckCtx<'_> {
                 self.check_predicate_ref(predicate, args, RefMode::Use, scope);
                 let result_kind = value_of_result_kind(predicate, args, &self.predicates);
                 if let Some(default_expr) = default {
-                    let default_kind = self.infer_value_expr(default_expr, scope);
+                    let default_kind = self.infer_value(default_expr, scope);
                     // The runtime returns either the looked-up value
                     // or the default, so a kind mismatch between them
                     // is the same class of error as a comparator
@@ -693,27 +682,6 @@ impl CheckCtx<'_> {
                     }
                 }
                 result_kind
-            }
-            // Predicate-shaped expression at a value position. The
-            // runtime raises `NotValue`; surface it earlier.
-            Expr::Claim { .. }
-            | Expr::Implies { .. }
-            | Expr::Exists { .. }
-            | Expr::Forall { .. }
-            | Expr::And(_)
-            | Expr::Or(_)
-            | Expr::Not(_)
-            | Expr::Pre(_)
-            | Expr::Eq(_, _)
-            | Expr::Compare { .. }
-            | Expr::Neq(_, _)
-            | Expr::In(_, _) => {
-                let context = self.context.clone();
-                self.errors.push(ValidationError::ExpectedValueExpression {
-                    context,
-                    expression: short_expr_shape(expr),
-                });
-                InferredKind::UnknownOrAny
             }
         }
     }
@@ -877,9 +845,9 @@ impl CheckCtx<'_> {
 /// kind can be written back to the env).
 type EqualityOperand<'a> = (InferredKind, Option<&'a str>);
 
-fn expr_var_name(expr: &Expr) -> Option<&str> {
+fn value_var_name(expr: &ValueExpr) -> Option<&str> {
     match expr {
-        Expr::Term(Term::Var(name)) => Some(name.as_str()),
+        ValueExpr::Term(Term::Var(name)) => Some(name.as_str()),
         _ => None,
     }
 }
@@ -923,7 +891,12 @@ fn value_of_result_kind(
         .unwrap_or(InferredKind::UnknownOrAny)
 }
 
-/// Whether an expression references `Term::Actor` anywhere in its
+/// Whether a `Term` is `Term::Actor`.
+fn is_actor(t: &Term) -> bool {
+    matches!(t, Term::Actor)
+}
+
+/// Whether a proposition references `Term::Actor` anywhere in its
 /// tree. Used to flag `actor` in invariant and derived-claim
 /// bodies, where the runtime raises `EvalError::UnboundActor`
 /// because no proposing transition is in scope.
@@ -931,30 +904,37 @@ fn value_of_result_kind(
 /// A standalone exhaustive walk rather than a hook in the kind
 /// visitor: `actor` can sit in any term position (claim arg,
 /// comparator operand, `sum` target, `in` operand), and a
-/// dedicated scan with no `_` arm guarantees a future `Expr`
-/// variant cannot let an `actor` slip through unnoticed.
-fn expr_mentions_actor(expr: &Expr) -> bool {
-    fn is_actor(t: &Term) -> bool {
-        matches!(t, Term::Actor)
-    }
-    match expr {
-        Expr::Term(t) => is_actor(t),
-        Expr::Claim { args, .. } => args.iter().any(is_actor),
-        Expr::ValueOf { args, default, .. } => {
-            args.iter().any(is_actor) || default.as_ref().is_some_and(|d| expr_mentions_actor(d))
+/// dedicated scan with no `_` arm guarantees a future `Prop` or
+/// `ValueExpr` variant cannot let an `actor` slip through unnoticed.
+/// Crosses into [`value_mentions_actor`] for comparator operands.
+fn prop_mentions_actor(prop: &Prop) -> bool {
+    match prop {
+        Prop::Claim { args, .. } => args.iter().any(is_actor),
+        Prop::In(a, b) => is_actor(a) || is_actor(b),
+        Prop::And(items) | Prop::Or(items) => items.iter().any(prop_mentions_actor),
+        Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => prop_mentions_actor(p),
+        Prop::Implies { left, right } => prop_mentions_actor(left) || prop_mentions_actor(right),
+        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
+            value_mentions_actor(left) || value_mentions_actor(right)
         }
-        Expr::In(a, b) => is_actor(a) || is_actor(b),
-        Expr::Sum { value, body } => is_actor(value) || expr_mentions_actor(body),
-        Expr::And(items) | Expr::Or(items) => items.iter().any(expr_mentions_actor),
-        Expr::Not(e) | Expr::Pre(e) | Expr::Exists { body: e, .. } => expr_mentions_actor(e),
-        Expr::Implies { left, right }
-        | Expr::Eq(left, right)
-        | Expr::Neq(left, right)
-        | Expr::Compare { left, right, .. }
-        | Expr::Add(left, right)
-        | Expr::Sub(left, right) => expr_mentions_actor(left) || expr_mentions_actor(right),
-        Expr::Forall { source, body, .. } => {
-            expr_mentions_actor(source) || expr_mentions_actor(body)
+        Prop::Forall { source, body, .. } => {
+            prop_mentions_actor(source) || prop_mentions_actor(body)
+        }
+    }
+}
+
+/// Whether a value expression references `Term::Actor` anywhere in its
+/// tree. The value-sort companion to [`prop_mentions_actor`]; the two
+/// recurse into each other (`Sum`'s body is a `Prop`).
+fn value_mentions_actor(expr: &ValueExpr) -> bool {
+    match expr {
+        ValueExpr::Term(t) => is_actor(t),
+        ValueExpr::ValueOf { args, default, .. } => {
+            args.iter().any(is_actor) || default.as_ref().is_some_and(|d| value_mentions_actor(d))
+        }
+        ValueExpr::Sum { value, body } => is_actor(value) || prop_mentions_actor(body),
+        ValueExpr::Add(left, right) | ValueExpr::Sub(left, right) => {
+            value_mentions_actor(left) || value_mentions_actor(right)
         }
     }
 }
@@ -968,31 +948,6 @@ fn term_kind(term: &Term) -> InferredKind {
         Term::Literal(Value::Subject(_)) => InferredKind::Known(PredicateArgKind::Subject),
         Term::Literal(Value::Decimal(_)) => InferredKind::Known(PredicateArgKind::Decimal),
         Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),
-    }
-}
-
-/// Short structural label for an expression used in
-/// `ExpectedValueExpression`. Not a full pretty-print; just the
-/// outermost constructor.
-fn short_expr_shape(expr: &Expr) -> String {
-    match expr {
-        Expr::Claim { predicate, .. } => format!("claim {predicate}(...)"),
-        Expr::Implies { .. } => "_ implies _".to_string(),
-        Expr::Exists { .. } => "exists _: _".to_string(),
-        Expr::Forall { .. } => "forall _ in _: _".to_string(),
-        Expr::And(_) => "_ and _".to_string(),
-        Expr::Or(_) => "_ or _".to_string(),
-        Expr::Not(_) => "not _".to_string(),
-        Expr::Pre(_) => "pre(_)".to_string(),
-        Expr::Eq(_, _) => "_ == _".to_string(),
-        Expr::Compare { op, domain, .. } => format!("_ {} _", compare_token(*op, *domain)),
-        Expr::Neq(_, _) => "_ != _".to_string(),
-        Expr::In(_, _) => "_ in _".to_string(),
-        Expr::Term(_) => "term".to_string(),
-        Expr::Add(_, _) => "_ + _".to_string(),
-        Expr::Sub(_, _) => "_ - _".to_string(),
-        Expr::Sum { .. } => "sum(...)".to_string(),
-        Expr::ValueOf { predicate, .. } => format!("value {predicate}(...)"),
     }
 }
 
@@ -1592,37 +1547,6 @@ mod tests {
         assert!(
             errs.is_empty(),
             "`in` binds the unbound element; the sum body is clean. got {errs:?}"
-        );
-    }
-
-    #[test]
-    fn value_shaped_expression_in_require_flags_expected_predicate() {
-        // `require value Policy(p, _)` - a value-producing lookup
-        // where a state-matching predicate is required. The runtime
-        // raises NotPredicate; the check surfaces it as
-        // ExpectedPredicateExpression. `p` is a parameter, so the
-        // only error is the shape, not an unbound variable.
-        let mut p = empty_program();
-        p.predicates = vec![pdecl(
-            "Policy",
-            &[
-                ("policy", PredicateArgKind::Subject),
-                ("limit", PredicateArgKind::Decimal),
-            ],
-        )];
-        p.transformations = vec![Transformation {
-            name: "t".to_string(),
-            parameters: params(&["p"]),
-            body: vec![require(value_of("Policy", vec![var("p"), wildcard()]))],
-        }];
-        let errs = check_program(&p);
-        assert!(
-            errs.iter().any(|e| matches!(
-                e,
-                ValidationError::ExpectedPredicateExpression { expression, .. }
-                    if expression == "value Policy(...)"
-            )),
-            "value-shaped require body must flag ExpectedPredicateExpression; got {errs:?}"
         );
     }
 
@@ -2317,7 +2241,7 @@ mod tests {
         p.invariants = vec![Invariant {
             name: "in_lit".to_string(),
             version: 1,
-            body: Expr::In(Term::Var("x".to_string()), dec("100")),
+            body: Prop::In(Term::Var("x".to_string()), dec("100")),
         }];
         let errs = check_program(&p);
         assert!(

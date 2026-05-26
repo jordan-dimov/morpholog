@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::format;
-use crate::ir::{Expr, Program};
+use crate::ir::{Program, Prop};
 
 /// One guarantee derived from one invariant: the impossible state it
 /// rules out.
@@ -45,11 +45,11 @@ pub fn guarantees(program: &Program) -> Vec<Guarantee> {
         .iter()
         .map(|inv| Guarantee {
             invariant: inv.name.clone(),
-            rule: format::format_expr_inline(&inv.body),
+            rule: format::format_prop_inline(&inv.body),
             // A `not(X)` invariant forbids exactly `X`; that is the only
             // shape whose bad state is mechanically obvious in v0.
             forbids: match &inv.body {
-                Expr::Not(inner) => Some(format::format_expr_inline(inner)),
+                Prop::Not(inner) => Some(format::format_prop_inline(inner)),
                 _ => None,
             },
         })

@@ -1,11 +1,22 @@
 //! IR types: the structural surface of a Morpholog programme.
 //!
-//! `Invariant`, `Expr`, `Term`, `Value`, `Claim`, `Intent`, `Stmt`,
-//! `Transformation`, `Program`, `DerivedClaim`, `DerivedValue`, plus the
-//! predicate-declaration types `PredicateDecl`, `ArgDecl`,
+//! `Invariant`, `Prop`, `ValueExpr`, `Term`, `Value`, `Claim`, `Intent`,
+//! `Stmt`, `Transformation`, `Program`, `DerivedClaim`, `DerivedValue`,
+//! plus the predicate-declaration types `PredicateDecl`, `ArgDecl`,
 //! `PredicateArgKind`. These are pure data; runtime concerns (state,
 //! evaluation, proposal execution, validation, persistence) live in
 //! sibling modules.
+//!
+//! The body grammar of invariants and transformations is two mutually
+//! recursive sorts, not one. A [`Prop`] *searches* governed state and
+//! produces binding witnesses (zero, one, or many satisfying binding
+//! contexts) - it is relational, not boolean. A [`ValueExpr`] *computes
+//! one value* from a binding context. The split makes the
+//! predicate-vs-value boundary a Rust type instead of a runtime error
+//! plus a static shape check: the evaluator for each sort is total, with
+//! no wrong-shape arm. The cross-references between the sorts encode the
+//! grammar - a comparison relates two values, a sum ranges over a
+//! proposition.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,38 +35,40 @@ use crate::validate::{ValidationError, validate_program};
 pub struct Invariant {
     pub name: String,
     pub version: u32,
-    pub body: Expr,
+    pub body: Prop,
 }
 
-/// Expression nodes used inside invariant bodies, transformation
-/// requires, and let-bindings. An `Expr` evaluates against a state and a
-/// binding set to yield either a truth-witness (predicate position) or a
-/// value (value position).
+/// A proposition: the predicate-shaped sort of the body grammar. A
+/// `Prop` *searches* a state and a binding set, producing the set of
+/// extended binding contexts that satisfy it (zero, one, or many) - it
+/// is relational, not boolean. Evaluated by `find_matches`.
 ///
-/// The variants are deliberately narrow - composition, claim and
-/// (in)equality matching, bounded aggregation, and one comparator or
-/// arithmetic primitive per kind. Anything not expressible within this
-/// set is, by design, not yet a runtime concern.
+/// Used inside invariant bodies, transformation `require`/`bind`
+/// statements, derived-claim domains, and quantifier composition. The
+/// variants are deliberately narrow - composition, claim and
+/// (in)equality matching, ordered comparison, and bounded quantification.
+/// Where a `Prop` relates values (`Eq`, `Neq`, `Compare`), its operands
+/// are [`ValueExpr`]s; the two sorts are mutually recursive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
+pub enum Prop {
     Claim {
         predicate: String,
         args: Vec<Term>,
     },
     Implies {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        left: Box<Prop>,
+        right: Box<Prop>,
     },
     Exists {
         binding: String,
-        body: Box<Expr>,
+        body: Box<Prop>,
     },
-    And(Vec<Expr>),
+    And(Vec<Prop>),
     /// Predicate-shaped disjunction. Concatenates the binding sets each
     /// branch produces against the same base context; empty when every
     /// branch is empty. No deduplication (matches `And`'s convention).
-    /// Flattened `Vec<Expr>` so `a or b or c` is one node.
-    Or(Vec<Expr>),
+    /// Flattened `Vec<Prop>` so `a or b or c` is one node.
+    Or(Vec<Prop>),
     /// Evaluates the wrapped subtree against the pre-transition state
     /// instead of the candidate (post) state, so one invariant can
     /// relate pre and post values. Raises
@@ -67,16 +80,15 @@ pub enum Expr {
     /// ...)` resolves both the domain and the body against pre, while
     /// `forall x in C: pre(...)` iterates the post-state domain and flips
     /// only the body - they diverge when the iteration set changes.
-    Pre(Box<Expr>),
-    Not(Box<Expr>),
-    Term(Term),
-    /// Value equality and inequality. Both operate on full expressions
-    /// (a bare `Term`, arithmetic, `Sum`, or `ValueOf`), evaluated to a
-    /// value and compared. Predicate-shaped: the unchanged binding set
-    /// when the (in)equality holds, empty otherwise. `Eq` and `Neq` are
-    /// symmetric - neither restricts its operands to bare terms.
-    Eq(Box<Expr>, Box<Expr>),
-    Neq(Box<Expr>, Box<Expr>),
+    Pre(Box<Prop>),
+    Not(Box<Prop>),
+    /// Value equality and inequality. Both operate on [`ValueExpr`]
+    /// operands (a bare `Term`, arithmetic, `Sum`, or `ValueOf`),
+    /// evaluated to a value and compared. Predicate-shaped: the unchanged
+    /// binding set when the (in)equality holds, empty otherwise. `Eq` and
+    /// `Neq` are symmetric - neither restricts its operands to bare terms.
+    Eq(Box<ValueExpr>, Box<ValueExpr>),
+    Neq(Box<ValueExpr>, Box<ValueExpr>),
     /// Ordered comparison: an operator (`<=` `<` `>=` `>`) over an ordered
     /// domain (decimal or civil date). Predicate-shaped - the unchanged
     /// binding set when the comparison holds, empty otherwise.
@@ -92,31 +104,45 @@ pub enum Expr {
     Compare {
         op: CompareOp,
         domain: OrderedDomain,
-        left: Box<Expr>,
-        right: Box<Expr>,
+        left: Box<ValueExpr>,
+        right: Box<ValueExpr>,
     },
+    Forall {
+        binding: String,
+        source: Box<Prop>,
+        body: Box<Prop>,
+    },
+    In(Term, Term),
+}
+
+/// A value expression: the value-producing sort of the body grammar. A
+/// `ValueExpr` *computes exactly one value* from a binding context (or a
+/// structural error). Evaluated by `eval_value`.
+///
+/// Appears only nested: as a comparator or (in)equality operand, a `let`
+/// value, a `sum` target's enclosing arithmetic, a `for` collection, or a
+/// derived-claim value expression. Where a `ValueExpr` ranges over a
+/// proposition (`Sum`), its body is a [`Prop`]; the two sorts are
+/// mutually recursive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueExpr {
+    Term(Term),
     /// Decimal subtraction; both operands must evaluate to
     /// `EvalValue::Decimal`, result is left minus right.
-    Sub(Box<Expr>, Box<Expr>),
+    Sub(Box<ValueExpr>, Box<ValueExpr>),
     /// Decimal addition; both operands must evaluate to
     /// `EvalValue::Decimal`, result is left plus right. With `Sub`, the
     /// whole decimal-arithmetic surface in v0 - no multiplication or
     /// division until an example forces them.
-    Add(Box<Expr>, Box<Expr>),
+    Add(Box<ValueExpr>, Box<ValueExpr>),
     /// Sums `value` over every binding the `body` produces. `value` is
     /// usually a variable bound by the body (`sum(amount | ...)`); a
     /// decimal-literal `value` turns the sum into a count of matches
     /// (`sum(1 | ...)`).
     Sum {
         value: Term,
-        body: Box<Expr>,
+        body: Box<Prop>,
     },
-    Forall {
-        binding: String,
-        source: Box<Expr>,
-        body: Box<Expr>,
-    },
-    In(Term, Term),
     /// Reads exactly one matching claim and yields its value-position
     /// binding; wildcards in `args` mark the value position(s). Zero
     /// matches errors unless `default` is supplied; multiple matches
@@ -125,17 +151,17 @@ pub enum Expr {
     /// Prefer [`Stmt::BindOne`] in transformation bodies (it rejects
     /// lawfully on zero matches, where `ValueOf` raises a kernel error).
     /// `ValueOf` is for value positions that are not statement-level
-    /// binding extensions: inside `Sum`/`Add`/`Sub`/`Eq`/`Le`/`DateLe`,
+    /// binding extensions: inside `Sum`/`Add`/`Sub`/`Eq`/`Compare`,
     /// a `Let` value, or a `DerivedClaim` value expression.
     ValueOf {
         predicate: String,
         args: Vec<Term>,
-        default: Option<Box<Expr>>,
+        default: Option<Box<ValueExpr>>,
     },
 }
 
 /// A comparison operator, independent of operand domain. Carried by
-/// [`Expr::Compare`] together with an [`OrderedDomain`]; the pair replaces
+/// [`Prop::Compare`] together with an [`OrderedDomain`]; the pair replaces
 /// what were once eight flat comparator variants (`Le` through `DateGt`) -
 /// the operator stays first-class without the enum exploding by kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +172,7 @@ pub enum CompareOp {
     Gt,
 }
 
-/// The ordered domain an [`Expr::Compare`] compares over. Explicit in the
+/// The ordered domain an [`Prop::Compare`] compares over. Explicit in the
 /// IR, never inferred from operand kind: the surface picks it by token (`<`
 /// decimal, `before` date), so there is no runtime operator overloading and
 /// each domain type-checks its own operands.
@@ -197,7 +223,7 @@ pub enum Value {
 /// A Claim is an admitted assertion candidate - a statement that may be
 /// admitted into governed state. It is not objective reality.
 ///
-/// Distinct from `Expr::Claim`, which is a *query* over candidate state.
+/// Distinct from `Prop::Claim`, which is a *query* over candidate state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
     pub predicate: String,
@@ -225,9 +251,9 @@ pub struct Intent {
 /// below and in full in `docs/runtime-semantics.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Require(Expr),
+    Require(Prop),
     /// Deterministic unique-lookup binding statement. Evaluates a
-    /// predicate-shaped expression against current state and bindings:
+    /// predicate-shaped proposition against current state and bindings:
     /// - Zero matches: transformation rejected (lawful: the expected
     ///   governed record is absent).
     /// - One match: the returned binding set *replaces* the current
@@ -235,10 +261,10 @@ pub enum Stmt {
     /// - Multiple matches: `EvalError::TypeMismatch` (the programme
     ///   expected unique state but admitted ambiguous state - a missing
     ///   structural-uniqueness invariant, or corruption).
-    BindOne(Expr),
+    BindOne(Prop),
     Let {
         name: String,
-        value: Expr,
+        value: ValueExpr,
     },
     LetNewSubject {
         name: String,
@@ -252,9 +278,11 @@ pub enum Stmt {
         predicate: String,
         args: Vec<Term>,
     },
+    /// `collection` is evaluated as a value (it must yield an
+    /// `EvalValue::Collection`); `binding` ranges over its items.
     For {
         binding: String,
-        collection: Expr,
+        collection: ValueExpr,
         body: Vec<Stmt>,
     },
     Emit(Intent),
@@ -289,8 +317,8 @@ pub struct Transformation {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
-    /// The vocabulary of admissible claim shapes. Every `Expr::Claim`,
-    /// `Stmt::Assert`, `Stmt::Retract`, `Expr::ValueOf`, and
+    /// The vocabulary of admissible claim shapes. Every `Prop::Claim`,
+    /// `Stmt::Assert`, `Stmt::Retract`, `ValueExpr::ValueOf`, and
     /// `DerivedClaim` output must target a declared predicate (validated
     /// by [`Program::validate`]).
     pub predicates: Vec<PredicateDecl>,
@@ -356,8 +384,6 @@ impl Program {
     /// - **Binding flow**: a name consumed where a bound value is
     ///   required must have been bound first, following the runtime
     ///   quartet's export rules.
-    /// - **Shape**: a value-producing expression at a predicate
-    ///   position, or the reverse.
     /// - **Actor context**: `Term::Actor` in an invariant or
     ///   derived-claim body, where no proposing transition is in scope.
     /// - **Nesting depth**: a body whose expressions or `for`-statements
@@ -384,9 +410,9 @@ impl Program {
 
 /// A predicate declaration: the name of a predicate and the named-and-
 /// kinded shape of its argument list. Declarations appear in
-/// [`Program::predicates`]; references appear inside `Expr::Claim`,
-/// `Stmt::Assert`, `Stmt::Retract`, `Expr::ValueOf`, and `DerivedClaim`
-/// output positions.
+/// [`Program::predicates`]; references appear inside `Prop::Claim`,
+/// `Stmt::Assert`, `Stmt::Retract`, `ValueExpr::ValueOf`, and
+/// `DerivedClaim` output positions.
 ///
 /// Argument *names* in a declaration are documentation - they describe
 /// what each position means, surface in `morpholog inspect predicates`,
@@ -458,16 +484,16 @@ pub struct DerivedClaim {
     pub predicate: String,
     pub keys: Vec<String>,
     pub values: Vec<DerivedValue>,
-    pub domain: Expr,
+    pub domain: Prop,
 }
 
 /// One computed value in a [`DerivedClaim`]. `name` is the variable
 /// name within the derived claim's scope (used only for documentation
 /// today; the output [`crate::ClaimInstance`] is positional, key values
 /// followed by computed values in declaration order). `expr` is a
-/// value-producing [`Expr`] that runs once per distinct key binding.
+/// [`ValueExpr`] that runs once per distinct key binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedValue {
     pub name: String,
-    pub expr: Expr,
+    pub expr: ValueExpr,
 }

@@ -14,13 +14,21 @@
 //! small. The depth guard, which only triggers far below any bound the
 //! random generator reaches, is exercised separately by explicitly deep
 //! inputs that walk every recursive arm.
+//!
+//! The IR's two sorts ([`Prop`] and [`ValueExpr`]) mean the generator
+//! also splits in two: `arb_prop` builds propositions, `arb_value_expr`
+//! builds value expressions. They are mutually recursive (a comparator
+//! relates two values, a `sum` ranges over a proposition), so the value
+//! generator nests a bounded proposition generator for `sum` bodies, and
+//! the proposition generator nests the value generator for comparator
+//! operands.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{
-    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation,
-    ValidationError, Value,
+    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
+    ValidationError, Value, ValueExpr,
 };
 use proptest::prelude::*;
 
@@ -66,61 +74,92 @@ fn arb_args() -> impl Strategy<Value = Vec<Term>> {
     prop::collection::vec(arb_term(), 0..4)
 }
 
-// ---------- recursive expression generator ----------
+// ---------- value-expression generator ----------
 
-fn arb_expr() -> impl Strategy<Value = Expr> {
+/// A bounded value expression. `Sum` ranges over a (leaf-only)
+/// proposition, so the value generator can recurse without forming an
+/// unbounded mutual cycle with `arb_prop`; the property under test only
+/// needs each recursive arm reached, not maximal mutual nesting.
+fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
     let leaf = prop_oneof![
-        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Expr::Claim { predicate, args }),
-        arb_term().prop_map(Expr::Term),
-        (arb_term(), arb_term())
-            .prop_map(|(a, b)| Expr::Neq(Box::new(Expr::Term(a)), Box::new(Expr::Term(b)))),
-        (arb_term(), arb_term()).prop_map(|(a, b)| Expr::In(a, b)),
-        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Expr::ValueOf {
+        arb_term().prop_map(ValueExpr::Term),
+        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| ValueExpr::ValueOf {
             predicate,
             args,
             default: None,
         }),
     ];
+    leaf.prop_recursive(4, 32, 4, |inner| {
+        prop_oneof![
+            (inner.clone(), inner.clone())
+                .prop_map(|(l, r)| ValueExpr::Add(Box::new(l), Box::new(r))),
+            (inner.clone(), inner.clone())
+                .prop_map(|(l, r)| ValueExpr::Sub(Box::new(l), Box::new(r))),
+            (arb_term(), arb_prop_leaf()).prop_map(|(value, body)| ValueExpr::Sum {
+                value,
+                body: Box::new(body),
+            }),
+            (arb_pred_name(), arb_args(), inner).prop_map(|(predicate, args, default)| {
+                ValueExpr::ValueOf {
+                    predicate,
+                    args,
+                    default: Some(Box::new(default)),
+                }
+            }),
+        ]
+    })
+}
+
+/// A leaf-only proposition, used as the body of a `sum` inside the value
+/// generator to keep the mutual recursion bounded.
+fn arb_prop_leaf() -> impl Strategy<Value = Prop> {
+    prop_oneof![
+        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Prop::Claim { predicate, args }),
+        (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, b)),
+    ]
+}
+
+// ---------- recursive proposition generator ----------
+
+fn arb_prop() -> impl Strategy<Value = Prop> {
+    let leaf = prop_oneof![
+        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Prop::Claim { predicate, args }),
+        (arb_value_expr(), arb_value_expr()).prop_map(|(a, b)| Prop::Neq(Box::new(a), Box::new(b))),
+        (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, b)),
+    ];
     // depth 4, ~32 total nodes, up to 4 children per collection node.
     leaf.prop_recursive(4, 32, 4, |inner| {
         prop_oneof![
-            prop::collection::vec(inner.clone(), 1..4).prop_map(Expr::And),
-            prop::collection::vec(inner.clone(), 1..4).prop_map(Expr::Or),
-            inner.clone().prop_map(|e| Expr::Not(Box::new(e))),
-            inner.clone().prop_map(|e| Expr::Pre(Box::new(e))),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Implies {
+            prop::collection::vec(inner.clone(), 1..4).prop_map(Prop::And),
+            prop::collection::vec(inner.clone(), 1..4).prop_map(Prop::Or),
+            inner.clone().prop_map(|e| Prop::Not(Box::new(e))),
+            inner.clone().prop_map(|e| Prop::Pre(Box::new(e))),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| Prop::Implies {
                 left: Box::new(l),
                 right: Box::new(r),
             }),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Eq(Box::new(l), Box::new(r))),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Compare {
+            (arb_value_expr(), arb_value_expr())
+                .prop_map(|(l, r)| Prop::Eq(Box::new(l), Box::new(r))),
+            (arb_value_expr(), arb_value_expr()).prop_map(|(l, r)| Prop::Compare {
                 op: CompareOp::Le,
                 domain: OrderedDomain::Decimal,
                 left: Box::new(l),
                 right: Box::new(r),
             }),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Compare {
+            (arb_value_expr(), arb_value_expr()).prop_map(|(l, r)| Prop::Compare {
                 op: CompareOp::Le,
                 domain: OrderedDomain::Date,
                 left: Box::new(l),
                 right: Box::new(r),
             }),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Add(Box::new(l), Box::new(r))),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| Expr::Sub(Box::new(l), Box::new(r))),
-            (arb_var_name(), inner.clone()).prop_map(|(binding, body)| Expr::Exists {
+            (arb_var_name(), inner.clone()).prop_map(|(binding, body)| Prop::Exists {
                 binding,
                 body: Box::new(body),
             }),
-            (arb_var_name(), inner.clone(), inner.clone()).prop_map(|(binding, source, body)| {
-                Expr::Forall {
+            (arb_var_name(), inner.clone(), inner).prop_map(|(binding, source, body)| {
+                Prop::Forall {
                     binding,
                     source: Box::new(source),
-                    body: Box::new(body),
-                }
-            }),
-            (arb_term(), arb_var_name(), inner.clone()).prop_map(|(value, _binding, body)| {
-                Expr::Sum {
-                    value,
                     body: Box::new(body),
                 }
             }),
@@ -132,9 +171,9 @@ fn arb_expr() -> impl Strategy<Value = Expr> {
 
 fn arb_stmt() -> impl Strategy<Value = Stmt> {
     let leaf = prop_oneof![
-        arb_expr().prop_map(Stmt::Require),
-        arb_expr().prop_map(Stmt::BindOne),
-        (arb_var_name(), arb_expr()).prop_map(|(name, value)| Stmt::Let { name, value }),
+        arb_prop().prop_map(Stmt::Require),
+        arb_prop().prop_map(Stmt::BindOne),
+        (arb_var_name(), arb_value_expr()).prop_map(|(name, value)| Stmt::Let { name, value }),
         arb_var_name().prop_map(|name| Stmt::LetNewSubject { name }),
         (arb_pred_name(), arb_args())
             .prop_map(|(predicate, args)| Stmt::Assert(Claim { predicate, args })),
@@ -146,7 +185,7 @@ fn arb_stmt() -> impl Strategy<Value = Stmt> {
     leaf.prop_recursive(3, 16, 3, |inner| {
         (
             arb_var_name(),
-            arb_expr(),
+            arb_value_expr(),
             prop::collection::vec(inner, 1..3),
         )
             .prop_map(|(binding, collection, body)| Stmt::For {
@@ -176,7 +215,7 @@ fn arb_intent_decl() -> impl Strategy<Value = IntentDecl> {
 }
 
 fn arb_invariant() -> impl Strategy<Value = Invariant> {
-    (arb_pred_name(), arb_expr()).prop_map(|(name, body)| Invariant {
+    (arb_pred_name(), arb_prop()).prop_map(|(name, body)| Invariant {
         name,
         version: 1,
         body,
@@ -200,8 +239,8 @@ fn arb_derived_claim() -> impl Strategy<Value = DerivedClaim> {
     (
         arb_pred_name(),
         prop::collection::vec(arb_var_name(), 0..3),
-        prop::collection::vec((arb_var_name(), arb_expr()), 0..3),
-        arb_expr(),
+        prop::collection::vec((arb_var_name(), arb_value_expr()), 0..3),
+        arb_prop(),
     )
         .prop_map(|(predicate, keys, values, domain)| DerivedClaim {
             predicate,
@@ -257,68 +296,87 @@ proptest! {
     }
 }
 
-/// Wrap `leaf` in `depth` copies of one recursive node, selected by
-/// `node`. Exercises every recursive match arm of the depth measure -
-/// the single-child arm (`Not`/`Pre`/`Exists`), the collection arm
-/// (`And`/`Or`), the two-child arm (`Implies` and the comparators), the
-/// quantifier `Forall` (recurses through both source and body), `Sum`,
-/// and `ValueOf` (recurses only through its `default`). Filler operands
-/// are wildcards; the depth guard short-circuits before any semantic
-/// check looks at them.
-fn nest_expr(node: usize, depth: usize, leaf: Expr) -> Expr {
-    let filler = || Box::new(Expr::Term(Term::Wildcard));
+/// Wrap `leaf` in `depth` copies of one recursive proposition node,
+/// selected by `node`. Exercises every recursive match arm of the depth
+/// measure that lives on the `Prop` sort - the single-child arm
+/// (`Not`/`Pre`/`Exists`), the collection arm (`And`/`Or`), the
+/// two-child arm (`Implies`), the comparator (whose deepening operand is
+/// a value expression), and the quantifier `Forall` (recurses through
+/// both source and body). Filler operands are wildcards; the depth guard
+/// short-circuits before any semantic check looks at them.
+fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
     let mut e = leaf;
     for _ in 0..depth {
         e = match node {
-            0 => Expr::Not(Box::new(e)),
-            1 => Expr::Pre(Box::new(e)),
-            2 => Expr::And(vec![e]),
-            3 => Expr::Or(vec![e]),
-            4 => Expr::Implies {
+            0 => Prop::Not(Box::new(e)),
+            1 => Prop::Pre(Box::new(e)),
+            2 => Prop::And(vec![e]),
+            3 => Prop::Or(vec![e]),
+            4 => Prop::Implies {
                 left: Box::new(e),
-                right: filler(),
+                right: Box::new(Prop::Claim {
+                    predicate: "A".to_string(),
+                    args: vec![],
+                }),
             },
-            5 => Expr::Exists {
+            5 => Prop::Exists {
                 binding: "x".to_string(),
                 body: Box::new(e),
             },
-            6 => Expr::Sum {
-                value: Term::Wildcard,
-                body: Box::new(e),
-            },
-            7 => Expr::Compare {
-                op: CompareOp::Le,
-                domain: OrderedDomain::Decimal,
-                left: Box::new(e),
-                right: filler(),
-            },
-            8 => Expr::Forall {
+            _ => Prop::Forall {
                 binding: "x".to_string(),
-                source: filler(),
+                source: Box::new(Prop::Claim {
+                    predicate: "A".to_string(),
+                    args: vec![],
+                }),
                 body: Box::new(e),
-            },
-            _ => Expr::ValueOf {
-                predicate: "P".to_string(),
-                args: vec![],
-                default: Some(Box::new(e)),
             },
         };
     }
     e
 }
 
+/// Wrap a leaf value expression in `depth` copies of one recursive value
+/// node, then a comparator that puts the deep value on one side. This
+/// reaches the value-sort depth arms - the two-child arithmetic arm
+/// (`Add`/`Sub`) and `ValueOf` (recurses only through its `default`) -
+/// and feeds the result through a `Prop::Compare` so the validator sees a
+/// proposition. (`Sum` deepens through a `Prop` body, covered by the
+/// proposition deep-nest test's reachability into the value sort.)
+fn nest_value(node: usize, depth: usize) -> Prop {
+    let filler = || Box::new(ValueExpr::Term(Term::Wildcard));
+    let mut e = ValueExpr::Term(Term::Wildcard);
+    for _ in 0..depth {
+        e = match node {
+            0 => ValueExpr::Add(Box::new(e), filler()),
+            1 => ValueExpr::Sub(Box::new(e), filler()),
+            _ => ValueExpr::ValueOf {
+                predicate: "P".to_string(),
+                args: vec![],
+                default: Some(Box::new(e)),
+            },
+        };
+    }
+    Prop::Compare {
+        op: CompareOp::Le,
+        domain: OrderedDomain::Decimal,
+        left: Box::new(e),
+        right: filler(),
+    }
+}
+
 #[test]
-fn deeply_nested_expressions_are_rejected_not_overflowed() {
-    // Each recursive expression arm, nested far past any plausible
+fn deeply_nested_propositions_are_rejected_not_overflowed() {
+    // Each recursive proposition arm, nested far past any plausible
     // limit, must come back as a depth rejection - a returned verdict,
     // not a blown stack. The depth guard runs first and short-circuits,
     // so a pure deep-nest yields NestingTooDeep and nothing downstream.
     const DEPTH: usize = 1024;
-    for node in 0..10 {
-        let body = nest_expr(
+    for node in 0..7 {
+        let body = nest_prop(
             node,
             DEPTH,
-            Expr::Claim {
+            Prop::Claim {
                 predicate: "A".to_string(),
                 args: vec![],
             },
@@ -345,6 +403,37 @@ fn deeply_nested_expressions_are_rejected_not_overflowed() {
 }
 
 #[test]
+fn deeply_nested_value_expressions_are_rejected_not_overflowed() {
+    // The value-sort recursion arms, nested far past any limit and
+    // wrapped in a comparator so the validator sees a proposition, must
+    // also come back as a depth rejection rather than a blown stack.
+    const DEPTH: usize = 1024;
+    for node in 0..3 {
+        let body = nest_value(node, DEPTH);
+        let p = Program {
+            name: "deep".to_string(),
+            predicates: vec![],
+            intents: vec![],
+            invariants: vec![Invariant {
+                name: "i".to_string(),
+                version: 1,
+                body,
+            }],
+            transformations: vec![],
+            derived_claims: vec![],
+        };
+        let errs = p
+            .validate()
+            .expect_err("deep value nesting must be rejected");
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ValidationError::NestingTooDeep { .. })),
+            "node {node}: expected NestingTooDeep, got {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn deeply_nested_for_statements_are_rejected_not_overflowed() {
     // Statement nesting is the other recursion dimension the guard
     // covers; `for` is the only statement that nests statements.
@@ -356,7 +445,7 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
     for _ in 0..DEPTH {
         body = vec![Stmt::For {
             binding: "x".to_string(),
-            collection: Expr::Term(Term::Var("c".to_string())),
+            collection: ValueExpr::Term(Term::Var("c".to_string())),
             body,
         }];
     }

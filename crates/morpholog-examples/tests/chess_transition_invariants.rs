@@ -1,7 +1,7 @@
 //! Integration tests for the chess transition invariants example
 //! (`examples/07_chess_transition_invariants/`).
 //!
-//! The example's reason to exist is to force `Expr::Pre` into the
+//! The example's reason to exist is to force `Prop::Pre` into the
 //! kernel. These tests pin the load-bearing claim: a transition
 //! invariant catches a bug that a state invariant cannot.
 //!

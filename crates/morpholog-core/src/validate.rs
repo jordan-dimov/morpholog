@@ -4,15 +4,15 @@
 //! cannot overflow on the input that would trip it), a name-level
 //! duplicate-declaration pass, and the single static-check traversal in
 //! [`crate::check`] (declarations and arity for both predicate and
-//! intent vocabularies, kind/type compatibility, binding flow, shape,
-//! and actor context).
+//! intent vocabularies, kind/type compatibility, binding flow, and
+//! actor context).
 //!
 //! Called via [`crate::Program::validate`]. Strict mode: undeclared
 //! predicates and intents are errors, not passthrough. The validator
 //! collects every error rather than failing on the first; a migration
 //! that adds declarations should see the full work list at once.
 
-use crate::ir::{Expr, PredicateArgKind, Program, Stmt};
+use crate::ir::{PredicateArgKind, Program, Prop, Stmt, ValueExpr};
 use std::collections::HashMap;
 
 /// Which declared vocabulary a validation error refers to. Predicates
@@ -117,26 +117,6 @@ pub enum ValidationError {
         previous: PredicateArgKind,
         new: PredicateArgKind,
         context: ValidationContext,
-    },
-    /// An expression that the kind-checker treats as value-producing
-    /// (operand of arithmetic, comparator right-hand side, `Sum`'s
-    /// target term) appeared as a predicate-shaped expression - one
-    /// that produces binding witnesses rather than a value. The
-    /// runtime would surface this as `EvalError::NotValue`; kind-
-    /// check surfaces it earlier.
-    ExpectedValueExpression {
-        context: ValidationContext,
-        expression: String,
-    },
-    /// The mirror of `ExpectedValueExpression`: a value-producing
-    /// expression (a bare term, `+`, `-`, `sum`, `value`) appeared
-    /// where a predicate-shaped expression was required - a `require`
-    /// body, an invariant, a quantifier body, a comparator that
-    /// matches state. The runtime surfaces this as
-    /// `EvalError::NotPredicate`; the check surfaces it earlier.
-    ExpectedPredicateExpression {
-        context: ValidationContext,
-        expression: String,
     },
     /// `actor` was referenced in an invariant or derived-claim
     /// body, where no proposing transition is in scope. The kernel
@@ -244,22 +224,6 @@ impl std::fmt::Display for ValidationError {
                 "variable `{variable}` was first constrained to {previous:?} but later \
                  used as {new:?} in {context}"
             ),
-            ValidationError::ExpectedValueExpression {
-                context,
-                expression,
-            } => write!(
-                f,
-                "expected a value-producing expression but found predicate-shaped \
-                 `{expression}` in {context}"
-            ),
-            ValidationError::ExpectedPredicateExpression {
-                context,
-                expression,
-            } => write!(
-                f,
-                "expected a predicate-shaped expression but found value-producing \
-                 `{expression}` in {context}"
-            ),
             ValidationError::ActorNotAvailable { context } => write!(
                 f,
                 "`actor` is not available in {context}; it resolves only inside \
@@ -327,7 +291,7 @@ pub(crate) const MAX_EXPR_DEPTH: usize = 256;
 fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for inv in &p.invariants {
-        if expr_exceeds_depth(&inv.body, MAX_EXPR_DEPTH) {
+        if prop_exceeds_depth(&inv.body, MAX_EXPR_DEPTH) {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Invariant {
                     name: inv.name.clone(),
@@ -345,10 +309,10 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
     for d in &p.derived_claims {
-        let too_deep = expr_exceeds_depth(&d.domain, MAX_EXPR_DEPTH)
+        let too_deep = prop_exceeds_depth(&d.domain, MAX_EXPR_DEPTH)
             || d.values
                 .iter()
-                .any(|v| expr_exceeds_depth(&v.expr, MAX_EXPR_DEPTH));
+                .any(|v| value_exceeds_depth(&v.expr, MAX_EXPR_DEPTH));
         if too_deep {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::DerivedClaim {
@@ -360,56 +324,69 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
     errors
 }
 
-/// True if `expr` nests deeper than `budget` levels. Spends one unit
+/// True if `prop` nests deeper than `budget` levels. Spends one unit
 /// of budget per level and bails the instant it runs out, so its own
 /// recursion is bounded by `budget` - it cannot overflow on the very
-/// input it exists to reject.
-fn expr_exceeds_depth(expr: &Expr, budget: usize) -> bool {
+/// input it exists to reject. Crosses into [`value_exceeds_depth`] for
+/// comparator operands, since the sorts are mutually recursive.
+fn prop_exceeds_depth(prop: &Prop, budget: usize) -> bool {
+    let Some(budget) = budget.checked_sub(1) else {
+        return true;
+    };
+    match prop {
+        Prop::Claim { .. } | Prop::In(_, _) => false,
+        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| prop_exceeds_depth(p, budget)),
+        Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
+            prop_exceeds_depth(inner, budget)
+        }
+        Prop::Implies { left, right } => {
+            prop_exceeds_depth(left, budget) || prop_exceeds_depth(right, budget)
+        }
+        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
+            value_exceeds_depth(left, budget) || value_exceeds_depth(right, budget)
+        }
+        Prop::Forall { source, body, .. } => {
+            prop_exceeds_depth(source, budget) || prop_exceeds_depth(body, budget)
+        }
+    }
+}
+
+/// True if `expr` nests deeper than `budget` levels. The value-sort
+/// companion to [`prop_exceeds_depth`]; the two recurse into each other
+/// (`Sum`'s body is a `Prop`).
+fn value_exceeds_depth(expr: &ValueExpr, budget: usize) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
     };
     match expr {
-        Expr::Claim { .. } | Expr::Term(_) | Expr::In(_, _) => false,
-        Expr::And(items) | Expr::Or(items) => items.iter().any(|e| expr_exceeds_depth(e, budget)),
-        Expr::Not(inner) | Expr::Pre(inner) | Expr::Exists { body: inner, .. } => {
-            expr_exceeds_depth(inner, budget)
+        ValueExpr::Term(_) => false,
+        ValueExpr::Sub(left, right) | ValueExpr::Add(left, right) => {
+            value_exceeds_depth(left, budget) || value_exceeds_depth(right, budget)
         }
-        Expr::Implies { left, right }
-        | Expr::Eq(left, right)
-        | Expr::Neq(left, right)
-        | Expr::Compare { left, right, .. }
-        | Expr::Sub(left, right)
-        | Expr::Add(left, right) => {
-            expr_exceeds_depth(left, budget) || expr_exceeds_depth(right, budget)
-        }
-        Expr::Sum { body, .. } => expr_exceeds_depth(body, budget),
-        Expr::Forall { source, body, .. } => {
-            expr_exceeds_depth(source, budget) || expr_exceeds_depth(body, budget)
-        }
-        Expr::ValueOf { default, .. } => default
+        ValueExpr::Sum { body, .. } => prop_exceeds_depth(body, budget),
+        ValueExpr::ValueOf { default, .. } => default
             .as_deref()
-            .is_some_and(|d| expr_exceeds_depth(d, budget)),
+            .is_some_and(|d| value_exceeds_depth(d, budget)),
     }
 }
 
 /// True if `stmt` nests deeper than `budget` levels, counting both its
 /// expression bodies and nested `for` statements. Same bailing
-/// discipline as [`expr_exceeds_depth`].
+/// discipline as [`prop_exceeds_depth`].
 fn stmt_exceeds_depth(stmt: &Stmt, budget: usize) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
     };
     match stmt {
-        Stmt::Require(e) | Stmt::BindOne(e) | Stmt::Let { value: e, .. } => {
-            expr_exceeds_depth(e, budget)
-        }
+        Stmt::Require(p) | Stmt::BindOne(p) => prop_exceeds_depth(p, budget),
+        Stmt::Let { value, .. } => value_exceeds_depth(value, budget),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {
             false
         }
         Stmt::For {
             collection, body, ..
         } => {
-            expr_exceeds_depth(collection, budget)
+            value_exceeds_depth(collection, budget)
                 || body.iter().any(|s| stmt_exceeds_depth(s, budget))
         }
     }

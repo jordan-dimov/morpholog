@@ -20,12 +20,12 @@
 //! degrades the rendering.
 
 use crate::{
-    Claim, CompareOp, DerivedClaim, Expr, Intent, Invariant, OrderedDomain, PredicateArgKind,
-    PredicateDecl, Program, Stmt, Term, Transformation, Value,
+    Claim, CompareOp, DerivedClaim, Intent, Invariant, OrderedDomain, PredicateArgKind,
+    PredicateDecl, Program, Prop, Stmt, Term, Transformation, Value, ValueExpr,
 };
 
 /// The surface token for an ordered comparison. The single source of
-/// truth for rendering `Expr::Compare` (used by the formatter and the
+/// truth for rendering `Prop::Compare` (used by the formatter and the
 /// static checker's diagnostics); the parser holds the inverse mapping,
 /// and the round-trip test couples the two.
 pub(crate) fn compare_token(op: CompareOp, domain: OrderedDomain) -> &'static str {
@@ -124,7 +124,7 @@ pub fn format_invariant(inv: &Invariant) -> String {
     // defaults to 1 and the formatter omits it.
     out.push_str(&format!("invariant {}:\n", inv.name));
     out.push_str(&indent(1));
-    out.push_str(&format_expr_inline(&inv.body));
+    out.push_str(&format_prop_inline(&inv.body));
     out.push('\n');
     out
 }
@@ -160,13 +160,13 @@ pub fn format_derived_claim(d: &DerivedClaim) -> String {
         d.keys.join(", ")
     ));
     out.push_str(&indent(1));
-    out.push_str(&format!("over {}\n", format_expr_inline(&d.domain)));
+    out.push_str(&format!("over {}\n", format_prop_inline(&d.domain)));
     for v in &d.values {
         out.push_str(&indent(1));
         out.push_str(&format!(
             "value {} = {}\n",
             v.name,
-            format_expr_inline(&v.expr)
+            format_value_inline(&v.expr)
         ));
     }
     out
@@ -179,19 +179,19 @@ pub fn format_derived_claim(d: &DerivedClaim) -> String {
 pub fn format_stmt(s: &Stmt, depth: usize) -> String {
     let pad = indent(depth);
     match s {
-        Stmt::Require(e) => format!("{pad}require {}", format_expr_inline(e)),
-        Stmt::BindOne(e) => {
+        Stmt::Require(p) => format!("{pad}require {}", format_prop_inline(p)),
+        Stmt::BindOne(p) => {
             // The surface grammar restricts `bind` to a claim pattern,
-            // though the IR's `Stmt::BindOne(Expr)` is broader. Panic on
+            // though the IR's `Stmt::BindOne(Prop)` is broader. Panic on
             // non-Claim shapes rather than emit text the parser refuses.
             assert!(
-                matches!(e, Expr::Claim { .. }),
-                "format_stmt: bind requires a claim pattern; got {e:?}",
+                matches!(p, Prop::Claim { .. }),
+                "format_stmt: bind requires a claim pattern; got {p:?}",
             );
-            format!("{pad}bind {}", format_expr_inline(e))
+            format!("{pad}bind {}", format_prop_inline(p))
         }
         Stmt::Let { name, value } => {
-            format!("{pad}let {name} = {}", format_expr_inline(value))
+            format!("{pad}let {name} = {}", format_value_inline(value))
         }
         Stmt::LetNewSubject { name } => {
             format!("{pad}let {name} = new Subject()")
@@ -208,7 +208,7 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
         } => {
             let mut out = format!(
                 "{pad}for {binding} in {}:\n",
-                format_expr_inline(collection)
+                format_value_inline(collection)
             );
             for (i, inner) in body.iter().enumerate() {
                 out.push_str(&format_stmt(inner, depth + 1));
@@ -225,114 +225,121 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
 // Expression formatting
 // ============================================================
 
-/// One-line expression rendering, the only expression printer in the
-/// kernel. Used in `require`/`let`/`bind`, invariant bodies,
-/// derived-claim domains and values, and kernel diagnostic paths
-/// (rejection reasons, multi-match errors).
-pub fn format_expr_inline(e: &Expr) -> String {
-    // Composite sub-expressions are wrapped in parens unconditionally;
+/// One-line rendering of a [`Prop`], the proposition printer in the
+/// kernel. Used in `require`/`bind`, invariant bodies, derived-claim
+/// domains, and kernel diagnostic paths (rejection reasons, multi-match
+/// errors). Its value-operand renderer is [`format_value_inline`]; the
+/// two compose because the sorts are mutually recursive.
+pub fn format_prop_inline(p: &Prop) -> String {
+    // Composite sub-propositions are wrapped in parens unconditionally;
     // verbose but unambiguous and round-trips through `parse_program`.
     // The surface comparator precedence (arithmetic > comparators > not
     // > and > implies) makes the parens a no-op for the parser.
-    fn primary(e: &Expr) -> String {
-        match e {
-            Expr::Term(t) => format_term(t),
-            Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
-            Expr::Sum { value, body } => {
-                format!("sum({} | {})", format_term(value), format_expr_inline(body))
-            }
-            Expr::ValueOf {
-                predicate,
-                args,
-                default,
-            } => {
-                let base = format!("value {}", format_predicate_call(predicate, args));
-                match default {
-                    Some(d) => format!("{base} default {}", format_expr_inline(d)),
-                    None => base,
-                }
-            }
+    fn prop_primary(p: &Prop) -> String {
+        match p {
+            Prop::Claim { predicate, args } => format_predicate_call(predicate, args),
             // `pre(...)` is function-call-shape; no outer parens needed.
-            Expr::Pre(inner) => format!("pre({})", format_expr_inline(inner)),
-            _ => format!("({})", format_expr_inline(e)),
+            Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
+            _ => format!("({})", format_prop_inline(p)),
         }
     }
 
-    match e {
-        Expr::Term(t) => format_term(t),
-        Expr::Claim { predicate, args } => format_predicate_call(predicate, args),
-        Expr::Sum { value, body } => {
-            format!("sum({} | {})", format_term(value), format_expr_inline(body))
-        }
-        Expr::ValueOf {
-            predicate,
-            args,
-            default,
-        } => {
-            let base = format!("value {}", format_predicate_call(predicate, args));
-            match default {
-                Some(d) => format!("{base} default {}", format_expr_inline(d)),
-                None => base,
-            }
-        }
+    match p {
+        Prop::Claim { predicate, args } => format_predicate_call(predicate, args),
 
-        // Arithmetic and comparators: operands are primary-shaped.
-        Expr::Add(l, r) => format!("{} + {}", primary(l), primary(r)),
-        Expr::Sub(l, r) => format!("{} - {}", primary(l), primary(r)),
-        Expr::Eq(l, r) => format!("{} = {}", primary(l), primary(r)),
-        Expr::Compare {
+        // Comparators relate two value expressions.
+        Prop::Eq(l, r) => format!("{} = {}", value_primary(l), value_primary(r)),
+        Prop::Compare {
             op,
             domain,
             left,
             right,
         } => format!(
             "{} {} {}",
-            primary(left),
+            value_primary(left),
             compare_token(*op, *domain),
-            primary(right)
+            value_primary(right)
         ),
-        Expr::Neq(lhs, rhs) => format!("{} != {}", primary(lhs), primary(rhs)),
-        Expr::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
+        Prop::Neq(lhs, rhs) => format!("{} != {}", value_primary(lhs), value_primary(rhs)),
+        Prop::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
         // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.
-        Expr::Pre(inner) => format!("pre({})", format_expr_inline(inner)),
-        Expr::Not(inner) => format!("not {}", primary(inner)),
-        Expr::And(exprs) => {
-            let inner: Vec<String> = exprs.iter().map(primary).collect();
+        Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
+        Prop::Not(inner) => format!("not {}", prop_primary(inner)),
+        Prop::And(props) => {
+            let inner: Vec<String> = props.iter().map(prop_primary).collect();
             inner.join(" and ")
         }
-        Expr::Or(exprs) => {
-            let inner: Vec<String> = exprs.iter().map(primary).collect();
+        Prop::Or(props) => {
+            let inner: Vec<String> = props.iter().map(prop_primary).collect();
             inner.join(" or ")
         }
-        Expr::Implies { left, right } => {
-            format!("{} implies {}", primary(left), primary(right))
+        Prop::Implies { left, right } => {
+            format!("{} implies {}", prop_primary(left), prop_primary(right))
         }
 
         // Quantifiers: colon-block form. Source for `forall` is a
-        // primary expression (typically a Claim or bare Var).
-        Expr::Exists { binding, body } => {
-            format!("exists {binding}: {}", format_expr_inline(body))
+        // primary proposition (typically a Claim or a lifted `In`).
+        Prop::Exists { binding, body } => {
+            format!("exists {binding}: {}", format_prop_inline(body))
         }
-        Expr::Forall {
+        Prop::Forall {
             binding,
             source,
             body,
         } => {
-            // The IR's source is an Expr; the natural surface
-            // form `forall x in coll:` is built by the parser as
-            // `Expr::In(Term::Var(x), coll)`. Detect that lifted
-            // shape and emit the natural surface; otherwise fall
-            // back to whatever primary expression the source is.
+            // The IR's source is a Prop; the natural surface form
+            // `forall x in coll:` is built by the parser as
+            // `Prop::In(Term::Var(x), coll)`. Detect that lifted shape
+            // and emit the natural surface; otherwise fall back to
+            // whatever primary proposition the source is.
             let source_text = match source.as_ref() {
-                Expr::In(Term::Var(b), coll) if b == binding => format_term(coll),
-                _ => primary(source),
+                Prop::In(Term::Var(b), coll) if b == binding => format_term(coll),
+                _ => prop_primary(source),
             };
             format!(
                 "forall {binding} in {source_text}: {}",
-                format_expr_inline(body)
+                format_prop_inline(body)
             )
         }
+    }
+}
+
+/// Render a value expression for an operand position, wrapping a
+/// composite arithmetic subtree in parens so the surface text reparses
+/// to the same tree. `Term`, `Sum`, and `ValueOf` are already primary-
+/// shaped; `Add`/`Sub` are parenthesised.
+fn value_primary(e: &ValueExpr) -> String {
+    match e {
+        ValueExpr::Term(t) => format_term(t),
+        ValueExpr::Sum { .. } | ValueExpr::ValueOf { .. } => format_value_inline(e),
+        ValueExpr::Add(_, _) | ValueExpr::Sub(_, _) => format!("({})", format_value_inline(e)),
+    }
+}
+
+/// One-line rendering of a [`ValueExpr`], the value-expression printer
+/// in the kernel. Used in `let`/`for` collections and derived-claim
+/// value expressions. Its proposition renderer (for a `sum` body) is
+/// [`format_prop_inline`].
+pub fn format_value_inline(e: &ValueExpr) -> String {
+    match e {
+        ValueExpr::Term(t) => format_term(t),
+        ValueExpr::Sum { value, body } => {
+            format!("sum({} | {})", format_term(value), format_prop_inline(body))
+        }
+        ValueExpr::ValueOf {
+            predicate,
+            args,
+            default,
+        } => {
+            let base = format!("value {}", format_predicate_call(predicate, args));
+            match default {
+                Some(d) => format!("{base} default {}", format_value_inline(d)),
+                None => base,
+            }
+        }
+        ValueExpr::Add(l, r) => format!("{} + {}", value_primary(l), value_primary(r)),
+        ValueExpr::Sub(l, r) => format!("{} - {}", value_primary(l), value_primary(r)),
     }
 }
 
@@ -511,11 +518,13 @@ mod tests {
     }
 
     #[test]
-    fn format_expr_renders_each_variant() {
-        // One expression exercising every Expr variant; each must
+    fn format_prop_renders_each_variant() {
+        // One proposition exercising every Prop variant; each must
         // produce a recognisable token. A new variant without a printer
-        // arm fails to compile against the exhaustive match.
-        let e = and(vec![
+        // arm fails to compile against the exhaustive match. Comparator
+        // operands are value expressions, so this also reaches the value
+        // renderer for the bare-term and arithmetic-operand cases.
+        let p = and(vec![
             claim("P", vec![var("x"), wildcard()]),
             not(claim("Q", vec![var("x")])),
             implies(
@@ -526,15 +535,11 @@ mod tests {
             forall("w", claim("U", vec![var("w")]), claim("V", vec![var("w")])),
             eq(term(var("a")), term(var("b"))),
             neq(var("a"), var("b")),
-            le(term(var("a")), term(var("b"))),
+            le(add(term(var("a")), term(var("c"))), term(var("b"))),
             date_le(term(var("d1")), term(var("d2"))),
-            add(term(var("p")), term(var("q"))),
-            sub(term(var("p")), term(var("q"))),
-            sum(var("v"), claim("W", vec![var("v")])),
             in_(var("e"), var("coll")),
-            value_of("X", vec![var("k"), wildcard()]),
         ]);
-        let s = format_expr_inline(&e);
+        let s = format_prop_inline(&p);
 
         assert!(s.contains("P(x, _)"));
         assert!(s.contains("not Q(x)"));
@@ -543,14 +548,27 @@ mod tests {
         assert!(s.contains("forall w in"));
         assert!(s.contains("a = b"));
         assert!(s.contains("a != b"));
-        assert!(s.contains("a <= b"));
+        assert!(s.contains("(a + c) <= b"));
         assert!(s.contains("d1 on_or_before d2"));
-        assert!(s.contains("p + q"));
+        assert!(s.contains("e in coll"));
+        assert!(s.contains("actor"));
+    }
+
+    #[test]
+    fn format_value_renders_each_variant() {
+        // One value expression exercising every ValueExpr variant; each
+        // must produce a recognisable token. A new variant without a
+        // printer arm fails to compile against the exhaustive match.
+        let e = add(
+            sub(term(var("p")), term(var("q"))),
+            sum(var("v"), claim("W", vec![var("v")])),
+        );
+        let s = format_value_inline(&e);
         assert!(s.contains("p - q"));
         assert!(s.contains("sum(v |"));
-        assert!(s.contains("e in coll"));
-        assert!(s.contains("value X(k, _)"));
-        assert!(s.contains("actor"));
+
+        let vo = value_of("X", vec![var("k"), wildcard()]);
+        assert!(format_value_inline(&vo).contains("value X(k, _)"));
     }
 
     #[test]

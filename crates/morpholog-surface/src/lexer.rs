@@ -95,7 +95,7 @@ pub enum Token {
 
     // ---- Civil-date comparison ----
     /// `on_or_before` infix operator for civil-date `<=`. Lowers to
-    /// `Expr::Compare` with the `Date` domain. Distinct keyword from
+    /// `Prop::Compare` with the `Date` domain. Distinct keyword from
     /// decimal `<=` because the comparison's domain is carried
     /// explicitly in the IR, type-checking each operand kind separately
     /// rather than overloading one operator by operand type. The
@@ -105,7 +105,7 @@ pub enum Token {
     /// variable names.
     KwOnOrBefore,
     /// `on_or_after` infix operator for civil-date `>=`; lowers to
-    /// `Expr::Compare` (`Ge`, `Date`).
+    /// `Prop::Compare` (`Ge`, `Date`).
     KwOnOrAfter,
 
     // ---- Layout virtual tokens ----
@@ -132,12 +132,12 @@ pub enum Token {
     KwNot,
     /// `and` infix operator.
     KwAnd,
-    /// `or` infix operator. Lowers to `Expr::Or`. Sits at lower
+    /// `or` infix operator. Lowers to `Prop::Or`. Sits at lower
     /// precedence than `and`, higher than `implies`.
     KwOr,
     /// `implies` infix operator.
     KwImplies,
-    /// `pre` function-call-shape primary. Lowers to `Expr::Pre`. Always
+    /// `pre` function-call-shape primary. Lowers to `Prop::Pre`. Always
     /// followed by `(`; the parens are mandatory. Reserved everywhere so
     /// a variable named `pre` cannot shadow the keyword.
     KwPre,
@@ -204,14 +204,14 @@ pub enum Token {
     Eq,
     /// `!=` (Neq).
     Neq,
-    /// `<=`, decimal-only; lowers to `Expr::Compare` (`Le`, `Decimal`).
+    /// `<=`, decimal-only; lowers to `Prop::Compare` (`Le`, `Decimal`).
     /// (`on_or_before` is the civil-date surface for the same operator.)
     Le,
-    /// `<`, decimal-only; lowers to `Expr::Compare` (`Lt`, `Decimal`).
+    /// `<`, decimal-only; lowers to `Prop::Compare` (`Lt`, `Decimal`).
     Lt,
-    /// `>=`, decimal-only; lowers to `Expr::Compare` (`Ge`, `Decimal`).
+    /// `>=`, decimal-only; lowers to `Prop::Compare` (`Ge`, `Decimal`).
     Ge,
-    /// `>`, decimal-only; lowers to `Expr::Compare` (`Gt`, `Decimal`).
+    /// `>`, decimal-only; lowers to `Prop::Compare` (`Gt`, `Decimal`).
     Gt,
     /// `+` (Add).
     Plus,
