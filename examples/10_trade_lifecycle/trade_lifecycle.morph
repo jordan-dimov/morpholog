@@ -1,0 +1,40 @@
+-- Trade lifecycle - taking a commodity trade from booking to
+-- settlement, with the rules about who may confirm a price and which
+-- price may be settled on enforced by the runtime instead of by a
+-- status column and a prayer.
+--
+-- A trader strikes a deal - buy or sell a quantity of some commodity
+-- (power, gas, oil) for delivery over a future period - and *captures*
+-- it: the terms, plus the price they believe they struck. That captured
+-- price is only the trader's word for it; before anyone settles money
+-- against the trade, the middle office confirms it and an official price
+-- takes over. This first slice models the capture step; confirmation,
+-- price correction, and settlement arrive in the commits that follow.
+--
+-- Morpholog does not store "facts" - it stores *claims* it has agreed to
+-- admit because they obey the rules. A trade is never in a single
+-- "status": it is captured, then also confirmed, then also settled, and
+-- the phase is the accumulation of admitted claims, not a field to
+-- overwrite.
+
+program trade_lifecycle
+
+-- The vocabulary so far. `TradeCaptured` is the trade's terms;
+-- `CapturedPrice` is the trader's price estimate, recorded but carrying
+-- no settlement standing on its own - only a confirmed price will.
+predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject, quantity: Decimal, delivery_period: Subject)
+predicate CapturedPrice(trade: Subject, price: Decimal)
+
+-- Intents are messages the system sends to the outside world after a
+-- change commits.
+intent TradeCapturedAdmitted(trade: Subject)
+
+-- A trader captures a new trade: its terms and the price they believe
+-- they struck. The gate refuses a second capture under the same trade
+-- id, so a trade's terms are fixed once booked - a change of terms is a
+-- new trade, never a silent overwrite.
+transformation capture_trade(trade, commodity, direction, quantity, delivery_period, price):
+    require not TradeCaptured(trade, _, _, _, _)
+    admit TradeCaptured(trade, commodity, direction, quantity, delivery_period)
+    admit CapturedPrice(trade, price)
+    emit TradeCapturedAdmitted(trade)
