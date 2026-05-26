@@ -443,7 +443,6 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::ir::{Invariant, Transformation};

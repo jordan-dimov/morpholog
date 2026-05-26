@@ -1,0 +1,6 @@
+# Test code asserts by panicking - an unwrap that fails is the failure
+# signal. These let the panic-family restriction lints stay strict on
+# library code without a per-file #![allow(...)] in every test module.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
