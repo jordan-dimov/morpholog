@@ -30,9 +30,21 @@ use crate::validate::{ValidationError, validate_program};
 /// `Borrow`, so the inner string never leaks into general string APIs and the
 /// kinds stay un-confusable at the type level.
 macro_rules! opaque_id {
+    // Default: no ordering. `Ord` is a capability some ids never need, so it
+    // is opt-in rather than uniform - a `Subject` is not orderable.
     ($(#[$meta:meta])* $name:ident) => {
+        opaque_id!(@define $(#[$meta])* $name; Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize);
+    };
+    // `ord`: also derive `PartialOrd` / `Ord`, for ids that are sorted or used
+    // as `BTreeSet` / `BTreeMap` keys (the per-id doc says why it is load-bearing).
+    ($(#[$meta:meta])* ord $name:ident) => {
+        opaque_id!(@define $(#[$meta])* $name; Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize);
+    };
+    // The shared body: the derive set is the only thing that varies between the
+    // two public forms, so everything below is written once.
+    (@define $(#[$meta:meta])* $name:ident; $($derive:path),+ $(,)?) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive($($derive),+)]
         #[serde(transparent)]
         pub struct $name(String);
 
@@ -90,7 +102,10 @@ opaque_id! {
     /// attach to subjects, but there are no types *over* a subject and nothing in
     /// the surface language inspects its structure, so the newtype keeps a subject
     /// distinct at the type level from a predicate name, a variable, or any other
-    /// string the kernel handles.
+    /// string the kernel handles. It is deliberately not orderable: sorting
+    /// subjects would imply a sequence semantics the surface language never
+    /// gives them. Where the kernel must order subjects it does so explicitly
+    /// through `as_str`, not through the type.
     Subject
 }
 
@@ -100,14 +115,15 @@ opaque_id! {
     /// resolved against the [`crate::EvalValue`] bindings during evaluation.
     /// Bindings are reported sorted by variable name in the trace, so the
     /// derived `Ord` is load-bearing here (not merely uniform with the others).
-    Var
+    ord Var
 }
 
 opaque_id! {
     /// An opaque predicate name - the identifier of a claim predicate. Distinct
     /// at the type level from a subject id, a bound variable, an intent name, or
     /// a declaration name, so the compiler keeps the kernel's nouns un-confusable.
-    PredicateName
+    /// Ordered: the analysis walkers collect predicate names into `BTreeSet`s.
+    ord PredicateName
 }
 
 opaque_id! {
