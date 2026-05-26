@@ -183,7 +183,7 @@ fn arb_stmt() -> impl Strategy<Value = Stmt> {
         (arb_pred_name(), arb_args())
             .prop_map(|(predicate, args)| Stmt::Retract { predicate, args }),
         (arb_pred_name(), arb_args()).prop_map(|(name, args)| Stmt::Emit(Intent {
-            name: name.to_string(),
+            name: name.as_str().into(),
             args
         })),
     ];
@@ -218,7 +218,7 @@ fn arb_pred_decl() -> impl Strategy<Value = PredicateDecl> {
 
 fn arb_intent_decl() -> impl Strategy<Value = IntentDecl> {
     (arb_pred_name(), arb_decl_args()).prop_map(|(name, args)| IntentDecl {
-        name: name.to_string(),
+        name: name.as_str().into(),
         args,
     })
 }

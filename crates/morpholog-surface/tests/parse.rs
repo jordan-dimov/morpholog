@@ -28,7 +28,7 @@ predicate SettlementPaid(claim_id: Subject, paid_at: Date)
     assert!(program.derived_claims.is_empty());
 
     let policy = &program.predicates[0];
-    assert_eq!(policy.name.as_str(), "Policy");
+    assert_eq!(policy.name, "Policy");
     assert_eq!(policy.args.len(), 2);
     assert_eq!(policy.args[0].name, "policy_id");
     assert_eq!(policy.args[0].kind, PredicateArgKind::Subject);
@@ -81,8 +81,8 @@ predicate Bar(b: Decimal)
     let program = parse_program(source).expect("comments should be skipped");
     assert_eq!(program.name, "with_comments");
     assert_eq!(program.predicates.len(), 2);
-    assert_eq!(program.predicates[0].name.as_str(), "Foo");
-    assert_eq!(program.predicates[1].name.as_str(), "Bar");
+    assert_eq!(program.predicates[0].name, "Foo");
+    assert_eq!(program.predicates[1].name, "Bar");
 }
 
 #[test]
@@ -92,7 +92,7 @@ program demo
 predicate Marker()
 "#;
     let program = parse_program(source).expect("empty arg list should parse");
-    assert_eq!(program.predicates[0].name.as_str(), "Marker");
+    assert_eq!(program.predicates[0].name, "Marker");
     assert!(program.predicates[0].args.is_empty());
 }
 
@@ -295,8 +295,8 @@ invariant cap_b: Bar(y)
     let program = parse_program(source).expect("interleaved decls should parse");
     assert_eq!(program.predicates.len(), 2);
     assert_eq!(program.invariants.len(), 2);
-    assert_eq!(program.predicates[0].name.as_str(), "Foo");
-    assert_eq!(program.predicates[1].name.as_str(), "Bar");
+    assert_eq!(program.predicates[0].name, "Foo");
+    assert_eq!(program.predicates[1].name, "Bar");
     assert_eq!(program.invariants[0].name, "cap_a");
     assert_eq!(program.invariants[1].name, "cap_b");
 }
@@ -399,7 +399,7 @@ fn parses_transformation_with_params() {
                   \x20\x20\x20\x20require Bar(x)\n";
     let program = parse_program(source).expect("parse should succeed");
     let t = &program.transformations[0];
-    assert_eq!(t.parameters, vec!["x".into(), "y".into(), "z".into()]);
+    assert_eq!(t.parameters, vec!["x", "y", "z"]);
 }
 
 #[test]
@@ -834,7 +834,7 @@ fn parses_simple_derived_claim() {
     assert_eq!(program.derived_claims.len(), 1);
     let d = &program.derived_claims[0];
     assert_eq!(d.predicate.as_str(), "Total");
-    assert_eq!(d.keys, vec!["x".into()]);
+    assert_eq!(d.keys, vec!["x"]);
     assert_eq!(d.values.len(), 1);
     assert_eq!(d.values[0].name, "sum_amount");
 }
@@ -866,7 +866,7 @@ fn parses_derived_with_multiple_keys() {
                   \x20\x20\x20\x20value total = sum(a | Posting(account, period, a))\n";
     let program = parse_program(source).expect("multi-key derived should parse");
     let d = &program.derived_claims[0];
-    assert_eq!(d.keys, vec!["account".into(), "period".into()]);
+    assert_eq!(d.keys, vec!["account", "period"]);
 }
 
 #[test]

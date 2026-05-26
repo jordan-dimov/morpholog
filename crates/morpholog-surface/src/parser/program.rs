@@ -281,7 +281,13 @@ where
         .then(arg_list.delimited_by(just(Token::LParen), just(Token::RParen)))
         .map_with(|(name, args), e| {
             let span: SimpleSpan = e.span();
-            TopLevelDecl::Intent(IntentDecl { name, args }, span.start()..span.end())
+            TopLevelDecl::Intent(
+                IntentDecl {
+                    name: name.into(),
+                    args,
+                },
+                span.start()..span.end(),
+            )
         });
 
     // invariant_decl ::= "invariant" Ident ":" body

@@ -147,7 +147,7 @@ async fn process_one_pending(
     // Reconstruct an IntentInstance from the outbox row. In
     // production this is the shape the Deliverer trait operates on.
     let intent = IntentInstance {
-        name: row.intent_type.clone(),
+        name: row.intent_type.clone().into(),
         args: row.arguments.clone(),
     };
 

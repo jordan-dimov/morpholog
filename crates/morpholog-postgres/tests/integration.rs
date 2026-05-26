@@ -530,7 +530,7 @@ fn idempotency_key_matches_golden_hash() {
     // catch formula drift, including delimiter changes.
     let transition_id = Uuid::nil();
     let intent = IntentInstance {
-        name: "TestIntent".to_string(),
+        name: "TestIntent".into(),
         args: vec![EvalValue::Subject("net1".into())],
     };
 

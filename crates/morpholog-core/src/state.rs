@@ -12,7 +12,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::ir::{PredicateName, Subject, Var};
+use crate::ir::{IntentName, PredicateName, Subject, Var};
 
 /// A runtime value flowing through evaluation. Distinct from the IR's
 /// `Value` (which holds literals only).
@@ -216,6 +216,6 @@ pub type Bindings = HashMap<Var, EvalValue>;
 /// test pins this contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentInstance {
-    pub name: String,
+    pub name: IntentName,
     pub args: Vec<EvalValue>,
 }

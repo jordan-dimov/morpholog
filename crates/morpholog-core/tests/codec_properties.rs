@@ -106,7 +106,10 @@ proptest! {
         name in arb_intent_name(),
         args in prop::collection::vec(arb_eval_value(), 0..6),
     ) {
-        let i = IntentInstance { name, args };
+        let i = IntentInstance {
+            name: name.into(),
+            args,
+        };
         let json = serde_json::to_string(&i).unwrap();
         let parsed: IntentInstance = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(parsed, i);

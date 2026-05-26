@@ -524,7 +524,7 @@ impl CheckCtx<'_> {
                 }
             }
             Stmt::Emit(intent) => {
-                self.check_intent_ref(&intent.name, &intent.args, RefMode::Use, scope);
+                self.check_intent_ref(intent.name.as_str(), &intent.args, RefMode::Use, scope);
             }
         }
     }
@@ -742,7 +742,7 @@ impl CheckCtx<'_> {
             let context = self.context.clone();
             self.errors.push(ValidationError::Undeclared {
                 vocabulary,
-                name: name.to_string(),
+                name: name.into(),
                 context,
             });
             return;
@@ -751,7 +751,7 @@ impl CheckCtx<'_> {
             let context = self.context.clone();
             self.errors.push(ValidationError::ArityMismatch {
                 vocabulary,
-                name: name.to_string(),
+                name: name.into(),
                 expected: decl_args.len(),
                 actual: args.len(),
                 context,
@@ -822,7 +822,7 @@ impl CheckCtx<'_> {
             let context = self.context.clone();
             self.errors.push(ValidationError::ArgKindMismatch {
                 vocabulary,
-                name: name.to_string(),
+                name: name.into(),
                 position,
                 expected,
                 actual: actual_kind,
@@ -2283,7 +2283,7 @@ mod tests {
 
     fn intent(name: &str, args: &[(&str, PredicateArgKind)]) -> IntentDecl {
         IntentDecl {
-            name: name.to_string(),
+            name: name.into(),
             args: args
                 .iter()
                 .map(|(n, k)| ArgDecl {
@@ -2305,7 +2305,7 @@ mod tests {
             name: "t".to_string(),
             parameters: vec![],
             body: vec![Stmt::Emit(Intent {
-                name: "Notify".to_string(),
+                name: "Notify".into(),
                 args: vec![dec("100")],
             })],
         }];
@@ -2340,7 +2340,7 @@ mod tests {
             body: vec![
                 bind_one(claim("P", vec![var("x")])),
                 Stmt::Emit(Intent {
-                    name: "Notify".to_string(),
+                    name: "Notify".into(),
                     args: vec![var("x")],
                 }),
             ],
@@ -2378,7 +2378,7 @@ mod tests {
             body: vec![
                 bind_one(claim("P", vec![var("x")])),
                 Stmt::Emit(Intent {
-                    name: "Notify".to_string(),
+                    name: "Notify".into(),
                     args: vec![var("x"), dec("5")],
                 }),
             ],
