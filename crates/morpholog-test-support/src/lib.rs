@@ -43,8 +43,8 @@
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Transformation, Transition,
-    propose,
+    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Subject, Transformation,
+    Transition, propose,
 };
 use rust_decimal::Decimal;
 
@@ -54,7 +54,7 @@ use rust_decimal::Decimal;
 
 /// Build an [`EvalValue::Subject`].
 pub fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
+    EvalValue::Subject(Subject::from(s))
 }
 
 /// Semantic alias for [`subj`]. Identical runtime; documents reader

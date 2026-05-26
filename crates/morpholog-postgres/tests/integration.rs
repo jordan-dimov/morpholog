@@ -529,7 +529,7 @@ fn idempotency_key_matches_golden_hash() {
     let transition_id = Uuid::nil();
     let intent = IntentInstance {
         name: "TestIntent".to_string(),
-        args: vec![EvalValue::Subject("net1".to_string())],
+        args: vec![EvalValue::Subject("net1".into())],
     };
 
     let expected = "c32fd9040f866912cfc522571e851ee6240c9e5d19a39db9e50ac7834fd2341f";
@@ -1662,7 +1662,7 @@ async fn audit_row_records_actor() {
     reset_db(&pool).await;
 
     let transformation = double_entry_ledger::post_simple_entry();
-    let actor = EvalValue::Subject("user:jordan".to_string());
+    let actor = EvalValue::Subject("user:jordan".into());
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: vec![

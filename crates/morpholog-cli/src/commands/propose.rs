@@ -88,7 +88,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone()),
+        actor: EvalValue::Subject(args.actor.clone().into()),
     };
     // 5. Propose, with or without trace, and emit JSON accordingly.
     //    Trace branch emits `{"result": ..., "trace": [...]}` for every

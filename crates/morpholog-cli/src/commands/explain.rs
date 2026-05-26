@@ -64,7 +64,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone()),
+        actor: EvalValue::Subject(args.actor.clone().into()),
     };
 
     let explanation = explain(&program, &transition, &state);

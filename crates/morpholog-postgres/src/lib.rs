@@ -33,7 +33,7 @@ pub use sqlx::PgPool;
 /// the actor of the original commit. The sentinel keeps the audit
 /// row's `actor` column meaningfully populated.
 pub fn system_actor() -> EvalValue {
-    EvalValue::Subject("morpholog-system".to_string())
+    EvalValue::Subject("morpholog-system".into())
 }
 
 /// Errors returned by the PostgreSQL adapter.

@@ -55,7 +55,7 @@ fn arb_kind() -> impl Strategy<Value = PredicateArgKind> {
 
 fn arb_value() -> impl Strategy<Value = Value> {
     prop_oneof![
-        "[a-z_]{1,8}".prop_map(Value::Subject),
+        "[a-z_]{1,8}".prop_map(|s| Value::Subject(s.into())),
         "-?[0-9]{1,6}".prop_map(Value::Decimal),
         Just(Value::Date("2026-05-24".to_string())),
     ]

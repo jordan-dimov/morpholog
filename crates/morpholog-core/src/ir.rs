@@ -22,6 +22,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::validate::{ValidationError, validate_program};
 
+/// An opaque subject identifier - Morpholog's one primitive noun. Predicates
+/// attach to subjects, but there are no types *over* a subject and nothing in
+/// the surface language inspects its structure. The newtype (rather than a
+/// bare `String`) keeps a subject distinct at the type level from a predicate
+/// name, a variable, or any other string the kernel handles.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Subject(String);
+
+impl Subject {
+    /// Borrow the underlying opaque identifier. Use sparingly - at the edges
+    /// (formatting, persistence), not to route subjects through string APIs.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Subject {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Subject {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for Subject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is
@@ -211,7 +246,7 @@ pub enum Value {
     /// Lets predicates and requires reference named constants
     /// (purposes, statuses, named authorities, etc.) without forcing
     /// every transformation to take them as extra parameters.
-    Subject(String),
+    Subject(Subject),
     /// ISO-8601 civil date (`YYYY-MM-DD`) stored as its exact source string.
     /// Parsing into [`jiff::civil::Date`] is the evaluator's concern, not the
     /// IR's; mirrors how [`Value::Decimal`] defers parsing to evaluation.

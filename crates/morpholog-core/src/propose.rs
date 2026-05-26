@@ -508,7 +508,7 @@ pub(crate) fn execute_stmt(
         }
         Stmt::LetNewSubject { name } => {
             let id = uuid::Uuid::now_v7().to_string();
-            let subject = EvalValue::Subject(id);
+            let subject = EvalValue::Subject(id.into());
             if trace.is_on() {
                 trace.push(TraceEntry::LetNewSubject {
                     name: name.clone(),

@@ -12,6 +12,8 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::ir::Subject;
+
 /// A runtime value flowing through evaluation. Distinct from the IR's
 /// `Value` (which holds literals only).
 ///
@@ -23,7 +25,7 @@ use std::collections::HashMap;
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum EvalValue {
     Decimal(#[serde(with = "rust_decimal::serde::str")] Decimal),
-    Subject(String),
+    Subject(Subject),
     Bool(bool),
     Collection(Vec<EvalValue>),
     /// Civil date (ISO-8601 `YYYY-MM-DD`) with no time-of-day and no

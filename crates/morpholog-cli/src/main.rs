@@ -900,7 +900,7 @@ mod tests {
 
         let committed = PgProposalOutcome::Committed {
             transition_id: Uuid::nil(),
-            actor: EvalValue::Subject("jordan".to_string()),
+            actor: EvalValue::Subject("jordan".into()),
             asserted_claims: vec![ClaimInstance {
                 predicate: "Foo".to_string(),
                 args: vec![],

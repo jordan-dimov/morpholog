@@ -24,7 +24,7 @@ fn eval_value_decimal_round_trips_as_tagged_json_string() {
 
 #[test]
 fn eval_value_subject_round_trips_as_tagged_json_string() {
-    let v = EvalValue::Subject("asset_a".to_string());
+    let v = EvalValue::Subject("asset_a".into());
     let json = serde_json::to_string(&v).unwrap();
     assert_eq!(json, r#"{"type":"subject","value":"asset_a"}"#);
     let parsed: EvalValue = serde_json::from_str(&json).unwrap();
@@ -56,8 +56,8 @@ fn eval_value_date_round_trips_as_tagged_json_string() {
 #[test]
 fn eval_value_collection_round_trips_through_nested_json() {
     let v = EvalValue::Collection(vec![
-        EvalValue::Subject("l1".to_string()),
-        EvalValue::Subject("l2".to_string()),
+        EvalValue::Subject("l1".into()),
+        EvalValue::Subject("l2".into()),
         EvalValue::Decimal(Decimal::new(60, 0)),
     ]);
     let json = serde_json::to_string(&v).unwrap();

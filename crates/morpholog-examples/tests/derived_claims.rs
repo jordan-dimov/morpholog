@@ -231,7 +231,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
                     "1".to_string(),
                 )))),
                 Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
-                    "not_a_number".to_string(),
+                    "not_a_number".into(),
                 )))),
             ),
         }],

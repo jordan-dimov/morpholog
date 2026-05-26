@@ -68,7 +68,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone()),
+        actor: EvalValue::Subject(args.actor.clone().into()),
     };
 
     if args.trace {

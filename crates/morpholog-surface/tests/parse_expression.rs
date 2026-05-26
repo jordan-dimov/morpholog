@@ -592,9 +592,7 @@ fn parses_subject_literal_as_term() {
     let got = parse_value_expr("#BANK_DEBT_SERVICE").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Term(Term::Literal(Value::Subject(
-            "BANK_DEBT_SERVICE".to_string()
-        )))
+        ValueExpr::Term(Term::Literal(Value::Subject("BANK_DEBT_SERVICE".into())))
     );
 }
 
@@ -622,7 +620,7 @@ fn subject_literal_in_claim_args() {
     assert_eq!(args[0], Term::Var("asset".to_string()));
     assert_eq!(
         args[1],
-        Term::Literal(Value::Subject("BANK_DEBT_SERVICE".to_string()))
+        Term::Literal(Value::Subject("BANK_DEBT_SERVICE".into()))
     );
 }
 

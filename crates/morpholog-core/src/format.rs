@@ -377,6 +377,7 @@ fn format_value(v: &Value) -> String {
         // wouldn't round-trip, so the issue surfaces at format time
         // rather than as a confusing downstream parse failure.
         Value::Subject(s) => {
+            let s = s.as_str();
             assert!(
                 is_identifier_safe_subject(s),
                 "format_value: Value::Subject({s:?}) is not identifier-safe; the `#name` surface accepts only ASCII identifiers",
@@ -574,7 +575,7 @@ mod tests {
     #[test]
     fn format_term_renders_literals_subject_decimal_date() {
         assert_eq!(
-            format_term(&Term::Literal(Value::Subject("foo".to_string()))),
+            format_term(&Term::Literal(Value::Subject("foo".into()))),
             "#foo"
         );
         assert_eq!(

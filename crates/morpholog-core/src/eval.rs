@@ -781,7 +781,7 @@ fn render_term(t: &Term, ctx: &EvalContext<'_>) -> String {
 /// as ISO-8601; collections bracketed.
 pub(crate) fn render_eval_value(v: &EvalValue) -> String {
     match v {
-        EvalValue::Subject(s) => s.clone(),
+        EvalValue::Subject(s) => s.as_str().to_string(),
         EvalValue::Decimal(d) => d.to_string(),
         EvalValue::Bool(b) => b.to_string(),
         EvalValue::Date(d) => d.to_string(),

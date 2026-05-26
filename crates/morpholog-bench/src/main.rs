@@ -240,7 +240,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
             subj("account_revenue"),
             dec(42),
         ],
-        actor: EvalValue::Subject("bench".to_string()),
+        actor: EvalValue::Subject("bench".into()),
     };
     let outcome = propose_against_pg(
         &pool,
@@ -634,7 +634,7 @@ async fn insert_noise_claims(pool: &PgPool, count: usize) -> Result<()> {
 }
 
 fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
+    EvalValue::Subject(s.into())
 }
 
 fn dec(n: i64) -> EvalValue {

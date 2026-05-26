@@ -322,7 +322,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         args: vec![
             subj("jordan"),
             subj("invoice"),
-            EvalValue::Subject("not_a_decimal".to_string()),
+            EvalValue::Subject("not_a_decimal".into()),
         ],
     }]);
 
@@ -379,10 +379,7 @@ fn term_actor_unbound_error_is_position_independent() {
         version: 1,
         body: Prop::Claim {
             predicate: "AnyPredicate".to_string(),
-            args: vec![
-                Term::Literal(Value::Subject("missing".to_string())),
-                Term::Actor,
-            ],
+            args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
         },
     };
     let err = eval_invariant(&inv, &State::default(), None)
