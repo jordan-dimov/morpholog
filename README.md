@@ -12,6 +12,8 @@ The point is to make *"how do you know?"* answerable by *"because the system cou
 
 That gate runs forward as well as back. Whatever decides what to do next - a person, an optimiser, a heuristic, an AI model - only ever *proposes* a change; the runtime is what admits it or refuses. So the thing making the decision does not have to be trusted. You can put untrusted intelligence to work precisely because legitimacy is enforced outside it, never asked of it.
 
+And when it refuses, it says why. A rejected proposal comes back as a structured, reproducible account - the rule that failed, the claims that were missing, and which transformations could supply them - built only from your own predicate and transformation names. That turns the gate into something an automated searcher can *work against*, not just bounce off: a solver or a model proposes, reads the refusal, repairs its own candidate, and tries again. Whatever finally commits did so by satisfying the same rules a human change would have to.
+
 ## The questions you can answer
 
 - *Why does this report differ from the one we filed last quarter?*
