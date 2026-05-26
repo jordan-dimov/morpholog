@@ -232,9 +232,10 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
 /// two compose because the sorts are mutually recursive.
 pub fn format_prop_inline(p: &Prop) -> String {
     // Composite sub-propositions are wrapped in parens unconditionally;
-    // verbose but unambiguous and round-trips through `parse_program`.
-    // The surface comparator precedence (arithmetic > comparators > not
-    // > and > implies) makes the parens a no-op for the parser.
+    // verbose but unambiguous and round-trips through `parse_expression`
+    // (or `parse_program` once embedded in a programme body). The surface
+    // comparator precedence (arithmetic > comparators > not > and >
+    // implies) makes the parens a no-op for the parser.
     fn prop_primary(p: &Prop) -> String {
         match p {
             Prop::Claim { predicate, args } => format_predicate_call(predicate, args),

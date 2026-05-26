@@ -6,14 +6,14 @@
 //! statement ::= require_stmt | bind_stmt | let_stmt
 //!             | admit_stmt | retract_stmt | emit_stmt
 //!             | for_stmt
-//! require_stmt  ::= "require" expression
+//! require_stmt  ::= "require" proposition
 //! bind_stmt     ::= "bind" claim_pattern    -- restricted; see below
 //! let_stmt      ::= "let" Ident "=" let_rhs
-//! let_rhs       ::= "new" "Subject" "(" ")" | expression
+//! let_rhs       ::= "new" "Subject" "(" ")" | value_expression
 //! admit_stmt    ::= "admit" claim_pattern
 //! retract_stmt  ::= "retract" claim_pattern
 //! emit_stmt     ::= "emit" claim_pattern    -- Intent shares the shape
-//! for_stmt      ::= "for" Ident "in" expression ":" Indent statement+ Dedent
+//! for_stmt      ::= "for" Ident "in" value_expression ":" Indent statement+ Dedent
 //! claim_pattern ::= Ident "(" term_list ")"
 //! ```
 //!
