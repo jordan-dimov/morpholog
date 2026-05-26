@@ -77,7 +77,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | --- | --- |
 | `TradeCaptured(trade, commodity, direction, quantity, delivery_period)` | The trade's terms, as the trader booked them. Fixed once captured. |
 | `CapturedPrice(trade, price)` | The trader's price estimate. Recorded, but never settleable on its own. |
-| `MayConfirm(principal, commodity)` | A desk's authority to confirm prices for a commodity. Grantable and revocable. |
+| `MayConfirm(principal, commodity)` | A desk's authority to confirm prices for a commodity. Granted by `grant_confirm_authority`. |
 | `TradeConfirmed(trade, counterparty, confirmation_id)` | The confirmation event against the counterparty. Happens once. |
 | `OfficialPrice(trade, price, official_price_id)` | An official price figure. Append-only; a correction admits a new one alongside the old. |
 | `CurrentOfficialPrice(trade, official_price_id)` | The retractable pointer naming which official figure is in force - the settlement figure. The one moving part. |
@@ -90,6 +90,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | --- | --- |
 | `current_official_price_has_a_figure` | The in-force pointer must name an official figure that actually exists. |
 | `at_most_one_current_official_price` | At most one official price is in force per trade. |
+| `official_price_id_identifies_one_figure` | An official price id names one figure (same trade, same price), so the in-force pointer and the audit price lookup are unambiguous. |
 | `official_price_has_captured_trade` | An official price belongs to a trade that was actually captured. With the rule above, a clean pointer -> figure -> trade provenance chain. |
 | `at_most_one_direct_successor` | The correction chain stays linear: a figure has at most one direct successor. |
 | `settled_quantity_within_captured` | A trade can never be settled for more than the quantity captured (inclusive). |
@@ -122,8 +123,15 @@ pointing at the official price it relied on.
 
 ## What this example deliberately does not cover
 
-Each is a simplification, not a gap - deferred until a forcing scenario
-arrives.
+"Lifecycle" here means the capture-to-settlement path *with price
+correction* - not the exception-handling lifecycle. Each item below is a
+simplification, not a gap, deferred until a forcing scenario arrives.
+
+- **Exception handling.** Cancellation, novation, partial termination -
+  the exception taxonomy of a real trade lifecycle. These are the natural
+  home for validity-window and exception/repair claims, deferred until an
+  example forces them. This example covers the happy path plus correction,
+  and deliberately claims no more.
 
 - **Partial or multiple settlements.** `settle_trade` admits one settlement
   per trade. Real commodity trades settle in slices (delivery days,

@@ -252,6 +252,36 @@ fn correct_by_actor_authorised_for_a_different_commodity_is_rejected() {
     assert!(matches!(outcome, Outcome::Rejected { .. }));
 }
 
+#[test]
+fn reusing_an_official_price_id_across_figures_is_rejected() {
+    // `op1` names trade `t1`'s official price. A different trade may not
+    // reuse `op1` for its own figure - an official price id identifies one
+    // figure (official_price_id_identifies_one_figure).
+    let mut state = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    state = must_accept(
+        &trade_lifecycle::capture_trade(),
+        vec![
+            subj("t2"),
+            subj("power"),
+            subj("buy"),
+            dec(50),
+            subj("cal26"),
+            dec(40),
+        ],
+        state,
+        &invariants(),
+    );
+    let outcome = propose_as(
+        &trade_lifecycle::confirm_trade(),
+        vec![subj("t2"), subj("cp2"), subj("conf2"), subj("op1"), dec(40)],
+        "mo",
+        &state,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
 // ============================================================
 // Settlement
 // ============================================================

@@ -17,10 +17,10 @@
 -- Two ideas do the real work, and this example is built around both.
 --
 -- First, a trade is never in a single "status". It is captured, then
--- also confirmed, then also settled - each step adds to what is true
--- about it, and the earlier facts never stop being true. There is no
+-- also confirmed, then also settled - each step admits another claim,
+-- and the earlier claims stay on the record. There is no
 -- `status = "confirmed"` field to overwrite: a trade is "confirmed"
--- precisely because a confirmation claim exists for it. The phase is
+-- precisely because a confirmation claim stands for it. The phase is
 -- the accumulation of admitted claims, and the history reads itself.
 --
 -- Second, the same trade carries two prices at two standings. The
@@ -46,17 +46,17 @@
 --     quantity that was captured.
 --   * a `require` is a gate on a single action, checked the moment you
 --     act and never again. Whether the actor confirming a price holds
---     authority for that commodity is settled when they act; revoking
---     that authority tomorrow does not unwind a confirmation made
---     today. An invariant governs what is true; a gate governs what
---     you may do.
+--     authority for that commodity is settled when they act; a
+--     confirmation made today stays valid even if that authority is
+--     later withdrawn. An invariant governs what is true; a gate
+--     governs what you may do.
 
 program trade_lifecycle
 
 -- The vocabulary. `TradeCaptured` is the trade's terms; `CapturedPrice`
 -- the trader's estimate, recorded but carrying no settlement standing.
--- `MayConfirm` is a desk's authority to confirm prices for a commodity
--- - it can be granted and, later, revoked. `TradeConfirmed` records the
+-- `MayConfirm` is a desk's authority to confirm prices for a commodity,
+-- granted by `grant_confirm_authority`. `TradeConfirmed` records the
 -- confirmation event against the counterparty. `OfficialPrice` is an
 -- official price figure; `CurrentOfficialPrice` is the retractable
 -- pointer naming which official figure is in force for the trade right
@@ -101,6 +101,13 @@ invariant current_official_price_has_a_figure:
 -- the same trade cannot coexist.
 invariant at_most_one_current_official_price:
     CurrentOfficialPrice(trade, a) and CurrentOfficialPrice(trade, b) implies a = b
+
+-- An official price id identifies one figure: two OfficialPrice claims
+-- sharing the id must agree on the trade and the price. The in-force
+-- pointer and the audit question "what price did we settle at?" both
+-- resolve a figure by its id, so the id must be unambiguous.
+invariant official_price_id_identifies_one_figure:
+    OfficialPrice(trade_a, price_a, opid) and OfficialPrice(trade_b, price_b, opid) implies (trade_a = trade_b and price_a = price_b)
 
 -- An official price always belongs to a trade that was actually
 -- captured. Together with the rule above, this gives a clean provenance
