@@ -172,7 +172,7 @@ fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
     let post = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
-        subj("alex"),
+        "alex",
         pre,
         &invariants(),
     );
@@ -216,7 +216,8 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
     // That is the kind of precision a future test author should
     // reach for instead of `reason.contains(...)`.
     use morpholog_core::{
-        BindOneOutcome, RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+        BindOneOutcome, RequireOutcome, Subject, TraceEntry, TracedProposal, Transition,
+        propose_with_trace,
     };
     let pre = {
         let s = issue(State::default(), "policy_001", 100_000);
@@ -226,7 +227,7 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args: vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
-        actor: subj("alex"),
+        actor: Subject::from("alex"),
     };
     let TracedProposal::Completed { outcome, trace } =
         propose_with_trace(&t, &transition, &pre, &invariants())
@@ -278,7 +279,7 @@ fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
     let outcome = propose_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
-        subj("alex"),
+        "alex",
         &pre,
         &invariants(),
     )
@@ -295,7 +296,7 @@ fn authorise_settlement_at_actor_boundary_admits() {
     let post = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(50_000)],
-        subj("alex"),
+        "alex",
         pre,
         &invariants(),
     );
@@ -329,7 +330,7 @@ fn after_first_settlement(amount: i64) -> State {
     must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(amount)],
-        subj("alex"),
+        "alex",
         pre,
         &invariants(),
     )
@@ -342,7 +343,7 @@ fn second_settlement_under_remaining_aggregate_admits() {
     let post = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(30_000)],
-        subj("alex"),
+        "alex",
         pre,
         &invariants(),
     );
@@ -366,7 +367,7 @@ fn second_settlement_at_aggregate_boundary_admits() {
     let post = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(40_000)],
-        subj("alex"),
+        "alex",
         pre,
         &invariants(),
     );
@@ -393,7 +394,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
     // could only prove a require failed; the trace identifies the
     // specific gate.
     use morpholog_core::{
-        RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+        RequireOutcome, Subject, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
     let pre = after_first_settlement(60_000);
     let pre = report(pre, "claim_002", "policy_001", 50_000);
@@ -401,7 +402,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args: vec![subj("claim_002"), subj("settlement_002"), dec(50_000)],
-        actor: subj("alex"),
+        actor: Subject::from("alex"),
     };
     let TracedProposal::Completed { outcome, trace } =
         propose_with_trace(&t, &transition, &pre, &invariants())
@@ -457,7 +458,7 @@ fn aggregate_limit_scoped_per_policy() {
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(100_000)],
-        subj("alex"),
+        "alex",
         s,
         &invariants(),
     );
@@ -466,7 +467,7 @@ fn aggregate_limit_scoped_per_policy() {
     let post = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(80_000)],
-        subj("alex"),
+        "alex",
         s,
         &invariants(),
     );
@@ -499,7 +500,7 @@ fn settlement_id_must_be_unique_across_payments() {
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(10_000)],
-        subj("alex"),
+        "alex",
         s,
         &invariants(),
     );
@@ -507,7 +508,7 @@ fn settlement_id_must_be_unique_across_payments() {
     let outcome = propose_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_001"), dec(10_000)],
-        subj("alex"),
+        "alex",
         &s,
         &invariants(),
     )
@@ -587,21 +588,21 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(50_000)],
-        subj("alex"),
+        "alex",
         s,
         &invariants(),
     );
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(25_000)],
-        subj("alex"),
+        "alex",
         s,
         &invariants(),
     );
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_003"), subj("settlement_003"), dec(100_000)],
-        subj("alex"),
+        "alex",
         s,
         &invariants(),
     );
@@ -651,7 +652,7 @@ fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
     let post = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
-        subj("alex"),
+        "alex",
         pre,
         &invariants(),
     );
@@ -766,7 +767,7 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     let outcome = propose_as(
         &buggy,
         vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
-        subj("alex"),
+        "alex",
         &pre,
         &invariants(),
     )
@@ -896,7 +897,7 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
         ],
     };
 
-    let outcome = propose_as(&buggy, vec![dec(30_000)], subj("alex"), &pre, &invariants())
+    let outcome = propose_as(&buggy, vec![dec(30_000)], "alex", &pre, &invariants())
         .expect("kernel must not error");
 
     match outcome {

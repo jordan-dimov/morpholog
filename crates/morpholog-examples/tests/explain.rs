@@ -23,7 +23,7 @@
 mod common;
 
 use common::{claim_instance, dec, subj};
-use morpholog_core::{GateKind, Rejection, State, Transition, Verdict, explain};
+use morpholog_core::{GateKind, Rejection, State, Subject, Transition, Verdict, explain};
 use morpholog_examples::approval_controls;
 use morpholog_surface::parse_program;
 
@@ -31,7 +31,7 @@ fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> 
     Transition {
         transformation_name: name.to_string(),
         args,
-        actor: subj(actor),
+        actor: Subject::from(actor),
     }
 }
 

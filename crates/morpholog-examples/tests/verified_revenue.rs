@@ -185,7 +185,7 @@ fn decision_admits_only_with_matching_standing() {
     // this example; trace lets us pin it precisely instead of
     // settling for `matches!(outcome, Rejected { .. })`.
     use morpholog_core::{
-        RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
+        RequireOutcome, Subject, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
     let t = verified_revenue::admit_debt_service_revenue();
     let transition = Transition {
@@ -197,7 +197,7 @@ fn decision_admits_only_with_matching_standing() {
             subj("decision_001"),
             subj("ver_001"),
         ],
-        actor: subj("test_actor"),
+        actor: Subject::from("test_actor"),
     };
     let TracedProposal::Completed { outcome, trace } =
         propose_with_trace(&t, &transition, &pre, &invariants())

@@ -43,7 +43,7 @@ fn invariants() -> Vec<Invariant> {
 /// attributable.
 struct Setup {
     trial: &'static str,
-    investigator: EvalValue,
+    investigator: &'static str,
     participant: &'static str,
     proto_v1: &'static str,
     proto_v1_from: &'static str,
@@ -69,7 +69,7 @@ struct Setup {
 fn default_setup() -> Setup {
     Setup {
         trial: "trial_001",
-        investigator: subj("dr_smith"),
+        investigator: "dr_smith",
         participant: "p_001",
         proto_v1: "proto_v1",
         proto_v1_from: "2026-01-01",
@@ -130,7 +130,7 @@ fn happy_path_state(s: &Setup) -> State {
     state = must_accept(
         &cte::delegate_investigator(),
         vec![
-            s.investigator.clone(),
+            subj(s.investigator),
             subj(s.trial),
             subj(ROLE_RANDOMISE_PARTICIPANT),
             date(s.delegation_from),
@@ -152,7 +152,7 @@ fn happy_path_state(s: &Setup) -> State {
             subj(s.trial),
             subj(s.consent_form),
             date(s.consented_on),
-            s.investigator.clone(),
+            subj(s.investigator),
         ],
         state,
         &invariants(),
@@ -202,7 +202,7 @@ fn happy_path_admits_randomisation() {
     let post = must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         pre,
         &invariants(),
     );
@@ -215,7 +215,7 @@ fn happy_path_admits_randomisation() {
                 subj(s.trial),
                 subj(s.proto_v1),
                 date(s.randomised_on),
-                s.investigator.clone(),
+                subj(s.investigator),
             ],
         ),
         "happy path must record the ParticipantRandomised claim with the actor"
@@ -238,7 +238,7 @@ fn boundary_equality_admits_at_protocol_end() {
     let post = must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         pre,
         &invariants(),
     );
@@ -250,7 +250,7 @@ fn boundary_equality_admits_at_protocol_end() {
             subj(s.trial),
             subj(s.proto_v1),
             date(s.randomised_on),
-            s.investigator.clone(),
+            subj(s.investigator),
         ],
     ));
 }
@@ -265,7 +265,7 @@ fn boundary_equality_admits_at_assessment_expiry() {
     let post = must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         pre,
         &invariants(),
     );
@@ -277,7 +277,7 @@ fn boundary_equality_admits_at_assessment_expiry() {
             subj(s.trial),
             subj(s.proto_v1),
             date(s.randomised_on),
-            s.investigator.clone(),
+            subj(s.investigator),
         ],
     ));
 }
@@ -295,7 +295,7 @@ fn expired_consent_form_rejects() {
     let outcome = propose_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         &pre,
         &invariants(),
     )
@@ -374,7 +374,7 @@ fn expired_eligibility_assessment_rejects() {
     let outcome = propose_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         &pre,
         &invariants(),
     )
@@ -391,7 +391,7 @@ fn expired_delegation_rejects() {
     let outcome = propose_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         &pre,
         &invariants(),
     )
@@ -408,7 +408,7 @@ fn expired_protocol_window_rejects() {
     let outcome = propose_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         &pre,
         &invariants(),
     )
@@ -425,14 +425,14 @@ fn open_important_protocol_deviation_rejects() {
     pre = must_accept_as(
         &cte::open_important_protocol_deviation(),
         vec![subj(s.participant), subj(s.trial), subj("dev_001")],
-        s.investigator.clone(),
+        s.investigator,
         pre,
         &invariants(),
     );
     let outcome = propose_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         &pre,
         &invariants(),
     )
@@ -456,7 +456,7 @@ fn failed_eligibility_assessment_rejects() {
     let outcome = propose_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         &pre,
         &invariants(),
     )
@@ -480,7 +480,7 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
     let post_randomise = must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
-        s.investigator.clone(),
+        s.investigator,
         pre,
         &invariants(),
     );
@@ -506,7 +506,7 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
             subj(s.trial),
             subj(s.proto_v1),
             date(s.randomised_on),
-            s.investigator.clone(),
+            subj(s.investigator),
         ],
     ));
     // And the new protocol version is admitted alongside.
@@ -564,7 +564,7 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj(s.trial),
             subj(s.consent_form),
             date("2026-04-05"),
-            s.investigator.clone(),
+            subj(s.investigator),
         ],
         state,
         &invariants(),
@@ -591,7 +591,7 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj(s.proto_v1),
             date("2026-04-15"),
         ],
-        s.investigator.clone(),
+        s.investigator,
         &state,
         &invariants(),
     )
@@ -609,7 +609,7 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj("proto_v2"),
             date("2026-04-15"),
         ],
-        s.investigator.clone(),
+        s.investigator,
         state,
         &invariants(),
     );
@@ -621,7 +621,7 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj(s.trial),
             subj("proto_v2"),
             date("2026-04-15"),
-            s.investigator.clone(),
+            subj(s.investigator),
         ],
     ));
 }

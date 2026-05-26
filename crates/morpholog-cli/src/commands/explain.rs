@@ -15,7 +15,7 @@
 //! that wants the gate uses `run`.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{EvalValue, Transition, explain};
+use morpholog_core::{EvalValue, Subject, Transition, explain};
 use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
@@ -64,7 +64,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone().into()),
+        actor: Subject::from(args.actor.clone()),
     };
 
     let explanation = explain(&program, &transition, &state);

@@ -2,7 +2,7 @@
 //! PostgreSQL database.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{EvalValue, Transition};
+use morpholog_core::{EvalValue, Subject, Transition};
 use morpholog_postgres::{
     PgProposalOutcome, PgTracedOutcome, propose_against_pg, propose_against_pg_with_trace,
 };
@@ -88,7 +88,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone().into()),
+        actor: Subject::from(args.actor.clone()),
     };
     // 5. Propose, with or without trace, and emit JSON accordingly.
     //    Trace branch emits `{"result": ..., "trace": [...]}` for every

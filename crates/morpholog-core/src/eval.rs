@@ -19,7 +19,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::ir::{CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
+use crate::ir::{CompareOp, OrderedDomain, Prop, Subject, Term, Value, ValueExpr};
 use crate::state::{Bindings, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -97,7 +97,7 @@ pub(crate) struct EvalContext<'a> {
     pub(crate) bindings: &'a Bindings,
     /// The proposing transition's actor; `None` in one-state contexts.
     /// `Term::Actor` reached with `actor: None` surfaces `UnboundActor`.
-    pub(crate) actor: Option<&'a EvalValue>,
+    pub(crate) actor: Option<&'a Subject>,
 }
 
 impl<'a> EvalContext<'a> {
@@ -105,7 +105,7 @@ impl<'a> EvalContext<'a> {
         state: &'a State,
         pre_state: Option<&'a State>,
         bindings: &'a Bindings,
-        actor: Option<&'a EvalValue>,
+        actor: Option<&'a Subject>,
     ) -> Self {
         Self {
             state,
@@ -304,7 +304,7 @@ pub(crate) fn find_claim_matches(
             Term::Literal(Value::Decimal(s)) => Decimal::from_str(s).ok().map(EvalValue::Decimal),
             Term::Literal(Value::Date(s)) => parse_date_literal(s).ok().map(EvalValue::Date),
             Term::Actor => match actor {
-                Some(a) => Some(a.clone()),
+                Some(a) => Some(EvalValue::Subject(a.clone())),
                 None => return Err(EvalError::UnboundActor),
             },
         };
@@ -347,7 +347,7 @@ pub(crate) fn unify_args(
     patterns: &[Term],
     values: &[EvalValue],
     base: &Bindings,
-    actor: Option<&EvalValue>,
+    actor: Option<&Subject>,
 ) -> Option<Bindings> {
     let mut b = base.clone();
     for (p, v) in patterns.iter().zip(values.iter()) {
@@ -381,7 +381,7 @@ pub(crate) fn unify_args(
                 }
             }
             Term::Actor => match actor {
-                Some(a) if a == v => {}
+                Some(a) if *v == EvalValue::Subject(a.clone()) => {}
                 _ => return None,
             },
         }
@@ -537,7 +537,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
 pub(crate) fn resolve_term(
     t: &Term,
     bindings: &Bindings,
-    actor: Option<&EvalValue>,
+    actor: Option<&Subject>,
 ) -> Result<EvalValue, EvalError> {
     match t {
         Term::Var(name) => bindings
@@ -554,7 +554,9 @@ pub(crate) fn resolve_term(
         }
         Term::Literal(Value::Subject(s)) => Ok(EvalValue::Subject(s.clone())),
         Term::Literal(Value::Date(s)) => Ok(EvalValue::Date(parse_date_literal(s)?)),
-        Term::Actor => actor.cloned().ok_or(EvalError::UnboundActor),
+        Term::Actor => actor
+            .map(|a| EvalValue::Subject(a.clone()))
+            .ok_or(EvalError::UnboundActor),
     }
 }
 

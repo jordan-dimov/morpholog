@@ -63,7 +63,7 @@ async fn commit(pool: &PgPool, t: &morpholog_core::Transformation, args: Vec<Eva
 async fn randomise_participant_happy_path_through_pg() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let investigator = subj("dr_smith");
+    let investigator = "dr_smith";
     let trial = "trial_001";
     let proto_v1 = "proto_v1";
     let consent_form = "icf_v1";
@@ -102,7 +102,7 @@ async fn randomise_participant_happy_path_through_pg() {
         &pool,
         &cte::delegate_investigator(),
         vec![
-            investigator.clone(),
+            subj(investigator),
             subj(trial),
             subj(ROLE_RANDOMISE_PARTICIPANT),
             date("2026-01-01"),
@@ -118,7 +118,7 @@ async fn randomise_participant_happy_path_through_pg() {
             subj(trial),
             subj(consent_form),
             date("2026-03-08"),
-            investigator.clone(),
+            subj(investigator),
         ],
     )
     .await;
@@ -153,7 +153,7 @@ async fn randomise_participant_happy_path_through_pg() {
             subj(proto_v1),
             date(randomised_on),
         ],
-        investigator.clone(),
+        investigator,
         &all_invariants(),
     )
     .await
@@ -189,7 +189,7 @@ async fn randomise_participant_happy_path_through_pg() {
             subj(trial),
             subj(proto_v1),
             date(randomised_on),
-            investigator.clone(),
+            subj(investigator),
         ],
         "civil-date arg must round-trip through PG JSONB without loss"
     );

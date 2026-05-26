@@ -22,6 +22,7 @@
 //! `.clippy.toml` (`allow-panic-in-tests`).
 #![warn(clippy::panic, clippy::float_arithmetic)]
 
+pub mod actor_repr;
 pub mod format;
 pub mod ir_builder;
 
@@ -1011,7 +1012,7 @@ mod tests {
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![],
-            actor: EvalValue::Subject("test_actor".into()),
+            actor: Subject::from("test_actor"),
         };
         propose(t, &transition, state, &[])
     }
@@ -1213,7 +1214,7 @@ mod tests {
                 EvalValue::Subject("L1".into()),
                 EvalValue::Subject("L2".into()),
             ])],
-            actor: EvalValue::Subject("test_actor".into()),
+            actor: Subject::from("test_actor"),
         };
         let Outcome::Accepted {
             asserted_claims, ..
@@ -1258,7 +1259,7 @@ mod tests {
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![],
-            actor: EvalValue::Subject("dr_smith".into()),
+            actor: Subject::from("dr_smith"),
         };
         let Outcome::Accepted {
             asserted_claims, ..
@@ -1498,7 +1499,7 @@ mod tests {
         Transition {
             transformation_name: t.name.clone(),
             args,
-            actor: EvalValue::Subject("trace_actor".into()),
+            actor: Subject::from("trace_actor"),
         }
     }
 

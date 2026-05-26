@@ -35,7 +35,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    EvalValue, State, Transition, enumerate_derived, predicates_referenced_by_derived,
+    EvalValue, State, Subject, Transition, enumerate_derived, predicates_referenced_by_derived,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
@@ -240,7 +240,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
             subj("account_revenue"),
             dec(42),
         ],
-        actor: EvalValue::Subject("bench".into()),
+        actor: Subject::from("bench"),
     };
     let outcome = propose_against_pg(
         &pool,

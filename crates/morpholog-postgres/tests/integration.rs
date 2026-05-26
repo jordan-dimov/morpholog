@@ -9,7 +9,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Stmt, Term, Transformation};
+use morpholog_core::{
+    ClaimInstance, EvalValue, IntentInstance, Stmt, Subject, Term, Transformation,
+};
 use morpholog_examples::{
     approval_controls, double_entry_ledger, insurance_claim_settlement, settlement_netting,
     verified_revenue,
@@ -1662,7 +1664,7 @@ async fn audit_row_records_actor() {
     reset_db(&pool).await;
 
     let transformation = double_entry_ledger::post_simple_entry();
-    let actor = EvalValue::Subject("user:jordan".into());
+    let actor = Subject::from("user:jordan");
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: vec![
@@ -1709,47 +1711,51 @@ async fn audit_row_records_actor() {
     );
 }
 
-// Pins that a Transition whose `actor` is not a Subject is rejected at
-// the kernel boundary as a typed error, not silently committed with a
-// nonsense actor in the audit row.
+// A non-subject actor can no longer reach the kernel: `Transition.actor`
+// is a `Subject` by type, so the old "actor must be a subject" runtime
+// check is gone. The one place a non-subject actor could still enter is
+// the IO boundary - the audit `actor` column - so the read path validates
+// the tag there. This pins that surviving guarantee: an audit row whose
+// `actor` JSONB is not a tagged subject surfaces as a typed
+// `PgError::InvalidState`, never a silently-decoded nonsense actor.
 #[tokio::test]
-async fn propose_rejects_non_subject_actor() {
-    use morpholog_core::Transition;
-    use morpholog_postgres::{PgError, propose_against_pg};
+async fn audit_read_rejects_non_subject_actor() {
+    use morpholog_postgres::PgError;
 
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let transformation = double_entry_ledger::post_simple_entry();
-    let transition = Transition {
-        transformation_name: transformation.name.clone(),
-        args: vec![
-            subj("entry_bad_actor"),
-            subj("d_2026_05_20"),
-            subj("p_bad_actor"),
-            subj("account_cash"),
-            subj("account_revenue"),
-            dec(100),
-        ],
-        actor: dec(42), // decimal where a subject is required
-    };
-
-    let err = propose_against_pg(
-        &pool,
-        &transformation,
-        &transition,
-        &double_entry_ledger::all_invariants(),
+    // Hand-write an audit row whose actor column holds a tagged *decimal*
+    // rather than a subject - the corruption the read boundary must catch.
+    let non_subject_actor = serde_json::json!({ "type": "decimal", "value": "42" });
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
+    .bind(Uuid::now_v7())
+    .bind("hand_written")
+    .bind(serde_json::json!([]))
+    .bind(non_subject_actor)
+    .bind(1_i32)
+    .bind(serde_json::json!([]))
+    .bind(serde_json::json!([]))
+    .bind(serde_json::json!([]))
+    .bind(serde_json::json!([]))
+    .execute(&pool)
     .await
-    .expect_err("non-subject actor must surface as Kernel(TypeMismatch), not commit");
+    .expect("hand-written audit row should insert");
+
+    let err = list_audit_rows(&pool)
+        .await
+        .expect_err("a non-subject actor column must not decode silently");
 
     assert!(
-        matches!(err, PgError::Kernel(_)),
-        "expected PgError::Kernel(TypeMismatch), got {err:?}"
+        matches!(err, PgError::InvalidState(_)),
+        "expected PgError::InvalidState, got {err:?}"
     );
-
-    let audit_rows = list_audit_rows(&pool).await.unwrap();
-    assert!(audit_rows.is_empty(), "rejected proposal must not audit");
 }
 
 /// Emits the identical intent twice, forcing both outbox rows onto the
@@ -1824,7 +1830,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
-        subj("jordan"),
+        "jordan",
         &invariants,
     )
     .await
@@ -1838,7 +1844,7 @@ async fn approval_controls_full_chain_through_pg() {
     else {
         panic!("expected Committed, got {outcome:?}");
     };
-    assert_eq!(receipt_actor, subj("jordan"));
+    assert_eq!(receipt_actor, Subject::from("jordan"));
     assert!(asserted_claims.iter().any(|c| c.predicate == "Approval"
         && c.args == vec![subj("doc_001"), subj("vendor_onboarding"), subj("jordan")]));
 
@@ -1848,7 +1854,7 @@ async fn approval_controls_full_chain_through_pg() {
         .iter()
         .find(|r| r.transition_id == approve_tid)
         .unwrap();
-    assert_eq!(approve_row.actor, subj("jordan"));
+    assert_eq!(approve_row.actor, Subject::from("jordan"));
 
     // 4. alice has no authority; her attempt is rejected and leaves no
     // durable trace. Rejected carries no transition_id, so snapshot row
@@ -1859,7 +1865,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &approval_controls::approve_document(),
         vec![subj("doc_002"), subj("vendor_onboarding")],
-        subj("alice"),
+        "alice",
         &invariants,
     )
     .await
@@ -1896,7 +1902,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(750)],
-        subj("jordan"),
+        "jordan",
         &invariants,
     )
     .await
@@ -1911,7 +1917,7 @@ async fn approval_controls_full_chain_through_pg() {
     else {
         panic!("expected Committed");
     };
-    assert_eq!(limit_receipt_actor, subj("jordan"));
+    assert_eq!(limit_receipt_actor, Subject::from("jordan"));
     assert!(
         asserted_claims
             .iter()
@@ -1929,7 +1935,7 @@ async fn approval_controls_full_chain_through_pg() {
         .iter()
         .find(|r| r.transition_id == limit_approve_tid)
         .expect("audit row for approve_within_limit must exist");
-    assert_eq!(limit_row.actor, subj("jordan"));
+    assert_eq!(limit_row.actor, Subject::from("jordan"));
     assert!(
         list_pending_outbox(&pool)
             .await
@@ -1947,7 +1953,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &approval_controls::approve_within_limit(),
         vec![subj("inv_over"), subj("invoice"), dec(2000)],
-        subj("jordan"),
+        "jordan",
         &invariants,
     )
     .await
@@ -2054,7 +2060,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         &pool,
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
-        subj("alex"),
+        "alex",
         &invariants,
     )
     .await
@@ -2069,7 +2075,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     else {
         panic!("expected Committed");
     };
-    assert_eq!(first_receipt_actor, subj("alex"));
+    assert_eq!(first_receipt_actor, Subject::from("alex"));
     assert!(
         asserted_claims
             .iter()
@@ -2105,7 +2111,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         .iter()
         .find(|r| r.transition_id == first_tid)
         .unwrap();
-    assert_eq!(first_row.actor, subj("alex"));
+    assert_eq!(first_row.actor, Subject::from("alex"));
     assert!(
         list_pending_outbox(&pool)
             .await
@@ -2138,7 +2144,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         &pool,
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(40_000)],
-        subj("alex"),
+        "alex",
         &invariants,
     )
     .await
@@ -2170,7 +2176,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         &pool,
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_003"), subj("settlement_003"), dec(30_000)],
-        subj("alex"),
+        "alex",
         &invariants,
     )
     .await

@@ -10,7 +10,7 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{EvalValue, Invariant, Transformation, Transition};
+use morpholog_core::{EvalValue, Invariant, Subject, Transformation, Transition};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, PgTracedOutcome, propose_against_pg,
     propose_against_pg_with_trace,
@@ -62,13 +62,13 @@ pub async fn propose_pg_as(
     pool: &PgPool,
     transformation: &Transformation,
     args: Vec<EvalValue>,
-    actor: EvalValue,
+    actor: impl Into<Subject>,
     invariants: &[Invariant],
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args,
-        actor,
+        actor: actor.into(),
     };
     propose_against_pg(pool, transformation, &transition, invariants).await
 }
