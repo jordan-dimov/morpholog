@@ -2,7 +2,7 @@
 
 Morpholog is a language and runtime for business systems where a record's legitimacy must be provable, not just stored.
 
-You write the rules your records must obey as invariants. The only way state changes is a transformation, and it commits only if every invariant still holds. The runtime makes invalid business state impossible to write down - and keeps an audit trail that proves why each change was allowed.
+You write the rules your records must obey as invariants. The only way state changes is a transformation, and it commits only if every invariant still holds. The runtime makes invalid business state impossible to commit - and keeps an audit trail that proves why each committed change was allowed.
 
 Underneath, Morpholog treats records not as freestanding facts but as **admitted claims** - statements admitted under specific authority at a specific moment. The same number can carry different *standing* - whether it may be relied on, and for what - for different decisions, granted and revoked by different authorities. A verifier can correct a figure without erasing it: the original stays in the books and the corrected figure becomes current. **Decisions admitted under valid standing remain valid records even when that standing is later revoked** - the legitimacy of a *past* decision was established when it was made. The audit log carries enough provenance to reconstruct any past moment - no bitemporal columns, no shadow tables.
 
@@ -10,7 +10,7 @@ The point is to make *"how do you know?"* answerable by *"because the system cou
 
 That gate runs forward as well as back. Whatever decides what to do next - a person, an optimiser, a heuristic, an AI model - only ever *proposes* a change; the runtime is what admits it or refuses. So the thing making the decision does not have to be trusted. You can put untrusted intelligence to work precisely because legitimacy is enforced outside it, never asked of it.
 
-And when it refuses, it says why. A rejected proposal comes back as a structured, reproducible account - the rule that failed, the claims that were missing, and which transformations could supply them - built only from your own predicate and transformation names. That turns the gate into something an automated searcher can *work against*, not just bounce off: a solver or a model proposes, reads the refusal, repairs its own candidate, and tries again. Whatever finally commits did so by satisfying the same rules a human change would have to.
+And when it refuses, it says why. A rejected proposal comes back as a structured, reproducible account - the gate or invariant that failed and, where the cause is a missing claim, that claim and the candidate transformations that could supply it - built from your own predicate and transformation names, never free text. That turns the gate into something an automated searcher can *work against*, not just bounce off: a solver or a model proposes, reads the refusal, repairs its own candidate, and tries again. Whatever finally commits did so by satisfying the same rules a human change would have to.
 
 ## The questions you can answer
 
