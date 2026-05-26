@@ -3,38 +3,130 @@
 -- price may be settled on enforced by the runtime instead of by a
 -- status column and a prayer.
 --
--- A trader strikes a deal - buy or sell a quantity of some commodity
--- (power, gas, oil) for delivery over a future period - and *captures*
--- it: the terms, plus the price they believe they struck. That captured
--- price is only the trader's word for it; before anyone settles money
--- against the trade, the middle office confirms it and an official price
--- takes over. This first slice models the capture step; confirmation,
--- price correction, and settlement arrive in the commits that follow.
+-- A quick tour of the domain. A trader strikes a deal - buy or sell a
+-- quantity of some commodity (power, gas, oil) for delivery over a
+-- future period - and *captures* it: the terms, plus the price they
+-- believe they struck. That captured price is only the trader's word
+-- for it. Before anyone settles money against the trade, a separate
+-- desk - the middle office - independently *confirms* it against the
+-- counterparty's own record, and the price they confirm becomes the
+-- official one. The trade then *settles*. (Correction of an official
+-- price and settlement itself arrive in later slices of this example;
+-- capture and confirmation are modelled here.)
 --
--- Morpholog does not store "facts" - it stores *claims* it has agreed to
--- admit because they obey the rules. A trade is never in a single
--- "status": it is captured, then also confirmed, then also settled, and
--- the phase is the accumulation of admitted claims, not a field to
--- overwrite.
+-- Two ideas do the real work, and this example is built around both.
+--
+-- First, a trade is never in a single "status". It is captured, then
+-- also confirmed, then also settled - each step adds to what is true
+-- about it, and the earlier facts never stop being true. There is no
+-- `status = "confirmed"` field to overwrite: a trade is "confirmed"
+-- precisely because a confirmation claim exists for it. The phase is
+-- the accumulation of admitted claims, and the history reads itself.
+--
+-- Second, the same trade carries two prices at two standings. The
+-- trader's captured price is an estimate - real, recorded, but not
+-- something anyone may settle on. The middle office's confirmed price
+-- is the official one, marked by a pointer to the figure currently in
+-- force, and settlement will rely on that. Existence and
+-- admissibility-for-settlement are different things: a captured price
+-- exists without ever being settleable.
+--
+-- Here is how Morpholog thinks about this. It does not store "facts" -
+-- it stores *claims* it has agreed to admit because they obey the
+-- rules. Two kinds of rule do the work:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would
+--     break one - the official price in force can never point at a
+--     figure that does not exist.
+--   * a `require` is a gate on a single action, checked the moment you
+--     act and never again. Whether the actor confirming a price holds
+--     authority for that commodity is settled when they act; revoking
+--     that authority tomorrow does not unwind a confirmation made
+--     today. An invariant governs what is true; a gate governs what
+--     you may do.
 
 program trade_lifecycle
 
--- The vocabulary so far. `TradeCaptured` is the trade's terms;
--- `CapturedPrice` is the trader's price estimate, recorded but carrying
--- no settlement standing on its own - only a confirmed price will.
+-- The vocabulary. `TradeCaptured` is the trade's terms; `CapturedPrice`
+-- the trader's estimate, recorded but carrying no settlement standing.
+-- `MayConfirm` is a desk's authority to confirm prices for a commodity
+-- - it can be granted and, later, revoked. `TradeConfirmed` records the
+-- confirmation event against the counterparty. `OfficialPrice` is an
+-- official price figure; `CurrentOfficialPrice` is the retractable
+-- pointer naming which official figure is in force for the trade right
+-- now - the one moving part, which a later price correction will move.
 predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject, quantity: Decimal, delivery_period: Subject)
 predicate CapturedPrice(trade: Subject, price: Decimal)
+predicate MayConfirm(principal: Subject, commodity: Subject)
+predicate TradeConfirmed(trade: Subject, counterparty: Subject, confirmation_id: Subject)
+predicate OfficialPrice(trade: Subject, price: Decimal, official_price_id: Subject)
+predicate CurrentOfficialPrice(trade: Subject, official_price_id: Subject)
 
 -- Intents are messages the system sends to the outside world after a
--- change commits.
+-- change commits - a trade was captured, an authority granted, a trade
+-- confirmed.
 intent TradeCapturedAdmitted(trade: Subject)
+intent ConfirmAuthorityGranted(principal: Subject, commodity: Subject)
+intent TradeConfirmedAdmitted(trade: Subject, confirmation_id: Subject)
+
+
+-- The rules that must always hold. Any change that would leave the
+-- world violating one of these is rejected outright. Read `implies` as
+-- "whenever the left is true, the right must be too".
+
+-- The official price in force can never point at nothing: every current
+-- pointer must name an official price figure that actually exists. You
+-- cannot end up settling on a price with no record behind it.
+invariant current_official_price_has_a_figure:
+    CurrentOfficialPrice(trade, official_price_id) implies OfficialPrice(trade, _, official_price_id)
+
+-- There is exactly one official price in force at a time for a trade.
+-- The pointer is a singleton: two different current official prices for
+-- the same trade cannot coexist.
+invariant at_most_one_current_official_price:
+    CurrentOfficialPrice(trade, a) and CurrentOfficialPrice(trade, b) implies a = b
+
+
+-- The only ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every invariant still holds
+-- once they are in place. `admit` adds a claim; `emit` queues a message
+-- to the outside world for after the commit.
 
 -- A trader captures a new trade: its terms and the price they believe
 -- they struck. The gate refuses a second capture under the same trade
 -- id, so a trade's terms are fixed once booked - a change of terms is a
--- new trade, never a silent overwrite.
+-- new trade, never a silent overwrite. The captured price is recorded
+-- but carries no settlement standing on its own; only a confirmed price
+-- will.
 transformation capture_trade(trade, commodity, direction, quantity, delivery_period, price):
     require not TradeCaptured(trade, _, _, _, _)
     admit TradeCaptured(trade, commodity, direction, quantity, delivery_period)
     admit CapturedPrice(trade, price)
     emit TradeCapturedAdmitted(trade)
+
+-- Grant a desk the authority to confirm prices for a commodity.
+-- Confirmation is a middle-office responsibility, scoped per commodity
+-- and kept separate from whoever captured the trade.
+transformation grant_confirm_authority(principal, commodity):
+    admit MayConfirm(principal, commodity)
+    emit ConfirmAuthorityGranted(principal, commodity)
+
+-- The middle office confirms the trade against the counterparty and
+-- sets the official price. The first gate does two things at once: it
+-- looks up the trade's commodity and checks that whoever is proposing
+-- this holds confirmation authority for that commodity - so the
+-- authority is tied to the trade's own commodity, not just any
+-- commodity the actor happens to hold. The remaining gates insist the
+-- trade has not already been confirmed and has no official price in
+-- force yet. Confirming records the confirmation event, the official
+-- price figure, and the pointer marking that figure as the one in force
+-- for settlement.
+transformation confirm_trade(trade, counterparty, confirmation_id, official_price_id, confirmed_price):
+    require TradeCaptured(trade, commodity, _, _, _) and MayConfirm(actor, commodity)
+    require not TradeConfirmed(trade, _, _)
+    require not CurrentOfficialPrice(trade, _)
+    admit TradeConfirmed(trade, counterparty, confirmation_id)
+    admit OfficialPrice(trade, confirmed_price, official_price_id)
+    admit CurrentOfficialPrice(trade, official_price_id)
+    emit TradeConfirmedAdmitted(trade, confirmation_id)
