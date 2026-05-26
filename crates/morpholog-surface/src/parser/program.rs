@@ -5,7 +5,7 @@ use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
     ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateDecl, Program,
-    Transformation,
+    Transformation, Var,
 };
 use std::collections::HashMap;
 
@@ -154,7 +154,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         }
 
         // Duplicate key names inside a single derived declaration.
-        // The IR's `keys: Vec<String>` is positional; two same-named
+        // The IR's `keys` (a `Vec<Var>`) is positional; two same-named
         // keys would shadow each other in the binding context and
         // produce silently wrong enumeration.
         let mut seen_keys: HashMap<&str, ()> = HashMap::new();
@@ -316,8 +316,8 @@ where
 
     // transformation_decl ::= "transformation" Ident "(" param-list ")" ":" Indent stmt+ Dedent
     //
-    // Params are bare identifiers (no kinds; the IR's
-    // `Transformation` has `params: Vec<String>` only).
+    // Params are bare identifiers (no kinds); the IR stores them as
+    // `Var` because they initialise the transformation's binding context.
     // The body uses indented-block layout: the layout pass emits
     // Indent after the colon and Dedent at block end.
     let param_list = ident
@@ -342,7 +342,7 @@ where
             TopLevelDecl::Transformation(
                 Transformation {
                     name,
-                    parameters,
+                    parameters: parameters.into_iter().map(Var::from).collect(),
                     body,
                 },
                 span.start()..span.end(),
@@ -382,7 +382,7 @@ where
             TopLevelDecl::Derived(
                 DerivedClaim {
                     predicate,
-                    keys,
+                    keys: keys.into_iter().map(Var::from).collect(),
                     values,
                     domain,
                 },

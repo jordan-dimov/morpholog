@@ -1200,7 +1200,7 @@ mod tests {
         ]);
         let t = Transformation {
             name: "iterate_lines".to_string(),
-            parameters: vec!["lines".to_string()],
+            parameters: vec!["lines".into()],
             body: vec![for_(
                 "line",
                 term(var("lines")),
@@ -1404,7 +1404,7 @@ mod tests {
         let mut p = one_claim_program();
         p.derived_claims.push(DerivedClaim {
             predicate: "Computed".to_string(),
-            keys: vec!["id".to_string()],
+            keys: vec!["id".into()],
             values: vec![DerivedValue {
                 name: "n".to_string(),
                 expr: term(var("id")),
@@ -1437,7 +1437,7 @@ mod tests {
         );
         p.derived_claims.push(DerivedClaim {
             predicate: "Computed".to_string(),
-            keys: vec!["id".to_string()],
+            keys: vec!["id".into()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
                 expr: term(var("id")),
@@ -1520,7 +1520,7 @@ mod tests {
         }]);
         let t = Transformation {
             name: "happy".to_string(),
-            parameters: vec!["pid".to_string()],
+            parameters: vec!["pid".into()],
             body: vec![
                 require(claim("Policy", vec![var("pid"), wildcard()])),
                 bind_one(claim("Policy", vec![var("pid"), var("limit")])),
@@ -1755,7 +1755,7 @@ mod tests {
         ]);
         let t = Transformation {
             name: "iterate".to_string(),
-            parameters: vec!["lines".to_string()],
+            parameters: vec!["lines".into()],
             body: vec![for_(
                 "line",
                 term(var("lines")),
@@ -2016,7 +2016,7 @@ mod tests {
         }]);
         let t = Transformation {
             name: "all_lines_good".to_string(),
-            parameters: vec!["lines".to_string()],
+            parameters: vec!["lines".into()],
             body: vec![require(forall(
                 "line",
                 in_(var("line"), var("lines")),
@@ -2332,7 +2332,7 @@ mod tests {
         ]);
         let t = Transformation {
             name: "every_line_has_a_and_b".to_string(),
-            parameters: vec!["lines".to_string()],
+            parameters: vec!["lines".into()],
             body: vec![require(forall(
                 "line",
                 in_(var("line"), var("lines")),

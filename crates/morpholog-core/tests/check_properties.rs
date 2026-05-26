@@ -28,7 +28,7 @@
 use morpholog_core::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
     OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
-    ValidationError, Value, ValueExpr,
+    ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
@@ -233,7 +233,7 @@ fn arb_transformation() -> impl Strategy<Value = Transformation> {
     )
         .prop_map(|(name, parameters, body)| Transformation {
             name,
-            parameters,
+            parameters: parameters.into_iter().map(Var::from).collect(),
             body,
         })
 }
@@ -247,7 +247,7 @@ fn arb_derived_claim() -> impl Strategy<Value = DerivedClaim> {
     )
         .prop_map(|(predicate, keys, values, domain)| DerivedClaim {
             predicate,
-            keys,
+            keys: keys.into_iter().map(Var::from).collect(),
             values: values
                 .into_iter()
                 .map(|(name, expr)| DerivedValue { name, expr })
@@ -459,7 +459,7 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
         invariants: vec![],
         transformations: vec![Transformation {
             name: "t".to_string(),
-            parameters: vec!["c".to_string()],
+            parameters: vec!["c".into()],
             body,
         }],
         derived_claims: vec![],

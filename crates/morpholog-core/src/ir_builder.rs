@@ -30,7 +30,7 @@
 
 use crate::{
     ArgDecl, Claim, CompareOp, Intent, OrderedDomain, PredicateArgKind, PredicateDecl, Prop, Stmt,
-    Subject, Term, Value, ValueExpr,
+    Subject, Term, Value, ValueExpr, Var,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -325,10 +325,10 @@ pub fn for_(binding: &str, collection: ValueExpr, body: Vec<Stmt>) -> Stmt {
 // ============================================================
 
 /// Convenience for the parameter list of a [`crate::Transformation`].
-/// Equivalent to `names.iter().map(|s| s.to_string()).collect()` but
+/// Equivalent to `names.iter().map(|s| Var::from(*s)).collect()` but
 /// reads as `params(&["claim_id", "amount"])` at the call site.
-pub fn params(names: &[&str]) -> Vec<String> {
-    names.iter().map(|s| s.to_string()).collect()
+pub fn params(names: &[&str]) -> Vec<Var> {
+    names.iter().map(|s| Var::from(*s)).collect()
 }
 
 // ============================================================
