@@ -53,7 +53,7 @@ fn arb_civil_date() -> impl Strategy<Value = Date> {
 fn arb_eval_value() -> impl Strategy<Value = EvalValue> {
     let leaf = prop_oneof![
         arb_decimal().prop_map(EvalValue::Decimal),
-        arb_subject().prop_map(EvalValue::Subject),
+        arb_subject().prop_map(|s| EvalValue::Subject(s.into())),
         any::<bool>().prop_map(EvalValue::Bool),
         arb_civil_date().prop_map(EvalValue::Date),
     ];

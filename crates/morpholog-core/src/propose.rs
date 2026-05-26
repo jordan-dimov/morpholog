@@ -20,7 +20,7 @@ use crate::eval::{
     resolve_term, unify_args, unsatisfied_positive_claims,
 };
 use crate::format;
-use crate::ir::{Claim, Intent, Invariant, Stmt, Term, Transformation};
+use crate::ir::{Claim, Intent, Invariant, Stmt, Subject, Term, Transformation};
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
 /// A proposed state transition. Evaluated, accepted-or-rejected, and
@@ -30,14 +30,16 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 ///   Must match the `name` of the [`Transformation`] passed to [`propose`].
 /// - `args`: the per-call positional arguments, matching the
 ///   transformation's declared `parameters`.
-/// - `actor`: the [`EvalValue::Subject`] under whose authority the
-///   transition is proposed. Carried as transition context, not a
-///   transformation parameter, so domain payloads stay free of plumbing.
+/// - `actor`: the [`Subject`] under whose authority the transition is
+///   proposed. Carried as transition context, not a transformation
+///   parameter, so domain payloads stay free of plumbing. Persists and
+///   renders as a tagged [`EvalValue::Subject`] (see [`crate::actor_repr`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub transformation_name: String,
     pub args: Vec<EvalValue>,
-    pub actor: EvalValue,
+    #[serde(with = "crate::actor_repr")]
+    pub actor: Subject,
 }
 
 /// The result of proposing a transformation. Either the candidate state is
@@ -257,10 +259,10 @@ pub fn propose(
     pre_state: &State,
     invariants: &[Invariant],
 ) -> Result<Outcome, EvalError> {
-    // Input validation (transformation-name / actor-kind / arg-count
-    // matching) lives in `propose_inner` so both `propose` and
-    // `propose_with_trace` share a single source of truth and can't
-    // drift if one gate is updated.
+    // Input validation (transformation-name / arg-count matching) lives
+    // in `propose_inner` so both `propose` and `propose_with_trace` share
+    // a single source of truth and can't drift if one gate is updated.
+    // The actor is a `Subject` by type; no runtime kind check is needed.
     propose_inner(
         transformation,
         transition,
@@ -315,11 +317,6 @@ pub(crate) fn propose_inner(
             "transition names transformation `{}` but Transformation passed is `{}`",
             transition.transformation_name, transformation.name,
         )));
-    }
-    if !matches!(transition.actor, EvalValue::Subject(_)) {
-        return Err(EvalError::TypeMismatch(
-            "transition actor must be a subject".to_string(),
-        ));
     }
     if transition.args.len() != transformation.parameters.len() {
         return Err(EvalError::TypeMismatch(format!(
@@ -394,7 +391,7 @@ pub(crate) fn execute_stmt(
     stmt: &Stmt,
     pre_state: &State,
     bindings: &mut Bindings,
-    actor: Option<&EvalValue>,
+    actor: Option<&Subject>,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
@@ -508,7 +505,7 @@ pub(crate) fn execute_stmt(
         }
         Stmt::LetNewSubject { name } => {
             let id = uuid::Uuid::now_v7().to_string();
-            let subject = EvalValue::Subject(id);
+            let subject = EvalValue::Subject(id.into());
             if trace.is_on() {
                 trace.push(TraceEntry::LetNewSubject {
                     name: name.clone(),
@@ -680,7 +677,7 @@ pub(crate) fn execute_stmt(
 pub(crate) fn resolve_claim(
     claim: &Claim,
     bindings: &Bindings,
-    actor: Option<&EvalValue>,
+    actor: Option<&Subject>,
 ) -> Result<ClaimInstance, EvalError> {
     let mut args = Vec::with_capacity(claim.args.len());
     for t in &claim.args {
@@ -700,7 +697,7 @@ pub(crate) fn resolve_claim(
 pub(crate) fn resolve_intent(
     intent: &Intent,
     bindings: &Bindings,
-    actor: Option<&EvalValue>,
+    actor: Option<&Subject>,
 ) -> Result<IntentInstance, EvalError> {
     let mut args = Vec::with_capacity(intent.args.len());
     for t in &intent.args {

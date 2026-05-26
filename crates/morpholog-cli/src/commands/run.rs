@@ -13,7 +13,7 @@
 //! without forking the CLI or compiling Rust.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{EvalValue, Transition};
+use morpholog_core::{EvalValue, Subject, Transition};
 use morpholog_postgres::{
     PgProposalOutcome, PgTracedOutcome, propose_against_pg, propose_against_pg_with_trace,
 };
@@ -68,7 +68,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
-        actor: EvalValue::Subject(args.actor.clone()),
+        actor: Subject::from(args.actor.clone()),
     };
 
     if args.trace {

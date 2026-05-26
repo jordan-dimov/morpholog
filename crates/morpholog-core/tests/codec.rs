@@ -8,7 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{ClaimInstance, EvalValue, IntentInstance};
+use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Subject, Transition};
 use morpholog_test_support::{dec, subj};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -24,7 +24,7 @@ fn eval_value_decimal_round_trips_as_tagged_json_string() {
 
 #[test]
 fn eval_value_subject_round_trips_as_tagged_json_string() {
-    let v = EvalValue::Subject("asset_a".to_string());
+    let v = EvalValue::Subject("asset_a".into());
     let json = serde_json::to_string(&v).unwrap();
     assert_eq!(json, r#"{"type":"subject","value":"asset_a"}"#);
     let parsed: EvalValue = serde_json::from_str(&json).unwrap();
@@ -56,8 +56,8 @@ fn eval_value_date_round_trips_as_tagged_json_string() {
 #[test]
 fn eval_value_collection_round_trips_through_nested_json() {
     let v = EvalValue::Collection(vec![
-        EvalValue::Subject("l1".to_string()),
-        EvalValue::Subject("l2".to_string()),
+        EvalValue::Subject("l1".into()),
+        EvalValue::Subject("l2".into()),
         EvalValue::Decimal(Decimal::new(60, 0)),
     ]);
     let json = serde_json::to_string(&v).unwrap();
@@ -135,6 +135,44 @@ fn intent_args_serialise_as_a_json_array() {
     assert!(
         parsed.is_array(),
         "intent.args must serialise as a JSON array"
+    );
+}
+
+// ============================================================
+// Transition actor codec (`actor_repr`)
+//
+// `Transition.actor` is a `Subject`, but it serialises through
+// `actor_repr` as a tagged `EvalValue::Subject`, so the audit `actor`
+// column and the CLI transition JSON keep their v0 shape. Deserialisation
+// validates the tag at the boundary - the one place a non-subject actor
+// can still enter, now that the kernel type makes it otherwise
+// unrepresentable. These pin both halves of that contract.
+// ============================================================
+
+#[test]
+fn transition_actor_round_trips_as_tagged_subject() {
+    let t = Transition {
+        transformation_name: "do_it".to_string(),
+        args: vec![],
+        actor: Subject::from("alice"),
+    };
+    let json = serde_json::to_string(&t).unwrap();
+    assert!(
+        json.contains(r#""actor":{"type":"subject","value":"alice"}"#),
+        "actor must serialise as a tagged subject: {json}"
+    );
+    let parsed: Transition = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, t);
+}
+
+#[test]
+fn transition_deserialize_rejects_non_subject_actor() {
+    let bad = r#"{"transformation_name":"do_it","args":[],"actor":{"type":"decimal","value":"1"}}"#;
+    let err = serde_json::from_str::<Transition>(bad)
+        .expect_err("a non-subject actor must fail to deserialise");
+    assert!(
+        err.to_string().contains("actor must be a subject"),
+        "error must name the boundary contract: {err}"
     );
 }
 

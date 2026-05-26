@@ -164,7 +164,7 @@ impl Ord for EvalValueOrd {
 
         match (&self.0, &other.0) {
             (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
-            (EvalValue::Subject(a), EvalValue::Subject(b)) => a.cmp(b),
+            (EvalValue::Subject(a), EvalValue::Subject(b)) => a.as_str().cmp(b.as_str()),
             (EvalValue::Bool(a), EvalValue::Bool(b)) => a.cmp(b),
             (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
             (EvalValue::Collection(a), EvalValue::Collection(b)) => {

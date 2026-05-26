@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::Transition;
+use morpholog_core::{Subject, Transition};
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
@@ -58,7 +58,7 @@ async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
             subj(&format!("revenue_{entry_id}")),
             dec(100),
         ],
-        actor: subj("outbox_test"),
+        actor: Subject::from("outbox_test"),
     };
     let outcome = propose_against_pg(
         pool,

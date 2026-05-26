@@ -15,7 +15,7 @@ mod common;
 
 use common::{dec, subj};
 use morpholog_core::{
-    ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, ValueExpr, eval_invariant,
+    ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, Subject, ValueExpr, eval_invariant,
 };
 use morpholog_examples::settlement_netting;
 
@@ -261,7 +261,7 @@ fn propose_rejects_when_line_already_netted() {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args: netting_args(),
-        actor: subj("test_actor"),
+        actor: Subject::from("test_actor"),
     };
     let TracedProposal::Completed { outcome, trace } =
         propose_with_trace(&t, &transition, &pre, &settlement_netting::all_invariants())

@@ -43,8 +43,8 @@
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Transformation, Transition,
-    propose,
+    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, State, Subject, Transformation,
+    Transition, propose,
 };
 use rust_decimal::Decimal;
 
@@ -54,7 +54,7 @@ use rust_decimal::Decimal;
 
 /// Build an [`EvalValue::Subject`].
 pub fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.to_string())
+    EvalValue::Subject(Subject::from(s))
 }
 
 /// Semantic alias for [`subj`]. Identical runtime; documents reader
@@ -115,8 +115,8 @@ pub fn claim_instance(predicate: &str, args: &[EvalValue]) -> ClaimInstance {
 
 /// Default actor for tests that do not model authority. Authority-
 /// focused tests build their own [`Transition`] with a specific actor.
-pub fn test_actor() -> EvalValue {
-    subj("test_actor")
+pub fn test_actor() -> Subject {
+    Subject::from("test_actor")
 }
 
 /// Build a [`Transition`] with the shared [`test_actor`]. Used by
@@ -151,14 +151,14 @@ pub fn propose_with_test_actor(
 pub fn propose_as(
     t: &Transformation,
     args: Vec<EvalValue>,
-    actor: EvalValue,
+    actor: impl Into<Subject>,
     pre: &State,
     invariants: &[Invariant],
 ) -> Result<Outcome, EvalError> {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args,
-        actor,
+        actor: actor.into(),
     };
     propose(t, &transition, pre, invariants)
 }
@@ -192,14 +192,14 @@ pub fn must_accept(
 pub fn must_accept_as(
     t: &Transformation,
     args: Vec<EvalValue>,
-    actor: EvalValue,
+    actor: impl Into<Subject>,
     pre: State,
     invariants: &[Invariant],
 ) -> State {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args,
-        actor,
+        actor: actor.into(),
     };
     match propose(t, &transition, &pre, invariants).expect("propose should not error") {
         Outcome::Accepted {

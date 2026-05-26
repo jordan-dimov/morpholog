@@ -138,7 +138,7 @@ pub fn explain(program: &Program, transition: &Transition, pre_state: &State) ->
     let transition_ref = TransitionRef {
         transformation: transition.transformation_name.clone(),
         args: transition.args.iter().map(render_eval_value).collect(),
-        actor: render_eval_value(&transition.actor),
+        actor: transition.actor.to_string(),
     };
 
     let Some(transformation) = program.transformation(&transition.transformation_name) else {

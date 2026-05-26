@@ -13,14 +13,16 @@
 mod common;
 
 use common::{claim_instance, date, dec, has_claim, must_accept, subj};
-use morpholog_core::{EvalValue, GateKind, Rejection, State, Transition, Verdict, explain};
+use morpholog_core::{
+    EvalValue, GateKind, Rejection, State, Subject, Transition, Verdict, explain,
+};
 use morpholog_examples::carbon_credit_provenance as cc;
 
 fn transition(name: &str, args: Vec<EvalValue>, actor: &str) -> Transition {
     Transition {
         transformation_name: name.to_string(),
         args,
-        actor: subj(actor),
+        actor: Subject::from(actor),
     }
 }
 

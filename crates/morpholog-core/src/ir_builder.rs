@@ -30,7 +30,7 @@
 
 use crate::{
     ArgDecl, Claim, CompareOp, Intent, OrderedDomain, PredicateArgKind, PredicateDecl, Prop, Stmt,
-    Term, Value, ValueExpr,
+    Subject, Term, Value, ValueExpr,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -73,7 +73,7 @@ pub fn actor() -> Term {
 /// statuses, fixed authorities) and for embedding specific subject
 /// identifiers in IR bodies.
 pub fn subj(s: &str) -> Term {
-    Term::Literal(Value::Subject(s.to_string()))
+    Term::Literal(Value::Subject(Subject::from(s)))
 }
 
 /// Decimal literal. Stored as the exact source string; the evaluator

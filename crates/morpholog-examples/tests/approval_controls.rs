@@ -24,7 +24,7 @@ mod common;
 
 use common::{dec, has_claim, must_accept, must_accept_as, propose_as, subj};
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, Prop, State, Term, Value,
+    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, Prop, State, Subject, Term, Value,
     eval_invariant,
 };
 use morpholog_examples::approval_controls;
@@ -61,7 +61,7 @@ fn approve_without_authority_is_rejected_at_require() {
     let outcome = propose_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
-        subj("jordan"),
+        "jordan",
         &pre,
         &empty_invariants(),
     )
@@ -78,7 +78,7 @@ fn approve_with_authority_carries_proposing_actor_on_asserted_claim() {
     let post = must_accept_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
-        subj("jordan"),
+        "jordan",
         pre,
         &empty_invariants(),
     );
@@ -101,7 +101,7 @@ fn approve_uses_proposing_actor_not_a_caller_parameter() {
     let outcome = propose_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
-        subj("alice"),
+        "alice",
         &pre,
         &empty_invariants(),
     )
@@ -117,7 +117,7 @@ fn revoked_authority_blocks_future_but_preserves_past() {
     let after_approval = must_accept_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
-        subj("jordan"),
+        "jordan",
         pre,
         &empty_invariants(),
     );
@@ -142,7 +142,7 @@ fn revoked_authority_blocks_future_but_preserves_past() {
     let outcome = propose_as(
         &approval_controls::approve_document(),
         vec![subj("doc_002"), subj("vendor_onboarding")],
-        subj("jordan"),
+        "jordan",
         &after_revoke,
         &empty_invariants(),
     )
@@ -159,7 +159,7 @@ fn limit_approval_without_grant_is_rejected() {
     let outcome = propose_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(100)],
-        subj("jordan"),
+        "jordan",
         &State::default(),
         &empty_invariants(),
     )
@@ -173,7 +173,7 @@ fn limit_approval_under_limit_commits_with_actor_and_amount() {
     let post = must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(750)],
-        subj("jordan"),
+        "jordan",
         pre,
         &empty_invariants(),
     );
@@ -191,7 +191,7 @@ fn limit_approval_exactly_at_limit_commits() {
     let post = must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_at_limit"), subj("invoice"), dec(1000)],
-        subj("jordan"),
+        "jordan",
         pre,
         &empty_invariants(),
     );
@@ -213,7 +213,7 @@ fn limit_approval_above_limit_is_rejected() {
     let outcome = propose_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_over"), subj("invoice"), dec(1001)],
-        subj("jordan"),
+        "jordan",
         &pre,
         &empty_invariants(),
     )
@@ -230,7 +230,7 @@ fn limit_grant_is_per_actor_and_per_doc_type() {
     let outcome = propose_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_alice"), subj("invoice"), dec(10)],
-        subj("alice"),
+        "alice",
         &pre,
         &empty_invariants(),
     )
@@ -241,7 +241,7 @@ fn limit_grant_is_per_actor_and_per_doc_type() {
     let outcome = propose_as(
         &approval_controls::approve_within_limit(),
         vec![subj("ct_001"), subj("contract"), dec(10)],
-        subj("jordan"),
+        "jordan",
         &pre,
         &empty_invariants(),
     )
@@ -259,7 +259,7 @@ fn multiple_grants_take_the_satisfying_one() {
     let post = must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_3k"), subj("invoice"), dec(3000)],
-        subj("jordan"),
+        "jordan",
         pre,
         &empty_invariants(),
     );
@@ -276,7 +276,7 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
     let after_approval = must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(800)],
-        subj("jordan"),
+        "jordan",
         pre,
         &empty_invariants(),
     );
@@ -301,7 +301,7 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
     let outcome = propose_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_002"), subj("invoice"), dec(500)],
-        subj("jordan"),
+        "jordan",
         &after_revoke,
         &empty_invariants(),
     )
@@ -322,7 +322,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         args: vec![
             subj("jordan"),
             subj("invoice"),
-            EvalValue::Subject("not_a_decimal".to_string()),
+            EvalValue::Subject("not_a_decimal".into()),
         ],
     }]);
 
@@ -330,7 +330,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(100)],
     );
-    transition.actor = subj("jordan");
+    transition.actor = Subject::from("jordan");
 
     let err = morpholog_core::propose(
         &approval_controls::approve_within_limit(),
@@ -379,10 +379,7 @@ fn term_actor_unbound_error_is_position_independent() {
         version: 1,
         body: Prop::Claim {
             predicate: "AnyPredicate".to_string(),
-            args: vec![
-                Term::Literal(Value::Subject("missing".to_string())),
-                Term::Actor,
-            ],
+            args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
         },
     };
     let err = eval_invariant(&inv, &State::default(), None)

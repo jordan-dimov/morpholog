@@ -22,6 +22,7 @@
 //! `.clippy.toml` (`allow-panic-in-tests`).
 #![warn(clippy::panic, clippy::float_arithmetic)]
 
+pub mod actor_repr;
 pub mod format;
 pub mod ir_builder;
 
@@ -49,8 +50,8 @@ pub use explain::{
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
-    Value, ValueExpr,
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term,
+    Transformation, Value, ValueExpr,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -167,30 +168,27 @@ mod tests {
 
     #[test]
     fn subject_literal_constructs_and_resolves() {
-        let v = Value::Subject("bank_debt_service".to_string());
+        let v = Value::Subject("bank_debt_service".into());
         assert_eq!(
             Term::Literal(v),
-            Term::Literal(Value::Subject("bank_debt_service".to_string()))
+            Term::Literal(Value::Subject("bank_debt_service".into()))
         );
         let resolved = resolve_term(
-            &Term::Literal(Value::Subject("bank_debt_service".to_string())),
+            &Term::Literal(Value::Subject("bank_debt_service".into())),
             &Bindings::new(),
             None,
         )
         .unwrap();
-        assert_eq!(
-            resolved,
-            EvalValue::Subject("bank_debt_service".to_string())
-        );
+        assert_eq!(resolved, EvalValue::Subject("bank_debt_service".into()));
     }
 
     #[test]
     fn subject_literal_unifies_with_matching_subject_arg() {
-        let pattern = vec![Term::Literal(Value::Subject("p1".to_string()))];
-        let value = vec![EvalValue::Subject("p1".to_string())];
+        let pattern = vec![Term::Literal(Value::Subject("p1".into()))];
+        let value = vec![EvalValue::Subject("p1".into())];
         assert!(unify_args(&pattern, &value, &Bindings::new(), None).is_some());
 
-        let mismatch = vec![EvalValue::Subject("p2".to_string())];
+        let mismatch = vec![EvalValue::Subject("p2".into())];
         assert!(unify_args(&pattern, &mismatch, &Bindings::new(), None).is_none());
 
         let wrong_kind = vec![EvalValue::Decimal(Decimal::new(1, 0))];
@@ -207,7 +205,7 @@ mod tests {
     fn claims_for_returns_only_matching_predicate() {
         let a1 = ClaimInstance {
             predicate: "A".to_string(),
-            args: vec![EvalValue::Subject("a1".to_string())],
+            args: vec![EvalValue::Subject("a1".into())],
         };
         let b1 = ClaimInstance {
             predicate: "B".to_string(),
@@ -215,7 +213,7 @@ mod tests {
         };
         let a2 = ClaimInstance {
             predicate: "A".to_string(),
-            args: vec![EvalValue::Subject("a2".to_string())],
+            args: vec![EvalValue::Subject("a2".into())],
         };
         let state = State::from_claims(vec![a1.clone(), b1.clone(), a2.clone()]);
 
@@ -254,22 +252,22 @@ mod tests {
         let line_for_entry_a = ClaimInstance {
             predicate: "JournalLine".to_string(),
             args: vec![
-                EvalValue::Subject("entry_a".to_string()),
-                EvalValue::Subject("account_cash".to_string()),
+                EvalValue::Subject("entry_a".into()),
+                EvalValue::Subject("account_cash".into()),
             ],
         };
         let line_for_entry_b = ClaimInstance {
             predicate: "JournalLine".to_string(),
             args: vec![
-                EvalValue::Subject("entry_b".to_string()),
-                EvalValue::Subject("account_cash".to_string()),
+                EvalValue::Subject("entry_b".into()),
+                EvalValue::Subject("account_cash".into()),
             ],
         };
         // Same value at position 0 but different predicate; must not
         // pollute the JournalLine[0=entry_a] bucket.
         let je_for_entry_a = ClaimInstance {
             predicate: "JournalEntry".to_string(),
-            args: vec![EvalValue::Subject("entry_a".to_string())],
+            args: vec![EvalValue::Subject("entry_a".into())],
         };
         let state = State::from_claims(vec![
             line_for_entry_a.clone(),
@@ -277,7 +275,7 @@ mod tests {
             je_for_entry_a.clone(),
         ]);
 
-        let entry_a = EvalValue::Subject("entry_a".to_string());
+        let entry_a = EvalValue::Subject("entry_a".into());
         let positions = state
             .claim_indices_for_arg("JournalLine", 0, &entry_a)
             .expect("entry_a appears at JournalLine[0]");
@@ -288,7 +286,7 @@ mod tests {
             "must return only the JournalLine claim, not JournalEntry"
         );
 
-        let unknown = EvalValue::Subject("entry_z".to_string());
+        let unknown = EvalValue::Subject("entry_z".into());
         assert!(
             state
                 .claim_indices_for_arg("JournalLine", 0, &unknown)
@@ -296,7 +294,7 @@ mod tests {
             "absent value returns None, signalling empty intersection"
         );
 
-        let cash = EvalValue::Subject("account_cash".to_string());
+        let cash = EvalValue::Subject("account_cash".into());
         let cash_positions = state
             .claim_indices_for_arg("JournalLine", 1, &cash)
             .expect("account_cash appears at JournalLine[1]");
@@ -509,7 +507,7 @@ mod tests {
                 "10".to_string(),
             )))),
             Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
-                "oops".to_string(),
+                "oops".into(),
             )))),
         );
         let err = eval_value(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
@@ -594,7 +592,7 @@ mod tests {
         let expr = date_le_(
             Box::new(date_lit("2026-03-12")),
             Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
-                "oops".to_string(),
+                "oops".into(),
             )))),
         );
         let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
@@ -761,15 +759,15 @@ mod tests {
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "A".to_string(),
-                args: vec![EvalValue::Subject("a1".to_string())],
+                args: vec![EvalValue::Subject("a1".into())],
             },
             ClaimInstance {
                 predicate: "A".to_string(),
-                args: vec![EvalValue::Subject("a2".to_string())],
+                args: vec![EvalValue::Subject("a2".into())],
             },
             ClaimInstance {
                 predicate: "B".to_string(),
-                args: vec![EvalValue::Subject("b1".to_string())],
+                args: vec![EvalValue::Subject("b1".into())],
             },
         ]);
 
@@ -797,7 +795,7 @@ mod tests {
         let bound_x: Vec<_> = matches
             .iter()
             .map(|b| match b.get("x").expect("x bound in every extension") {
-                EvalValue::Subject(s) => s.clone(),
+                EvalValue::Subject(s) => s.as_str().to_string(),
                 _ => panic!("x must be a subject"),
             })
             .collect();
@@ -940,11 +938,11 @@ mod tests {
         let post = State::from_claims(vec![
             ClaimInstance {
                 predicate: "Account".to_string(),
-                args: vec![EvalValue::Subject("a1".to_string())],
+                args: vec![EvalValue::Subject("a1".into())],
             },
             ClaimInstance {
                 predicate: "Balance".to_string(),
-                args: vec![EvalValue::Subject("a1".to_string())],
+                args: vec![EvalValue::Subject("a1".into())],
             },
         ]);
 
@@ -1014,7 +1012,7 @@ mod tests {
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![],
-            actor: EvalValue::Subject("test_actor".to_string()),
+            actor: Subject::from("test_actor"),
         };
         propose(t, &transition, state, &[])
     }
@@ -1027,7 +1025,7 @@ mod tests {
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
-                EvalValue::Subject("p1".to_string()),
+                EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
@@ -1049,7 +1047,7 @@ mod tests {
         assert_eq!(
             asserted_claims[0].args,
             vec![
-                EvalValue::Subject("p1".to_string()),
+                EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
             "bind_one must have bound policy_id and limit for the assert"
@@ -1093,14 +1091,14 @@ mod tests {
             ClaimInstance {
                 predicate: "Policy".to_string(),
                 args: vec![
-                    EvalValue::Subject("p1".to_string()),
+                    EvalValue::Subject("p1".into()),
                     EvalValue::Decimal(Decimal::new(100, 0)),
                 ],
             },
             ClaimInstance {
                 predicate: "Policy".to_string(),
                 args: vec![
-                    EvalValue::Subject("p2".to_string()),
+                    EvalValue::Subject("p2".into()),
                     EvalValue::Decimal(Decimal::new(200, 0)),
                 ],
             },
@@ -1135,14 +1133,14 @@ mod tests {
             ClaimInstance {
                 predicate: "Policy".to_string(),
                 args: vec![
-                    EvalValue::Subject("p1".to_string()),
+                    EvalValue::Subject("p1".into()),
                     EvalValue::Decimal(Decimal::new(100, 0)),
                 ],
             },
             ClaimInstance {
                 predicate: "Policy".to_string(),
                 args: vec![
-                    EvalValue::Subject("p2".to_string()),
+                    EvalValue::Subject("p2".into()),
                     EvalValue::Decimal(Decimal::new(200, 0)),
                 ],
             },
@@ -1157,7 +1155,7 @@ mod tests {
             body: vec![
                 let_(
                     "policy_id",
-                    term(Term::Literal(Value::Subject("p2".to_string()))),
+                    term(Term::Literal(Value::Subject("p2".into()))),
                 ),
                 bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
                 assert_("Echo", vec![var("limit")]),
@@ -1186,14 +1184,14 @@ mod tests {
             ClaimInstance {
                 predicate: "LineAmount".to_string(),
                 args: vec![
-                    EvalValue::Subject("L1".to_string()),
+                    EvalValue::Subject("L1".into()),
                     EvalValue::Decimal(Decimal::new(60, 0)),
                 ],
             },
             ClaimInstance {
                 predicate: "LineAmount".to_string(),
                 args: vec![
-                    EvalValue::Subject("L2".to_string()),
+                    EvalValue::Subject("L2".into()),
                     EvalValue::Decimal(Decimal::new(40, 0)),
                 ],
             },
@@ -1213,10 +1211,10 @@ mod tests {
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![EvalValue::Collection(vec![
-                EvalValue::Subject("L1".to_string()),
-                EvalValue::Subject("L2".to_string()),
+                EvalValue::Subject("L1".into()),
+                EvalValue::Subject("L2".into()),
             ])],
-            actor: EvalValue::Subject("test_actor".to_string()),
+            actor: Subject::from("test_actor"),
         };
         let Outcome::Accepted {
             asserted_claims, ..
@@ -1225,18 +1223,12 @@ mod tests {
             panic!("expected Accepted");
         };
         assert_eq!(asserted_claims.len(), 2);
-        assert_eq!(
-            asserted_claims[0].args[0],
-            EvalValue::Subject("L1".to_string())
-        );
+        assert_eq!(asserted_claims[0].args[0], EvalValue::Subject("L1".into()));
         assert_eq!(
             asserted_claims[0].args[1],
             EvalValue::Decimal(Decimal::new(60, 0))
         );
-        assert_eq!(
-            asserted_claims[1].args[0],
-            EvalValue::Subject("L2".to_string())
-        );
+        assert_eq!(asserted_claims[1].args[0], EvalValue::Subject("L2".into()));
         assert_eq!(
             asserted_claims[1].args[1],
             EvalValue::Decimal(Decimal::new(40, 0))
@@ -1252,7 +1244,7 @@ mod tests {
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Authority".to_string(),
             args: vec![
-                EvalValue::Subject("dr_smith".to_string()),
+                EvalValue::Subject("dr_smith".into()),
                 EvalValue::Decimal(Decimal::new(50_000, 0)),
             ],
         }]);
@@ -1267,7 +1259,7 @@ mod tests {
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![],
-            actor: EvalValue::Subject("dr_smith".to_string()),
+            actor: Subject::from("dr_smith"),
         };
         let Outcome::Accepted {
             asserted_claims, ..
@@ -1507,7 +1499,7 @@ mod tests {
         Transition {
             transformation_name: t.name.clone(),
             args,
-            actor: EvalValue::Subject("trace_actor".to_string()),
+            actor: Subject::from("trace_actor"),
         }
     }
 
@@ -1520,7 +1512,7 @@ mod tests {
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
-                EvalValue::Subject("p1".to_string()),
+                EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
@@ -1536,7 +1528,7 @@ mod tests {
                 emit("EchoEmitted", vec![var("new_id")]),
             ],
         };
-        let transition = trace_transition(&t, vec![EvalValue::Subject("p1".to_string())]);
+        let transition = trace_transition(&t, vec![EvalValue::Subject("p1".into())]);
         let TracedProposal::Completed { outcome, trace } =
             propose_with_trace(&t, &transition, &state, &[])
         else {
@@ -1571,7 +1563,7 @@ mod tests {
             parameters: vec![],
             body: vec![require(claim(
                 "Policy",
-                vec![Term::Literal(Value::Subject("p1".to_string())), wildcard()],
+                vec![Term::Literal(Value::Subject("p1".into())), wildcard()],
             ))],
         };
         let transition = trace_transition(&t, vec![]);
@@ -1629,7 +1621,7 @@ mod tests {
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
-                EvalValue::Subject("p1".to_string()),
+                EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
@@ -1668,14 +1660,14 @@ mod tests {
             ClaimInstance {
                 predicate: "Policy".to_string(),
                 args: vec![
-                    EvalValue::Subject("p1".to_string()),
+                    EvalValue::Subject("p1".into()),
                     EvalValue::Decimal(Decimal::new(100, 0)),
                 ],
             },
             ClaimInstance {
                 predicate: "Policy".to_string(),
                 args: vec![
-                    EvalValue::Subject("p2".to_string()),
+                    EvalValue::Subject("p2".into()),
                     EvalValue::Decimal(Decimal::new(200, 0)),
                 ],
             },
@@ -1712,11 +1704,11 @@ mod tests {
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "MayApprove".to_string(),
-                args: vec![EvalValue::Subject("alice".to_string())],
+                args: vec![EvalValue::Subject("alice".into())],
             },
             ClaimInstance {
                 predicate: "MayApprove".to_string(),
-                args: vec![EvalValue::Subject("bob".to_string())],
+                args: vec![EvalValue::Subject("bob".into())],
             },
         ]);
         let t = Transformation {
@@ -1747,14 +1739,14 @@ mod tests {
             ClaimInstance {
                 predicate: "LineAmount".to_string(),
                 args: vec![
-                    EvalValue::Subject("L1".to_string()),
+                    EvalValue::Subject("L1".into()),
                     EvalValue::Decimal(Decimal::new(60, 0)),
                 ],
             },
             ClaimInstance {
                 predicate: "LineAmount".to_string(),
                 args: vec![
-                    EvalValue::Subject("L2".to_string()),
+                    EvalValue::Subject("L2".into()),
                     EvalValue::Decimal(Decimal::new(40, 0)),
                 ],
             },
@@ -1771,8 +1763,8 @@ mod tests {
         let transition = trace_transition(
             &t,
             vec![EvalValue::Collection(vec![
-                EvalValue::Subject("L1".to_string()),
-                EvalValue::Subject("L2".to_string()),
+                EvalValue::Subject("L1".into()),
+                EvalValue::Subject("L2".into()),
             ])],
         );
         let TracedProposal::Completed { trace, .. } =
@@ -1785,8 +1777,8 @@ mod tests {
             panic!("expected For, got {:?}", trace[0]);
         };
         assert_eq!(iterations.len(), 2);
-        assert_eq!(iterations[0].item, EvalValue::Subject("L1".to_string()));
-        assert_eq!(iterations[1].item, EvalValue::Subject("L2".to_string()));
+        assert_eq!(iterations[0].item, EvalValue::Subject("L1".into()));
+        assert_eq!(iterations[1].item, EvalValue::Subject("L2".into()));
         // Each iteration's inner trace has one bind_one entry.
         assert_eq!(iterations[0].trace.len(), 1);
         assert!(matches!(iterations[0].trace[0], TraceEntry::BindOne { .. }));
@@ -1804,7 +1796,7 @@ mod tests {
             parameters: vec![],
             body: vec![assert_(
                 "X",
-                vec![Term::Literal(Value::Subject("x1".to_string()))],
+                vec![Term::Literal(Value::Subject("x1".into()))],
             )],
         };
         // Invariant: claim X(x1) must imply Y(x1). The transformation
@@ -1814,8 +1806,8 @@ mod tests {
             name: "x_implies_y".to_string(),
             version: 1,
             body: implies(
-                claim("X", vec![Term::Literal(Value::Subject("x1".to_string()))]),
-                claim("Y", vec![Term::Literal(Value::Subject("x1".to_string()))]),
+                claim("X", vec![Term::Literal(Value::Subject("x1".into()))]),
+                claim("Y", vec![Term::Literal(Value::Subject("x1".into()))]),
             ),
         };
         let transition = trace_transition(&t, vec![]);
@@ -1850,7 +1842,7 @@ mod tests {
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Policy".to_string(),
             args: vec![
-                EvalValue::Subject("p1".to_string()),
+                EvalValue::Subject("p1".into()),
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
@@ -1903,15 +1895,15 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "A".to_string(),
-            args: vec![EvalValue::Subject("x".to_string())],
+            args: vec![EvalValue::Subject("x".into())],
         }]);
         // A holds (x is in state); B does not (no Bs in state).
         let t = Transformation {
             name: "needs_a_and_b".to_string(),
             parameters: vec![],
             body: vec![require(and(vec![
-                claim("A", vec![Term::Literal(Value::Subject("x".to_string()))]),
-                claim("B", vec![Term::Literal(Value::Subject("x".to_string()))]),
+                claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
+                claim("B", vec![Term::Literal(Value::Subject("x".into()))]),
             ]))],
         };
         let transition = trace_transition(&t, vec![]);
@@ -1938,7 +1930,7 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "A".to_string(),
-            args: vec![EvalValue::Subject("x".to_string())],
+            args: vec![EvalValue::Subject("x".into())],
         }]);
         // Outer And: [A, And(A, MissingPredicate)]. The nested And
         // fails at its second conjunct (MissingPredicate). Walker
@@ -1947,12 +1939,12 @@ mod tests {
             name: "nested_and".to_string(),
             parameters: vec![],
             body: vec![require(and(vec![
-                claim("A", vec![Term::Literal(Value::Subject("x".to_string()))]),
+                claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
                 and(vec![
-                    claim("A", vec![Term::Literal(Value::Subject("x".to_string()))]),
+                    claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
                     claim(
                         "MissingPredicate",
-                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                        vec![Term::Literal(Value::Subject("x".into()))],
                     ),
                 ]),
             ]))],
@@ -1983,21 +1975,15 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Trigger".to_string(),
-            args: vec![EvalValue::Subject("x".to_string())],
+            args: vec![EvalValue::Subject("x".into())],
         }]);
         // Trigger(x) -> Required(x). Trigger holds, Required does not.
         let t = Transformation {
             name: "needs_required_when_triggered".to_string(),
             parameters: vec![],
             body: vec![require(implies(
-                claim(
-                    "Trigger",
-                    vec![Term::Literal(Value::Subject("x".to_string()))],
-                ),
-                claim(
-                    "Required",
-                    vec![Term::Literal(Value::Subject("x".to_string()))],
-                ),
+                claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
+                claim("Required", vec![Term::Literal(Value::Subject("x".into()))]),
             ))],
         };
         let transition = trace_transition(&t, vec![]);
@@ -2024,7 +2010,7 @@ mod tests {
         // whole forall.
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "AllGood".to_string(),
-            args: vec![EvalValue::Subject("x".to_string())],
+            args: vec![EvalValue::Subject("x".into())],
         }]);
         let t = Transformation {
             name: "all_lines_good".to_string(),
@@ -2038,8 +2024,8 @@ mod tests {
         let transition = trace_transition(
             &t,
             vec![EvalValue::Collection(vec![
-                EvalValue::Subject("x".to_string()),
-                EvalValue::Subject("y".to_string()),
+                EvalValue::Subject("x".into()),
+                EvalValue::Subject("y".into()),
             ])],
         );
         let TracedProposal::Completed { trace, .. } =
@@ -2067,7 +2053,7 @@ mod tests {
         use ir_builder::*;
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Forbidden".to_string(),
-            args: vec![EvalValue::Subject("x".to_string())],
+            args: vec![EvalValue::Subject("x".into())],
         }]);
         // `not(Forbidden(x))` fails because Forbidden(x) holds.
         let t = Transformation {
@@ -2075,7 +2061,7 @@ mod tests {
             parameters: vec![],
             body: vec![require(not(claim(
                 "Forbidden",
-                vec![Term::Literal(Value::Subject("x".to_string()))],
+                vec![Term::Literal(Value::Subject("x".into()))],
             )))],
         };
         let transition = trace_transition(&t, vec![]);
@@ -2116,7 +2102,7 @@ mod tests {
             parameters: vec![],
             body: vec![require(claim(
                 "Missing",
-                vec![Term::Literal(Value::Subject("x".to_string()))],
+                vec![Term::Literal(Value::Subject("x".into()))],
             ))],
         };
         let transition = trace_transition(&t, vec![]);
@@ -2195,11 +2181,11 @@ mod tests {
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "A".to_string(),
-                args: vec![EvalValue::Subject("a1".to_string())],
+                args: vec![EvalValue::Subject("a1".into())],
             },
             ClaimInstance {
                 predicate: "B".to_string(),
-                args: vec![EvalValue::Subject("b2".to_string())],
+                args: vec![EvalValue::Subject("b2".into())],
             },
         ]);
         let t = Transformation {
@@ -2250,19 +2236,16 @@ mod tests {
                 // Implies with failing left: vacuously true; not a
                 // useful drill-down target.
                 implies(
-                    claim(
-                        "Trigger",
-                        vec![Term::Literal(Value::Subject("x".to_string()))],
-                    ),
+                    claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
                     claim(
                         "Consequent",
-                        vec![Term::Literal(Value::Subject("x".to_string()))],
+                        vec![Term::Literal(Value::Subject("x".into()))],
                     ),
                 ),
                 // This conjunct genuinely fails.
                 claim(
                     "RealRequirement",
-                    vec![Term::Literal(Value::Subject("x".to_string()))],
+                    vec![Term::Literal(Value::Subject("x".into()))],
                 ),
             ]))],
         };
@@ -2290,30 +2273,21 @@ mod tests {
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "Trigger".to_string(),
-                args: vec![EvalValue::Subject("x".to_string())],
+                args: vec![EvalValue::Subject("x".into())],
             },
             ClaimInstance {
                 predicate: "StepA".to_string(),
-                args: vec![EvalValue::Subject("x".to_string())],
+                args: vec![EvalValue::Subject("x".into())],
             },
         ]);
         let t = Transformation {
             name: "needs_both_steps".to_string(),
             parameters: vec![],
             body: vec![require(implies(
-                claim(
-                    "Trigger",
-                    vec![Term::Literal(Value::Subject("x".to_string()))],
-                ),
+                claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
                 and(vec![
-                    claim(
-                        "StepA",
-                        vec![Term::Literal(Value::Subject("x".to_string()))],
-                    ),
-                    claim(
-                        "StepB",
-                        vec![Term::Literal(Value::Subject("x".to_string()))],
-                    ),
+                    claim("StepA", vec![Term::Literal(Value::Subject("x".into()))]),
+                    claim("StepB", vec![Term::Literal(Value::Subject("x".into()))]),
                 ]),
             ))],
         };
@@ -2343,15 +2317,15 @@ mod tests {
         let state = State::from_claims(vec![
             ClaimInstance {
                 predicate: "A".to_string(),
-                args: vec![EvalValue::Subject("x".to_string())],
+                args: vec![EvalValue::Subject("x".into())],
             },
             ClaimInstance {
                 predicate: "A".to_string(),
-                args: vec![EvalValue::Subject("y".to_string())],
+                args: vec![EvalValue::Subject("y".into())],
             },
             ClaimInstance {
                 predicate: "B".to_string(),
-                args: vec![EvalValue::Subject("x".to_string())],
+                args: vec![EvalValue::Subject("x".into())],
             },
         ]);
         let t = Transformation {
@@ -2369,8 +2343,8 @@ mod tests {
         let transition = trace_transition(
             &t,
             vec![EvalValue::Collection(vec![
-                EvalValue::Subject("x".to_string()),
-                EvalValue::Subject("y".to_string()),
+                EvalValue::Subject("x".into()),
+                EvalValue::Subject("y".into()),
             ])],
         );
         let TracedProposal::Completed { trace, .. } =
@@ -2436,7 +2410,7 @@ mod tests {
         // walker should drill into the And and identify Active.
         let state = State::from_claims(vec![ClaimInstance {
             predicate: "Approved".to_string(),
-            args: vec![EvalValue::Subject("x".to_string())],
+            args: vec![EvalValue::Subject("x".into())],
         }]);
         let t = Transformation {
             name: "unique_approved_and_active".to_string(),

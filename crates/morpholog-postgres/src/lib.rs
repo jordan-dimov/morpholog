@@ -11,7 +11,7 @@ pub mod testing;
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
-    TraceEntry, TracedProposal, Transformation, Transition, enumerate_derived,
+    Subject, TraceEntry, TracedProposal, Transformation, Transition, enumerate_derived,
     predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
@@ -32,8 +32,8 @@ pub use sqlx::PgPool;
 /// compensating transformation is proposed by the runtime, not by
 /// the actor of the original commit. The sentinel keeps the audit
 /// row's `actor` column meaningfully populated.
-pub fn system_actor() -> EvalValue {
-    EvalValue::Subject("morpholog-system".to_string())
+pub fn system_actor() -> Subject {
+    Subject::from("morpholog-system")
 }
 
 /// Errors returned by the PostgreSQL adapter.
@@ -97,7 +97,8 @@ pub enum PgError {
 pub enum PgProposalOutcome {
     Committed {
         transition_id: Uuid,
-        actor: EvalValue,
+        #[serde(with = "morpholog_core::actor_repr")]
+        actor: Subject,
         asserted_claims: Vec<ClaimInstance>,
         retracted_claims: Vec<ClaimInstance>,
         emitted_intents: Vec<IntentInstance>,
@@ -448,7 +449,12 @@ async fn write_accepted(
     .bind(transition_id)
     .bind(&transformation.name)
     .bind(serde_json::to_value(&transition.args)?)
-    .bind(serde_json::to_value(&transition.actor)?)
+    // Serialise via the tagged `EvalValue::Subject` so the `actor` column
+    // keeps its v0 shape (`#[serde(with = "actor_repr")]` does not apply
+    // when the field is serialised directly, only through `Transition`).
+    .bind(serde_json::to_value(EvalValue::Subject(
+        transition.actor.clone(),
+    ))?)
     .bind(1_i32)
     .bind(serde_json::to_value(&checked)?)
     .bind(serde_json::to_value(asserted_claims)?)
@@ -534,7 +540,8 @@ pub struct AuditRow {
     pub transition_id: Uuid,
     pub transformation_name: String,
     pub arguments: Vec<EvalValue>,
-    pub actor: EvalValue,
+    #[serde(with = "morpholog_core::actor_repr")]
+    pub actor: Subject,
     pub invariant_epoch: i32,
     pub invariants_checked: Vec<AuditedInvariantCheck>,
     pub asserted_claims: Vec<ClaimInstance>,
@@ -726,7 +733,17 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
                     transition_id,
                     transformation_name,
                     arguments: serde_json::from_value(args_json)?,
-                    actor: serde_json::from_value(actor_json)?,
+                    // Decode the tagged actor JSON and extract the subject,
+                    // erroring at this boundary if the column somehow holds a
+                    // non-subject value.
+                    actor: match serde_json::from_value::<EvalValue>(actor_json)? {
+                        EvalValue::Subject(s) => s,
+                        other => {
+                            return Err(PgError::InvalidState(format!(
+                                "audit actor is not a subject: {other:?}"
+                            )));
+                        }
+                    },
                     invariant_epoch,
                     invariants_checked: serde_json::from_value(invariants_checked_json)?,
                     asserted_claims: serde_json::from_value(asserted_json)?,

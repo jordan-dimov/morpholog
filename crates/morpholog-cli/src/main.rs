@@ -894,13 +894,13 @@ mod tests {
         // The codec uses a `status` discriminant via serde's tagged-enum
         // representation; the CLI relies on this so that scripts can
         // parse stdout and branch on `.status`.
-        use morpholog_core::{ClaimInstance, EvalValue};
+        use morpholog_core::{ClaimInstance, Subject};
         use morpholog_postgres::PgProposalOutcome;
         use uuid::Uuid;
 
         let committed = PgProposalOutcome::Committed {
             transition_id: Uuid::nil(),
-            actor: EvalValue::Subject("jordan".to_string()),
+            actor: Subject::from("jordan"),
             asserted_claims: vec![ClaimInstance {
                 predicate: "Foo".to_string(),
                 args: vec![],

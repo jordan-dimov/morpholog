@@ -85,7 +85,7 @@ where
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
             date_lit.map(|s| Term::Literal(Value::Date(s))),
-            subject_lit.map(|s| Term::Literal(Value::Subject(s))),
+            subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
             ident.map(|name| {
                 if name == "actor" {
                     Term::Actor

@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use morpholog_core::Transition;
+use morpholog_core::{Subject, Transition};
 use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::{StdoutDeliverer, process_available_outbox_rows};
 use morpholog_postgres::{PgPool, PgProposalOutcome, ProcessOutcome, propose_against_pg};
@@ -48,7 +48,7 @@ async fn stdout_deliverer_marks_row_delivered_via_drain() {
             subj("revenue"),
             dec(100),
         ],
-        actor: subj("outbox_test"),
+        actor: Subject::from("outbox_test"),
     };
     let outcome = propose_against_pg(
         &pool,

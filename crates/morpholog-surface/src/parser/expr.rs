@@ -137,7 +137,7 @@ where
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
             date_lit.map(|s| Term::Literal(Value::Date(s))),
-            subject_lit.map(|s| Term::Literal(Value::Subject(s))),
+            subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
             ident.map(|name| {
                 if name == "actor" {
                     Term::Actor
@@ -505,7 +505,7 @@ where
         just(Token::Wildcard).to(Term::Wildcard),
         decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
         date_lit.map(|s| Term::Literal(Value::Date(s))),
-        subject_lit.map(|s| Term::Literal(Value::Subject(s))),
+        subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
         ident.map(|name| {
             if name == "actor" {
                 Term::Actor
@@ -551,7 +551,7 @@ where
             decimal_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Decimal(s))));
         let date_as_value = date_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Date(s))));
         let subject_as_value =
-            subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s))));
+            subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
 
         // A bare identifier is a value variable (or `actor`). A

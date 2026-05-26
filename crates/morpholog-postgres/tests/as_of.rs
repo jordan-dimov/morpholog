@@ -126,7 +126,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
 /// Find the TrialBalanceRow for `account_name` in `rows` and assert
 /// its balance matches `amount`.
 fn assert_balance(rows: &[ClaimInstance], account_name: &str, amount: i64) {
-    let account = EvalValue::Subject(account_name.to_string());
+    let account = EvalValue::Subject(account_name.into());
     let expected = EvalValue::Decimal(Decimal::new(amount, 0));
     let row = rows
         .iter()
