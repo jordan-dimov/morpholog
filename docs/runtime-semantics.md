@@ -65,17 +65,31 @@ Claim
   predicate_name
   arguments
 
-Expression                       (inside invariants, requires, lets, comprehensions)
-  literal | variable | claim-query | comprehension
-  operators: == != <= and not implies, plus subtraction on Decimal
-                                    (== takes Exprs; != takes Terms; <= takes Exprs
-                                    and requires Decimal operands; Sub returns Decimal;
-                                    no other arithmetic or comparison primitives yet)
+Prop                             -- a proposition: searches a state, yields binding
+                                    witnesses (zero, one, or many) - relational, not
+                                    boolean. Evaluated by find_matches.
+  Claim(predicate, args)         -- match a claim
+  And | Or | Not | Implies       -- boolean composition
+  Exists | Forall                -- bounded quantification
+  Pre(Prop)                      -- evaluate the subtree against pre-state
+  Eq | Neq | Compare             -- value (in)equality and ordered comparison;
+                                    operands are ValueExprs (== / != are kind-strict,
+                                    <= requires Decimal, on_or_before requires Date)
+  In(Term, Term)                 -- membership
+
+ValueExpr                        -- a value expression: computes exactly one value.
+                                    Evaluated by eval_value.
+  Term                           -- a leaf (Var, Wildcard, Literal, Actor)
+  Add | Sub                      -- decimal arithmetic (no other arithmetic yet)
+  Sum { value, body: Prop }      -- sum a value over a proposition's matches
+  ValueOf { predicate, args, default }  -- unique-lookup value extraction
+                                    (the two sorts are mutually recursive: a Compare
+                                    operand is a ValueExpr, a Sum body is a Prop)
 
 Invariant
   name
   version                        -- always present; v0 is always 1
-  body                           -- an Expression over candidate state
+  body                           -- a Prop over candidate state
 
 Transformation
   name
@@ -100,9 +114,9 @@ Term                             -- a node inside a claim's args, a comprehensio
                                     (authority checks live in `require`, not in invariants)
 
 Statement
-  require Expression             -- yes/no gate; does not export bindings
-  bind_one Expression            -- unique lookup; replaces bindings with match
-  let name = Expression          -- value-producing binding
+  require Prop                   -- yes/no gate; does not export bindings
+  bind_one Prop                  -- unique lookup; replaces bindings with match
+  let name = ValueExpr           -- value-producing binding
   let name = new Subject()       -- generates a fresh UUIDv7
   assert Claim
   retract Pred(args...)          -- pattern-based; idempotent on zero matches
@@ -156,16 +170,16 @@ External side effects fire only after commit, delivered by workers reading the o
 
 Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation.
 
-- **`require Expression`** is a **yes/no gate**. It evaluates `Expression` against the pre-state snapshot; if the expression admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
+- **`require Prop`** is a **yes/no gate**. It evaluates the `Prop` against the pre-state snapshot; if it admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
 
-- **`bind_one Expression`** is a **deterministic unique lookup**. It evaluates a predicate-shaped `Expression` against the pre-state, current bindings, and transition actor; the surviving binding set is treated as the next binding context.
+- **`bind_one Prop`** is a **deterministic unique lookup**. It evaluates the `Prop` against the pre-state, current bindings, and transition actor; the surviving binding set is treated as the next binding context.
   - Zero matches: the transformation is rejected (lawful business outcome: the expected governed record is not present).
   - One match: the returned binding set **replaces** the current binding context. Statements after a successful `bind_one` see the newly-bound variables.
   - Multiple matches: kernel error (`EvalError::TypeMismatch`). Multi-match means the programme thought something was unique but the admitted state did not make it unique - typically a missing structural-uniqueness invariant.
   
   `bind_one` is not iteration and does not branch. Use `for` for iteration. Use `require` for gates that should not export bindings. Use `let` for value-producing expressions.
 
-- **`let name = Expression`** is the **value-producing binding** primitive. It evaluates `Expression` to a single value and binds `name` in the active scope for every subsequent statement. Use `let` for `Sum`, `Add`, `Sub`, `ValueOf` inside value position, and any other expression that computes rather than looks up.
+- **`let name = ValueExpr`** is the **value-producing binding** primitive. It evaluates the `ValueExpr` to a single value and binds `name` in the active scope for every subsequent statement. Use `let` for `Sum`, `Add`, `Sub`, `ValueOf` inside value position, and any other expression that computes rather than looks up.
 
 - **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
 
@@ -179,7 +193,7 @@ bind_one Policy(policy_id, aggregate_limit)                 -- bound policy_id n
 
 The structural guarantee that each `bind_one` is single-valued comes from a programme-level invariant - e.g. `at_most_one_X_per_id` (the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use). Without that invariant, a duplicate admission would surface as `bind_one matched 2 candidates` (kernel error) rather than a lawful rejection.
 
-The legacy `require + let + value_of` chain remains expressible (`Expr::ValueOf` is not deleted), and is the right tool when a value-producing position needs a lookup that does not fit a statement-level binding extension - inside arithmetic, inside `Sum`, or inside a derived-claim value expression.
+The legacy `require + let + value_of` chain remains expressible (`ValueExpr::ValueOf` is not deleted), and is the right tool when a value-producing position needs a lookup that does not fit a statement-level binding extension - inside arithmetic, inside `Sum`, or inside a derived-claim value expression.
 
 Inside a `require` body, multiple sub-expressions composed with `And` *do* propagate bindings forward within that single require: the matcher's binding extensions are threaded through the conjuncts. So a require like
 
@@ -198,7 +212,7 @@ is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` co
 
 ## Invariants: state vs transition, and `pre(...)`
 
-An invariant is by default a predicate over the candidate (post) state - the world after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry" or "at most one piece per square." `Expr::Pre(inner)` opts a wrapped subtree into pre-transition evaluation, so a single invariant can relate pre and post values:
+An invariant is by default a predicate over the candidate (post) state - the world after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry" or "at most one piece per square." `Prop::Pre(inner)` opts a wrapped subtree into pre-transition evaluation, so a single invariant can relate pre and post values:
 
 ```
 invariant move_count_strictly_increases:
@@ -228,7 +242,7 @@ One trace entry per transformation statement and per invariant check. `For` is n
 
 The walker runs **only on rejection paths**. Success-path performance is unchanged. The field is omitted from JSON when `None` (`skip_serializing_if`), so existing trace consumers see no shape change.
 
-A fuller structural ExprTrace (mirroring `Expr` with success-path drill-downs, exists-witness extraction, forall-binding substitution, etc.) is a separate larger refactor and remains deferred until a worked example forces it.
+A fuller structural trace (mirroring the IR with success-path drill-downs, exists-witness extraction, forall-binding substitution, etc.) is a separate larger refactor and remains deferred until a worked example forces it.
 
 `propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum. The non-trace path allocates no trace storage and the `On`-vs-`Off` check at each statement is a single-variant enum match the optimiser collapses to nothing meaningful; the trace path opts in by passing `TraceSink::On(&mut Vec<TraceEntry>)`. There is no separate "traced evaluator" that could drift from `propose`.
 
@@ -244,7 +258,7 @@ The check is one traversal of every invariant, transformation, and derived-claim
 
 3. **Binding flow**: a variable consumed where a bound value is required - an `admit`/`retract`/`emit` argument, a comparator or arithmetic operand, a `value` lookup key, a `sum` target - must have been bound first. The static walk follows the runtime exactly: parameters, `bind`, `let`, `for`, and claim matches in predicate position bind names; a `require` match does **not** export to later statements; a disjunction exports only the names bound in *every* branch (whichever branch's witness the runtime carries forward); `in` binds its element when it is otherwise unbound. A use of an unbound name is flagged as `UnboundVariable` - the same the kernel would raise.
 
-4. **Shape**: a value-producing expression (a bare term, `+`, `-`, `sum`, `value`) at a predicate position, or a predicate-shaped expression where a value is required, is flagged before the kernel raises `NotPredicate` / `NotValue`.
+4. **Shape**: enforced by the type system, not the checker. The two-sort IR (`Prop` searches state; `ValueExpr` computes a value) makes a value expression at a predicate position - or the reverse - unrepresentable, so neither the parser nor `ir_builder` can construct it. The former static shape check and the `NotPredicate` / `NotValue` kernel errors are gone; the evaluators are total over their sorts.
 
 5. **Actor context**: `Term::Actor` referenced in an invariant or derived-claim body - where no proposing transition is in scope - is flagged (the kernel would raise `UnboundActor`). Authority checks belong in a `require`, not an invariant.
 
