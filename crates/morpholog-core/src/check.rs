@@ -34,6 +34,7 @@ use std::collections::{HashMap, HashSet};
 use crate::format::compare_token;
 use crate::ir::{
     OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value, ValueExpr,
+    Var,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -99,14 +100,14 @@ fn kinds_compatible(a: PredicateArgKind, b: PredicateArgKind) -> bool {
 /// doctrine).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct KindEnv {
-    bindings: HashMap<String, InferredKind>,
+    bindings: HashMap<Var, InferredKind>,
 }
 
 impl KindEnv {
     /// Look up a variable's current inferred kind. Returns
     /// `UnknownOrAny` for variables never observed before - that
     /// matches how an unconstrained slot would treat them.
-    pub(crate) fn lookup(&self, name: &str) -> InferredKind {
+    pub(crate) fn lookup(&self, name: &Var) -> InferredKind {
         self.bindings
             .get(name)
             .copied()
@@ -121,12 +122,12 @@ impl KindEnv {
     /// named.
     pub(crate) fn observe(
         &mut self,
-        name: &str,
+        name: &Var,
         observed: InferredKind,
     ) -> Result<(), (PredicateArgKind, PredicateArgKind)> {
         let existing = self.lookup(name);
         let refined = existing.refine(observed)?;
-        self.bindings.insert(name.to_string(), refined);
+        self.bindings.insert(name.clone(), refined);
         Ok(())
     }
 }
@@ -138,15 +139,15 @@ impl KindEnv {
 /// `KindEnv` so the quartet's non-export rules fall out for free.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct BoundEnv {
-    bound: HashSet<String>,
+    bound: HashSet<Var>,
 }
 
 impl BoundEnv {
-    fn bind(&mut self, name: &str) {
-        self.bound.insert(name.to_string());
+    fn bind(&mut self, name: &Var) {
+        self.bound.insert(name.clone());
     }
 
-    fn is_bound(&self, name: &str) -> bool {
+    fn is_bound(&self, name: &Var) -> bool {
         self.bound.contains(name)
     }
 
@@ -389,7 +390,7 @@ impl CheckCtx<'_> {
                 // mark it bound before the body. No shadowing of an
                 // outer variable of the same name (the runtime
                 // unifies); binding it again is idempotent.
-                scope.bound.bind(binding.as_str());
+                scope.bound.bind(binding);
                 self.walk_prop(body, scope);
             }
             Prop::Forall {
@@ -403,7 +404,7 @@ impl CheckCtx<'_> {
                 // live scope - conservative: a forall-introduced
                 // name may stay visible to a sibling conjunct rather
                 // than risk a false positive by scoping it away.
-                scope.bound.bind(binding.as_str());
+                scope.bound.bind(binding);
                 self.walk_prop(source, scope);
                 self.walk_prop(body, scope);
             }
@@ -435,17 +436,15 @@ impl CheckCtx<'_> {
                 // never a use. The collection must already be bound
                 // and Collection-kinded.
                 if let Term::Var(name) = element {
-                    scope.bound.bind(name.as_str());
-                    let _ = scope
-                        .kinds
-                        .observe(name.as_str(), InferredKind::UnknownOrAny);
+                    scope.bound.bind(name);
+                    let _ = scope.kinds.observe(name, InferredKind::UnknownOrAny);
                 }
                 match collection {
                     Term::Var(name) => {
-                        self.use_var(scope, name.as_str());
+                        self.use_var(scope, name);
                         self.observe_or_report(
                             scope,
-                            name.as_str(),
+                            name,
                             InferredKind::Known(PredicateArgKind::Collection),
                         );
                     }
@@ -490,16 +489,12 @@ impl CheckCtx<'_> {
             }
             Stmt::Let { name, value } => {
                 let value_kind = self.infer_value(value, scope);
-                scope.bound.bind(name.as_str());
-                self.observe_or_report(scope, name.as_str(), value_kind);
+                scope.bound.bind(name);
+                self.observe_or_report(scope, name, value_kind);
             }
             Stmt::LetNewSubject { name } => {
-                scope.bound.bind(name.as_str());
-                self.observe_or_report(
-                    scope,
-                    name.as_str(),
-                    InferredKind::Known(PredicateArgKind::Subject),
-                );
+                scope.bound.bind(name);
+                self.observe_or_report(scope, name, InferredKind::Known(PredicateArgKind::Subject));
             }
             Stmt::Assert(claim) => {
                 self.check_predicate_ref(&claim.predicate, &claim.args, RefMode::Use, scope);
@@ -517,10 +512,8 @@ impl CheckCtx<'_> {
                 // and any body-introduced names do not leak across
                 // iterations or beyond the loop.
                 let mut scoped = scope.clone();
-                scoped.bound.bind(binding.as_str());
-                let _ = scoped
-                    .kinds
-                    .observe(binding.as_str(), InferredKind::UnknownOrAny);
+                scoped.bound.bind(binding);
+                let _ = scoped.kinds.observe(binding, InferredKind::UnknownOrAny);
                 for inner in body {
                     self.walk_stmt(inner, &mut scoped);
                 }
@@ -543,8 +536,8 @@ impl CheckCtx<'_> {
         scope: &mut Scope,
     ) {
         if let ValueExpr::Term(Term::Var(name)) = operand {
-            self.use_var(scope, name.as_str());
-            self.observe_or_report(scope, name.as_str(), InferredKind::Known(expected));
+            self.use_var(scope, name);
+            self.observe_or_report(scope, name, InferredKind::Known(expected));
             return;
         }
         let inferred = self.infer_value(operand, scope);
@@ -622,7 +615,7 @@ impl CheckCtx<'_> {
         match expr {
             ValueExpr::Term(term) => {
                 if let Term::Var(name) = term {
-                    self.use_var(scope, name.as_str());
+                    self.use_var(scope, name);
                 }
                 resolved_term_kind(term, &scope.kinds)
             }
@@ -645,7 +638,7 @@ impl CheckCtx<'_> {
                 let mut scoped = scope.clone();
                 self.walk_prop(body, &mut scoped);
                 if let Term::Var(name) = value {
-                    self.use_var(&scoped, name.as_str());
+                    self.use_var(&scoped, name);
                 }
                 let resolved = resolved_term_kind(value, &scoped.kinds);
                 if let InferredKind::Known(actual) = resolved
@@ -696,7 +689,7 @@ impl CheckCtx<'_> {
 
     /// A variable used where a bound value is required. Flags
     /// `UnboundVariable` if nothing has bound it at this point.
-    fn use_var(&mut self, scope: &Scope, name: &str) {
+    fn use_var(&mut self, scope: &Scope, name: &Var) {
         if !scope.bound.is_bound(name) {
             let context = self.context.clone();
             self.errors.push(ValidationError::UnboundVariable {
@@ -802,12 +795,11 @@ impl CheckCtx<'_> {
         let actual = term_kind(arg);
         if let Term::Var(var_name) = arg {
             match mode {
-                RefMode::Match => scope.bound.bind(var_name.as_str()),
-                RefMode::Use => self.use_var(scope, var_name.as_str()),
+                RefMode::Match => scope.bound.bind(var_name),
+                RefMode::Use => self.use_var(scope, var_name),
             }
-            if let Err((previous, new)) = scope
-                .kinds
-                .observe(var_name.as_str(), InferredKind::Known(expected))
+            if let Err((previous, new)) =
+                scope.kinds.observe(var_name, InferredKind::Known(expected))
             {
                 let context = self.context.clone();
                 self.errors.push(ValidationError::VariableKindConflict {
@@ -836,7 +828,7 @@ impl CheckCtx<'_> {
 
     /// Observe `name` at `kind` in the scope's kind environment; on
     /// a refinement conflict, push a `VariableKindConflict`.
-    fn observe_or_report(&mut self, scope: &mut Scope, name: &str, kind: InferredKind) {
+    fn observe_or_report(&mut self, scope: &mut Scope, name: &Var, kind: InferredKind) {
         if let Err((previous, new)) = scope.kinds.observe(name, kind) {
             let context = self.context.clone();
             self.errors.push(ValidationError::VariableKindConflict {
@@ -852,11 +844,11 @@ impl CheckCtx<'_> {
 /// One side of an equality check: the inferred kind, plus the
 /// variable name if the operand was a bare variable (so a refined
 /// kind can be written back to the env).
-type EqualityOperand<'a> = (InferredKind, Option<&'a str>);
+type EqualityOperand<'a> = (InferredKind, Option<&'a Var>);
 
-fn value_var_name(expr: &ValueExpr) -> Option<&str> {
+fn value_var_name(expr: &ValueExpr) -> Option<&Var> {
     match expr {
-        ValueExpr::Term(Term::Var(name)) => Some(name.as_str()),
+        ValueExpr::Term(Term::Var(name)) => Some(name),
         _ => None,
     }
 }
@@ -866,7 +858,7 @@ fn value_var_name(expr: &ValueExpr) -> Option<&str> {
 /// inherent kind. Wildcard stays UnknownOrAny.
 fn resolved_term_kind(term: &Term, kinds: &KindEnv) -> InferredKind {
     match term {
-        Term::Var(name) => kinds.lookup(name.as_str()),
+        Term::Var(name) => kinds.lookup(name),
         other => term_kind(other),
     }
 }
@@ -1010,10 +1002,13 @@ mod tests {
     #[test]
     fn kindenv_observe_then_lookup_returns_refined_kind() {
         let mut env = KindEnv::default();
-        env.observe("amount", InferredKind::Known(PredicateArgKind::Decimal))
-            .expect("first observation always succeeds against UnknownOrAny");
+        env.observe(
+            &Var::from("amount"),
+            InferredKind::Known(PredicateArgKind::Decimal),
+        )
+        .expect("first observation always succeeds against UnknownOrAny");
         assert_eq!(
-            env.lookup("amount"),
+            env.lookup(&Var::from("amount")),
             InferredKind::Known(PredicateArgKind::Decimal)
         );
     }
@@ -1021,12 +1016,15 @@ mod tests {
     #[test]
     fn kindenv_observe_refines_through_any() {
         let mut env = KindEnv::default();
-        env.observe("x", InferredKind::Known(PredicateArgKind::Any))
+        env.observe(&Var::from("x"), InferredKind::Known(PredicateArgKind::Any))
             .unwrap();
-        env.observe("x", InferredKind::Known(PredicateArgKind::Decimal))
-            .unwrap();
+        env.observe(
+            &Var::from("x"),
+            InferredKind::Known(PredicateArgKind::Decimal),
+        )
+        .unwrap();
         assert_eq!(
-            env.lookup("x"),
+            env.lookup(&Var::from("x")),
             InferredKind::Known(PredicateArgKind::Decimal)
         );
     }
@@ -1034,10 +1032,16 @@ mod tests {
     #[test]
     fn kindenv_observe_reports_conflict_with_previous_kinds() {
         let mut env = KindEnv::default();
-        env.observe("x", InferredKind::Known(PredicateArgKind::Decimal))
-            .unwrap();
+        env.observe(
+            &Var::from("x"),
+            InferredKind::Known(PredicateArgKind::Decimal),
+        )
+        .unwrap();
         let err = env
-            .observe("x", InferredKind::Known(PredicateArgKind::Subject))
+            .observe(
+                &Var::from("x"),
+                InferredKind::Known(PredicateArgKind::Subject),
+            )
             .expect_err("conflict");
         assert_eq!(err, (PredicateArgKind::Decimal, PredicateArgKind::Subject));
     }
@@ -1277,7 +1281,7 @@ mod tests {
         ];
         p.derived_claims = vec![crate::ir::DerivedClaim {
             predicate: "Row".to_string(),
-            keys: vec!["k".to_string()],
+            keys: vec!["k".into()],
             values: vec![crate::ir::DerivedValue {
                 name: "v".to_string(),
                 expr: term(actor()),
@@ -1999,7 +2003,7 @@ mod tests {
         )];
         p.transformations = vec![Transformation {
             name: "t".to_string(),
-            parameters: vec!["p".to_string()],
+            parameters: vec!["p".into()],
             body: vec![require(le(
                 value_of("Policy", vec![var("p"), wildcard()]),
                 term(dec("100")),
@@ -2071,7 +2075,7 @@ mod tests {
         ];
         p.derived_claims = vec![DerivedClaim {
             predicate: "Row".to_string(),
-            keys: vec!["account".to_string()],
+            keys: vec!["account".into()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
                 expr: term(dec("0")),
@@ -2118,7 +2122,7 @@ mod tests {
         ];
         p.derived_claims = vec![DerivedClaim {
             predicate: "Row".to_string(),
-            keys: vec!["account".to_string()],
+            keys: vec!["account".into()],
             values: vec![DerivedValue {
                 name: "count".to_string(),
                 expr: sum(var("amt"), claim("P", vec![var("account"), var("amt")])),
@@ -2164,7 +2168,7 @@ mod tests {
         ];
         p.derived_claims = vec![DerivedClaim {
             predicate: "Row".to_string(),
-            keys: vec!["account".to_string()],
+            keys: vec!["account".into()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
                 expr: sum(var("amt"), claim("Line", vec![var("account"), var("amt")])),
@@ -2220,7 +2224,7 @@ mod tests {
         p.predicates = vec![pdecl("P", &[("v", PredicateArgKind::Decimal)])];
         p.transformations = vec![Transformation {
             name: "t".to_string(),
-            parameters: vec!["xs".to_string()],
+            parameters: vec!["xs".into()],
             body: vec![
                 for_("e", term(var("xs")), vec![]),
                 assert_("P", vec![var("xs")]),

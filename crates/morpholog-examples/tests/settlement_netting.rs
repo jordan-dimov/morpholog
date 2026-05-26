@@ -95,7 +95,10 @@ fn create_net_settlement_round_trips() {
 fn create_net_settlement_has_expected_shape() {
     let t = settlement_netting::create_net_settlement();
     assert_eq!(t.name, "create_net_settlement");
-    assert_eq!(t.parameters, vec!["party_a", "party_b", "lines"]);
+    assert_eq!(
+        t.parameters,
+        vec!["party_a".into(), "party_b".into(), "lines".into()]
+    );
     assert_eq!(t.body.len(), 6);
     assert!(matches!(t.body[0], Stmt::Require(_)));
     assert!(matches!(t.body[1], Stmt::LetNewSubject { .. }));

@@ -543,7 +543,7 @@ fn retract_marker_transformation() -> Transformation {
     let var = |s: &str| Term::Var(s.into());
     Transformation {
         name: "retract_marker".to_string(),
-        parameters: vec!["subject".to_string()],
+        parameters: vec!["subject".into()],
         body: vec![Stmt::Retract {
             predicate: "Marker".to_string(),
             args: vec![var("subject")],

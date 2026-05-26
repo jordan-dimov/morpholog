@@ -371,7 +371,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transformation {
     pub name: String,
-    pub parameters: Vec<String>,
+    pub parameters: Vec<Var>,
     pub body: Vec<Stmt>,
 }
 
@@ -553,7 +553,7 @@ pub enum PredicateArgKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedClaim {
     pub predicate: String,
-    pub keys: Vec<String>,
+    pub keys: Vec<Var>,
     pub values: Vec<DerivedValue>,
     pub domain: Prop,
 }

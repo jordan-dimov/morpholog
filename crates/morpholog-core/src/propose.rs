@@ -333,7 +333,7 @@ pub(crate) fn propose_inner(
         .iter()
         .zip(transition.args.iter().cloned())
     {
-        bindings.insert(name.clone().into(), val);
+        bindings.insert(name.clone(), val);
     }
 
     let mut asserted: Vec<ClaimInstance> = vec![];

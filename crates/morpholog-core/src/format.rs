@@ -21,7 +21,7 @@
 
 use crate::{
     Claim, CompareOp, DerivedClaim, Intent, Invariant, OrderedDomain, PredicateArgKind,
-    PredicateDecl, Program, Prop, Stmt, Term, Transformation, Value, ValueExpr,
+    PredicateDecl, Program, Prop, Stmt, Term, Transformation, Value, ValueExpr, Var,
 };
 
 /// The surface token for an ordered comparison. The single source of
@@ -134,7 +134,11 @@ pub fn format_transformation(t: &Transformation) -> String {
     out.push_str(&format!(
         "transformation {}({}):\n",
         t.name,
-        t.parameters.join(", ")
+        t.parameters
+            .iter()
+            .map(Var::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
     ));
     for stmt in &t.body {
         out.push_str(&format_stmt(stmt, 1));
@@ -157,7 +161,11 @@ pub fn format_derived_claim(d: &DerivedClaim) -> String {
     out.push_str(&format!(
         "derived {}({}):\n",
         d.predicate,
-        d.keys.join(", ")
+        d.keys
+            .iter()
+            .map(Var::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
     ));
     out.push_str(&indent(1));
     out.push_str(&format!("over {}\n", format_prop_inline(&d.domain)));

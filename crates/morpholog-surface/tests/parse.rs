@@ -399,7 +399,7 @@ fn parses_transformation_with_params() {
                   \x20\x20\x20\x20require Bar(x)\n";
     let program = parse_program(source).expect("parse should succeed");
     let t = &program.transformations[0];
-    assert_eq!(t.parameters, vec!["x", "y", "z"]);
+    assert_eq!(t.parameters, vec!["x".into(), "y".into(), "z".into()]);
 }
 
 #[test]
@@ -834,7 +834,7 @@ fn parses_simple_derived_claim() {
     assert_eq!(program.derived_claims.len(), 1);
     let d = &program.derived_claims[0];
     assert_eq!(d.predicate, "Total");
-    assert_eq!(d.keys, vec!["x"]);
+    assert_eq!(d.keys, vec!["x".into()]);
     assert_eq!(d.values.len(), 1);
     assert_eq!(d.values[0].name, "sum_amount");
 }
@@ -866,7 +866,7 @@ fn parses_derived_with_multiple_keys() {
                   \x20\x20\x20\x20value total = sum(a | Posting(account, period, a))\n";
     let program = parse_program(source).expect("multi-key derived should parse");
     let d = &program.derived_claims[0];
-    assert_eq!(d.keys, vec!["account", "period"]);
+    assert_eq!(d.keys, vec!["account".into(), "period".into()]);
 }
 
 #[test]

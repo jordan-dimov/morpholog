@@ -198,7 +198,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
 
     let derived_decimal_ok = DerivedClaim {
         predicate: "DecimalSub".to_string(),
-        keys: vec!["k".to_string()],
+        keys: vec!["k".into()],
         values: vec![DerivedValue {
             name: "result".to_string(),
             expr: ValueExpr::Sub(
@@ -223,7 +223,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     // Subtracting a subject from a decimal should be a TypeMismatch.
     let derived_type_error = DerivedClaim {
         predicate: "TypeError".to_string(),
-        keys: vec!["k".to_string()],
+        keys: vec!["k".into()],
         values: vec![DerivedValue {
             name: "result".to_string(),
             expr: ValueExpr::Sub(

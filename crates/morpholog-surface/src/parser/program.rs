@@ -5,7 +5,7 @@ use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
     ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateDecl, Program,
-    Transformation,
+    Transformation, Var,
 };
 use std::collections::HashMap;
 
@@ -342,7 +342,7 @@ where
             TopLevelDecl::Transformation(
                 Transformation {
                     name,
-                    parameters,
+                    parameters: parameters.into_iter().map(Var::from).collect(),
                     body,
                 },
                 span.start()..span.end(),
@@ -382,7 +382,7 @@ where
             TopLevelDecl::Derived(
                 DerivedClaim {
                     predicate,
-                    keys,
+                    keys: keys.into_iter().map(Var::from).collect(),
                     values,
                     domain,
                 },
