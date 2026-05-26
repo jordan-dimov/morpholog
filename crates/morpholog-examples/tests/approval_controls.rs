@@ -22,10 +22,10 @@
 
 mod common;
 
-use common::{dec, has_claim, must_accept, must_accept_as, propose_as, subj};
+use common::{claim_instance, dec, has_claim, must_accept, must_accept_as, propose_as, subj};
+use morpholog_core::ir_builder::invariant;
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, Prop, State, Subject, Term, Value,
-    eval_invariant,
+    EvalError, EvalValue, Invariant, Outcome, Prop, State, Subject, Term, Value, eval_invariant,
 };
 use morpholog_examples::approval_controls;
 
@@ -317,14 +317,14 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     // (amount <= limit) to raise `EvalError::TypeMismatch`. Until typed
     // predicates land,
     // this example's callers are trusted to admit decimal limits.
-    let pre = State::from_claims(vec![ClaimInstance {
-        predicate: "ApprovalLimit".into(),
-        args: vec![
+    let pre = State::from_claims(vec![claim_instance(
+        "ApprovalLimit",
+        &[
             subj("jordan"),
             subj("invoice"),
             EvalValue::Subject("not_a_decimal".into()),
         ],
-    }]);
+    )]);
 
     let mut transition = common::test_transition(
         &approval_controls::approve_within_limit(),
@@ -356,14 +356,13 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
 
 #[test]
 fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
-    let inv = Invariant {
-        name: "improperly_uses_actor".into(),
-        version: 1,
-        body: Prop::Claim {
+    let inv = invariant(
+        "improperly_uses_actor",
+        Prop::Claim {
             predicate: "AnyPredicate".into(),
             args: vec![Term::Actor],
         },
-    };
+    );
     let err = eval_invariant(&inv, &State::default(), None).expect_err("must error");
     assert!(matches!(err, EvalError::UnboundActor));
 }
@@ -374,14 +373,13 @@ fn term_actor_unbound_error_is_position_independent() {
     // NOT short-circuit before Term::Actor is checked. The
     // pre-pass in find_claim_matches makes the doctrine
     // position-independent.
-    let inv = Invariant {
-        name: "actor_masked_by_earlier_missing_literal".into(),
-        version: 1,
-        body: Prop::Claim {
+    let inv = invariant(
+        "actor_masked_by_earlier_missing_literal",
+        Prop::Claim {
             predicate: "AnyPredicate".into(),
             args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
         },
-    };
+    );
     let err = eval_invariant(&inv, &State::default(), None)
         .expect_err("Term::Actor outside transition scope must error regardless of arg order");
     assert!(matches!(err, EvalError::UnboundActor));

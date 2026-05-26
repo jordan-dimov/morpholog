@@ -1004,11 +1004,7 @@ mod tests {
     /// drive the full `propose` path, not `find_matches` directly, so
     /// the statement contract is exercised against a real transformation.
     fn single_stmt_transformation(name: &str, body: Vec<Stmt>) -> Transformation {
-        Transformation {
-            name: name.into(),
-            parameters: vec![],
-            body,
-        }
+        ir_builder::transformation(name, vec![], body)
     }
 
     fn run(t: &Transformation, state: &State) -> Result<Outcome, EvalError> {
@@ -1152,10 +1148,10 @@ mod tests {
         // a literal subject; the second uses that binding to narrow
         // the Policy pattern. Without the narrowing, the second
         // bind_one would see two Policy candidates and error.
-        let t = Transformation {
-            name: "narrow_by_var".into(),
-            parameters: vec![],
-            body: vec![
+        let t = transformation(
+            "narrow_by_var",
+            vec![],
+            vec![
                 let_(
                     "policy_id",
                     term(Term::Literal(Value::Subject("p2".into()))),
@@ -1163,7 +1159,7 @@ mod tests {
                 bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
                 assert_("Echo", vec![var("limit")]),
             ],
-        };
+        );
         let Outcome::Accepted {
             asserted_claims, ..
         } = run(&t, &state).unwrap()
@@ -1199,10 +1195,10 @@ mod tests {
                 ],
             },
         ]);
-        let t = Transformation {
-            name: "iterate_lines".into(),
-            parameters: vec!["lines".into()],
-            body: vec![for_(
+        let t = transformation(
+            "iterate_lines",
+            vec!["lines".into()],
+            vec![for_(
                 "line",
                 term(var("lines")),
                 vec![
@@ -1210,7 +1206,7 @@ mod tests {
                     assert_("Echo", vec![var("line"), var("amt")]),
                 ],
             )],
-        };
+        );
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![EvalValue::Collection(vec![
@@ -1251,14 +1247,14 @@ mod tests {
                 EvalValue::Decimal(Decimal::new(50_000, 0)),
             ],
         }]);
-        let t = Transformation {
-            name: "lookup_my_authority".into(),
-            parameters: vec![],
-            body: vec![
+        let t = transformation(
+            "lookup_my_authority",
+            vec![],
+            vec![
                 bind_one(claim("Authority", vec![actor(), var("limit")])),
                 assert_("Echo", vec![var("limit")]),
             ],
-        };
+        );
         let transition = Transition {
             transformation_name: t.name.clone(),
             args: vec![],
@@ -1294,18 +1290,16 @@ mod tests {
     /// branch.
     fn one_claim_program() -> Program {
         use ir_builder::*;
-        Program {
-            name: "tiny".into(),
-            predicates: vec![predicate("Echo").subject("id").decimal("amount").build()],
-            intents: vec![],
-            invariants: vec![],
-            transformations: vec![Transformation {
-                name: "echo".into(),
-                parameters: params(&["id", "amount"]),
-                body: vec![assert_("Echo", vec![var("id"), var("amount")])],
-            }],
-            derived_claims: vec![],
-        }
+        program("tiny")
+            .predicates(vec![
+                predicate("Echo").subject("id").decimal("amount").build(),
+            ])
+            .transformations(vec![transformation(
+                "echo",
+                params(&["id", "amount"]),
+                vec![assert_("Echo", vec![var("id"), var("amount")])],
+            )])
+            .build()
     }
 
     #[test]
@@ -1359,12 +1353,10 @@ mod tests {
     fn validate_reports_arity_mismatch_in_invariant_body() {
         use ir_builder::*;
         let mut p = one_claim_program();
-        p.invariants.push(Invariant {
-            name: "bad_inv".into(),
-            version: 1,
-            // Echo has arity 2; invariant body uses arity 3.
-            body: claim("Echo", vec![var("x"), var("y"), var("z")]),
-        });
+        p.invariants.push(invariant(
+            "bad_inv", // Echo has arity 2; invariant body uses arity 3.
+            claim("Echo", vec![var("x"), var("y"), var("z")]),
+        ));
         let errors = p.validate().expect_err("expected validation errors");
         assert!(
             errors.iter().any(|e| matches!(
@@ -1519,10 +1511,10 @@ mod tests {
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
-        let t = Transformation {
-            name: "happy".into(),
-            parameters: vec!["pid".into()],
-            body: vec![
+        let t = transformation(
+            "happy",
+            vec!["pid".into()],
+            vec![
                 require(claim("Policy", vec![var("pid"), wildcard()])),
                 bind_one(claim("Policy", vec![var("pid"), var("limit")])),
                 let_("doubled", add(term(var("limit")), term(var("limit")))),
@@ -1530,7 +1522,7 @@ mod tests {
                 assert_("Echo", vec![var("new_id"), var("doubled")]),
                 emit("EchoEmitted", vec![var("new_id")]),
             ],
-        };
+        );
         let transition = trace_transition(&t, vec![EvalValue::Subject("p1".into())]);
         let TracedProposal::Completed { outcome, trace } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1561,14 +1553,14 @@ mod tests {
     fn propose_with_trace_records_failing_require_with_rendered_expression() {
         use ir_builder::*;
         let state = State::default();
-        let t = Transformation {
-            name: "needs_policy".into(),
-            parameters: vec![],
-            body: vec![require(claim(
+        let t = transformation(
+            "needs_policy",
+            vec![],
+            vec![require(claim(
                 "Policy",
                 vec![Term::Literal(Value::Subject("p1".into())), wildcard()],
             ))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { outcome, trace } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1593,11 +1585,11 @@ mod tests {
     fn propose_with_trace_records_bind_one_no_match() {
         use ir_builder::*;
         let state = State::default();
-        let t = Transformation {
-            name: "lookup_missing".into(),
-            parameters: vec![],
-            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
-        };
+        let t = transformation(
+            "lookup_missing",
+            vec![],
+            vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { outcome, trace } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1628,11 +1620,11 @@ mod tests {
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
-        let t = Transformation {
-            name: "lookup".into(),
-            parameters: vec![],
-            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
-        };
+        let t = transformation(
+            "lookup",
+            vec![],
+            vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1675,11 +1667,11 @@ mod tests {
                 ],
             },
         ]);
-        let t = Transformation {
-            name: "ambiguous".into(),
-            parameters: vec![],
-            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
-        };
+        let t = transformation(
+            "ambiguous",
+            vec![],
+            vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Errored { error, trace } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1714,11 +1706,11 @@ mod tests {
                 args: vec![EvalValue::Subject("bob".into())],
             },
         ]);
-        let t = Transformation {
-            name: "wildcard_retract".into(),
-            parameters: vec![],
-            body: vec![retract("MayApprove", vec![wildcard()])],
-        };
+        let t = transformation(
+            "wildcard_retract",
+            vec![],
+            vec![retract("MayApprove", vec![wildcard()])],
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1754,15 +1746,15 @@ mod tests {
                 ],
             },
         ]);
-        let t = Transformation {
-            name: "iterate".into(),
-            parameters: vec!["lines".into()],
-            body: vec![for_(
+        let t = transformation(
+            "iterate",
+            vec!["lines".into()],
+            vec![for_(
                 "line",
                 term(var("lines")),
                 vec![bind_one(claim("LineAmount", vec![var("line"), var("amt")]))],
             )],
-        };
+        );
         let transition = trace_transition(
             &t,
             vec![EvalValue::Collection(vec![
@@ -1794,25 +1786,24 @@ mod tests {
     fn propose_with_trace_records_invariant_check_and_failure() {
         use ir_builder::*;
         let state = State::default();
-        let t = Transformation {
-            name: "fires_invariant".into(),
-            parameters: vec![],
-            body: vec![assert_(
+        let t = transformation(
+            "fires_invariant",
+            vec![],
+            vec![assert_(
                 "X",
                 vec![Term::Literal(Value::Subject("x1".into()))],
             )],
-        };
+        );
         // Invariant: claim X(x1) must imply Y(x1). The transformation
         // asserts X but not Y, so the invariant fails on the
         // candidate state.
-        let inv = Invariant {
-            name: "x_implies_y".into(),
-            version: 1,
-            body: implies(
+        let inv = invariant(
+            "x_implies_y",
+            implies(
                 claim("X", vec![Term::Literal(Value::Subject("x1".into()))]),
                 claim("Y", vec![Term::Literal(Value::Subject("x1".into()))]),
             ),
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { outcome, trace } =
             propose_with_trace(&t, &transition, &state, &[inv])
@@ -1849,14 +1840,14 @@ mod tests {
                 EvalValue::Decimal(Decimal::new(100, 0)),
             ],
         }]);
-        let t = Transformation {
-            name: "lookup".into(),
-            parameters: vec![],
-            body: vec![
+        let t = transformation(
+            "lookup",
+            vec![],
+            vec![
                 bind_one(claim("Policy", vec![var("pid"), var("limit")])),
                 assert_("Echo", vec![var("pid"), var("limit")]),
             ],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let outcome_a = propose(&t, &transition, &state, &[]).unwrap();
         let TracedProposal::Completed {
@@ -1901,14 +1892,14 @@ mod tests {
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // A holds (x is in state); B does not (no Bs in state).
-        let t = Transformation {
-            name: "needs_a_and_b".into(),
-            parameters: vec![],
-            body: vec![require(and(vec![
+        let t = transformation(
+            "needs_a_and_b",
+            vec![],
+            vec![require(and(vec![
                 claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
                 claim("B", vec![Term::Literal(Value::Subject("x".into()))]),
             ]))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1938,10 +1929,10 @@ mod tests {
         // Outer And: [A, And(A, MissingPredicate)]. The nested And
         // fails at its second conjunct (MissingPredicate). Walker
         // should drill to that, not stop at the outer or inner And.
-        let t = Transformation {
-            name: "nested_and".into(),
-            parameters: vec![],
-            body: vec![require(and(vec![
+        let t = transformation(
+            "nested_and",
+            vec![],
+            vec![require(and(vec![
                 claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
                 and(vec![
                     claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
@@ -1951,7 +1942,7 @@ mod tests {
                     ),
                 ]),
             ]))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -1981,14 +1972,14 @@ mod tests {
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // Trigger(x) -> Required(x). Trigger holds, Required does not.
-        let t = Transformation {
-            name: "needs_required_when_triggered".into(),
-            parameters: vec![],
-            body: vec![require(implies(
+        let t = transformation(
+            "needs_required_when_triggered",
+            vec![],
+            vec![require(implies(
                 claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
                 claim("Required", vec![Term::Literal(Value::Subject("x".into()))]),
             ))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2015,15 +2006,15 @@ mod tests {
             predicate: "AllGood".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
-        let t = Transformation {
-            name: "all_lines_good".into(),
-            parameters: vec!["lines".into()],
-            body: vec![require(forall(
+        let t = transformation(
+            "all_lines_good",
+            vec!["lines".into()],
+            vec![require(forall(
                 "line",
                 in_(var("line"), var("lines")),
                 claim("AllGood", vec![var("line")]),
             ))],
-        };
+        );
         let transition = trace_transition(
             &t,
             vec![EvalValue::Collection(vec![
@@ -2059,14 +2050,14 @@ mod tests {
             args: vec![EvalValue::Subject("x".into())],
         }]);
         // `not(Forbidden(x))` fails because Forbidden(x) holds.
-        let t = Transformation {
-            name: "no_forbidden".into(),
-            parameters: vec![],
-            body: vec![require(not(claim(
+        let t = transformation(
+            "no_forbidden",
+            vec![],
+            vec![require(not(claim(
                 "Forbidden",
                 vec![Term::Literal(Value::Subject("x".into()))],
             )))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2100,14 +2091,14 @@ mod tests {
     fn failure_walk_leaf_claim_returns_none() {
         use ir_builder::*;
         let state = State::default();
-        let t = Transformation {
-            name: "needs_missing".into(),
-            parameters: vec![],
-            body: vec![require(claim(
+        let t = transformation(
+            "needs_missing",
+            vec![],
+            vec![require(claim(
                 "Missing",
                 vec![Term::Literal(Value::Subject("x".into()))],
             ))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2140,11 +2131,11 @@ mod tests {
     fn failure_walk_bind_one_no_match_carries_field() {
         use ir_builder::*;
         let state = State::default();
-        let t = Transformation {
-            name: "lookup_missing".into(),
-            parameters: vec![],
-            body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
-        };
+        let t = transformation(
+            "lookup_missing",
+            vec![],
+            vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2191,14 +2182,14 @@ mod tests {
                 args: vec![EvalValue::Subject("b2".into())],
             },
         ]);
-        let t = Transformation {
-            name: "needs_shared_x".into(),
-            parameters: vec![],
-            body: vec![require(and(vec![
+        let t = transformation(
+            "needs_shared_x",
+            vec![],
+            vec![require(and(vec![
                 claim("A", vec![var("x")]),
                 claim("B", vec![var("x")]),
             ]))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2232,10 +2223,10 @@ mod tests {
         // a separately-failing conjunct, then assert that the walker
         // points at the failing And conjunct, not at the implies.
         let state = State::default();
-        let t = Transformation {
-            name: "needs_failing_conjunct".into(),
-            parameters: vec![],
-            body: vec![require(and(vec![
+        let t = transformation(
+            "needs_failing_conjunct",
+            vec![],
+            vec![require(and(vec![
                 // Implies with failing left: vacuously true; not a
                 // useful drill-down target.
                 implies(
@@ -2251,7 +2242,7 @@ mod tests {
                     vec![Term::Literal(Value::Subject("x".into()))],
                 ),
             ]))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2283,17 +2274,17 @@ mod tests {
                 args: vec![EvalValue::Subject("x".into())],
             },
         ]);
-        let t = Transformation {
-            name: "needs_both_steps".into(),
-            parameters: vec![],
-            body: vec![require(implies(
+        let t = transformation(
+            "needs_both_steps",
+            vec![],
+            vec![require(implies(
                 claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
                 and(vec![
                     claim("StepA", vec![Term::Literal(Value::Subject("x".into()))]),
                     claim("StepB", vec![Term::Literal(Value::Subject("x".into()))]),
                 ]),
             ))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2331,10 +2322,10 @@ mod tests {
                 args: vec![EvalValue::Subject("x".into())],
             },
         ]);
-        let t = Transformation {
-            name: "every_line_has_a_and_b".into(),
-            parameters: vec!["lines".into()],
-            body: vec![require(forall(
+        let t = transformation(
+            "every_line_has_a_and_b",
+            vec!["lines".into()],
+            vec![require(forall(
                 "line",
                 in_(var("line"), var("lines")),
                 and(vec![
@@ -2342,7 +2333,7 @@ mod tests {
                     claim("B", vec![var("line")]),
                 ]),
             ))],
-        };
+        );
         let transition = trace_transition(
             &t,
             vec![EvalValue::Collection(vec![
@@ -2373,11 +2364,11 @@ mod tests {
     fn failure_walk_exists_returns_none() {
         use ir_builder::*;
         let state = State::default();
-        let t = Transformation {
-            name: "needs_some_x".into(),
-            parameters: vec![],
-            body: vec![require(exists("x", claim("Missing", vec![var("x")])))],
-        };
+        let t = transformation(
+            "needs_some_x",
+            vec![],
+            vec![require(exists("x", claim("Missing", vec![var("x")])))],
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])
@@ -2415,14 +2406,14 @@ mod tests {
             predicate: "Approved".into(),
             args: vec![EvalValue::Subject("x".into())],
         }]);
-        let t = Transformation {
-            name: "unique_approved_and_active".into(),
-            parameters: vec![],
-            body: vec![bind_one(and(vec![
+        let t = transformation(
+            "unique_approved_and_active",
+            vec![],
+            vec![bind_one(and(vec![
                 claim("Approved", vec![var("x")]),
                 claim("Active", vec![var("x")]),
             ]))],
-        };
+        );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
             propose_with_trace(&t, &transition, &state, &[])

@@ -13,8 +13,8 @@
 
 mod common;
 
-use common::{dec, has_claim, must_accept, subj};
-use morpholog_core::{ClaimInstance, Outcome, State, eval_invariant};
+use common::{claim_instance, dec, has_claim, must_accept, subj};
+use morpholog_core::{Outcome, State, eval_invariant};
 use morpholog_examples::double_entry_ledger;
 
 #[test]
@@ -297,10 +297,10 @@ fn lone_journal_entry_without_lines_violates_invariant() {
     // assert at least two lines), so this test evaluates the
     // invariant directly against a hand-crafted state that no
     // legitimate path could reach.
-    let state = State::from_claims(vec![ClaimInstance {
-        predicate: "JournalEntry".into(),
-        args: vec![subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
-    }]);
+    let state = State::from_claims(vec![claim_instance(
+        "JournalEntry",
+        &[subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
+    )]);
     let inv = double_entry_ledger::journal_entry_has_lines();
     let holds = eval_invariant(&inv, &state, None).expect("evaluation should not error");
     assert!(

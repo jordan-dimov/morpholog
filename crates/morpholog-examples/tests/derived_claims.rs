@@ -29,10 +29,9 @@
 
 mod common;
 
-use common::{dec, must_accept, subj};
+use common::{claim_instance, dec, must_accept, subj};
 use morpholog_core::{
-    ClaimInstance, DerivedClaim, DerivedValue, EvalValue, Prop, State, Term, ValueExpr,
-    enumerate_derived,
+    DerivedClaim, DerivedValue, EvalValue, Prop, State, Term, ValueExpr, enumerate_derived,
 };
 use morpholog_examples::double_entry_ledger;
 use rust_decimal::Decimal;
@@ -97,10 +96,7 @@ fn trial_balance_over_simple_ledger_enumerates_one_row_per_account() {
         ("account_expenses", 30),
     ];
     for (account, balance) in expected {
-        let expected_row = ClaimInstance {
-            predicate: "TrialBalanceRow".into(),
-            args: vec![subj(account), dec(balance)],
-        };
+        let expected_row = claim_instance("TrialBalanceRow", &[subj(account), dec(balance)]);
         assert!(
             rows.contains(&expected_row),
             "expected row for `{account}` with balance {balance}; got: {rows:#?}"
@@ -191,10 +187,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     // that yields one key binding.
     use morpholog_core::Value;
 
-    let state = State::from_claims(vec![ClaimInstance {
-        predicate: "Tag".into(),
-        args: vec![subj("only")],
-    }]);
+    let state = State::from_claims(vec![claim_instance("Tag", &[subj("only")])]);
 
     let derived_decimal_ok = DerivedClaim {
         predicate: "DecimalSub".into(),

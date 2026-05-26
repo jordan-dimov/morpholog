@@ -92,6 +92,13 @@ quiet allocation the old borrowed-`&str` lookup did not have (`Var` in
 **not**: that re-opens the string-masquerade the opacity exists to close.
 Precompute the keys, or promote the foreign key into the newtype too.
 
+The one ergonomic an opaque id *should* carry is symmetric `PartialEq<str>` /
+`PartialEq<&str>`, so `name == "Foo"` and `assert_eq!(name, "Foo")` compile
+without `Deref`. Comparison-against-a-literal is where the churn concentrates
+(mostly assertions); this kills it while keeping the type opaque to coercion.
+It is part of the standard opaque-id surface (`opaque_id!` in
+`morpholog-core::ir` generates it alongside `From` / `Display` / `as_str`).
+
 ## Where human attention goes
 
 The compiler worklist also tells you where to *look*: once the mechanical sites

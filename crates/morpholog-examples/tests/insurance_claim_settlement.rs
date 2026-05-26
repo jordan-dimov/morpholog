@@ -27,7 +27,8 @@
 mod common;
 
 use common::{
-    dec, dec_str, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
+    claim_instance, dec, dec_str, has_claim, must_accept, must_accept_as, propose_as,
+    propose_with_test_actor, subj,
 };
 use morpholog_core::{ClaimInstance, Invariant, Outcome, State, enumerate_derived, eval_invariant};
 use morpholog_examples::insurance_claim_settlement;
@@ -528,15 +529,15 @@ fn paid_without_authorised_violates_invariant() {
     // authorisation. The transformations never produce this; the
     // invariant exists so the runtime contract holds against
     // candidate states regardless of how they arrived.
-    let orphan_payment = ClaimInstance {
-        predicate: "SettlementPaid".into(),
-        args: vec![
+    let orphan_payment = claim_instance(
+        "SettlementPaid",
+        &[
             subj("policy_001"),
             subj("claim_001"),
             subj("settlement_001"),
             dec(30_000),
         ],
-    };
+    );
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_authorised();
     let holds = eval_invariant(&inv, &state, None).expect("eval should not error");
@@ -554,15 +555,15 @@ fn paid_without_headroom_violates_invariant() {
     // headroom_consumed_by_payment (the conservation rule's
     // pre/post guard fails, the implies is vacuously true). The
     // pairing closes the gap.
-    let orphan_payment = ClaimInstance {
-        predicate: "SettlementPaid".into(),
-        args: vec![
+    let orphan_payment = claim_instance(
+        "SettlementPaid",
+        &[
             subj("policy_001"),
             subj("claim_001"),
             subj("settlement_001"),
             dec(30_000),
         ],
-    };
+    );
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_headroom();
     let holds = eval_invariant(&inv, &state, None).expect("eval should not error");
@@ -685,7 +686,6 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     // one statement to prove an invariant has teeth - a kernel-teeth test,
     // not a business story, so the Rust IR builder is the right tool here,
     // not `.morph`.
-    use morpholog_core::Transformation;
     use morpholog_core::ir_builder;
 
     let pre = happy_pre();
@@ -694,10 +694,10 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     // one does EXCEPT retract+assert PolicyHeadroom. The require
     // gates still hold (alex has 50k authority; 30k <= 100k
     // aggregate); the conservation invariant must reject.
-    let buggy = Transformation {
-        name: "buggy_authorise_settlement".into(),
-        parameters: ir_builder::params(&["claim_id", "settlement_id", "amount"]),
-        body: vec![
+    let buggy = ir_builder::transformation(
+        "buggy_authorise_settlement",
+        ir_builder::params(&["claim_id", "settlement_id", "amount"]),
+        vec![
             ir_builder::bind_one(ir_builder::claim(
                 "ClaimReported",
                 vec![
@@ -762,7 +762,7 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
                 ],
             ),
         ],
-    };
+    );
 
     let outcome = propose_as(
         &buggy,
@@ -798,7 +798,6 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
 /// 70 != 100 - sum(30, 30) = 40.
 #[test]
 fn conservation_invariant_catches_multi_payment_with_single_decrement() {
-    use morpholog_core::Transformation;
     use morpholog_core::ir_builder;
 
     // Pre-state: policy_001 with 100k headroom, two reported
@@ -817,10 +816,10 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     // would still pass because the sum check (0 + 60 <= 100k) holds
     // in pre-state at evaluation time. Only the sum-based
     // conservation invariant catches the discrepancy.
-    let buggy = Transformation {
-        name: "buggy_multi_payment".into(),
-        parameters: ir_builder::params(&["amount"]),
-        body: vec![
+    let buggy = ir_builder::transformation(
+        "buggy_multi_payment",
+        ir_builder::params(&["amount"]),
+        vec![
             ir_builder::bind_one(ir_builder::claim(
                 "PolicyHeadroom",
                 vec![
@@ -895,7 +894,7 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
                 ],
             ),
         ],
-    };
+    );
 
     let outcome = propose_as(&buggy, vec![dec(30_000)], "alex", &pre, &invariants())
         .expect("kernel must not error");

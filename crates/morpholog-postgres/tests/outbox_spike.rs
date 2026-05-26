@@ -26,7 +26,7 @@ use morpholog_postgres::{PgPool, PgProposalOutcome, list_audit_rows, list_pendin
 use uuid::Uuid;
 
 mod common;
-use common::{dec, subj};
+use common::{dec, intent_instance, subj};
 
 // ============================================================
 // Test infrastructure
@@ -146,10 +146,7 @@ async fn process_one_pending(
 
     // Reconstruct an IntentInstance from the outbox row. In
     // production this is the shape the Deliverer trait operates on.
-    let intent = IntentInstance {
-        name: row.intent_type.clone().into(),
-        args: row.arguments.clone(),
-    };
+    let intent = intent_instance(&row.intent_type, &row.arguments);
 
     match deliverer(&intent) {
         DeliveryOutcome::Delivered => {

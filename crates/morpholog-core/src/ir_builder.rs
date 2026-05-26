@@ -29,8 +29,9 @@
 //!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{
-    ArgDecl, Claim, CompareOp, Intent, OrderedDomain, PredicateArgKind, PredicateDecl, Prop, Stmt,
-    Subject, Term, Value, ValueExpr, Var,
+    ArgDecl, Claim, CompareOp, DerivedClaim, Intent, IntentDecl, Invariant, OrderedDomain,
+    PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term, Transformation, Value,
+    ValueExpr, Var,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -457,5 +458,90 @@ pub fn intent_decl(name: &str) -> IntentDeclBuilder {
     IntentDeclBuilder {
         name: name.to_string(),
         args: Vec::new(),
+    }
+}
+
+// ============================================================
+// Top-level declaration builders
+// ============================================================
+
+/// Build an [`Invariant`]. `version` defaults to 1, the v0 value the
+/// surface always emits.
+pub fn invariant(name: &str, body: Prop) -> Invariant {
+    Invariant {
+        name: name.into(),
+        version: 1,
+        body,
+    }
+}
+
+/// Build a [`Transformation`]. Parameters come from [`params`].
+pub fn transformation(name: &str, parameters: Vec<Var>, body: Vec<Stmt>) -> Transformation {
+    Transformation {
+        name: name.into(),
+        parameters,
+        body,
+    }
+}
+
+/// Builder for a [`Program`]. Set the non-empty sections and finish with
+/// `.build()`; omitted sections default to empty.
+#[must_use]
+pub struct ProgramBuilder {
+    name: String,
+    predicates: Vec<PredicateDecl>,
+    intents: Vec<IntentDecl>,
+    invariants: Vec<Invariant>,
+    transformations: Vec<Transformation>,
+    derived_claims: Vec<DerivedClaim>,
+}
+
+impl ProgramBuilder {
+    pub fn predicates(mut self, v: Vec<PredicateDecl>) -> Self {
+        self.predicates = v;
+        self
+    }
+
+    pub fn intents(mut self, v: Vec<IntentDecl>) -> Self {
+        self.intents = v;
+        self
+    }
+
+    pub fn invariants(mut self, v: Vec<Invariant>) -> Self {
+        self.invariants = v;
+        self
+    }
+
+    pub fn transformations(mut self, v: Vec<Transformation>) -> Self {
+        self.transformations = v;
+        self
+    }
+
+    pub fn derived_claims(mut self, v: Vec<DerivedClaim>) -> Self {
+        self.derived_claims = v;
+        self
+    }
+
+    pub fn build(self) -> Program {
+        Program {
+            name: self.name,
+            predicates: self.predicates,
+            intents: self.intents,
+            invariants: self.invariants,
+            transformations: self.transformations,
+            derived_claims: self.derived_claims,
+        }
+    }
+}
+
+/// Start a [`Program`]; chain section setters and finish with `.build()`.
+pub fn program(name: &str) -> ProgramBuilder {
+    ProgramBuilder {
+        name: name.to_string(),
+        predicates: Vec::new(),
+        intents: Vec::new(),
+        invariants: Vec::new(),
+        transformations: Vec::new(),
+        derived_claims: Vec::new(),
     }
 }

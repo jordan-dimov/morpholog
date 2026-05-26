@@ -9,7 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Subject, Transition};
-use morpholog_test_support::{dec, subj};
+use morpholog_test_support::{claim_instance, dec, intent_instance, subj};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -69,10 +69,10 @@ fn eval_value_collection_round_trips_through_nested_json() {
 
 #[test]
 fn claim_instance_round_trips_through_json_with_mixed_args() {
-    let c = ClaimInstance {
-        predicate: "BankRecognisedRevenue".into(),
-        args: vec![subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")],
-    };
+    let c = claim_instance(
+        "BankRecognisedRevenue",
+        &[subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")],
+    );
     let json = serde_json::to_string(&c).unwrap();
     let parsed: ClaimInstance = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, c);
@@ -82,10 +82,7 @@ fn claim_instance_round_trips_through_json_with_mixed_args() {
 
 #[test]
 fn intent_instance_round_trips_through_json() {
-    let i = IntentInstance {
-        name: "NetSettlementCreated".into(),
-        args: vec![subj("net1")],
-    };
+    let i = intent_instance("NetSettlementCreated", &[subj("net1")]);
     let json = serde_json::to_string(&i).unwrap();
     let parsed: IntentInstance = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, i);
@@ -109,10 +106,7 @@ fn claim_args_serialise_as_a_json_array() {
     // Pins the split contract: the `claims.arguments` column has a CHECK
     // constraint `jsonb_typeof(arguments) = 'array'`. The PG adapter
     // writes only the `args` field of a ClaimInstance into that column.
-    let c = ClaimInstance {
-        predicate: "Quantity".into(),
-        args: vec![subj("trade123"), dec(10)],
-    };
+    let c = claim_instance("Quantity", &[subj("trade123"), dec(10)]);
     let args_json = serde_json::to_string(&c.args).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&args_json).unwrap();
     assert!(
@@ -126,10 +120,7 @@ fn intent_args_serialise_as_a_json_array() {
     // Pins the split contract: the `outbox.arguments` column has a CHECK
     // constraint `jsonb_typeof(arguments) = 'array'`. The PG adapter
     // writes only the `args` field of an IntentInstance into that column.
-    let i = IntentInstance {
-        name: "NetSettlementCreated".into(),
-        args: vec![subj("net1"), dec(100)],
-    };
+    let i = intent_instance("NetSettlementCreated", &[subj("net1"), dec(100)]);
     let args_json = serde_json::to_string(&i.args).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&args_json).unwrap();
     assert!(
@@ -349,10 +340,7 @@ fn trace_entry_for_with_per_iteration_items_round_trips() {
             ForIterationTrace {
                 item: subj("L1"),
                 trace: vec![TraceEntry::Assert {
-                    claim: ClaimInstance {
-                        predicate: "Echo".into(),
-                        args: vec![subj("L1")],
-                    },
+                    claim: claim_instance("Echo", &[subj("L1")]),
                 }],
             },
             ForIterationTrace {
@@ -397,23 +385,14 @@ fn trace_entry_let_let_new_subject_assert_retract_emit_round_trip() {
             subject: subj("generated-uuid"),
         },
         TraceEntry::Assert {
-            claim: ClaimInstance {
-                predicate: "Echo".into(),
-                args: vec![subj("a"), dec(1)],
-            },
+            claim: claim_instance("Echo", &[subj("a"), dec(1)]),
         },
         TraceEntry::Retract {
             predicate: "OldClaim".into(),
-            retracted: vec![ClaimInstance {
-                predicate: "OldClaim".into(),
-                args: vec![subj("z")],
-            }],
+            retracted: vec![claim_instance("OldClaim", &[subj("z")])],
         },
         TraceEntry::Emit {
-            intent: IntentInstance {
-                name: "Notified".into(),
-                args: vec![subj("a")],
-            },
+            intent: intent_instance("Notified", &[subj("a")]),
         },
     ];
     for entry in entries {

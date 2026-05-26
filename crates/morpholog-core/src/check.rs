@@ -1055,7 +1055,7 @@ mod tests {
     // check_program: claim arg checking + statement flow
     // ============================================================
 
-    use crate::ir::{ArgDecl, Intent, Invariant, Program, Transformation};
+    use crate::ir::{ArgDecl, Program};
     use crate::ir_builder::*;
 
     /// Build a `PredicateDecl` shorthand for tests.
@@ -1073,14 +1073,7 @@ mod tests {
     }
 
     fn empty_program() -> Program {
-        Program {
-            name: "test".into(),
-            predicates: vec![],
-            intents: vec![],
-            invariants: vec![],
-            transformations: vec![],
-            derived_claims: vec![],
-        }
+        program("test").build()
     }
 
     #[test]
@@ -1093,11 +1086,10 @@ mod tests {
                 ("limit", PredicateArgKind::Decimal),
             ],
         )];
-        p.invariants = vec![Invariant {
-            name: "any_policy_has_positive_limit".into(),
-            version: 1,
-            body: claim("Policy", vec![var("p"), var("l")]),
-        }];
+        p.invariants = vec![invariant(
+            "any_policy_has_positive_limit",
+            claim("Policy", vec![var("p"), var("l")]),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1109,11 +1101,7 @@ mod tests {
     fn decimal_literal_in_subject_slot_is_flagged() {
         let mut p = empty_program();
         p.predicates = vec![pdecl("Policy", &[("policy_id", PredicateArgKind::Subject)])];
-        p.invariants = vec![Invariant {
-            name: "bad".into(),
-            version: 1,
-            body: claim("Policy", vec![dec("123")]),
-        }];
+        p.invariants = vec![invariant("bad", claim("Policy", vec![dec("123")]))];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected one kind error; got {errs:?}");
         match &errs[0] {
@@ -1143,11 +1131,10 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("B", &[("v", PredicateArgKind::Decimal)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "refine".into(),
-            version: 1,
-            body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
-        }];
+        p.invariants = vec![invariant(
+            "refine",
+            and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1164,11 +1151,10 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("B", &[("v", PredicateArgKind::Subject)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "conflict".into(),
-            version: 1,
-            body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
-        }];
+        p.invariants = vec![invariant(
+            "conflict",
+            and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        )];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected one conflict; got {errs:?}");
         match &errs[0] {
@@ -1196,11 +1182,10 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Any)]),
             pdecl("B", &[("v", PredicateArgKind::Decimal)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "refines_through_any".into(),
-            version: 1,
-            body: and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
-        }];
+        p.invariants = vec![invariant(
+            "refines_through_any",
+            and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1217,11 +1202,11 @@ mod tests {
         // body would add.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Limit", &[("amount", PredicateArgKind::Decimal)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![assert_("Limit", vec![actor()])],
-        }];
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![assert_("Limit", vec![actor()])],
+        )];
         let errs = check_program(&p);
         assert_eq!(
             errs.len(),
@@ -1252,11 +1237,10 @@ mod tests {
         // so no kind error muddies the result.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Approver", &[("who", PredicateArgKind::Subject)])];
-        p.invariants = vec![Invariant {
-            name: "mentions_actor".into(),
-            version: 1,
-            body: claim("Approver", vec![actor()]),
-        }];
+        p.invariants = vec![invariant(
+            "mentions_actor",
+            claim("Approver", vec![actor()]),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1311,11 +1295,11 @@ mod tests {
         // ActorNotAvailable. Slot is Subject so no kind error either.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Approver", &[("who", PredicateArgKind::Subject)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![assert_("Approver", vec![actor()])],
-        }];
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![assert_("Approver", vec![actor()])],
+        )];
         let errs = check_program(&p);
         assert!(
             !errs
@@ -1335,14 +1319,14 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("B", &[("v", PredicateArgKind::Decimal)]),
         ];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("A", vec![var("x")])),
                 assert_("B", vec![var("x")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1358,14 +1342,14 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("B", &[("v", PredicateArgKind::Subject)]),
         ];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("A", vec![var("x")])),
                 assert_("B", vec![var("x")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected conflict; got {errs:?}");
         assert!(matches!(
@@ -1392,14 +1376,14 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("B", &[("v", PredicateArgKind::Subject)]),
         ];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 require(claim("A", vec![var("x")])),
                 assert_("B", vec![var("x")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1423,11 +1407,11 @@ mod tests {
                 ("limit", PredicateArgKind::Decimal),
             ],
         )];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: params(&["p", "limit"]),
-            body: vec![assert_("Payment", vec![var("p"), var("limit")])],
-        }];
+        p.transformations = vec![transformation(
+            "t",
+            params(&["p", "limit"]),
+            vec![assert_("Payment", vec![var("p"), var("limit")])],
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1464,10 +1448,9 @@ mod tests {
                 ],
             ),
         ];
-        p.invariants = vec![Invariant {
-            name: "ok".into(),
-            version: 1,
-            body: implies(
+        p.invariants = vec![invariant(
+            "ok",
+            implies(
                 claim("A", vec![var("x"), var("n")]),
                 and(vec![
                     or(vec![
@@ -1477,7 +1460,7 @@ mod tests {
                     le(term(var("n")), term(var("m"))),
                 ]),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1509,10 +1492,9 @@ mod tests {
             ),
             pdecl("C", &[("x", PredicateArgKind::Subject)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "bad".into(),
-            version: 1,
-            body: implies(
+        p.invariants = vec![invariant(
+            "bad",
+            implies(
                 claim("A", vec![var("x"), var("n")]),
                 and(vec![
                     or(vec![
@@ -1522,7 +1504,7 @@ mod tests {
                     le(term(var("n")), term(var("m"))),
                 ]),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1546,10 +1528,10 @@ mod tests {
                 ("amount", PredicateArgKind::Decimal),
             ],
         )];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: params(&["lines"]),
-            body: vec![let_(
+        p.transformations = vec![transformation(
+            "t",
+            params(&["lines"]),
+            vec![let_(
                 "total",
                 sum(
                     var("x"),
@@ -1559,7 +1541,7 @@ mod tests {
                     ]),
                 ),
             )],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -1573,11 +1555,11 @@ mod tests {
         // Decimal slot must flag.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Amt", &[("v", PredicateArgKind::Decimal)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![let_new_subject("fresh"), assert_("Amt", vec![var("fresh")])],
-        }];
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![let_new_subject("fresh"), assert_("Amt", vec![var("fresh")])],
+        )];
         let errs = check_program(&p);
         assert_eq!(
             errs.len(),
@@ -1599,11 +1581,11 @@ mod tests {
         // Retract is the read side of the assert pair; same kind rules apply.
         let mut p = empty_program();
         p.predicates = vec![pdecl("P", &[("id", PredicateArgKind::Subject)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![retract("P", vec![dec("99")])],
-        }];
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![retract("P", vec![dec("99")])],
+        )];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         assert!(matches!(
@@ -1625,11 +1607,10 @@ mod tests {
         // side is the canonical "wrong comparator" mistake the
         // kernel surfaces as TypeMismatch at runtime.
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "bad_le".into(),
-            version: 1,
-            body: le(term(date("2026-01-01")), term(dec("100"))),
-        }];
+        p.invariants = vec![invariant(
+            "bad_le",
+            le(term(date("2026-01-01")), term(dec("100"))),
+        )];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1, "expected one operand error; got {errs:?}");
         match &errs[0] {
@@ -1651,11 +1632,10 @@ mod tests {
     fn date_le_with_decimal_literal_flags_operand_mismatch() {
         // `on_or_before` is the date comparator; decimal here is wrong.
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "bad_date_le".into(),
-            version: 1,
-            body: date_le(term(date("2026-01-01")), term(dec("100"))),
-        }];
+        p.invariants = vec![invariant(
+            "bad_date_le",
+            date_le(term(date("2026-01-01")), term(dec("100"))),
+        )];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         match &errs[0] {
@@ -1677,14 +1657,13 @@ mod tests {
     fn add_with_subject_literal_operand_flags_operand_mismatch() {
         // Arithmetic on a subject literal is the unambiguous bug.
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "bad_add".into(),
-            version: 1,
-            body: le(
+        p.invariants = vec![invariant(
+            "bad_add",
+            le(
                 add(term(dec("10")), term(subj("not_a_number"))),
                 term(dec("100")),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1710,15 +1689,14 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Any)]),
             pdecl("B", &[("v", PredicateArgKind::Subject)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "refine_via_le".into(),
-            version: 1,
-            body: and(vec![
+        p.invariants = vec![invariant(
+            "refine_via_le",
+            and(vec![
                 claim("A", vec![var("x")]),
                 le(term(var("x")), term(dec("100"))),
                 claim("B", vec![var("x")]),
             ]),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1739,11 +1717,7 @@ mod tests {
         // Eq is strict: Decimal == Subject must surface as a kind
         // mismatch, not be silently coerced.
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "bad_eq".into(),
-            version: 1,
-            body: eq(term(dec("100")), term(subj("S"))),
-        }];
+        p.invariants = vec![invariant("bad_eq", eq(term(dec("100")), term(subj("S"))))];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         assert!(matches!(
@@ -1756,11 +1730,7 @@ mod tests {
     fn neq_with_distinct_known_kinds_flags_operand_mismatch() {
         // Neq's operands are Terms; strict-equality rules still apply.
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "bad_neq".into(),
-            version: 1,
-            body: neq(dec("100"), subj("S")),
-        }];
+        p.invariants = vec![invariant("bad_neq", neq(dec("100"), subj("S")))];
         let errs = check_program(&p);
         assert_eq!(errs.len(), 1);
         assert!(matches!(
@@ -1775,14 +1745,13 @@ mod tests {
         // pin `x` to Decimal; a later Subject-slot use conflicts.
         let mut p = empty_program();
         p.predicates = vec![pdecl("B", &[("v", PredicateArgKind::Subject)])];
-        p.invariants = vec![Invariant {
-            name: "refine_via_eq".into(),
-            version: 1,
-            body: and(vec![
+        p.invariants = vec![invariant(
+            "refine_via_eq",
+            and(vec![
                 eq(term(var("x")), term(dec("100"))),
                 claim("B", vec![var("x")]),
             ]),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1806,15 +1775,15 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("S", &[("id", PredicateArgKind::Subject)]),
         ];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("A", vec![var("x")])),
                 let_("y", sub(term(var("x")), term(dec("1")))),
                 assert_("S", vec![var("y")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1839,15 +1808,14 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("L", &[("v", PredicateArgKind::Decimal)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "ok".into(),
-            version: 1,
-            body: and(vec![
+        p.invariants = vec![invariant(
+            "ok",
+            and(vec![
                 claim("A", vec![var("amount")]),
                 claim("L", vec![var("limit")]),
                 le(term(var("amount")), term(var("limit"))),
             ]),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(errs.is_empty(), "happy path should pass; got {errs:?}");
     }
@@ -1870,17 +1838,16 @@ mod tests {
                 ("amount", PredicateArgKind::Decimal),
             ],
         )];
-        p.invariants = vec![Invariant {
-            name: "ok_sum".into(),
-            version: 1,
-            body: le(
+        p.invariants = vec![invariant(
+            "ok_sum",
+            le(
                 sum(
                     var("amount"),
                     claim("Payment", vec![wildcard(), var("amount")]),
                 ),
                 term(dec("1000")),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(errs.is_empty(), "well-typed Sum should pass; got {errs:?}");
     }
@@ -1897,14 +1864,13 @@ mod tests {
                 ("amount", PredicateArgKind::Decimal),
             ],
         )];
-        p.invariants = vec![Invariant {
-            name: "bad_sum".into(),
-            version: 1,
-            body: le(
+        p.invariants = vec![invariant(
+            "bad_sum",
+            le(
                 sum(var("p"), claim("Payment", vec![var("p"), wildcard()])),
                 term(dec("1000")),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1925,14 +1891,13 @@ mod tests {
         // A literal in the value position that is not Decimal.
         let mut p = empty_program();
         p.predicates = vec![pdecl("X", &[("v", PredicateArgKind::Subject)])];
-        p.invariants = vec![Invariant {
-            name: "bad_sum_lit".into(),
-            version: 1,
-            body: le(
+        p.invariants = vec![invariant(
+            "bad_sum_lit",
+            le(
                 sum(date("2026-01-01"), claim("X", vec![var("x")])),
                 term(dec("100")),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -1966,10 +1931,10 @@ mod tests {
             ),
             pdecl("S", &[("id", PredicateArgKind::Subject)]),
         ];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("Q", vec![var("x")])),
                 require(le(
                     term(var("x")),
@@ -1981,7 +1946,7 @@ mod tests {
                 // non-leak property: the sum binding did not escape.
                 assert_("S", vec![var("amount")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2006,14 +1971,14 @@ mod tests {
                 ("limit", PredicateArgKind::Decimal),
             ],
         )];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec!["p".into()],
-            body: vec![require(le(
+        p.transformations = vec![transformation(
+            "t",
+            vec!["p".into()],
+            vec![require(le(
                 value_of("Policy", vec![var("p"), wildcard()]),
                 term(dec("100")),
             ))],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -2033,14 +1998,13 @@ mod tests {
                 ("owner", PredicateArgKind::Subject),
             ],
         )];
-        p.invariants = vec![Invariant {
-            name: "bad_value_of".into(),
-            version: 1,
-            body: le(
+        p.invariants = vec![invariant(
+            "bad_value_of",
+            le(
                 value_of("Owner", vec![var("p"), wildcard()]),
                 term(dec("100")),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2197,14 +2161,14 @@ mod tests {
         // (Q's slot). The `for` collection slot demands Collection.
         let mut p = empty_program();
         p.predicates = vec![pdecl("Q", &[("v", PredicateArgKind::Decimal)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("Q", vec![var("x")])),
                 for_("e", term(var("x")), vec![]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2227,14 +2191,14 @@ mod tests {
         // Collection, then assert tries Decimal.
         let mut p = empty_program();
         p.predicates = vec![pdecl("P", &[("v", PredicateArgKind::Decimal)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec!["xs".into()],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec!["xs".into()],
+            vec![
                 for_("e", term(var("xs")), vec![]),
                 assert_("P", vec![var("xs")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2255,11 +2219,10 @@ mod tests {
         // `x in 100` - the collection side is a decimal literal,
         // which runtime would reject as "In expects a collection".
         let mut p = empty_program();
-        p.invariants = vec![Invariant {
-            name: "in_lit".into(),
-            version: 1,
-            body: Prop::In(Term::Var("x".into()), dec("100")),
-        }];
+        p.invariants = vec![invariant(
+            "in_lit",
+            Prop::In(Term::Var("x".into()), dec("100")),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2301,14 +2264,11 @@ mod tests {
         // predicate-side `Assert` case, but tagged Intent.
         let mut p = empty_program();
         p.intents = vec![intent("Notify", &[("id", PredicateArgKind::Subject)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![Stmt::Emit(Intent {
-                name: "Notify".into(),
-                args: vec![dec("100")],
-            })],
-        }];
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![emit("Notify", vec![dec("100")])],
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2334,17 +2294,14 @@ mod tests {
         let mut p = empty_program();
         p.predicates = vec![pdecl("P", &[("v", PredicateArgKind::Decimal)])];
         p.intents = vec![intent("Notify", &[("v", PredicateArgKind::Subject)])];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("P", vec![var("x")])),
-                Stmt::Emit(Intent {
-                    name: "Notify".into(),
-                    args: vec![var("x")],
-                }),
+                emit("Notify", vec![var("x")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2372,17 +2329,14 @@ mod tests {
                 ("count", PredicateArgKind::Decimal),
             ],
         )];
-        p.transformations = vec![Transformation {
-            name: "t".into(),
-            parameters: vec![],
-            body: vec![
+        p.transformations = vec![transformation(
+            "t",
+            vec![],
+            vec![
                 bind_one(claim("P", vec![var("x")])),
-                Stmt::Emit(Intent {
-                    name: "Notify".into(),
-                    args: vec![var("x"), dec("5")],
-                }),
+                emit("Notify", vec![var("x"), dec("5")]),
             ],
-        }];
+        )];
         let errs = check_program(&p);
         assert!(errs.is_empty(), "well-typed emit should pass; got {errs:?}");
     }
@@ -2407,11 +2361,10 @@ mod tests {
             pdecl("A", &[("v", PredicateArgKind::Decimal)]),
             pdecl("B", &[("v", PredicateArgKind::Subject)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "or_disjoint".into(),
-            version: 1,
-            body: or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
-        }];
+        p.invariants = vec![invariant(
+            "or_disjoint",
+            or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -2432,14 +2385,13 @@ mod tests {
             pdecl("B", &[("v", PredicateArgKind::Subject)]),
             pdecl("C", &[("v", PredicateArgKind::Subject)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "or_no_leak".into(),
-            version: 1,
-            body: and(vec![
+        p.invariants = vec![invariant(
+            "or_no_leak",
+            and(vec![
                 or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
                 claim("C", vec![var("x")]),
             ]),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.is_empty(),
@@ -2455,11 +2407,10 @@ mod tests {
         // not per-error-emission.
         let mut p = empty_program();
         p.predicates = vec![pdecl("A", &[("v", PredicateArgKind::Subject)])];
-        p.invariants = vec![Invariant {
-            name: "or_inner_error".into(),
-            version: 1,
-            body: or(vec![claim("A", vec![dec("100")])]),
-        }];
+        p.invariants = vec![invariant(
+            "or_inner_error",
+            or(vec![claim("A", vec![dec("100")])]),
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2495,14 +2446,13 @@ mod tests {
             pdecl("P", &[("v", PredicateArgKind::Decimal)]),
             pdecl("C", &[("v", PredicateArgKind::Decimal)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "forall_unify".into(),
-            version: 1,
-            body: and(vec![
+        p.invariants = vec![invariant(
+            "forall_unify",
+            and(vec![
                 claim("S", vec![var("x")]),
                 forall("x", claim("P", vec![var("x")]), claim("C", vec![var("x")])),
             ]),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2525,14 +2475,13 @@ mod tests {
             pdecl("S", &[("v", PredicateArgKind::Subject)]),
             pdecl("D", &[("v", PredicateArgKind::Decimal)]),
         ];
-        p.invariants = vec![Invariant {
-            name: "exists_unify".into(),
-            version: 1,
-            body: and(vec![
+        p.invariants = vec![invariant(
+            "exists_unify",
+            and(vec![
                 claim("S", vec![var("x")]),
                 exists("x", claim("D", vec![var("x")])),
             ]),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
@@ -2562,10 +2511,9 @@ mod tests {
                 ("limit", PredicateArgKind::Decimal),
             ],
         )];
-        p.invariants = vec![Invariant {
-            name: "bad_default".into(),
-            version: 1,
-            body: le(
+        p.invariants = vec![invariant(
+            "bad_default",
+            le(
                 value_of_with_default(
                     "Policy",
                     vec![var("p"), wildcard()],
@@ -2573,7 +2521,7 @@ mod tests {
                 ),
                 term(dec("100")),
             ),
-        }];
+        )];
         let errs = check_program(&p);
         assert!(
             errs.iter().any(|e| matches!(
