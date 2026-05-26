@@ -77,14 +77,18 @@ pub fn enumerate_derived(
     let domain_ctx = EvalContext::new(state, None, &empty_bindings, None);
     let raw_bindings = find_matches(&derived.domain, &domain_ctx)?;
 
+    // The keys are declared as strings but looked up in `Bindings`
+    // (keyed by `Var`); build the `Var`s once rather than per lookup.
+    let key_vars: Vec<Var> = derived.keys.iter().map(|k| Var::from(k.as_str())).collect();
+
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
     for b in &raw_bindings {
-        let mut tuple = Vec::with_capacity(derived.keys.len());
-        for k in &derived.keys {
-            let v = b.get(&Var::from(k.as_str())).ok_or_else(|| {
+        let mut tuple = Vec::with_capacity(key_vars.len());
+        for key in &key_vars {
+            let v = b.get(key).ok_or_else(|| {
                 EvalError::UnboundVariable(format!(
                     "derived claim `{}`: key `{}` not bound by domain expression",
-                    derived.predicate, k
+                    derived.predicate, key
                 ))
             })?;
             tuple.push(EvalValueOrd(v.clone()));
@@ -95,8 +99,8 @@ pub fn enumerate_derived(
     let mut out: Vec<ClaimInstance> = Vec::with_capacity(key_tuples.len());
     for tuple in key_tuples {
         let mut per_key = Bindings::new();
-        for (k, v) in derived.keys.iter().zip(tuple.iter()) {
-            per_key.insert(k.clone().into(), v.0.clone());
+        for (key, v) in key_vars.iter().zip(tuple.iter()) {
+            per_key.insert(key.clone(), v.0.clone());
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
         let value_ctx = EvalContext::new(state, None, &per_key, None);
