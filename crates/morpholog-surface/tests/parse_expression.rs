@@ -1080,10 +1080,11 @@ fn forall_source_rejects_sum_expression() {
     assert!(!errs.is_empty());
 }
 
-/// Parenthesised sources pass through as-is. The user signalled
-/// explicit intent by parenthesising. If they put a value-shaped
-/// expression inside parens, the kernel will reject it at runtime;
-/// the parser does not second-guess.
+/// Parenthesised proposition sources pass through as-is - the user
+/// signalled explicit intent by parenthesising. A value-shaped
+/// expression inside parens is still not a proposition, so it fails at
+/// parse time (the source production is proposition-shaped), not as an
+/// ill-shaped case the kernel has to catch.
 #[test]
 fn forall_source_accepts_parenthesised_predicate_form() {
     let got = parse_expression("forall x in (x in lines): P(x)").unwrap();
