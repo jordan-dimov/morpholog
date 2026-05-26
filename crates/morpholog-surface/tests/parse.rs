@@ -439,7 +439,7 @@ fn parses_let_statement_with_expression() {
     let Stmt::Let { name, .. } = stmt else {
         panic!("expected Stmt::Let, got {stmt:?}");
     };
-    assert_eq!(name, "z");
+    assert_eq!(name.as_str(), "z");
 }
 
 #[test]
@@ -453,7 +453,7 @@ fn parses_let_new_subject() {
     let Stmt::LetNewSubject { name } = stmt else {
         panic!("expected Stmt::LetNewSubject, got {stmt:?}");
     };
-    assert_eq!(name, "s");
+    assert_eq!(name.as_str(), "s");
 }
 
 #[test]
@@ -654,7 +654,7 @@ fn parses_for_block_with_single_statement() {
     else {
         panic!("expected Stmt::For, got {:?}", body[0]);
     };
-    assert_eq!(binding, "item");
+    assert_eq!(binding.as_str(), "item");
     assert_eq!(for_body.len(), 1);
     assert!(matches!(for_body[0], Stmt::Assert(_)));
 }

@@ -131,7 +131,7 @@ pub enum Prop {
         right: Box<Prop>,
     },
     Exists {
-        binding: String,
+        binding: Var,
         body: Box<Prop>,
     },
     And(Vec<Prop>),
@@ -179,7 +179,7 @@ pub enum Prop {
         right: Box<ValueExpr>,
     },
     Forall {
-        binding: String,
+        binding: Var,
         source: Box<Prop>,
         body: Box<Prop>,
     },
@@ -261,7 +261,7 @@ pub enum OrderedDomain {
 /// enforceable: authority checks belong in `require`, not invariants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
-    Var(String),
+    Var(Var),
     Wildcard,
     Literal(Value),
     /// Resolves to the actor of the proposed transition. Available
@@ -334,11 +334,11 @@ pub enum Stmt {
     ///   structural-uniqueness invariant, or corruption).
     BindOne(Prop),
     Let {
-        name: String,
+        name: Var,
         value: ValueExpr,
     },
     LetNewSubject {
-        name: String,
+        name: Var,
     },
     Assert(Claim),
     /// Pattern-based retraction. Each Var in `args` is resolved against
@@ -352,7 +352,7 @@ pub enum Stmt {
     /// `collection` is evaluated as a value (it must yield an
     /// `EvalValue::Collection`); `binding` ranges over its items.
     For {
-        binding: String,
+        binding: Var,
         collection: ValueExpr,
         body: Vec<Stmt>,
     },

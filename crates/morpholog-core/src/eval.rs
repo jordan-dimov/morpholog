@@ -543,7 +543,7 @@ pub(crate) fn resolve_term(
         Term::Var(name) => bindings
             .get(name)
             .cloned()
-            .ok_or_else(|| EvalError::UnboundVariable(name.clone())),
+            .ok_or_else(|| EvalError::UnboundVariable(name.to_string())),
         Term::Wildcard => Err(EvalError::TypeMismatch(
             "wildcard cannot be resolved as a value".into(),
         )),
@@ -768,7 +768,7 @@ fn render_term(t: &Term, ctx: &EvalContext<'_>) -> String {
     match resolve_term(t, ctx.bindings, ctx.actor) {
         Ok(v) => render_eval_value(&v),
         Err(_) => match t {
-            Term::Var(name) => name.clone(),
+            Term::Var(name) => name.to_string(),
             Term::Wildcard => "_".to_string(),
             Term::Actor => "actor".to_string(),
             // Literals always resolve, so this arm is unreachable in

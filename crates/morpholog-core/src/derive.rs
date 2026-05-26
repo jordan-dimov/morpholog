@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 
 use crate::eval::{EvalContext, EvalError, eval_value, find_matches};
-use crate::ir::{DerivedClaim, Invariant};
+use crate::ir::{DerivedClaim, Invariant, Var};
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
@@ -81,7 +81,7 @@ pub fn enumerate_derived(
     for b in &raw_bindings {
         let mut tuple = Vec::with_capacity(derived.keys.len());
         for k in &derived.keys {
-            let v = b.get(k).ok_or_else(|| {
+            let v = b.get(&Var::from(k.as_str())).ok_or_else(|| {
                 EvalError::UnboundVariable(format!(
                     "derived claim `{}`: key `{}` not bound by domain expression",
                     derived.predicate, k
@@ -96,7 +96,7 @@ pub fn enumerate_derived(
     for tuple in key_tuples {
         let mut per_key = Bindings::new();
         for (k, v) in derived.keys.iter().zip(tuple.iter()) {
-            per_key.insert(k.clone(), v.0.clone());
+            per_key.insert(k.clone().into(), v.0.clone());
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
         let value_ctx = EvalContext::new(state, None, &per_key, None);

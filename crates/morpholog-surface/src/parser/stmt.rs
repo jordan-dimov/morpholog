@@ -90,7 +90,7 @@ where
                 if name == "actor" {
                     Term::Actor
                 } else {
-                    Term::Var(name)
+                    Term::Var(name.into())
                 }
             }),
         ));
@@ -198,8 +198,11 @@ where
             .then_ignore(just(Token::Eq))
             .then(let_rhs)
             .map(|(name, rhs)| match rhs {
-                LetRhs::NewSubject => Stmt::LetNewSubject { name },
-                LetRhs::Value(value) => Stmt::Let { name, value },
+                LetRhs::NewSubject => Stmt::LetNewSubject { name: name.into() },
+                LetRhs::Value(value) => Stmt::Let {
+                    name: name.into(),
+                    value,
+                },
             });
 
         // for <name> in <value-expression> : Indent statement+ Dedent
@@ -227,7 +230,7 @@ where
             )
             .then_ignore(just(Token::Dedent))
             .map(|((binding, collection), body)| Stmt::For {
-                binding,
+                binding: binding.into(),
                 collection,
                 body,
             });

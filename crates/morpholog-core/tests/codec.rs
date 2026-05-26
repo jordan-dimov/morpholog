@@ -299,10 +299,7 @@ fn trace_entry_bind_one_bound_round_trips_with_sorted_bindings() {
     let entry = TraceEntry::BindOne {
         expression: "Policy(pid, limit)".to_string(),
         outcome: BindOneOutcome::Bound {
-            bindings: vec![
-                ("limit".to_string(), dec(100)),
-                ("pid".to_string(), subj("p1")),
-            ],
+            bindings: vec![("limit".into(), dec(100)), ("pid".into(), subj("p1"))],
         },
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -347,7 +344,7 @@ fn trace_entry_bind_one_multiple_matches_round_trips() {
 #[test]
 fn trace_entry_for_with_per_iteration_items_round_trips() {
     let entry = TraceEntry::For {
-        binding: "line".to_string(),
+        binding: "line".into(),
         iterations: vec![
             ForIterationTrace {
                 item: subj("L1"),
@@ -392,11 +389,11 @@ fn trace_entry_let_let_new_subject_assert_retract_emit_round_trip() {
     // wire bytes are less important than the round-trip closure.
     let entries = vec![
         TraceEntry::Let {
-            name: "x".to_string(),
+            name: "x".into(),
             value: dec(42),
         },
         TraceEntry::LetNewSubject {
-            name: "y".to_string(),
+            name: "y".into(),
             subject: subj("generated-uuid"),
         },
         TraceEntry::Assert {

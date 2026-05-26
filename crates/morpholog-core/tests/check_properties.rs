@@ -63,7 +63,7 @@ fn arb_value() -> impl Strategy<Value = Value> {
 
 fn arb_term() -> impl Strategy<Value = Term> {
     prop_oneof![
-        arb_var_name().prop_map(Term::Var),
+        arb_var_name().prop_map(|s| Term::Var(s.into())),
         Just(Term::Wildcard),
         arb_value().prop_map(Term::Literal),
         Just(Term::Actor),
@@ -153,12 +153,12 @@ fn arb_prop() -> impl Strategy<Value = Prop> {
                 right: Box::new(r),
             }),
             (arb_var_name(), inner.clone()).prop_map(|(binding, body)| Prop::Exists {
-                binding,
+                binding: binding.into(),
                 body: Box::new(body),
             }),
             (arb_var_name(), inner.clone(), inner).prop_map(|(binding, source, body)| {
                 Prop::Forall {
-                    binding,
+                    binding: binding.into(),
                     source: Box::new(source),
                     body: Box::new(body),
                 }
@@ -173,8 +173,11 @@ fn arb_stmt() -> impl Strategy<Value = Stmt> {
     let leaf = prop_oneof![
         arb_prop().prop_map(Stmt::Require),
         arb_prop().prop_map(Stmt::BindOne),
-        (arb_var_name(), arb_value_expr()).prop_map(|(name, value)| Stmt::Let { name, value }),
-        arb_var_name().prop_map(|name| Stmt::LetNewSubject { name }),
+        (arb_var_name(), arb_value_expr()).prop_map(|(name, value)| Stmt::Let {
+            name: name.into(),
+            value
+        }),
+        arb_var_name().prop_map(|name| Stmt::LetNewSubject { name: name.into() }),
         (arb_pred_name(), arb_args())
             .prop_map(|(predicate, args)| Stmt::Assert(Claim { predicate, args })),
         (arb_pred_name(), arb_args())
@@ -189,7 +192,7 @@ fn arb_stmt() -> impl Strategy<Value = Stmt> {
             prop::collection::vec(inner, 1..3),
         )
             .prop_map(|(binding, collection, body)| Stmt::For {
-                binding,
+                binding: binding.into(),
                 collection,
                 body,
             })
@@ -320,11 +323,11 @@ fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
                 }),
             },
             5 => Prop::Exists {
-                binding: "x".to_string(),
+                binding: "x".into(),
                 body: Box::new(e),
             },
             _ => Prop::Forall {
-                binding: "x".to_string(),
+                binding: "x".into(),
                 source: Box::new(Prop::Claim {
                     predicate: "A".to_string(),
                     args: vec![],
@@ -444,8 +447,8 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
     })];
     for _ in 0..DEPTH {
         body = vec![Stmt::For {
-            binding: "x".to_string(),
-            collection: ValueExpr::Term(Term::Var("c".to_string())),
+            binding: "x".into(),
+            collection: ValueExpr::Term(Term::Var("c".into())),
             body,
         }];
     }

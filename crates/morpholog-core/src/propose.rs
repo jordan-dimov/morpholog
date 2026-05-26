@@ -20,7 +20,7 @@ use crate::eval::{
     resolve_term, unify_args, unsatisfied_positive_claims,
 };
 use crate::format;
-use crate::ir::{Claim, Intent, Invariant, Stmt, Subject, Term, Transformation};
+use crate::ir::{Claim, Intent, Invariant, Stmt, Subject, Term, Transformation, Var};
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
 /// A proposed state transition. Evaluated, accepted-or-rejected, and
@@ -118,11 +118,11 @@ pub enum TraceEntry {
         outcome: BindOneOutcome,
     },
     Let {
-        name: String,
+        name: Var,
         value: EvalValue,
     },
     LetNewSubject {
-        name: String,
+        name: Var,
         subject: EvalValue,
     },
     Assert {
@@ -139,7 +139,7 @@ pub enum TraceEntry {
         intent: IntentInstance,
     },
     For {
-        binding: String,
+        binding: Var,
         iterations: Vec<ForIterationTrace>,
     },
     /// One invariant check. The expression string lets the trace
@@ -203,7 +203,7 @@ pub enum BindOneOutcome {
     /// `BindOne` replaces the current context with the returned set, so
     /// the trace records the full set, not a delta.
     Bound {
-        bindings: Vec<(String, EvalValue)>,
+        bindings: Vec<(Var, EvalValue)>,
     },
     NoMatch {
         /// The most specific sub-expression responsible for the
@@ -333,7 +333,7 @@ pub(crate) fn propose_inner(
         .iter()
         .zip(transition.args.iter().cloned())
     {
-        bindings.insert(name.clone(), val);
+        bindings.insert(name.clone().into(), val);
     }
 
     let mut asserted: Vec<ClaimInstance> = vec![];
@@ -463,7 +463,7 @@ pub(crate) fn execute_stmt(
                 1 => {
                     let new_bindings = matches.swap_remove(0);
                     if trace.is_on() {
-                        let mut sorted: Vec<(String, EvalValue)> = new_bindings
+                        let mut sorted: Vec<(Var, EvalValue)> = new_bindings
                             .iter()
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();

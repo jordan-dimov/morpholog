@@ -363,7 +363,7 @@ fn format_intent(i: &Intent) -> String {
 
 fn format_term(t: &Term) -> String {
     match t {
-        Term::Var(name) => name.clone(),
+        Term::Var(name) => name.to_string(),
         Term::Wildcard => "_".to_string(),
         Term::Literal(v) => format_value(v),
         Term::Actor => "actor".to_string(),
@@ -588,7 +588,7 @@ mod tests {
         );
         assert_eq!(format_term(&Term::Wildcard), "_");
         assert_eq!(format_term(&Term::Actor), "actor");
-        assert_eq!(format_term(&Term::Var("x".to_string())), "x");
+        assert_eq!(format_term(&Term::Var("x".into())), "x");
     }
 
     /// `format_program` documents that its output ends with a

@@ -540,7 +540,7 @@ fn idempotency_key_matches_golden_hash() {
 }
 
 fn retract_marker_transformation() -> Transformation {
-    let var = |s: &str| Term::Var(s.to_string());
+    let var = |s: &str| Term::Var(s.into());
     Transformation {
         name: "retract_marker".to_string(),
         parameters: vec!["subject".to_string()],
