@@ -529,7 +529,7 @@ fn paid_without_authorised_violates_invariant() {
     // invariant exists so the runtime contract holds against
     // candidate states regardless of how they arrived.
     let orphan_payment = ClaimInstance {
-        predicate: "SettlementPaid".to_string(),
+        predicate: "SettlementPaid".into(),
         args: vec![
             subj("policy_001"),
             subj("claim_001"),
@@ -555,7 +555,7 @@ fn paid_without_headroom_violates_invariant() {
     // pre/post guard fails, the implies is vacuously true). The
     // pairing closes the gap.
     let orphan_payment = ClaimInstance {
-        predicate: "SettlementPaid".to_string(),
+        predicate: "SettlementPaid".into(),
         args: vec![
             subj("policy_001"),
             subj("claim_001"),

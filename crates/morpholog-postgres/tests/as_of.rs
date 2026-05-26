@@ -130,7 +130,7 @@ fn assert_balance(rows: &[ClaimInstance], account_name: &str, amount: i64) {
     let expected = EvalValue::Decimal(Decimal::new(amount, 0));
     let row = rows
         .iter()
-        .find(|r| r.predicate == "TrialBalanceRow" && r.args.first() == Some(&account))
+        .find(|r| r.predicate.as_str() == "TrialBalanceRow" && r.args.first() == Some(&account))
         .unwrap_or_else(|| panic!("no TrialBalanceRow for `{account_name}` in {rows:?}"));
     assert_eq!(
         row.args.get(1),
@@ -449,7 +449,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let claims_at_tid1 = list_claims_at(&pool, tid1).await.unwrap();
     let pointer_at_tid1 = claims_at_tid1
         .iter()
-        .filter(|c| c.predicate == "CurrentVerification" && c.args[2] == subj("ver_001"))
+        .filter(|c| c.predicate.as_str() == "CurrentVerification" && c.args[2] == subj("ver_001"))
         .count();
     assert_eq!(
         pointer_at_tid1, 1,
@@ -461,11 +461,11 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let claims_at_tid2 = list_claims_at(&pool, tid2).await.unwrap();
     let stale_pointer_at_tid2 = claims_at_tid2
         .iter()
-        .filter(|c| c.predicate == "CurrentVerification" && c.args[2] == subj("ver_001"))
+        .filter(|c| c.predicate.as_str() == "CurrentVerification" && c.args[2] == subj("ver_001"))
         .count();
     let new_pointer_at_tid2 = claims_at_tid2
         .iter()
-        .filter(|c| c.predicate == "CurrentVerification" && c.args[2] == subj("ver_002"))
+        .filter(|c| c.predicate.as_str() == "CurrentVerification" && c.args[2] == subj("ver_002"))
         .count();
     assert_eq!(
         stale_pointer_at_tid2, 0,
@@ -481,7 +481,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     // at tid2.
     let iv_at_tid2 = claims_at_tid2
         .iter()
-        .filter(|c| c.predicate == "IndependentlyVerifiedRevenue")
+        .filter(|c| c.predicate.as_str() == "IndependentlyVerifiedRevenue")
         .count();
     assert_eq!(
         iv_at_tid2, 2,

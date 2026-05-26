@@ -106,7 +106,7 @@ pub fn role(s: &str) -> Term {
 /// every position must unify against the candidate claim.
 pub fn claim(predicate: &str, args: Vec<Term>) -> Prop {
     Prop::Claim {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args,
     }
 }
@@ -239,7 +239,7 @@ pub fn sum(value: Term, body: Prop) -> ValueExpr {
 /// `DerivedClaim` value expression) where a statement form does not fit.
 pub fn value_of(predicate: &str, args: Vec<Term>) -> ValueExpr {
     ValueExpr::ValueOf {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args,
         default: None,
     }
@@ -249,7 +249,7 @@ pub fn value_of(predicate: &str, args: Vec<Term>) -> ValueExpr {
 /// Multiple matches still error.
 pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: ValueExpr) -> ValueExpr {
     ValueExpr::ValueOf {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args,
         default: Some(Box::new(default)),
     }
@@ -282,14 +282,14 @@ pub fn bind_one(prop: Prop) -> Stmt {
 
 pub fn assert_(predicate: &str, args: Vec<Term>) -> Stmt {
     Stmt::Assert(Claim {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args,
     })
 }
 
 pub fn retract(predicate: &str, args: Vec<Term>) -> Stmt {
     Stmt::Retract {
-        predicate: predicate.to_string(),
+        predicate: predicate.into(),
         args,
     }
 }
@@ -386,7 +386,7 @@ impl PredicateDeclBuilder {
 
     pub fn build(self) -> PredicateDecl {
         PredicateDecl {
-            name: self.name,
+            name: self.name.into(),
             args: self.args,
         }
     }

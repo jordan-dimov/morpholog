@@ -28,7 +28,7 @@ predicate SettlementPaid(claim_id: Subject, paid_at: Date)
     assert!(program.derived_claims.is_empty());
 
     let policy = &program.predicates[0];
-    assert_eq!(policy.name, "Policy");
+    assert_eq!(policy.name.as_str(), "Policy");
     assert_eq!(policy.args.len(), 2);
     assert_eq!(policy.args[0].name, "policy_id");
     assert_eq!(policy.args[0].kind, PredicateArgKind::Subject);
@@ -81,8 +81,8 @@ predicate Bar(b: Decimal)
     let program = parse_program(source).expect("comments should be skipped");
     assert_eq!(program.name, "with_comments");
     assert_eq!(program.predicates.len(), 2);
-    assert_eq!(program.predicates[0].name, "Foo");
-    assert_eq!(program.predicates[1].name, "Bar");
+    assert_eq!(program.predicates[0].name.as_str(), "Foo");
+    assert_eq!(program.predicates[1].name.as_str(), "Bar");
 }
 
 #[test]
@@ -92,7 +92,7 @@ program demo
 predicate Marker()
 "#;
     let program = parse_program(source).expect("empty arg list should parse");
-    assert_eq!(program.predicates[0].name, "Marker");
+    assert_eq!(program.predicates[0].name.as_str(), "Marker");
     assert!(program.predicates[0].args.is_empty());
 }
 
@@ -295,8 +295,8 @@ invariant cap_b: Bar(y)
     let program = parse_program(source).expect("interleaved decls should parse");
     assert_eq!(program.predicates.len(), 2);
     assert_eq!(program.invariants.len(), 2);
-    assert_eq!(program.predicates[0].name, "Foo");
-    assert_eq!(program.predicates[1].name, "Bar");
+    assert_eq!(program.predicates[0].name.as_str(), "Foo");
+    assert_eq!(program.predicates[1].name.as_str(), "Bar");
     assert_eq!(program.invariants[0].name, "cap_a");
     assert_eq!(program.invariants[1].name, "cap_b");
 }
@@ -518,7 +518,7 @@ fn parses_admit_statement() {
     let Stmt::Assert(claim) = &body[0] else {
         panic!("expected Stmt::Assert, got {:?}", body[0]);
     };
-    assert_eq!(claim.predicate, "Foo");
+    assert_eq!(claim.predicate.as_str(), "Foo");
     assert_eq!(claim.args.len(), 1);
 }
 
@@ -587,7 +587,7 @@ fn bind_accepts_claim_pattern() {
             body[0]
         );
     };
-    assert_eq!(predicate, "Foo");
+    assert_eq!(predicate.as_str(), "Foo");
     assert_eq!(args.len(), 3);
 }
 
@@ -616,7 +616,7 @@ fn parses_retract_statement() {
     let Stmt::Retract { predicate, args } = &body[0] else {
         panic!("expected Stmt::Retract, got {:?}", body[0]);
     };
-    assert_eq!(predicate, "Foo");
+    assert_eq!(predicate.as_str(), "Foo");
     assert_eq!(args.len(), 2);
     use morpholog_core::Term;
     assert!(matches!(args[1], Term::Wildcard));
@@ -833,7 +833,7 @@ fn parses_simple_derived_claim() {
     let program = parse_program(source).expect("derived claim should parse");
     assert_eq!(program.derived_claims.len(), 1);
     let d = &program.derived_claims[0];
-    assert_eq!(d.predicate, "Total");
+    assert_eq!(d.predicate.as_str(), "Total");
     assert_eq!(d.keys, vec!["x".into()]);
     assert_eq!(d.values.len(), 1);
     assert_eq!(d.values[0].name, "sum_amount");

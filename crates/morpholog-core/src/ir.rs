@@ -93,6 +93,39 @@ impl std::fmt::Display for Var {
     }
 }
 
+/// An opaque predicate name - the identifier of a claim predicate. Distinct
+/// at the type level from a subject id, a bound variable, an intent name, or
+/// a declaration name, so the compiler keeps the kernel's nouns un-confusable.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PredicateName(String);
+
+impl PredicateName {
+    /// Borrow the name. Use at the edges (formatting, persistence, building a
+    /// SQL predicate filter), not to route predicate names through string APIs.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for PredicateName {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for PredicateName {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for PredicateName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is
@@ -123,7 +156,7 @@ pub struct Invariant {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Prop {
     Claim {
-        predicate: String,
+        predicate: PredicateName,
         args: Vec<Term>,
     },
     Implies {
@@ -225,7 +258,7 @@ pub enum ValueExpr {
     /// binding extensions: inside `Sum`/`Add`/`Sub`/`Eq`/`Compare`,
     /// a `Let` value, or a `DerivedClaim` value expression.
     ValueOf {
-        predicate: String,
+        predicate: PredicateName,
         args: Vec<Term>,
         default: Option<Box<ValueExpr>>,
     },
@@ -297,7 +330,7 @@ pub enum Value {
 /// Distinct from `Prop::Claim`, which is a *query* over candidate state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
-    pub predicate: String,
+    pub predicate: PredicateName,
     pub args: Vec<Term>,
 }
 
@@ -346,7 +379,7 @@ pub enum Stmt {
     /// in the pre-state matching the resolved pattern are staged for
     /// retraction. Zero matches is an idempotent no-op (not an error).
     Retract {
-        predicate: String,
+        predicate: PredicateName,
         args: Vec<Term>,
     },
     /// `collection` is evaluated as a value (it must yield an
@@ -420,7 +453,9 @@ impl Program {
     /// derived claim in the program has that name. Symmetric with
     /// [`Program::transformation`] and [`Program::invariant`].
     pub fn derived_claim(&self, name: &str) -> Option<&DerivedClaim> {
-        self.derived_claims.iter().find(|d| d.predicate == name)
+        self.derived_claims
+            .iter()
+            .find(|d| d.predicate.as_str() == name)
     }
 
     /// Look up a predicate declaration by name. Returns `None` if no
@@ -432,7 +467,7 @@ impl Program {
     /// declarations are invalid and are reported by
     /// [`Program::validate`] as `ValidationError::DuplicateDecl`.
     pub fn predicate(&self, name: &str) -> Option<&PredicateDecl> {
-        self.predicates.iter().find(|p| p.name == name)
+        self.predicates.iter().find(|p| p.name.as_str() == name)
     }
 
     /// Look up an intent declaration by name. Returns `None` if no
@@ -490,14 +525,13 @@ impl Program {
 /// and inform future parser diagnostics. They have no runtime effect on
 /// matching, which remains positional.
 ///
-/// Argument *kinds* (see [`PredicateArgKind`]) are metadata recorded
-/// for future use. Kind validation against the kinds of values flowing
-/// through the binding context is not enforced in v0; recording the
-/// metadata now means migrations stay shallow when kind checking
-/// arrives.
+/// Argument *kinds* (see [`PredicateArgKind`]) constrain the kinds of
+/// values flowing through the binding context: [`Program::validate`]
+/// checks every value reaching an argument position against the
+/// declared kind and rejects incompatible ones.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PredicateDecl {
-    pub name: String,
+    pub name: PredicateName,
     pub args: Vec<ArgDecl>,
 }
 
@@ -552,7 +586,7 @@ pub enum PredicateArgKind {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedClaim {
-    pub predicate: String,
+    pub predicate: PredicateName,
     pub keys: Vec<Var>,
     pub values: Vec<DerivedValue>,
     pub domain: Prop,

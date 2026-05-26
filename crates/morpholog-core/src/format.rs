@@ -206,7 +206,10 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
         }
         Stmt::Assert(c) => format!("{pad}admit {}", format_claim(c)),
         Stmt::Retract { predicate, args } => {
-            format!("{pad}retract {}", format_predicate_call(predicate, args))
+            format!(
+                "{pad}retract {}",
+                format_predicate_call(predicate.as_str(), args)
+            )
         }
         Stmt::Emit(i) => format!("{pad}emit {}", format_intent(i)),
         Stmt::For {
@@ -246,7 +249,7 @@ pub fn format_prop_inline(p: &Prop) -> String {
     // implies) makes the parens a no-op for the parser.
     fn prop_primary(p: &Prop) -> String {
         match p {
-            Prop::Claim { predicate, args } => format_predicate_call(predicate, args),
+            Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
             // `pre(...)` is function-call-shape; no outer parens needed.
             Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
             _ => format!("({})", format_prop_inline(p)),
@@ -254,7 +257,7 @@ pub fn format_prop_inline(p: &Prop) -> String {
     }
 
     match p {
-        Prop::Claim { predicate, args } => format_predicate_call(predicate, args),
+        Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
 
         // Comparators relate two value expressions.
         Prop::Eq(l, r) => format!("{} = {}", value_primary(l), value_primary(r)),
@@ -341,7 +344,7 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             args,
             default,
         } => {
-            let base = format!("value {}", format_predicate_call(predicate, args));
+            let base = format!("value {}", format_predicate_call(predicate.as_str(), args));
             match default {
                 Some(d) => format!("{base} default {}", format_value_inline(d)),
                 None => base,
@@ -362,7 +365,7 @@ fn format_predicate_call(predicate: &str, args: &[Term]) -> String {
 }
 
 fn format_claim(c: &Claim) -> String {
-    format_predicate_call(&c.predicate, &c.args)
+    format_predicate_call(c.predicate.as_str(), &c.args)
 }
 
 fn format_intent(i: &Intent) -> String {

@@ -261,7 +261,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
 
     for derived in &program.derived_claims {
         cx.context = ValidationContext::DerivedClaim {
-            predicate: derived.predicate.clone(),
+            predicate: derived.predicate.to_string(),
         };
         if prop_mentions_actor(&derived.domain)
             || derived.values.iter().any(|v| value_mentions_actor(&v.expr))
@@ -290,7 +290,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             let context = cx.context.clone();
             cx.errors.push(ValidationError::Undeclared {
                 vocabulary: VocabularyKind::Predicate,
-                name: derived.predicate.clone(),
+                name: derived.predicate.to_string(),
                 context,
             });
             continue;
@@ -300,7 +300,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             let context = cx.context.clone();
             cx.errors.push(ValidationError::ArityMismatch {
                 vocabulary: VocabularyKind::Predicate,
-                name: derived.predicate.clone(),
+                name: derived.predicate.to_string(),
                 expected: decl.args.len(),
                 actual: output_arity,
                 context,
@@ -320,7 +320,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
                 let context = cx.context.clone();
                 cx.errors.push(ValidationError::ArgKindMismatch {
                     vocabulary: VocabularyKind::Predicate,
-                    name: derived.predicate.clone(),
+                    name: derived.predicate.to_string(),
                     position,
                     expected,
                     actual: actual_kind,
@@ -342,7 +342,7 @@ impl CheckCtx<'_> {
     fn walk_prop(&mut self, prop: &Prop, scope: &mut Scope) {
         match prop {
             Prop::Claim { predicate, args } => {
-                self.check_predicate_ref(predicate, args, RefMode::Match, scope);
+                self.check_predicate_ref(predicate.as_str(), args, RefMode::Match, scope);
             }
             Prop::And(items) => {
                 // Conjuncts thread the scope forward: each branch
@@ -497,10 +497,15 @@ impl CheckCtx<'_> {
                 self.observe_or_report(scope, name, InferredKind::Known(PredicateArgKind::Subject));
             }
             Stmt::Assert(claim) => {
-                self.check_predicate_ref(&claim.predicate, &claim.args, RefMode::Use, scope);
+                self.check_predicate_ref(
+                    claim.predicate.as_str(),
+                    &claim.args,
+                    RefMode::Use,
+                    scope,
+                );
             }
             Stmt::Retract { predicate, args } => {
-                self.check_predicate_ref(predicate, args, RefMode::Use, scope);
+                self.check_predicate_ref(predicate.as_str(), args, RefMode::Use, scope);
             }
             Stmt::For {
                 binding,
@@ -661,8 +666,8 @@ impl CheckCtx<'_> {
             } => {
                 // A lookup consumes its key arguments (the wildcard
                 // marks the extracted value, not a binding).
-                self.check_predicate_ref(predicate, args, RefMode::Use, scope);
-                let result_kind = value_of_result_kind(predicate, args, &self.predicates);
+                self.check_predicate_ref(predicate.as_str(), args, RefMode::Use, scope);
+                let result_kind = value_of_result_kind(predicate.as_str(), args, &self.predicates);
                 if let Some(default_expr) = default {
                     let default_kind = self.infer_value(default_expr, scope);
                     // The runtime returns either the looked-up value
@@ -1056,7 +1061,7 @@ mod tests {
     /// Build a `PredicateDecl` shorthand for tests.
     fn pdecl(name: &str, args: &[(&str, PredicateArgKind)]) -> crate::ir::PredicateDecl {
         crate::ir::PredicateDecl {
-            name: name.to_string(),
+            name: name.into(),
             args: args
                 .iter()
                 .map(|(n, k)| ArgDecl {
@@ -1280,7 +1285,7 @@ mod tests {
             pdecl("Src", &[("k", PredicateArgKind::Subject)]),
         ];
         p.derived_claims = vec![crate::ir::DerivedClaim {
-            predicate: "Row".to_string(),
+            predicate: "Row".into(),
             keys: vec!["k".into()],
             values: vec![crate::ir::DerivedValue {
                 name: "v".to_string(),
@@ -2074,7 +2079,7 @@ mod tests {
             pdecl("P", &[("v", PredicateArgKind::Decimal)]),
         ];
         p.derived_claims = vec![DerivedClaim {
-            predicate: "Row".to_string(),
+            predicate: "Row".into(),
             keys: vec!["account".into()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),
@@ -2121,7 +2126,7 @@ mod tests {
             ),
         ];
         p.derived_claims = vec![DerivedClaim {
-            predicate: "Row".to_string(),
+            predicate: "Row".into(),
             keys: vec!["account".into()],
             values: vec![DerivedValue {
                 name: "count".to_string(),
@@ -2167,7 +2172,7 @@ mod tests {
             ),
         ];
         p.derived_claims = vec![DerivedClaim {
-            predicate: "Row".to_string(),
+            predicate: "Row".into(),
             keys: vec!["account".into()],
             values: vec![DerivedValue {
                 name: "balance".to_string(),

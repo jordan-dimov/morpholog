@@ -180,7 +180,7 @@ async fn randomise_participant_happy_path_through_pg() {
     let claims = list_claims(&pool).await.unwrap();
     let admitted: &ClaimInstance = claims
         .iter()
-        .find(|c| c.predicate == "ParticipantRandomised")
+        .find(|c| c.predicate.as_str() == "ParticipantRandomised")
         .expect("ParticipantRandomised must be admitted");
     assert_eq!(
         admitted.args,

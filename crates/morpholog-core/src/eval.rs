@@ -19,7 +19,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::ir::{CompareOp, OrderedDomain, Prop, Subject, Term, Value, ValueExpr};
+use crate::ir::{CompareOp, OrderedDomain, PredicateName, Prop, Subject, Term, Value, ValueExpr};
 use crate::state::{Bindings, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -267,7 +267,7 @@ pub(crate) fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
 }
 
 pub(crate) fn find_claim_matches(
-    predicate: &str,
+    predicate: &PredicateName,
     args: &[Term],
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
@@ -331,7 +331,7 @@ pub(crate) fn find_claim_matches(
             }
         }
     } else {
-        for claim in state.claims_for(predicate) {
+        for claim in state.claims_for_name(predicate) {
             if claim.args.len() != args.len() {
                 continue;
             }
@@ -516,19 +516,19 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         })?;
                     let claim = ctx
                         .state
-                        .claims_for(predicate)
+                        .claims_for_name(predicate)
                         .find(|f| {
                             f.args.len() == args.len()
                                 && unify_args(args, &f.args, ctx.bindings, ctx.actor).is_some()
                         })
-                        .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.clone()))?;
+                        .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.to_string()))?;
                     Ok(claim.args[pos].clone())
                 }
                 0 => match default {
                     Some(d) => eval_value(d, ctx),
-                    None => Err(EvalError::ValueOfZeroMatches(predicate.clone())),
+                    None => Err(EvalError::ValueOfZeroMatches(predicate.to_string())),
                 },
-                _ => Err(EvalError::ValueOfMultipleMatches(predicate.clone())),
+                _ => Err(EvalError::ValueOfMultipleMatches(predicate.to_string())),
             }
         }
     }
@@ -757,7 +757,7 @@ fn render_claim(prop: &Prop, ctx: &EvalContext<'_>) -> RenderedClaim {
     };
     let rendered_args: Vec<String> = args.iter().map(|t| render_term(t, ctx)).collect();
     RenderedClaim {
-        predicate: predicate.clone(),
+        predicate: predicate.to_string(),
         rendered: format!("{}({})", predicate, rendered_args.join(", ")),
     }
 }

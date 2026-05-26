@@ -70,7 +70,7 @@ fn eval_value_collection_round_trips_through_nested_json() {
 #[test]
 fn claim_instance_round_trips_through_json_with_mixed_args() {
     let c = ClaimInstance {
-        predicate: "BankRecognisedRevenue".to_string(),
+        predicate: "BankRecognisedRevenue".into(),
         args: vec![subj("asset_a"), subj("p_2026_04"), dec(92), subj("rec_001")],
     };
     let json = serde_json::to_string(&c).unwrap();
@@ -110,7 +110,7 @@ fn claim_args_serialise_as_a_json_array() {
     // constraint `jsonb_typeof(arguments) = 'array'`. The PG adapter
     // writes only the `args` field of a ClaimInstance into that column.
     let c = ClaimInstance {
-        predicate: "Quantity".to_string(),
+        predicate: "Quantity".into(),
         args: vec![subj("trade123"), dec(10)],
     };
     let args_json = serde_json::to_string(&c.args).unwrap();
@@ -282,7 +282,7 @@ fn trace_entry_require_rejected_round_trips_with_directly_missing_claims() {
                 .to_string(),
             failing_sub_expression: None,
             directly_missing_claims: vec![RenderedClaim {
-                predicate: "MayApprove".to_string(),
+                predicate: "MayApprove".into(),
                 rendered: "MayApprove(alice, contract)".to_string(),
             }],
         },
@@ -350,7 +350,7 @@ fn trace_entry_for_with_per_iteration_items_round_trips() {
                 item: subj("L1"),
                 trace: vec![TraceEntry::Assert {
                     claim: ClaimInstance {
-                        predicate: "Echo".to_string(),
+                        predicate: "Echo".into(),
                         args: vec![subj("L1")],
                     },
                 }],
@@ -398,14 +398,14 @@ fn trace_entry_let_let_new_subject_assert_retract_emit_round_trip() {
         },
         TraceEntry::Assert {
             claim: ClaimInstance {
-                predicate: "Echo".to_string(),
+                predicate: "Echo".into(),
                 args: vec![subj("a"), dec(1)],
             },
         },
         TraceEntry::Retract {
-            predicate: "OldClaim".to_string(),
+            predicate: "OldClaim".into(),
             retracted: vec![ClaimInstance {
-                predicate: "OldClaim".to_string(),
+                predicate: "OldClaim".into(),
                 args: vec![subj("z")],
             }],
         },

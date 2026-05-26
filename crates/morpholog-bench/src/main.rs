@@ -290,6 +290,7 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     let derived = double_entry_ledger::trial_balance_row();
     let footprint: Vec<String> = predicates_referenced_by_derived(&derived)
         .into_iter()
+        .map(|p| p.to_string())
         .collect();
 
     let t = Instant::now();
