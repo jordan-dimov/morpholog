@@ -132,7 +132,7 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
     assert_eq!(asserted_claims.len(), 5);
     assert_eq!(retracted_claims.len(), 0);
     assert_eq!(emitted_intents.len(), 1);
-    assert_eq!(emitted_intents[0].name.as_str(), "NetSettlementCreated");
+    assert_eq!(emitted_intents[0].name, "NetSettlementCreated");
 
     // DB state.
     let claim_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM morpholog.claims")
@@ -221,7 +221,7 @@ async fn propose_against_pg_does_not_load_unreferenced_predicates() {
     );
     assert_eq!(retracted_claims.len(), 0);
     assert_eq!(emitted_intents.len(), 1);
-    assert_eq!(emitted_intents[0].name.as_str(), "NetSettlementCreated");
+    assert_eq!(emitted_intents[0].name, "NetSettlementCreated");
 
     // DB-side: same audit/outbox shape as the baseline, and the
     // untouched noise claims must still be present.
@@ -680,7 +680,7 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     // emitted_intents: Vec<IntentInstance>
     let intents: Vec<IntentInstance> = serde_json::from_value(intents_json).unwrap();
     assert_eq!(intents.len(), 1);
-    assert_eq!(intents[0].name.as_str(), "NetSettlementCreated");
+    assert_eq!(intents[0].name, "NetSettlementCreated");
 }
 
 // ============================================================
@@ -1070,7 +1070,7 @@ async fn double_entry_full_chain_through_pg() {
         3,
         "1 JournalEntry + 2 JournalLine asserts"
     );
-    assert_eq!(emitted_intents[0].name.as_str(), "JournalEntryPosted");
+    assert_eq!(emitted_intents[0].name, "JournalEntryPosted");
 
     // 2. Close the period.
     let outcome = common::propose_pg_with_test_actor(
@@ -1090,7 +1090,7 @@ async fn double_entry_full_chain_through_pg() {
         panic!("step 2 expected Committed, got {outcome:?}");
     };
     assert_eq!(asserted_claims.len(), 1, "1 PeriodClosed assert");
-    assert_eq!(emitted_intents[0].name.as_str(), "PeriodClosed");
+    assert_eq!(emitted_intents[0].name, "PeriodClosed");
 
     // 3. Restate the entry with a corrected amount (101). Restatement
     //    does not check PeriodClosed - it is the closed-period path.
@@ -1129,7 +1129,7 @@ async fn double_entry_full_chain_through_pg() {
         0,
         "restatement is fully append-only (no retractable pointers)"
     );
-    assert_eq!(emitted_intents[0].name.as_str(), "JournalEntryRestated");
+    assert_eq!(emitted_intents[0].name, "JournalEntryRestated");
 
     // Final DB shape: 8 claims total.
     //   2 JournalEntry (original + restated)
@@ -1354,7 +1354,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     );
     assert_eq!(first.retracted_claims.len(), 0);
     assert_eq!(first.emitted_intents.len(), 1);
-    assert_eq!(first.emitted_intents[0].name.as_str(), "JournalEntryPosted");
+    assert_eq!(first.emitted_intents[0].name, "JournalEntryPosted");
     assert_eq!(first.invariant_epoch, 1);
 
     // invariants_checked: every invariant active at admission, named with
@@ -1364,7 +1364,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
         first
             .invariants_checked
             .iter()
-            .any(|c| c.name.as_str() == "balanced_posted_entry" && c.version == 1)
+            .any(|c| c.name == "balanced_posted_entry" && c.version == 1)
     );
 
     // close_period is a no-arg-shape transformation that asserts one
@@ -1373,7 +1373,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     assert_eq!(second.arguments, vec![ledger_period()]);
     assert_eq!(second.asserted_claims.len(), 1);
     assert_eq!(second.asserted_claims[0].predicate.as_str(), "PeriodClosed");
-    assert_eq!(second.emitted_intents[0].name.as_str(), "PeriodClosed");
+    assert_eq!(second.emitted_intents[0].name, "PeriodClosed");
 }
 
 #[tokio::test]
@@ -1933,7 +1933,7 @@ async fn approval_controls_full_chain_through_pg() {
     assert!(
         emitted_intents
             .iter()
-            .any(|i| i.name.as_str() == "DocumentApprovedWithinLimit"),
+            .any(|i| i.name == "DocumentApprovedWithinLimit"),
         "approve_within_limit must emit DocumentApprovedWithinLimit",
     );
     let audit_rows = list_audit_rows(&pool).await.unwrap();
@@ -2121,7 +2121,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     assert!(
         emitted_intents
             .iter()
-            .any(|i| i.name.as_str() == "ClaimPaymentRequested"),
+            .any(|i| i.name == "ClaimPaymentRequested"),
         "authorise_settlement must emit ClaimPaymentRequested",
     );
     let audit_rows = list_audit_rows(&pool).await.unwrap();

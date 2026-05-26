@@ -159,6 +159,31 @@ impl std::fmt::Display for IntentName {
     }
 }
 
+/// Equality against a string literal for the opaque identifier newtypes.
+/// Lets `name == "Foo"` and `assert_eq!(name, "Foo")` work without exposing
+/// the inner string for general use - distinct from `Deref`/`AsRef`/`Borrow`,
+/// which would let the newtype masquerade as a `&str` everywhere. Comparison
+/// to a literal is safe and legible; it does not weaken cross-type distinctness
+/// (an `IntentName` still cannot be compared to a `PredicateName`).
+macro_rules! impl_eq_str {
+    ($t:ty) => {
+        impl PartialEq<str> for $t {
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
+        }
+        impl PartialEq<&str> for $t {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+    };
+}
+impl_eq_str!(Subject);
+impl_eq_str!(Var);
+impl_eq_str!(PredicateName);
+impl_eq_str!(IntentName);
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is

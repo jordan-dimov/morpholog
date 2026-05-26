@@ -169,7 +169,7 @@ fn second_credit_for_the_same_measurement_violates_no_double_issuance() {
             explanation.verdict
         );
     };
-    assert_eq!(inv.name.as_str(), "no_double_issuance");
+    assert_eq!(inv.name, "no_double_issuance");
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn reissuing_one_credit_against_a_second_measurement_is_an_invariant_rejection()
             explanation.verdict
         );
     };
-    assert_eq!(inv.name.as_str(), "credit_backed_by_one_measurement");
+    assert_eq!(inv.name, "credit_backed_by_one_measurement");
 }
 
 // ============================================================

@@ -35,7 +35,7 @@ fn invariant_round_trips_through_equality() {
 #[test]
 fn invariant_has_expected_top_level_shape() {
     let inv = settlement_netting::net_settlement_has_lines();
-    assert_eq!(inv.name.as_str(), "net_settlement_has_lines");
+    assert_eq!(inv.name, "net_settlement_has_lines");
     assert_eq!(inv.version, 1);
     assert!(matches!(inv.body, Prop::Implies { .. }));
 }
@@ -51,7 +51,7 @@ fn no_double_netting_round_trips() {
 #[test]
 fn no_double_netting_has_expected_shape() {
     let inv = settlement_netting::no_double_netting();
-    assert_eq!(inv.name.as_str(), "no_double_netting");
+    assert_eq!(inv.name, "no_double_netting");
     assert_eq!(inv.version, 1);
     let Prop::Implies { left, right } = inv.body else {
         panic!("body should be Implies");
@@ -71,7 +71,7 @@ fn net_amount_equals_lines_round_trips() {
 #[test]
 fn net_amount_equals_lines_has_expected_shape() {
     let inv = settlement_netting::net_amount_equals_lines();
-    assert_eq!(inv.name.as_str(), "net_amount_equals_lines");
+    assert_eq!(inv.name, "net_amount_equals_lines");
     let Prop::Implies { left, right } = inv.body else {
         panic!("body should be Implies");
     };
@@ -94,11 +94,8 @@ fn create_net_settlement_round_trips() {
 #[test]
 fn create_net_settlement_has_expected_shape() {
     let t = settlement_netting::create_net_settlement();
-    assert_eq!(t.name.as_str(), "create_net_settlement");
-    assert_eq!(
-        t.parameters,
-        vec!["party_a".into(), "party_b".into(), "lines".into()]
-    );
+    assert_eq!(t.name, "create_net_settlement");
+    assert_eq!(t.parameters, vec!["party_a", "party_b", "lines"]);
     assert_eq!(t.body.len(), 6);
     assert!(matches!(t.body[0], Stmt::Require(_)));
     assert!(matches!(t.body[1], Stmt::LetNewSubject { .. }));
@@ -233,7 +230,7 @@ fn propose_accepts_well_formed_netting() {
     assert_eq!(asserted_claims.len(), 5);
     assert_eq!(retracted_claims.len(), 0);
     assert_eq!(emitted_intents.len(), 1);
-    assert_eq!(emitted_intents[0].name.as_str(), "NetSettlementCreated");
+    assert_eq!(emitted_intents[0].name, "NetSettlementCreated");
 
     // Exactly one NetSettlement assertion with the expected total.
     let net_settlement = asserted_claims

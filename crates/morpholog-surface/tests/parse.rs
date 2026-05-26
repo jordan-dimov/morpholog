@@ -21,18 +21,18 @@ predicate ClaimReported(claim_id: Subject, policy_id: Subject, amount: Decimal)
 predicate SettlementPaid(claim_id: Subject, paid_at: Date)
 "#;
     let program = parse_program(source).expect("parse should succeed");
-    assert_eq!(program.name.as_str(), "billing");
+    assert_eq!(program.name, "billing");
     assert_eq!(program.predicates.len(), 3);
     assert!(program.invariants.is_empty());
     assert!(program.transformations.is_empty());
     assert!(program.derived_claims.is_empty());
 
     let policy = &program.predicates[0];
-    assert_eq!(policy.name.as_str(), "Policy");
+    assert_eq!(policy.name, "Policy");
     assert_eq!(policy.args.len(), 2);
-    assert_eq!(policy.args[0].name.as_str(), "policy_id");
+    assert_eq!(policy.args[0].name, "policy_id");
     assert_eq!(policy.args[0].kind, PredicateArgKind::Subject);
-    assert_eq!(policy.args[1].name.as_str(), "aggregate_limit");
+    assert_eq!(policy.args[1].name, "aggregate_limit");
     assert_eq!(policy.args[1].kind, PredicateArgKind::Decimal);
 }
 
@@ -79,10 +79,10 @@ predicate Foo(a: Subject) -- comment after decl
 predicate Bar(b: Decimal)
 "#;
     let program = parse_program(source).expect("comments should be skipped");
-    assert_eq!(program.name.as_str(), "with_comments");
+    assert_eq!(program.name, "with_comments");
     assert_eq!(program.predicates.len(), 2);
-    assert_eq!(program.predicates[0].name.as_str(), "Foo");
-    assert_eq!(program.predicates[1].name.as_str(), "Bar");
+    assert_eq!(program.predicates[0].name, "Foo");
+    assert_eq!(program.predicates[1].name, "Bar");
 }
 
 #[test]
@@ -92,7 +92,7 @@ program demo
 predicate Marker()
 "#;
     let program = parse_program(source).expect("empty arg list should parse");
-    assert_eq!(program.predicates[0].name.as_str(), "Marker");
+    assert_eq!(program.predicates[0].name, "Marker");
     assert!(program.predicates[0].args.is_empty());
 }
 
@@ -100,7 +100,7 @@ predicate Marker()
 fn program_with_no_predicates_is_valid() {
     let source = "program empty_for_now\n";
     let program = parse_program(source).expect("header-only programme should parse");
-    assert_eq!(program.name.as_str(), "empty_for_now");
+    assert_eq!(program.name, "empty_for_now");
     assert!(program.predicates.is_empty());
 }
 
@@ -214,7 +214,7 @@ invariant something: Foo(x)
     let program = parse_program(source).expect("parse should succeed");
     assert_eq!(program.invariants.len(), 1);
     let inv = &program.invariants[0];
-    assert_eq!(inv.name.as_str(), "something");
+    assert_eq!(inv.name, "something");
     assert_eq!(inv.version, 1);
     // Body is the claim Foo(x).
     use morpholog_core::Prop;
@@ -276,9 +276,9 @@ invariant c: R()
 "#;
     let program = parse_program(source).expect("parse should succeed");
     assert_eq!(program.invariants.len(), 3);
-    assert_eq!(program.invariants[0].name.as_str(), "a");
-    assert_eq!(program.invariants[1].name.as_str(), "b");
-    assert_eq!(program.invariants[2].name.as_str(), "c");
+    assert_eq!(program.invariants[0].name, "a");
+    assert_eq!(program.invariants[1].name, "b");
+    assert_eq!(program.invariants[2].name, "c");
 }
 
 #[test]
@@ -295,10 +295,10 @@ invariant cap_b: Bar(y)
     let program = parse_program(source).expect("interleaved decls should parse");
     assert_eq!(program.predicates.len(), 2);
     assert_eq!(program.invariants.len(), 2);
-    assert_eq!(program.predicates[0].name.as_str(), "Foo");
-    assert_eq!(program.predicates[1].name.as_str(), "Bar");
-    assert_eq!(program.invariants[0].name.as_str(), "cap_a");
-    assert_eq!(program.invariants[1].name.as_str(), "cap_b");
+    assert_eq!(program.predicates[0].name, "Foo");
+    assert_eq!(program.predicates[1].name, "Bar");
+    assert_eq!(program.invariants[0].name, "cap_a");
+    assert_eq!(program.invariants[1].name, "cap_b");
 }
 
 #[test]
@@ -387,7 +387,7 @@ fn parses_transformation_with_zero_params() {
     let program = parse_program(source).expect("parse should succeed");
     assert_eq!(program.transformations.len(), 1);
     let t = &program.transformations[0];
-    assert_eq!(t.name.as_str(), "noop");
+    assert_eq!(t.name, "noop");
     assert!(t.parameters.is_empty());
     assert_eq!(t.body.len(), 1);
 }
@@ -399,7 +399,7 @@ fn parses_transformation_with_params() {
                   \x20\x20\x20\x20require Bar(x)\n";
     let program = parse_program(source).expect("parse should succeed");
     let t = &program.transformations[0];
-    assert_eq!(t.parameters, vec!["x".into(), "y".into(), "z".into()]);
+    assert_eq!(t.parameters, vec!["x", "y", "z"]);
 }
 
 #[test]
@@ -633,7 +633,7 @@ fn parses_emit_statement() {
     let Stmt::Emit(intent) = &body[0] else {
         panic!("expected Stmt::Emit, got {:?}", body[0]);
     };
-    assert_eq!(intent.name.as_str(), "Notify");
+    assert_eq!(intent.name, "Notify");
     assert_eq!(intent.args.len(), 1);
 }
 
@@ -834,9 +834,9 @@ fn parses_simple_derived_claim() {
     assert_eq!(program.derived_claims.len(), 1);
     let d = &program.derived_claims[0];
     assert_eq!(d.predicate.as_str(), "Total");
-    assert_eq!(d.keys, vec!["x".into()]);
+    assert_eq!(d.keys, vec!["x"]);
     assert_eq!(d.values.len(), 1);
-    assert_eq!(d.values[0].name.as_str(), "sum_amount");
+    assert_eq!(d.values[0].name, "sum_amount");
 }
 
 #[test]
@@ -852,8 +852,8 @@ fn parses_derived_with_multiple_values() {
     let program = parse_program(source).expect("multi-value derived should parse");
     let d = &program.derived_claims[0];
     assert_eq!(d.values.len(), 2);
-    assert_eq!(d.values[0].name.as_str(), "total_debits");
-    assert_eq!(d.values[1].name.as_str(), "total_credits");
+    assert_eq!(d.values[0].name, "total_debits");
+    assert_eq!(d.values[1].name, "total_credits");
 }
 
 #[test]
@@ -866,7 +866,7 @@ fn parses_derived_with_multiple_keys() {
                   \x20\x20\x20\x20value total = sum(a | Posting(account, period, a))\n";
     let program = parse_program(source).expect("multi-key derived should parse");
     let d = &program.derived_claims[0];
-    assert_eq!(d.keys, vec!["account".into(), "period".into()]);
+    assert_eq!(d.keys, vec!["account", "period"]);
 }
 
 #[test]
