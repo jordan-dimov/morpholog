@@ -20,7 +20,7 @@ fn every_registered_program_yields_one_guarantee_per_invariant() {
             program.name,
         );
         for (g, inv) in gs.iter().zip(program.invariants.iter()) {
-            assert_eq!(g.invariant, inv.name);
+            assert_eq!(g.invariant, inv.name.as_str());
             assert!(!g.rule.is_empty(), "every guarantee renders its rule");
         }
     }

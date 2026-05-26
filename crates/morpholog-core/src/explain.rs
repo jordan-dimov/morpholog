@@ -136,12 +136,13 @@ pub struct MissingClaim {
 /// derives the explanation from the trace.
 pub fn explain(program: &Program, transition: &Transition, pre_state: &State) -> Explanation {
     let transition_ref = TransitionRef {
-        transformation: transition.transformation_name.clone(),
+        transformation: transition.transformation_name.to_string(),
         args: transition.args.iter().map(render_eval_value).collect(),
         actor: transition.actor.to_string(),
     };
 
-    let Some(transformation) = program.transformation(&transition.transformation_name) else {
+    let Some(transformation) = program.transformation(transition.transformation_name.as_str())
+    else {
         return Explanation {
             transition: transition_ref,
             verdict: Verdict::Rejected(Rejection::Error(ErrorRejection {
@@ -269,7 +270,7 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
         Some(TraceEntry::InvariantCheck {
             name, expression, ..
         }) => Verdict::Rejected(Rejection::Invariant(InvariantRejection {
-            name: name.clone(),
+            name: name.to_string(),
             rule: expression.clone(),
         })),
         _ => Verdict::Rejected(Rejection::Error(ErrorRejection {

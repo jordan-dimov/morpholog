@@ -542,7 +542,7 @@ fn idempotency_key_matches_golden_hash() {
 fn retract_marker_transformation() -> Transformation {
     let var = |s: &str| Term::Var(s.into());
     Transformation {
-        name: "retract_marker".to_string(),
+        name: "retract_marker".into(),
         parameters: vec!["subject".into()],
         body: vec![Stmt::Retract {
             predicate: "Marker".into(),
@@ -1765,7 +1765,7 @@ async fn audit_read_rejects_non_subject_actor() {
 fn double_emit_transformation() -> Transformation {
     use morpholog_core::ir_builder::{emit, subj as lit_subj};
     Transformation {
-        name: "double_emit".to_string(),
+        name: "double_emit".into(),
         parameters: vec![],
         body: vec![
             emit("Ping", vec![lit_subj("p")]),

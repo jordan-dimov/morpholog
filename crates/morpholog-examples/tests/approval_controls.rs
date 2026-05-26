@@ -357,7 +357,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
 #[test]
 fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
     let inv = Invariant {
-        name: "improperly_uses_actor".to_string(),
+        name: "improperly_uses_actor".into(),
         version: 1,
         body: Prop::Claim {
             predicate: "AnyPredicate".into(),
@@ -375,7 +375,7 @@ fn term_actor_unbound_error_is_position_independent() {
     // pre-pass in find_claim_matches makes the doctrine
     // position-independent.
     let inv = Invariant {
-        name: "actor_masked_by_earlier_missing_literal".to_string(),
+        name: "actor_masked_by_earlier_missing_literal".into(),
         version: 1,
         body: Prop::Claim {
             predicate: "AnyPredicate".into(),

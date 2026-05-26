@@ -50,8 +50,8 @@ pub use explain::{
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, IntentName,
-    Invariant, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt,
-    Subject, Term, Transformation, Value, ValueExpr, Var,
+    Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName,
+    Program, Prop, Stmt, Subject, Term, Transformation, TransformationName, Value, ValueExpr, Var,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -1005,7 +1005,7 @@ mod tests {
     /// the statement contract is exercised against a real transformation.
     fn single_stmt_transformation(name: &str, body: Vec<Stmt>) -> Transformation {
         Transformation {
-            name: name.to_string(),
+            name: name.into(),
             parameters: vec![],
             body,
         }
@@ -1153,7 +1153,7 @@ mod tests {
         // the Policy pattern. Without the narrowing, the second
         // bind_one would see two Policy candidates and error.
         let t = Transformation {
-            name: "narrow_by_var".to_string(),
+            name: "narrow_by_var".into(),
             parameters: vec![],
             body: vec![
                 let_(
@@ -1200,7 +1200,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "iterate_lines".to_string(),
+            name: "iterate_lines".into(),
             parameters: vec!["lines".into()],
             body: vec![for_(
                 "line",
@@ -1252,7 +1252,7 @@ mod tests {
             ],
         }]);
         let t = Transformation {
-            name: "lookup_my_authority".to_string(),
+            name: "lookup_my_authority".into(),
             parameters: vec![],
             body: vec![
                 bind_one(claim("Authority", vec![actor(), var("limit")])),
@@ -1295,12 +1295,12 @@ mod tests {
     fn one_claim_program() -> Program {
         use ir_builder::*;
         Program {
-            name: "tiny".to_string(),
+            name: "tiny".into(),
             predicates: vec![predicate("Echo").subject("id").decimal("amount").build()],
             intents: vec![],
             invariants: vec![],
             transformations: vec![Transformation {
-                name: "echo".to_string(),
+                name: "echo".into(),
                 parameters: params(&["id", "amount"]),
                 body: vec![assert_("Echo", vec![var("id"), var("amount")])],
             }],
@@ -1360,7 +1360,7 @@ mod tests {
         use ir_builder::*;
         let mut p = one_claim_program();
         p.invariants.push(Invariant {
-            name: "bad_inv".to_string(),
+            name: "bad_inv".into(),
             version: 1,
             // Echo has arity 2; invariant body uses arity 3.
             body: claim("Echo", vec![var("x"), var("y"), var("z")]),
@@ -1407,7 +1407,7 @@ mod tests {
             predicate: "Computed".into(),
             keys: vec!["id".into()],
             values: vec![DerivedValue {
-                name: "n".to_string(),
+                name: "n".into(),
                 expr: term(var("id")),
             }],
             domain: claim("Echo", vec![var("id"), wildcard()]),
@@ -1440,7 +1440,7 @@ mod tests {
             predicate: "Computed".into(),
             keys: vec!["id".into()],
             values: vec![DerivedValue {
-                name: "balance".to_string(),
+                name: "balance".into(),
                 expr: term(var("id")),
             }],
             domain: claim("Echo", vec![var("id"), wildcard()]),
@@ -1520,7 +1520,7 @@ mod tests {
             ],
         }]);
         let t = Transformation {
-            name: "happy".to_string(),
+            name: "happy".into(),
             parameters: vec!["pid".into()],
             body: vec![
                 require(claim("Policy", vec![var("pid"), wildcard()])),
@@ -1562,7 +1562,7 @@ mod tests {
         use ir_builder::*;
         let state = State::default();
         let t = Transformation {
-            name: "needs_policy".to_string(),
+            name: "needs_policy".into(),
             parameters: vec![],
             body: vec![require(claim(
                 "Policy",
@@ -1594,7 +1594,7 @@ mod tests {
         use ir_builder::*;
         let state = State::default();
         let t = Transformation {
-            name: "lookup_missing".to_string(),
+            name: "lookup_missing".into(),
             parameters: vec![],
             body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
         };
@@ -1629,7 +1629,7 @@ mod tests {
             ],
         }]);
         let t = Transformation {
-            name: "lookup".to_string(),
+            name: "lookup".into(),
             parameters: vec![],
             body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
         };
@@ -1676,7 +1676,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "ambiguous".to_string(),
+            name: "ambiguous".into(),
             parameters: vec![],
             body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
         };
@@ -1715,7 +1715,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "wildcard_retract".to_string(),
+            name: "wildcard_retract".into(),
             parameters: vec![],
             body: vec![retract("MayApprove", vec![wildcard()])],
         };
@@ -1755,7 +1755,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "iterate".to_string(),
+            name: "iterate".into(),
             parameters: vec!["lines".into()],
             body: vec![for_(
                 "line",
@@ -1795,7 +1795,7 @@ mod tests {
         use ir_builder::*;
         let state = State::default();
         let t = Transformation {
-            name: "fires_invariant".to_string(),
+            name: "fires_invariant".into(),
             parameters: vec![],
             body: vec![assert_(
                 "X",
@@ -1806,7 +1806,7 @@ mod tests {
         // asserts X but not Y, so the invariant fails on the
         // candidate state.
         let inv = Invariant {
-            name: "x_implies_y".to_string(),
+            name: "x_implies_y".into(),
             version: 1,
             body: implies(
                 claim("X", vec![Term::Literal(Value::Subject("x1".into()))]),
@@ -1850,7 +1850,7 @@ mod tests {
             ],
         }]);
         let t = Transformation {
-            name: "lookup".to_string(),
+            name: "lookup".into(),
             parameters: vec![],
             body: vec![
                 bind_one(claim("Policy", vec![var("pid"), var("limit")])),
@@ -1902,7 +1902,7 @@ mod tests {
         }]);
         // A holds (x is in state); B does not (no Bs in state).
         let t = Transformation {
-            name: "needs_a_and_b".to_string(),
+            name: "needs_a_and_b".into(),
             parameters: vec![],
             body: vec![require(and(vec![
                 claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
@@ -1939,7 +1939,7 @@ mod tests {
         // fails at its second conjunct (MissingPredicate). Walker
         // should drill to that, not stop at the outer or inner And.
         let t = Transformation {
-            name: "nested_and".to_string(),
+            name: "nested_and".into(),
             parameters: vec![],
             body: vec![require(and(vec![
                 claim("A", vec![Term::Literal(Value::Subject("x".into()))]),
@@ -1982,7 +1982,7 @@ mod tests {
         }]);
         // Trigger(x) -> Required(x). Trigger holds, Required does not.
         let t = Transformation {
-            name: "needs_required_when_triggered".to_string(),
+            name: "needs_required_when_triggered".into(),
             parameters: vec![],
             body: vec![require(implies(
                 claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
@@ -2016,7 +2016,7 @@ mod tests {
             args: vec![EvalValue::Subject("x".into())],
         }]);
         let t = Transformation {
-            name: "all_lines_good".to_string(),
+            name: "all_lines_good".into(),
             parameters: vec!["lines".into()],
             body: vec![require(forall(
                 "line",
@@ -2060,7 +2060,7 @@ mod tests {
         }]);
         // `not(Forbidden(x))` fails because Forbidden(x) holds.
         let t = Transformation {
-            name: "no_forbidden".to_string(),
+            name: "no_forbidden".into(),
             parameters: vec![],
             body: vec![require(not(claim(
                 "Forbidden",
@@ -2101,7 +2101,7 @@ mod tests {
         use ir_builder::*;
         let state = State::default();
         let t = Transformation {
-            name: "needs_missing".to_string(),
+            name: "needs_missing".into(),
             parameters: vec![],
             body: vec![require(claim(
                 "Missing",
@@ -2141,7 +2141,7 @@ mod tests {
         use ir_builder::*;
         let state = State::default();
         let t = Transformation {
-            name: "lookup_missing".to_string(),
+            name: "lookup_missing".into(),
             parameters: vec![],
             body: vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
         };
@@ -2192,7 +2192,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "needs_shared_x".to_string(),
+            name: "needs_shared_x".into(),
             parameters: vec![],
             body: vec![require(and(vec![
                 claim("A", vec![var("x")]),
@@ -2233,7 +2233,7 @@ mod tests {
         // points at the failing And conjunct, not at the implies.
         let state = State::default();
         let t = Transformation {
-            name: "needs_failing_conjunct".to_string(),
+            name: "needs_failing_conjunct".into(),
             parameters: vec![],
             body: vec![require(and(vec![
                 // Implies with failing left: vacuously true; not a
@@ -2284,7 +2284,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "needs_both_steps".to_string(),
+            name: "needs_both_steps".into(),
             parameters: vec![],
             body: vec![require(implies(
                 claim("Trigger", vec![Term::Literal(Value::Subject("x".into()))]),
@@ -2332,7 +2332,7 @@ mod tests {
             },
         ]);
         let t = Transformation {
-            name: "every_line_has_a_and_b".to_string(),
+            name: "every_line_has_a_and_b".into(),
             parameters: vec!["lines".into()],
             body: vec![require(forall(
                 "line",
@@ -2374,7 +2374,7 @@ mod tests {
         use ir_builder::*;
         let state = State::default();
         let t = Transformation {
-            name: "needs_some_x".to_string(),
+            name: "needs_some_x".into(),
             parameters: vec![],
             body: vec![require(exists("x", claim("Missing", vec![var("x")])))],
         };
@@ -2416,7 +2416,7 @@ mod tests {
             args: vec![EvalValue::Subject("x".into())],
         }]);
         let t = Transformation {
-            name: "unique_approved_and_active".to_string(),
+            name: "unique_approved_and_active".into(),
             parameters: vec![],
             body: vec![bind_one(and(vec![
                 claim("Approved", vec![var("x")]),

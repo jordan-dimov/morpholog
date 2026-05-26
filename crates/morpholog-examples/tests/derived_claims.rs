@@ -200,7 +200,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         predicate: "DecimalSub".into(),
         keys: vec!["k".into()],
         values: vec![DerivedValue {
-            name: "result".to_string(),
+            name: "result".into(),
             expr: ValueExpr::Sub(
                 Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                     "100".to_string(),
@@ -225,7 +225,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         predicate: "TypeError".into(),
         keys: vec!["k".into()],
         values: vec![DerivedValue {
-            name: "result".to_string(),
+            name: "result".into(),
             expr: ValueExpr::Sub(
                 Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                     "1".to_string(),

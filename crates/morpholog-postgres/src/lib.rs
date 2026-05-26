@@ -10,9 +10,10 @@ pub mod testing;
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{
-    ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, Outcome,
-    PredicateName, State, Subject, TraceEntry, TracedProposal, Transformation, Transition,
-    enumerate_derived, predicates_referenced_by_derived, propose, propose_with_trace,
+    ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, InvariantName,
+    Outcome, PredicateName, State, Subject, TraceEntry, TracedProposal, Transformation,
+    TransformationName, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
+    propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -377,7 +378,7 @@ fn compute_load_scope(
 /// kernel variant is a transient per-call diagnostic entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditedInvariantCheck {
-    pub name: String,
+    pub name: InvariantName,
     pub version: u32,
 }
 
@@ -456,7 +457,7 @@ async fn write_accepted(
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(transition_id)
-    .bind(&transformation.name)
+    .bind(transformation.name.as_str())
     .bind(serde_json::to_value(&transition.args)?)
     // Serialise via the tagged `EvalValue::Subject` so the `actor` column
     // keeps its v0 shape (`#[serde(with = "actor_repr")]` does not apply
@@ -547,7 +548,7 @@ pub fn compute_idempotency_key(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditRow {
     pub transition_id: Uuid,
-    pub transformation_name: String,
+    pub transformation_name: TransformationName,
     pub arguments: Vec<EvalValue>,
     #[serde(with = "morpholog_core::actor_repr")]
     pub actor: Subject,
@@ -743,7 +744,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
             )| {
                 Ok(AuditRow {
                     transition_id,
-                    transformation_name,
+                    transformation_name: TransformationName::from(transformation_name),
                     arguments: serde_json::from_value(args_json)?,
                     // Decode the tagged actor JSON and extract the subject,
                     // erroring at this boundary if the column somehow holds a

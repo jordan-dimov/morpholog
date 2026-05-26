@@ -44,7 +44,7 @@ pub fn guarantees(program: &Program) -> Vec<Guarantee> {
         .invariants
         .iter()
         .map(|inv| Guarantee {
-            invariant: inv.name.clone(),
+            invariant: inv.name.to_string(),
             rule: format::format_prop_inline(&inv.body),
             // A `not(X)` invariant forbids exactly `X`; that is the only
             // shape whose bad state is mechanically obvious in v0.

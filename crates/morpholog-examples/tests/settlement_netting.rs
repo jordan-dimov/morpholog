@@ -337,7 +337,7 @@ fn propose_rejects_transition_name_mismatch() {
     let t = settlement_netting::create_net_settlement();
     let pre = netting_pre_state(vec![]);
     let transition = Transition {
-        transformation_name: "some_other_name".to_string(),
+        transformation_name: "some_other_name".into(),
         args: netting_args(),
         actor: common::test_actor(),
     };
@@ -348,7 +348,7 @@ fn propose_rejects_transition_name_mismatch() {
     match err {
         EvalError::TypeMismatch(msg) => {
             assert!(
-                msg.contains("some_other_name") && msg.contains(&t.name),
+                msg.contains("some_other_name") && msg.contains(t.name.as_str()),
                 "error message should name both sides: got `{msg}`"
             );
         }

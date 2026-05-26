@@ -432,7 +432,7 @@ mod tests {
     fn format_program_starts_with_program_header() {
         let p = Program {
             predicates: vec![],
-            name: "demo".to_string(),
+            name: "demo".into(),
             intents: vec![],
             invariants: vec![],
             transformations: vec![],
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn format_transformation_shows_parameter_list_and_body_indented() {
         let t = Transformation {
-            name: "open_trial".to_string(),
+            name: "open_trial".into(),
             parameters: params(&["trial_id"]),
             body: vec![
                 assert_("Trial", vec![var("trial_id")]),
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn format_program_renders_predicates_section_consecutively() {
         let p = Program {
-            name: "tiny".to_string(),
+            name: "tiny".into(),
             predicates: vec![
                 predicate("Foo").subject("a").build(),
                 predicate("Bar").decimal("n").build(),
@@ -610,11 +610,11 @@ mod tests {
     fn format_program_output_ends_with_newline() {
         let p = Program {
             predicates: vec![],
-            name: "demo".to_string(),
+            name: "demo".into(),
             intents: vec![],
             invariants: vec![],
             transformations: vec![Transformation {
-                name: "noop".to_string(),
+                name: "noop".into(),
                 parameters: vec![],
                 body: vec![],
             }],

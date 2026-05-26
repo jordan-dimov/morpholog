@@ -20,7 +20,7 @@ use morpholog_examples::carbon_credit_provenance as cc;
 
 fn transition(name: &str, args: Vec<EvalValue>, actor: &str) -> Transition {
     Transition {
-        transformation_name: name.to_string(),
+        transformation_name: name.into(),
         args,
         actor: Subject::from(actor),
     }

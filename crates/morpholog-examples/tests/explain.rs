@@ -29,7 +29,7 @@ use morpholog_surface::parse_program;
 
 fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> Transition {
     Transition {
-        transformation_name: name.to_string(),
+        transformation_name: name.into(),
         args,
         actor: Subject::from(actor),
     }
