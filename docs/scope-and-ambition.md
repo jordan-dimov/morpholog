@@ -193,7 +193,7 @@ The cost of this discipline is that the parser does real translation work (infix
 | `on_or_before` `before` `on_or_after` `after` (infix) | `Prop::Compare { op, domain: Date }` | Distinct keywords (not overloaded `<=`) for civil-date comparison; `on_or_*` are inclusive, `before`/`after` strict. Reads as business prose and aligns with the `[from, to]` inclusive-window doctrine. `before`/`after` are matched contextually (comparator position only), so they remain usable as variable names. Operands are type-checked as `EvalValue::Date`; using them on decimals surfaces as a runtime `TypeMismatch`. |
 | `=`, `!=` (infix) | `Prop::Eq` (ValueExpr, ValueExpr), `Prop::Neq` (ValueExpr, ValueExpr) | Both operate on full expressions and are symmetric: `a + 1 != b` is as legal as `a + 1 = b`. Not tied to one domain like the ordered comparators, but the two operands must share a kind - `=`/`!=` are kind-strict, with no silent coercion. |
 | `+`, `-` (infix) | `ValueExpr::Add`, `ValueExpr::Sub` (decimal) | Standard arithmetic notation, decimal-only. No unary minus until forced. |
-| `not`, `and`, `implies` (keywords) | `Prop::Not`, `Prop::And`, `Prop::Implies` | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Prop::And(Vec<Prop>)`; `implies` is right-associative. |
+| `not`, `and`, `or`, `implies` (keywords) | `Prop::Not`, `Prop::And`, `Prop::Or`, `Prop::Implies` | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Prop::And(Vec<Prop>)` and `or` into `Prop::Or(Vec<Prop>)`; `implies` is right-associative. |
 | `forall x in coll: body`, `exists x: body` | `Prop::Forall`, `Prop::Exists` | Bounded quantification is mathematical convention. The `in` clause on `forall` makes unbounded quantification syntactically impossible. `exists` carries no source clause because the IR's `Prop::Exists` doesn't model one - the bound variable is whatever the body matches. |
 | `sum(target | body)` | `ValueExpr::Sum` | Set-builder notation. The target is a variable to sum, or a decimal literal - `sum(1 | body)` counts the matches (the chess material census forced this). A general expression target awaits an example that needs it. |
 | `value Pred(args)` (with optional `default expr`) | `ValueExpr::ValueOf` | Claim-pattern form. The wildcard `_` in `args` marks the value position to extract. The kernel's `ValueOf { predicate, args, default }` is shaped this way deliberately; a `value(target | body)` shape would imply a general query and be more expressive than the IR. |
@@ -204,7 +204,7 @@ The cost of this discipline is that the parser does real translation work (infix
 **What this rules out:**
 
 - A surface form that maps to no IR construct (would be a fictitious operator).
-- A surface form that adds an interpretation the kernel does not have (e.g., `<` for strict decimal comparison - the kernel only has `Le`, so `<` is not in the surface until the kernel grows `Lt`).
+- A surface form that adds an interpretation the kernel does not have (e.g., date arithmetic like `@2026-05-22 + 30d` - the kernel compares dates but has no interval arithmetic, so the form stays out of the surface until a worked example forces the kernel to grow it).
 - A surface escape hatch like `unsafe_block { ... }` or `evaluate_in_rust(...)`.
 
 **What this leaves room for:**

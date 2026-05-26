@@ -108,7 +108,7 @@ Transition                       -- the value object proposed against a Transfor
 Term                             -- a node inside a claim's args, a comprehension binding, etc.
   Var(name)                      -- bound by surrounding context
   Wildcard                       -- matches anything
-  Literal(Value)                 -- IR literal (Subject or Decimal)
+  Literal(Value)                 -- IR literal (Subject, Decimal, or Date)
   Actor                          -- resolves to the proposing transition's actor;
                                     in invariant bodies it raises EvalError::UnboundActor
                                     (authority checks live in `require`, not in invariants)
@@ -231,7 +231,7 @@ Quantifier composition is non-commutative by design. `pre(forall x in S: body)` 
 
 `propose_with_trace` is `propose`'s diagnostic twin. It returns a `TracedProposal` that carries a structured `Vec<TraceEntry>` on **both** the success path (`Completed { outcome, trace }`) and the kernel-error path (`Errored { error, trace }`). The error path matters most: a multi-match `bind_one`, a type-mismatch `DateLe`, an unbound `Term::Actor` - each surfaces as an `EvalError`, and `propose`'s `Result<Outcome, EvalError>` shape would discard the run-up that led to the failure. `propose_with_trace` does not.
 
-One trace entry per transformation statement and per invariant check. `For` is nested - its `iterations` carry a sub-trace plus the iteration item per element. `Retract` records the actual retracted claims, not just a count. `BindOne` on a unique match records the full new binding context (sorted by variable name). `Require` records `match_count` on success, `reason` on rejection. Every expression-bearing entry renders its expression via `format_expr_inline`, so callers can assert on the failing predicate name instead of pattern-matching on reason strings.
+One trace entry per transformation statement and per invariant check. `For` is nested - its `iterations` carry a sub-trace plus the iteration item per element. `Retract` records the actual retracted claims, not just a count. `BindOne` on a unique match records the full new binding context (sorted by variable name). `Require` records `match_count` on success, `reason` on rejection. Every proposition-bearing entry renders its proposition via `format_prop_inline`, so callers can assert on the failing predicate name instead of pattern-matching on reason strings.
 
 **Scope: statement-level plus failure-walk on rejection paths.** Every statement that runs produces one trace entry. When a `require` or `bind_one` rejects, the trace's `failing_sub_expression` field (on `RequireOutcome::Rejected` and `BindOneOutcome::NoMatch`) carries the most specific sub-expression responsible:
 
