@@ -21,7 +21,7 @@ use crate::eval::{
 };
 use crate::format;
 use crate::ir::{
-    Claim, Intent, Invariant, InvariantName, Stmt, Subject, Term, Transformation,
+    Claim, Intent, Invariant, InvariantName, PredicateName, Stmt, Subject, Term, Transformation,
     TransformationName, Var,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
@@ -135,7 +135,7 @@ pub enum TraceEntry {
     /// wildcard retract that takes out more than expected is invisible
     /// if only the count is recorded.
     Retract {
-        predicate: String,
+        predicate: PredicateName,
         retracted: Vec<ClaimInstance>,
     },
     Emit {
@@ -544,7 +544,7 @@ pub(crate) fn execute_stmt(
                     }
                 }
                 trace.push(TraceEntry::Retract {
-                    predicate: predicate.to_string(),
+                    predicate: predicate.clone(),
                     retracted: retracted_here.clone(),
                 });
                 retracted.extend(retracted_here);
