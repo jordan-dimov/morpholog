@@ -159,22 +159,33 @@ impl std::fmt::Display for IntentName {
     }
 }
 
-/// Equality against a string literal for the opaque identifier newtypes.
-/// Lets `name == "Foo"` and `assert_eq!(name, "Foo")` work without exposing
-/// the inner string for general use - distinct from `Deref`/`AsRef`/`Borrow`,
-/// which would let the newtype masquerade as a `&str` everywhere. Comparison
-/// to a literal is safe and legible; it does not weaken cross-type distinctness
-/// (an `IntentName` still cannot be compared to a `PredicateName`).
+/// Equality against a string literal for the opaque identifier newtypes,
+/// symmetric so both `name == "Foo"` and `"Foo" == name` (and `assert_eq!` in
+/// either order) work without exposing the inner string for general use -
+/// distinct from `Deref`/`AsRef`/`Borrow`, which would let the newtype
+/// masquerade as a `&str` everywhere. Comparison to a literal is safe and
+/// legible; it does not weaken cross-type distinctness (an `IntentName` still
+/// cannot be compared to a `PredicateName`).
 macro_rules! impl_eq_str {
     ($t:ty) => {
         impl PartialEq<str> for $t {
             fn eq(&self, other: &str) -> bool {
-                self.0 == other
+                self.as_str() == other
             }
         }
         impl PartialEq<&str> for $t {
             fn eq(&self, other: &&str) -> bool {
-                self.0 == *other
+                self.as_str() == *other
+            }
+        }
+        impl PartialEq<$t> for str {
+            fn eq(&self, other: &$t) -> bool {
+                self == other.as_str()
+            }
+        }
+        impl PartialEq<$t> for &str {
+            fn eq(&self, other: &$t) -> bool {
+                *self == other.as_str()
             }
         }
     };
