@@ -1,8 +1,7 @@
 # Refactoring playbook
 
 How to make a type change ripple through the codebase safely when it touches
-dozens of sites. Learned the hard way from the `Subject` newtype and the
-`actor` retype.
+dozens of sites. Learned from the `Subject`, `actor`, and `Var` slices.
 
 ## The principle
 
@@ -20,13 +19,18 @@ Keep the tree green and committable at every step.
    the old call sites compiling (`From`, sometimes a temporary `Deref` /
    `AsRef`). Commit.
 2. **Migrate.** Flip the type at its definition. The compiler now prints the
-   exhaustive worklist. Rewrite the sites - mechanically, with a structural
-   tool, not by hand (below) - until `cargo check` is clean. Commit.
+   exhaustive worklist. Rewrite the sites guided by that worklist (below) until
+   `cargo check` is clean. Commit.
 3. **Contract.** Remove the temporary leniency from step 1, forcing the last
    lenient sites to be explicit. Commit.
 
 Each step is a separate, green, bisectable commit. If something breaks later,
 `git bisect` lands on the exact step.
+
+For an *opaque* newtype (no `Deref` / `AsRef` - the discipline here) there is
+usually nothing to make temporarily lenient, so expand (add the type) and
+migrate (flip and propagate) are the whole dance: `Subject`, `actor`, and `Var`
+each skipped the contract step.
 
 ## Clear the worklist: the compiler is the spine, ast-grep an accelerator
 
@@ -77,12 +81,23 @@ the newtype enforces "an actor is a subject" *once*, at the deserialisation
 boundary, and a round-trip test pins the `{"type":"subject", ...}` shape.
 Validation moves to the edge; the interior is check-free.
 
+## Watch the boundary costs - but don't re-open the newtype
+
+A newtype changes how it is *looked up*. When a foreign-typed key that is still
+outside the slice (a `String`) must query a `HashMap<NewType, _>`, build the
+`NewType` keys *once*, not per lookup: the per-lookup `NewType::from(...)` is a
+quiet allocation the old borrowed-`&str` lookup did not have (`Var` in
+`enumerate_derived` hit exactly this). The tempting "fix" is to give the newtype
+`Borrow<str>` or `Deref<Target = str>` so the bare `&str` key works again - do
+**not**: that re-opens the string-masquerade the opacity exists to close.
+Precompute the keys, or promote the foreign key into the newtype too.
+
 ## Where human attention goes
 
-After the structural rules run, `cargo check --message-format=short` lists the
-residual - usually a handful of genuine judgement sites (the codec, a boundary,
-an ordering). That is where careful review concentrates, not the mechanical
-hundred.
+The compiler worklist also tells you where to *look*: once the mechanical sites
+are cleared, the residual is a handful of genuine judgement sites (the codec, a
+boundary, an ordering). That is where careful review concentrates, not the
+mechanical hundred.
 
 ## Do it yourself; delegate only the genuinely-uniform mass
 
