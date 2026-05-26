@@ -381,7 +381,7 @@ pub(crate) fn unify_args(
                 }
             }
             Term::Actor => match actor {
-                Some(a) if *v == EvalValue::Subject(a.clone()) => {}
+                Some(a) if matches!(v, EvalValue::Subject(s) if s == a) => {}
                 _ => return None,
             },
         }
@@ -783,7 +783,7 @@ fn render_term(t: &Term, ctx: &EvalContext<'_>) -> String {
 /// as ISO-8601; collections bracketed.
 pub(crate) fn render_eval_value(v: &EvalValue) -> String {
     match v {
-        EvalValue::Subject(s) => s.as_str().to_string(),
+        EvalValue::Subject(s) => s.to_string(),
         EvalValue::Decimal(d) => d.to_string(),
         EvalValue::Bool(b) => b.to_string(),
         EvalValue::Date(d) => d.to_string(),
