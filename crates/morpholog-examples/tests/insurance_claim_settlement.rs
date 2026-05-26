@@ -11,7 +11,7 @@
 //!   exceeds the actor's limit; admits at the boundary.
 //!
 //! - **Cumulative aggregate-limit gate.** This is the load-bearing
-//!   `Expr::Add` shape. Pins under-cap admission, exact-fill boundary
+//!   `ValueExpr::Add` shape. Pins under-cap admission, exact-fill boundary
 //!   equality, and over-cap rejection that surfaces from the
 //!   `Le(Add(running, proposed), aggregate)` require.
 //!
@@ -312,7 +312,7 @@ fn authorise_settlement_at_actor_boundary_admits() {
 }
 
 // ============================================================
-// Cumulative aggregate-limit gate (the Expr::Add forcing function)
+// Cumulative aggregate-limit gate (the ValueExpr::Add forcing function)
 // ============================================================
 
 /// Setup for cumulative-cap tests: actor authority high enough that

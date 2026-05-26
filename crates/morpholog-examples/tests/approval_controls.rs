@@ -9,7 +9,7 @@
 //!   cannot impersonate another, revocation preserves history.
 //!
 //! - **Quantitative authority** (`ApprovalLimit`, `approve_within_limit`):
-//!   the same shape with a decimal `Expr::Compare` on amount-against-limit, boundary
+//!   the same shape with a decimal `Prop::Compare` on amount-against-limit, boundary
 //!   equality, stacked grants, per-doc-type scoping, and the
 //!   ill-typed-limit doctrine.
 //!
@@ -24,7 +24,7 @@ mod common;
 
 use common::{dec, has_claim, must_accept, must_accept_as, propose_as, subj};
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Expr, Invariant, Outcome, State, Term, Value,
+    ClaimInstance, EvalError, EvalValue, Invariant, Outcome, Prop, State, Term, Value,
     eval_invariant,
 };
 use morpholog_examples::approval_controls;
@@ -313,7 +313,7 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
 fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     // Doctrine: ill-typed admitted claims are structural corruption,
     // not business rejection. An `ApprovalLimit($actor, doc_type, X)`
-    // where `X` is not a decimal causes the decimal `Expr::Compare`
+    // where `X` is not a decimal causes the decimal `Prop::Compare`
     // (amount <= limit) to raise `EvalError::TypeMismatch`. Until typed
     // predicates land,
     // this example's callers are trusted to admit decimal limits.
@@ -359,7 +359,7 @@ fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
     let inv = Invariant {
         name: "improperly_uses_actor".to_string(),
         version: 1,
-        body: Expr::Claim {
+        body: Prop::Claim {
             predicate: "AnyPredicate".to_string(),
             args: vec![Term::Actor],
         },
@@ -377,7 +377,7 @@ fn term_actor_unbound_error_is_position_independent() {
     let inv = Invariant {
         name: "actor_masked_by_earlier_missing_literal".to_string(),
         version: 1,
-        body: Expr::Claim {
+        body: Prop::Claim {
             predicate: "AnyPredicate".to_string(),
             args: vec![
                 Term::Literal(Value::Subject("missing".to_string())),

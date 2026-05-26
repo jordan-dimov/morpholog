@@ -24,7 +24,7 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 /// before commit); pass `None` for state-only contexts (the read-side
 /// `enumerate_derived` consumers, the PostgreSQL adapter's standalone
 /// checks, tests that exercise an invariant against a hand-built state).
-/// Invariants that do not contain [`crate::Expr::Pre`] behave identically
+/// Invariants that do not contain [`crate::Prop::Pre`] behave identically
 /// in both modes. Invariants that *do* reach for `Pre` in a `None`
 /// context surface [`EvalError::PreStateUnavailable`].
 pub fn eval_invariant(
@@ -71,7 +71,7 @@ pub fn enumerate_derived(
     // Derived claims, like invariants in non-proposal contexts, evaluate
     // against admitted state with no transition in scope. `Term::Actor`
     // in a derived-claim body surfaces as `EvalError::UnboundActor`;
-    // `Expr::Pre` surfaces as `EvalError::PreStateUnavailable` (derived
+    // `Prop::Pre` surfaces as `EvalError::PreStateUnavailable` (derived
     // claims are a function of one state).
     let empty_bindings = Bindings::new();
     let domain_ctx = EvalContext::new(state, None, &empty_bindings, None);

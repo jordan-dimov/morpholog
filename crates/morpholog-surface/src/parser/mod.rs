@@ -40,9 +40,10 @@
 //! are allowed. Comments are stripped at the lexer; the parser
 //! never sees them.
 //!
-//! Asymmetry to honour: `Expr::In(Term, Term)` operates on *terms*,
-//! not expressions, as do claim-call arguments. `Eq`, `Neq`, the
-//! comparators, `Sub`, and `Add` operate on full expressions. The
+//! Asymmetry to honour: `Prop::In(Term, Term)` operates on *terms*,
+//! not expressions, as do claim-call arguments. `Eq`, `Neq`, and the
+//! comparators relate two value expressions; `Sub` and `Add` compose
+//! value expressions. The
 //! parser must therefore reject `a + 1 in xs` (membership is
 //! term-only) and `Foo(x + 1, y)` (claim arguments are terms), while
 //! `Foo + 1 != Bar` is accepted - `!=` is symmetric with `=`. These
@@ -61,13 +62,14 @@
 //!   expression) - per the doctrine, value-shaped primaries
 //!   (literals, wildcards, `sum`, `value`) cannot be `forall`
 //!   sources. When the source is a bare Term-wrapper, the parser
-//!   auto-lifts it to `Expr::In(Var(binding), source_term)`.
+//!   auto-lifts it to `Prop::In(Var(binding), source_term)`.
 //!
 //! Module layout: this parser file is split by concern. The
 //! programme-level parser (`parse_program`, `program_parser`,
 //! `RawProgram`, `TopLevelDecl`) lives in [`program`]; the
-//! expression-level parser (`parse_expression`, `expression_parser`,
-//! `CmpOp`, `expr_as_term`) lives in [`expr`]. The programme
+//! expression-level parsers (`parse_expression`/`parse_value_expr`,
+//! `expression_parser`/`value_expr_parser`, `CmpOp`, `value_as_term`)
+//! live in [`expr`]. The programme
 //! parser uses the expression parser for invariant bodies via
 //! the `pub(super)` re-export from `expr`.
 //!
@@ -84,5 +86,5 @@ mod expr;
 mod program;
 mod stmt;
 
-pub use expr::parse_expression;
+pub use expr::{parse_expression, parse_value_expr};
 pub use program::parse_program;

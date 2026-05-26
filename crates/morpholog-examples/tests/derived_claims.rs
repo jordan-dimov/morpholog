@@ -1,6 +1,6 @@
 //! Integration tests for derived claims.
 //!
-//! `DerivedClaim`, `DerivedValue`, `Expr::Sub`, and `enumerate_derived`
+//! `DerivedClaim`, `DerivedValue`, `ValueExpr::Sub`, and `enumerate_derived`
 //! make the trial balance over the double-entry ledger expressible
 //! and testable.
 //!
@@ -22,7 +22,7 @@
 //!   rows in domain means no derived rows.
 //!
 //! - `expr_sub_subtracts_decimals_and_rejects_other_types`: pins the
-//!   new `Expr::Sub` primitive's contract independently of the
+//!   new `ValueExpr::Sub` primitive's contract independently of the
 //!   trial-balance use case.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -31,7 +31,8 @@ mod common;
 
 use common::{dec, must_accept, subj};
 use morpholog_core::{
-    ClaimInstance, DerivedClaim, DerivedValue, EvalValue, Expr, State, Term, enumerate_derived,
+    ClaimInstance, DerivedClaim, DerivedValue, EvalValue, Prop, State, Term, ValueExpr,
+    enumerate_derived,
 };
 use morpholog_examples::double_entry_ledger;
 use rust_decimal::Decimal;
@@ -185,7 +186,7 @@ fn enumerate_derived_on_empty_state_is_empty() {
 #[test]
 fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     // Build a derived claim whose value is a simple subtraction of
-    // two literal decimals, so we can test Expr::Sub directly without
+    // two literal decimals, so we can test ValueExpr::Sub directly without
     // needing a ledger fixture. The domain is one synthetic claim
     // that yields one key binding.
     use morpholog_core::Value;
@@ -200,12 +201,16 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         keys: vec!["k".to_string()],
         values: vec![DerivedValue {
             name: "result".to_string(),
-            expr: Expr::Sub(
-                Box::new(Expr::Term(Term::Literal(Value::Decimal("100".to_string())))),
-                Box::new(Expr::Term(Term::Literal(Value::Decimal("30".to_string())))),
+            expr: ValueExpr::Sub(
+                Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "100".to_string(),
+                )))),
+                Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "30".to_string(),
+                )))),
             ),
         }],
-        domain: Expr::Claim {
+        domain: Prop::Claim {
             predicate: "Tag".to_string(),
             args: vec![Term::Var("k".to_string())],
         },
@@ -221,14 +226,16 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         keys: vec!["k".to_string()],
         values: vec![DerivedValue {
             name: "result".to_string(),
-            expr: Expr::Sub(
-                Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
-                Box::new(Expr::Term(Term::Literal(Value::Subject(
+            expr: ValueExpr::Sub(
+                Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "1".to_string(),
+                )))),
+                Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
                     "not_a_number".to_string(),
                 )))),
             ),
         }],
-        domain: Expr::Claim {
+        domain: Prop::Claim {
             predicate: "Tag".to_string(),
             args: vec![Term::Var("k".to_string())],
         },

@@ -1,29 +1,33 @@
-//! Integration tests for the v0 expression parser.
+//! Integration tests for the v0 expression parsers.
 //!
 //! Covers: atoms (vars, literals, wildcards, actor, claim calls),
 //! arithmetic, comparators, boolean composition, precedence,
 //! associativity, the term-only restriction on `in`.
 //!
-//! Deferred until later increments (not tested here): bool literals (`true` /
-//! `false`), date literals, subject literals, `in`, `exists`,
-//! `forall`, `sum`, `value`.
+//! The two-sort split means tests target the right entry point:
+//! proposition-shaped surface (`require`/invariant bodies - claims,
+//! comparators, boolean composition, quantifiers, `pre`) goes through
+//! `parse_expression`, which returns a [`Prop`]; value-shaped surface
+//! (a bare variable / literal / `actor` / `_`, arithmetic, `sum`,
+//! `value`) goes through `parse_value_expr`, which returns a
+//! [`ValueExpr`].
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::format::format_expr_inline;
-use morpholog_core::{CompareOp, Expr, OrderedDomain, Term, Value};
+use morpholog_core::format::format_prop_inline;
+use morpholog_core::{CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
 
-/// Build an `Expr::Compare` for the assertions below (the eight comparator
+/// Build a `Prop::Compare` for the assertions below (the eight comparator
 /// variants were collapsed into one `Compare { op, domain }`).
-fn cmp(op: CompareOp, domain: OrderedDomain, l: Expr, r: Expr) -> Expr {
-    Expr::Compare {
+fn cmp(op: CompareOp, domain: OrderedDomain, l: ValueExpr, r: ValueExpr) -> Prop {
+    Prop::Compare {
         op,
         domain,
         left: Box::new(l),
         right: Box::new(r),
     }
 }
-use morpholog_surface::parse_expression;
+use morpholog_surface::{parse_expression, parse_value_expr};
 
 // ---- Helpers ----
 
@@ -35,52 +39,54 @@ fn dec(s: &str) -> Term {
     Term::Literal(Value::Decimal(s.to_string()))
 }
 
-fn dec_expr(s: &str) -> Expr {
-    Expr::Term(dec(s))
+fn dec_value(s: &str) -> ValueExpr {
+    ValueExpr::Term(dec(s))
 }
 
-fn var_expr(name: &str) -> Expr {
-    Expr::Term(var(name))
+fn var_value(name: &str) -> ValueExpr {
+    ValueExpr::Term(var(name))
 }
 
-// ---- Atoms ----
+// ---- Atoms (value-shaped: parse_value_expr) ----
 
 #[test]
 fn parses_variable() {
-    let got = parse_expression("amount").unwrap();
-    assert_eq!(got, var_expr("amount"));
+    let got = parse_value_expr("amount").unwrap();
+    assert_eq!(got, var_value("amount"));
 }
 
 #[test]
 fn parses_decimal_literal_integer() {
-    let got = parse_expression("42").unwrap();
-    assert_eq!(got, dec_expr("42"));
+    let got = parse_value_expr("42").unwrap();
+    assert_eq!(got, dec_value("42"));
 }
 
 #[test]
 fn parses_decimal_literal_with_point() {
-    let got = parse_expression("1250.75").unwrap();
-    assert_eq!(got, dec_expr("1250.75"));
+    let got = parse_value_expr("1250.75").unwrap();
+    assert_eq!(got, dec_value("1250.75"));
 }
 
 #[test]
 fn parses_actor_as_special_term() {
-    let got = parse_expression("actor").unwrap();
-    assert_eq!(got, Expr::Term(Term::Actor));
+    let got = parse_value_expr("actor").unwrap();
+    assert_eq!(got, ValueExpr::Term(Term::Actor));
 }
 
 #[test]
 fn parses_wildcard() {
-    let got = parse_expression("_").unwrap();
-    assert_eq!(got, Expr::Term(Term::Wildcard));
+    let got = parse_value_expr("_").unwrap();
+    assert_eq!(got, ValueExpr::Term(Term::Wildcard));
 }
+
+// ---- Claim calls (proposition-shaped: parse_expression) ----
 
 #[test]
 fn parses_claim_call_no_args() {
     let got = parse_expression("Marker()").unwrap();
     assert_eq!(
         got,
-        Expr::Claim {
+        Prop::Claim {
             predicate: "Marker".to_string(),
             args: vec![],
         }
@@ -92,7 +98,7 @@ fn parses_claim_call_with_args() {
     let got = parse_expression("Policy(policy_id, limit)").unwrap();
     assert_eq!(
         got,
-        Expr::Claim {
+        Prop::Claim {
             predicate: "Policy".to_string(),
             args: vec![var("policy_id"), var("limit")],
         }
@@ -104,7 +110,7 @@ fn parses_claim_call_with_actor() {
     let got = parse_expression("MayApprove(actor, doc_type)").unwrap();
     assert_eq!(
         got,
-        Expr::Claim {
+        Prop::Claim {
             predicate: "MayApprove".to_string(),
             args: vec![Term::Actor, var("doc_type")],
         }
@@ -116,7 +122,7 @@ fn parses_claim_call_with_wildcards_and_literals() {
     let got = parse_expression("ClaimReported(claim_id, _, 100)").unwrap();
     assert_eq!(
         got,
-        Expr::Claim {
+        Prop::Claim {
             predicate: "ClaimReported".to_string(),
             args: vec![var("claim_id"), Term::Wildcard, dec("100")],
         }
@@ -125,39 +131,43 @@ fn parses_claim_call_with_wildcards_and_literals() {
 
 #[test]
 fn parens_change_grouping() {
-    let inner = parse_expression("(amount)").unwrap();
-    assert_eq!(inner, var_expr("amount"));
+    // A parenthesised value expression in value position.
+    let inner = parse_value_expr("(amount)").unwrap();
+    assert_eq!(inner, var_value("amount"));
 }
 
-// ---- Arithmetic ----
+// ---- Arithmetic (value-shaped) ----
 
 #[test]
 fn parses_addition() {
-    let got = parse_expression("a + b").unwrap();
+    let got = parse_value_expr("a + b").unwrap();
     assert_eq!(
         got,
-        Expr::Add(Box::new(var_expr("a")), Box::new(var_expr("b")))
+        ValueExpr::Add(Box::new(var_value("a")), Box::new(var_value("b")))
     );
 }
 
 #[test]
 fn parses_subtraction() {
-    let got = parse_expression("a - b").unwrap();
+    let got = parse_value_expr("a - b").unwrap();
     assert_eq!(
         got,
-        Expr::Sub(Box::new(var_expr("a")), Box::new(var_expr("b")))
+        ValueExpr::Sub(Box::new(var_value("a")), Box::new(var_value("b")))
     );
 }
 
 #[test]
 fn arithmetic_is_left_associative() {
     // `a + b - c` parses as `(a + b) - c`.
-    let got = parse_expression("a + b - c").unwrap();
+    let got = parse_value_expr("a + b - c").unwrap();
     assert_eq!(
         got,
-        Expr::Sub(
-            Box::new(Expr::Add(Box::new(var_expr("a")), Box::new(var_expr("b")),)),
-            Box::new(var_expr("c")),
+        ValueExpr::Sub(
+            Box::new(ValueExpr::Add(
+                Box::new(var_value("a")),
+                Box::new(var_value("b")),
+            )),
+            Box::new(var_value("c")),
         )
     );
 }
@@ -172,8 +182,8 @@ fn parses_le_with_decimal_literal() {
         cmp(
             CompareOp::Le,
             OrderedDomain::Decimal,
-            var_expr("amount"),
-            dec_expr("100")
+            var_value("amount"),
+            dec_value("100")
         )
     );
 }
@@ -183,7 +193,7 @@ fn parses_eq() {
     let got = parse_expression("a = b").unwrap();
     assert_eq!(
         got,
-        Expr::Eq(Box::new(var_expr("a")), Box::new(var_expr("b")))
+        Prop::Eq(Box::new(var_value("a")), Box::new(var_value("b")))
     );
 }
 
@@ -192,21 +202,24 @@ fn parses_neq_between_variables() {
     let got = parse_expression("a != b").unwrap();
     assert_eq!(
         got,
-        Expr::Neq(Box::new(var_expr("a")), Box::new(var_expr("b")))
+        Prop::Neq(Box::new(var_value("a")), Box::new(var_value("b")))
     );
 }
 
 #[test]
 fn neq_accepts_arithmetic_operand() {
-    // `!=` is symmetric with `=`: `Expr::Neq` takes full expressions, so
+    // `!=` is symmetric with `=`: `Prop::Neq` takes full expressions, so
     // `a + 1 != b` parses to `Neq(Add(a, 1), b)` rather than being
     // rejected as it was when Neq operated on terms only.
     let got = parse_expression("a + 1 != b").unwrap();
     assert_eq!(
         got,
-        Expr::Neq(
-            Box::new(Expr::Add(Box::new(var_expr("a")), Box::new(dec_expr("1")))),
-            Box::new(var_expr("b")),
+        Prop::Neq(
+            Box::new(ValueExpr::Add(
+                Box::new(var_value("a")),
+                Box::new(dec_value("1"))
+            )),
+            Box::new(var_value("b")),
         )
     );
 }
@@ -220,8 +233,8 @@ fn arithmetic_binds_tighter_than_comparison() {
         cmp(
             CompareOp::Le,
             OrderedDomain::Decimal,
-            Expr::Add(Box::new(var_expr("a")), Box::new(dec_expr("5"))),
-            var_expr("limit"),
+            ValueExpr::Add(Box::new(var_value("a")), Box::new(dec_value("5"))),
+            var_value("limit"),
         )
     );
 }
@@ -233,7 +246,7 @@ fn parses_not_over_claim() {
     let got = parse_expression("not Netted(line)").unwrap();
     assert_eq!(
         got,
-        Expr::Not(Box::new(Expr::Claim {
+        Prop::Not(Box::new(Prop::Claim {
             predicate: "Netted".to_string(),
             args: vec![var("line")],
         }))
@@ -245,7 +258,7 @@ fn double_negation() {
     let got = parse_expression("not not Done(x)").unwrap();
     assert_eq!(
         got,
-        Expr::Not(Box::new(Expr::Not(Box::new(Expr::Claim {
+        Prop::Not(Box::new(Prop::Not(Box::new(Prop::Claim {
             predicate: "Done".to_string(),
             args: vec![var("x")],
         }))))
@@ -255,12 +268,12 @@ fn double_negation() {
 #[test]
 fn parses_and_two_operands() {
     let got = parse_expression("A(x) and B(x)").unwrap();
-    let expected = Expr::And(vec![
-        Expr::Claim {
+    let expected = Prop::And(vec![
+        Prop::Claim {
             predicate: "A".to_string(),
             args: vec![var("x")],
         },
-        Expr::Claim {
+        Prop::Claim {
             predicate: "B".to_string(),
             args: vec![var("x")],
         },
@@ -273,7 +286,7 @@ fn and_flattens_three_operands_into_single_vec() {
     // `A and B and C` should be a single `And([A, B, C])`, not
     // `And([And([A, B]), C])`.
     let got = parse_expression("A() and B() and C()").unwrap();
-    let Expr::And(operands) = got else {
+    let Prop::And(operands) = got else {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(operands.len(), 3, "expected flat 3-operand And");
@@ -283,12 +296,12 @@ fn and_flattens_three_operands_into_single_vec() {
 fn not_binds_tighter_than_and() {
     // `not A() and B()` parses as `(not A()) and B()`.
     let got = parse_expression("not A() and B()").unwrap();
-    let Expr::And(ops) = &got else {
+    let Prop::And(ops) = &got else {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    assert!(matches!(ops[0], Expr::Not(_)));
-    assert!(matches!(ops[1], Expr::Claim { .. }));
+    assert!(matches!(ops[0], Prop::Not(_)));
+    assert!(matches!(ops[1], Prop::Claim { .. }));
 }
 
 #[test]
@@ -297,11 +310,11 @@ fn comparators_bind_tighter_than_not() {
     let got = parse_expression("not a <= b").unwrap();
     assert_eq!(
         got,
-        Expr::Not(Box::new(cmp(
+        Prop::Not(Box::new(cmp(
             CompareOp::Le,
             OrderedDomain::Decimal,
-            var_expr("a"),
-            var_expr("b"),
+            var_value("a"),
+            var_value("b"),
         )))
     );
 }
@@ -310,22 +323,22 @@ fn comparators_bind_tighter_than_not() {
 fn and_binds_tighter_than_implies() {
     // `A and B implies C` parses as `(A and B) implies C`.
     let got = parse_expression("A() and B() implies C()").unwrap();
-    let Expr::Implies { left, right } = got else {
+    let Prop::Implies { left, right } = got else {
         panic!("expected Implies");
     };
-    assert!(matches!(*left, Expr::And(_)));
-    assert!(matches!(*right, Expr::Claim { .. }));
+    assert!(matches!(*left, Prop::And(_)));
+    assert!(matches!(*right, Prop::Claim { .. }));
 }
 
 #[test]
 fn parses_or_two_operands() {
     let got = parse_expression("A(x) or B(x)").unwrap();
-    let expected = Expr::Or(vec![
-        Expr::Claim {
+    let expected = Prop::Or(vec![
+        Prop::Claim {
             predicate: "A".to_string(),
             args: vec![var("x")],
         },
-        Expr::Claim {
+        Prop::Claim {
             predicate: "B".to_string(),
             args: vec![var("x")],
         },
@@ -339,7 +352,7 @@ fn or_flattens_three_operands_into_single_vec() {
     // `Or([Or([A, B]), C])`. Mirrors `and_flattens_three_operands_...`
     // for the And flattening.
     let got = parse_expression("A() or B() or C()").unwrap();
-    let Expr::Or(operands) = got else {
+    let Prop::Or(operands) = got else {
         panic!("expected Or, got {got:?}");
     };
     assert_eq!(operands.len(), 3, "expected flat 3-operand Or");
@@ -351,41 +364,41 @@ fn and_binds_tighter_than_or() {
     // precedence). The disjunction's first branch is an And, the
     // second is a leaf Claim.
     let got = parse_expression("A() and B() or C()").unwrap();
-    let Expr::Or(ops) = got else {
+    let Prop::Or(ops) = got else {
         panic!("expected Or, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    assert!(matches!(ops[0], Expr::And(_)));
-    assert!(matches!(ops[1], Expr::Claim { .. }));
+    assert!(matches!(ops[0], Prop::And(_)));
+    assert!(matches!(ops[1], Prop::Claim { .. }));
 }
 
 #[test]
 fn or_binds_tighter_than_implies() {
     // `A or B implies C` parses as `(A or B) implies C`.
     let got = parse_expression("A() or B() implies C()").unwrap();
-    let Expr::Implies { left, right } = got else {
+    let Prop::Implies { left, right } = got else {
         panic!("expected Implies");
     };
-    assert!(matches!(*left, Expr::Or(_)));
-    assert!(matches!(*right, Expr::Claim { .. }));
+    assert!(matches!(*left, Prop::Or(_)));
+    assert!(matches!(*right, Prop::Claim { .. }));
 }
 
 #[test]
 fn not_binds_tighter_than_or() {
     // `not A() or B()` parses as `(not A()) or B()`.
     let got = parse_expression("not A() or B()").unwrap();
-    let Expr::Or(ops) = &got else {
+    let Prop::Or(ops) = &got else {
         panic!("expected Or, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    assert!(matches!(ops[0], Expr::Not(_)));
-    assert!(matches!(ops[1], Expr::Claim { .. }));
+    assert!(matches!(ops[0], Prop::Not(_)));
+    assert!(matches!(ops[1], Prop::Claim { .. }));
 }
 
 #[test]
 fn parses_pre_over_claim() {
     let got = parse_expression("pre(Balance(a, b))").unwrap();
-    let expected = Expr::Pre(Box::new(Expr::Claim {
+    let expected = Prop::Pre(Box::new(Prop::Claim {
         predicate: "Balance".to_string(),
         args: vec![var("a"), var("b")],
     }));
@@ -396,10 +409,10 @@ fn parses_pre_over_claim() {
 fn pre_composes_with_and_inside() {
     // `pre(A(x) and B(x))` parses as Pre wrapping the And.
     let got = parse_expression("pre(A(x) and B(x))").unwrap();
-    let Expr::Pre(inner) = got else {
+    let Prop::Pre(inner) = got else {
         panic!("expected Pre, got {got:?}");
     };
-    assert!(matches!(*inner, Expr::And(_)));
+    assert!(matches!(*inner, Prop::And(_)));
 }
 
 #[test]
@@ -408,12 +421,12 @@ fn pre_at_primary_level_composes_with_outer_and() {
     // because `pre(...)` is a function-call-shape primary, no
     // outer parens needed.
     let got = parse_expression("pre(A(x)) and B(x)").unwrap();
-    let Expr::And(ops) = got else {
+    let Prop::And(ops) = got else {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    assert!(matches!(ops[0], Expr::Pre(_)));
-    assert!(matches!(ops[1], Expr::Claim { .. }));
+    assert!(matches!(ops[0], Prop::Pre(_)));
+    assert!(matches!(ops[1], Prop::Claim { .. }));
 }
 
 #[test]
@@ -424,22 +437,22 @@ fn pre_inside_implies_with_disjunction() {
     let source = "PieceCount(after) and pre(PieceCount(before)) \
                   implies after = before or after = before - 1";
     let got = parse_expression(source).unwrap();
-    let Expr::Implies { left, right } = got else {
+    let Prop::Implies { left, right } = got else {
         panic!("expected Implies, got {got:?}");
     };
-    assert!(matches!(*left, Expr::And(_)));
-    assert!(matches!(*right, Expr::Or(_)));
+    assert!(matches!(*left, Prop::And(_)));
+    assert!(matches!(*right, Prop::Or(_)));
 }
 
 #[test]
 fn pre_value_position_inside_sum() {
     // pre composes with Sum's body: `sum(amount | pre(Posting(_, amount)))`
     // counts amounts that were in pre-state.
-    let got = parse_expression("sum(amount | pre(Posting(_, amount)))").unwrap();
-    let Expr::Sum { body, .. } = got else {
+    let got = parse_value_expr("sum(amount | pre(Posting(_, amount)))").unwrap();
+    let ValueExpr::Sum { body, .. } = got else {
         panic!("expected Sum, got {got:?}");
     };
-    assert!(matches!(*body, Expr::Pre(_)));
+    assert!(matches!(*body, Prop::Pre(_)));
 }
 
 /// Round-trip property over a mixed-precedence boolean expression:
@@ -458,7 +471,7 @@ fn formatter_preserves_mixed_and_or_implies_precedence() {
     // under the standard precedence (and > or > implies).
     let source = "A() and B() or C() implies D()";
     let parsed = parse_expression(source).unwrap();
-    let formatted = format_expr_inline(&parsed);
+    let formatted = format_prop_inline(&parsed);
     let reparsed = parse_expression(&formatted).unwrap_or_else(|errs| {
         panic!("formatted text did not reparse: {formatted}\nerrors: {errs:?}")
     });
@@ -472,11 +485,11 @@ fn formatter_preserves_mixed_and_or_implies_precedence() {
 fn implies_is_right_associative() {
     // `A implies B implies C` parses as `A implies (B implies C)`.
     let got = parse_expression("A() implies B() implies C()").unwrap();
-    let Expr::Implies { left, right } = got else {
+    let Prop::Implies { left, right } = got else {
         panic!("expected Implies");
     };
-    assert!(matches!(*left, Expr::Claim { .. }));
-    assert!(matches!(*right, Expr::Implies { .. }));
+    assert!(matches!(*left, Prop::Claim { .. }));
+    assert!(matches!(*right, Prop::Implies { .. }));
 }
 
 // ---- Real-shape examples (from the worked examples) ----
@@ -487,7 +500,7 @@ fn realistic_insurance_cap_rule() {
     // simplified (no sum yet (no sum yet).
     // `already_paid + proposed <= limit`.
     let got = parse_expression("already_paid + proposed <= limit").unwrap();
-    let Expr::Compare {
+    let Prop::Compare {
         left: lhs,
         right: rhs,
         ..
@@ -495,12 +508,12 @@ fn realistic_insurance_cap_rule() {
     else {
         panic!("expected Le");
     };
-    let Expr::Add(a, b) = *lhs else {
+    let ValueExpr::Add(a, b) = *lhs else {
         panic!("expected Add on LHS");
     };
-    assert_eq!(*a, var_expr("already_paid"));
-    assert_eq!(*b, var_expr("proposed"));
-    assert_eq!(*rhs, var_expr("limit"));
+    assert_eq!(*a, var_value("already_paid"));
+    assert_eq!(*b, var_value("proposed"));
+    assert_eq!(*rhs, var_value("limit"));
 }
 
 #[test]
@@ -508,18 +521,18 @@ fn realistic_netting_require_fragment() {
     // From settlement_netting: the per-line conjunct.
     // `ApprovedSettlementLine(line) and not Netted(line)`.
     let got = parse_expression("ApprovedSettlementLine(line) and not Netted(line)").unwrap();
-    let Expr::And(ops) = got else {
+    let Prop::And(ops) = got else {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
     assert!(matches!(
         ops[0],
-        Expr::Claim {
+        Prop::Claim {
             ref predicate,
             ..
         } if predicate == "ApprovedSettlementLine"
     ));
-    assert!(matches!(ops[1], Expr::Not(_)));
+    assert!(matches!(ops[1], Prop::Not(_)));
 }
 
 // ---- Error cases ----
@@ -567,19 +580,19 @@ fn true_and_false_are_reserved_not_parseable() {
 
 #[test]
 fn parses_date_literal_as_term() {
-    let got = parse_expression("@2026-05-22").unwrap();
+    let got = parse_value_expr("@2026-05-22").unwrap();
     assert_eq!(
         got,
-        Expr::Term(Term::Literal(Value::Date("2026-05-22".to_string())))
+        ValueExpr::Term(Term::Literal(Value::Date("2026-05-22".to_string())))
     );
 }
 
 #[test]
 fn parses_subject_literal_as_term() {
-    let got = parse_expression("#BANK_DEBT_SERVICE").unwrap();
+    let got = parse_value_expr("#BANK_DEBT_SERVICE").unwrap();
     assert_eq!(
         got,
-        Expr::Term(Term::Literal(Value::Subject(
+        ValueExpr::Term(Term::Literal(Value::Subject(
             "BANK_DEBT_SERVICE".to_string()
         )))
     );
@@ -588,7 +601,7 @@ fn parses_subject_literal_as_term() {
 #[test]
 fn date_literal_in_claim_args() {
     let got = parse_expression("EffectiveFrom(verification, @2026-05-22)").unwrap();
-    let Expr::Claim { predicate, args } = got else {
+    let Prop::Claim { predicate, args } = got else {
         panic!("expected Claim");
     };
     assert_eq!(predicate, "EffectiveFrom");
@@ -602,7 +615,7 @@ fn date_literal_in_claim_args() {
 #[test]
 fn subject_literal_in_claim_args() {
     let got = parse_expression("Purpose(asset, #BANK_DEBT_SERVICE)").unwrap();
-    let Expr::Claim { predicate, args } = got else {
+    let Prop::Claim { predicate, args } = got else {
         panic!("expected Claim");
     };
     assert_eq!(predicate, "Purpose");
@@ -620,7 +633,7 @@ fn parses_membership_between_variables() {
     let got = parse_expression("line in lines").unwrap();
     assert_eq!(
         got,
-        Expr::In(
+        Prop::In(
             Term::Var("line".to_string()),
             Term::Var("lines".to_string()),
         )
@@ -645,9 +658,9 @@ fn parses_exists_with_simple_body() {
     let got = parse_expression("exists x: Foo(x)").unwrap();
     assert_eq!(
         got,
-        Expr::Exists {
+        Prop::Exists {
             binding: "x".to_string(),
-            body: Box::new(Expr::Claim {
+            body: Box::new(Prop::Claim {
                 predicate: "Foo".to_string(),
                 args: vec![Term::Var("x".to_string())],
             }),
@@ -659,11 +672,11 @@ fn parses_exists_with_simple_body() {
 fn exists_body_extends_greedily() {
     // `exists x: A(x) and B(x)` -> body is the whole conjunction.
     let got = parse_expression("exists x: A(x) and B(x)").unwrap();
-    let Expr::Exists { binding, body } = got else {
+    let Prop::Exists { binding, body } = got else {
         panic!("expected Exists");
     };
     assert_eq!(binding, "x");
-    assert!(matches!(*body, Expr::And(_)));
+    assert!(matches!(*body, Prop::And(_)));
 }
 
 // ---- forall with bare-variable source (auto-wrapped as In) ----
@@ -671,7 +684,7 @@ fn exists_body_extends_greedily() {
 #[test]
 fn forall_with_variable_source_wraps_as_in() {
     let got = parse_expression("forall line in lines: ApprovedSettlementLine(line)").unwrap();
-    let Expr::Forall {
+    let Prop::Forall {
         binding,
         source,
         body,
@@ -684,12 +697,12 @@ fn forall_with_variable_source_wraps_as_in() {
     // `In(Var("line"), Var("lines"))` so the kernel can iterate.
     assert_eq!(
         *source,
-        Expr::In(
+        Prop::In(
             Term::Var("line".to_string()),
             Term::Var("lines".to_string()),
         )
     );
-    assert!(matches!(*body, Expr::Claim { .. }));
+    assert!(matches!(*body, Prop::Claim { .. }));
 }
 
 #[test]
@@ -698,7 +711,7 @@ fn forall_with_claim_source_used_as_is() {
         "forall claim_id in ClaimReported(claim_id, _, amount): AmountPaid(claim_id, amount)",
     )
     .unwrap();
-    let Expr::Forall {
+    let Prop::Forall {
         binding,
         source,
         body,
@@ -708,11 +721,11 @@ fn forall_with_claim_source_used_as_is() {
     };
     assert_eq!(binding, "claim_id");
     // Source is a claim, used as-is (not wrapped in In).
-    assert!(matches!(*source, Expr::Claim { .. }));
-    if let Expr::Claim { predicate, .. } = *source {
+    assert!(matches!(*source, Prop::Claim { .. }));
+    if let Prop::Claim { predicate, .. } = *source {
         assert_eq!(predicate, "ClaimReported");
     }
-    assert!(matches!(*body, Expr::Claim { .. }));
+    assert!(matches!(*body, Prop::Claim { .. }));
 }
 
 #[test]
@@ -721,17 +734,17 @@ fn forall_body_extends_greedily() {
     let got =
         parse_expression("forall line in lines: ApprovedSettlementLine(line) and not Netted(line)")
             .unwrap();
-    let Expr::Forall { body, .. } = got else {
+    let Prop::Forall { body, .. } = got else {
         panic!("expected Forall");
     };
-    assert!(matches!(*body, Expr::And(_)));
+    assert!(matches!(*body, Prop::And(_)));
 }
 
 #[test]
 fn nested_forall() {
     // forall x in xs: forall y in ys: P(x, y)
     let got = parse_expression("forall x in xs: forall y in ys: P(x, y)").unwrap();
-    let Expr::Forall {
+    let Prop::Forall {
         binding: outer_b,
         body: outer_body,
         ..
@@ -740,7 +753,7 @@ fn nested_forall() {
         panic!("expected outer Forall");
     };
     assert_eq!(outer_b, "x");
-    let Expr::Forall {
+    let Prop::Forall {
         binding: inner_b, ..
     } = *outer_body
     else {
@@ -753,24 +766,24 @@ fn nested_forall() {
 
 #[test]
 fn parses_sum() {
-    let got = parse_expression("sum(amount | SettlementPaid(claim, amount))").unwrap();
-    let Expr::Sum { value, body } = got else {
+    let got = parse_value_expr("sum(amount | SettlementPaid(claim, amount))").unwrap();
+    let ValueExpr::Sum { value, body } = got else {
         panic!("expected Sum");
     };
     assert_eq!(value, Term::Var("amount".to_string()));
-    assert!(matches!(*body, Expr::Claim { .. }));
+    assert!(matches!(*body, Prop::Claim { .. }));
 }
 
 #[test]
 fn sum_body_can_be_compound() {
     // sum(amount | Paid(claim, amount) and not Refunded(claim))
     let got =
-        parse_expression("sum(amount | SettlementPaid(claim, amount) and not Refunded(claim))")
+        parse_value_expr("sum(amount | SettlementPaid(claim, amount) and not Refunded(claim))")
             .unwrap();
-    let Expr::Sum { body, .. } = got else {
+    let ValueExpr::Sum { body, .. } = got else {
         panic!("expected Sum");
     };
-    assert!(matches!(*body, Expr::And(_)));
+    assert!(matches!(*body, Prop::And(_)));
 }
 
 #[test]
@@ -778,8 +791,8 @@ fn sum_target_can_be_a_decimal_literal_for_counting() {
     // `sum(1 | ...)` counts matches: the target is the literal 1, added
     // once per match. The parser accepts a decimal-literal target
     // alongside a variable.
-    let got = parse_expression("sum(1 | Foo())").expect("literal target should parse");
-    let Expr::Sum { value, .. } = got else {
+    let got = parse_value_expr("sum(1 | Foo())").expect("literal target should parse");
+    let ValueExpr::Sum { value, .. } = got else {
         panic!("expected Sum, got {got:?}");
     };
     assert_eq!(value, Term::Literal(Value::Decimal("1".to_string())));
@@ -787,7 +800,7 @@ fn sum_target_can_be_a_decimal_literal_for_counting() {
 
 #[test]
 fn sum_target_must_be_variable_not_wildcard() {
-    let errs = parse_expression("sum(_ | Foo())").expect_err("wildcard target should fail");
+    let errs = parse_value_expr("sum(_ | Foo())").expect_err("wildcard target should fail");
     assert!(!errs.is_empty());
 }
 
@@ -797,7 +810,7 @@ fn sum_target_must_be_variable_not_wildcard() {
 fn parses_decimal_strict_comparators() {
     assert!(matches!(
         parse_expression("a < b").unwrap(),
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Lt,
             domain: OrderedDomain::Decimal,
             ..
@@ -805,7 +818,7 @@ fn parses_decimal_strict_comparators() {
     ));
     assert!(matches!(
         parse_expression("a > b").unwrap(),
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Gt,
             domain: OrderedDomain::Decimal,
             ..
@@ -813,7 +826,7 @@ fn parses_decimal_strict_comparators() {
     ));
     assert!(matches!(
         parse_expression("a >= b").unwrap(),
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Ge,
             domain: OrderedDomain::Decimal,
             ..
@@ -822,7 +835,7 @@ fn parses_decimal_strict_comparators() {
     // The point of first-class comparators: each round-trips as written,
     // never as `not (a <= b)`.
     for src in ["a < b", "a > b", "a >= b", "a <= b"] {
-        assert_eq!(format_expr_inline(&parse_expression(src).unwrap()), src);
+        assert_eq!(format_prop_inline(&parse_expression(src).unwrap()), src);
     }
 }
 
@@ -830,7 +843,7 @@ fn parses_decimal_strict_comparators() {
 fn parses_date_strict_comparators() {
     assert!(matches!(
         parse_expression("d1 before d2").unwrap(),
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Lt,
             domain: OrderedDomain::Date,
             ..
@@ -838,7 +851,7 @@ fn parses_date_strict_comparators() {
     ));
     assert!(matches!(
         parse_expression("d1 after d2").unwrap(),
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Gt,
             domain: OrderedDomain::Date,
             ..
@@ -846,7 +859,7 @@ fn parses_date_strict_comparators() {
     ));
     assert!(matches!(
         parse_expression("d1 on_or_after d2").unwrap(),
-        Expr::Compare {
+        Prop::Compare {
             op: CompareOp::Ge,
             domain: OrderedDomain::Date,
             ..
@@ -858,7 +871,7 @@ fn parses_date_strict_comparators() {
         "d1 on_or_after d2",
         "d1 on_or_before d2",
     ] {
-        assert_eq!(format_expr_inline(&parse_expression(src).unwrap()), src);
+        assert_eq!(format_prop_inline(&parse_expression(src).unwrap()), src);
     }
 }
 
@@ -868,7 +881,7 @@ fn before_and_after_remain_usable_as_variable_names() {
     // in argument position they are ordinary variables, which the chess
     // and insurance examples rely on.
     let got = parse_expression("Headroom(before, after)").unwrap();
-    let Expr::Claim { args, .. } = got else {
+    let Prop::Claim { args, .. } = got else {
         panic!("expected Claim, got {got:?}");
     };
     assert_eq!(
@@ -884,8 +897,8 @@ fn before_and_after_remain_usable_as_variable_names() {
 
 #[test]
 fn parses_value_without_default() {
-    let got = parse_expression("value Policy(policy_id, _)").unwrap();
-    let Expr::ValueOf {
+    let got = parse_value_expr("value Policy(policy_id, _)").unwrap();
+    let ValueExpr::ValueOf {
         predicate,
         args,
         default,
@@ -902,8 +915,8 @@ fn parses_value_without_default() {
 
 #[test]
 fn parses_value_with_default() {
-    let got = parse_expression("value Policy(policy_id, _) default 0").unwrap();
-    let Expr::ValueOf {
+    let got = parse_value_expr("value Policy(policy_id, _) default 0").unwrap();
+    let ValueExpr::ValueOf {
         predicate, default, ..
     } = got
     else {
@@ -911,7 +924,7 @@ fn parses_value_with_default() {
     };
     assert_eq!(predicate, "Policy");
     let default = default.expect("expected default expr");
-    assert_eq!(*default, dec_expr("0"));
+    assert_eq!(*default, dec_value("0"));
 }
 
 // ---- Combinations / realistic fragments ----
@@ -922,7 +935,7 @@ fn realistic_insurance_aggregate_cap() {
     // sum(paid | SettlementPaid(claim, paid)) + proposed <= limit
     let got =
         parse_expression("sum(paid | SettlementPaid(claim, paid)) + proposed <= limit").unwrap();
-    let Expr::Compare {
+    let Prop::Compare {
         left: lhs,
         right: rhs,
         ..
@@ -930,12 +943,12 @@ fn realistic_insurance_aggregate_cap() {
     else {
         panic!("expected Le");
     };
-    let Expr::Add(a, b) = *lhs else {
+    let ValueExpr::Add(a, b) = *lhs else {
         panic!("expected Add on LHS of Le");
     };
-    assert!(matches!(*a, Expr::Sum { .. }));
-    assert_eq!(*b, var_expr("proposed"));
-    assert_eq!(*rhs, var_expr("limit"));
+    assert!(matches!(*a, ValueExpr::Sum { .. }));
+    assert_eq!(*b, var_value("proposed"));
+    assert_eq!(*rhs, var_value("limit"));
 }
 
 #[test]
@@ -945,7 +958,7 @@ fn realistic_netting_forall() {
     let got =
         parse_expression("forall line in lines: ApprovedSettlementLine(line) and not Netted(line)")
             .unwrap();
-    assert!(matches!(got, Expr::Forall { .. }));
+    assert!(matches!(got, Prop::Forall { .. }));
 }
 
 #[test]
@@ -954,11 +967,11 @@ fn realistic_verified_revenue_admissibility() {
     // exist for an admissible verification.
     // exists g: StandingGrantedBy(verification, purpose, _, g)
     let got = parse_expression("exists g: StandingGrantedBy(verification, purpose, _, g)").unwrap();
-    let Expr::Exists { binding, body } = got else {
+    let Prop::Exists { binding, body } = got else {
         panic!("expected Exists");
     };
     assert_eq!(binding, "g");
-    assert!(matches!(*body, Expr::Claim { .. }));
+    assert!(matches!(*body, Prop::Claim { .. }));
 }
 
 #[test]
@@ -970,13 +983,13 @@ fn realistic_clinical_trial_window_via_claims() {
         "Protocol(version, @2026-05-22) and InvestigatorDelegation(investigator, @2026-05-22)",
     )
     .unwrap();
-    let Expr::And(ops) = got else {
+    let Prop::And(ops) = got else {
         panic!("expected And");
     };
     assert_eq!(ops.len(), 2);
     // Both operands are claims with date literals in arg position.
     for op in &ops {
-        let Expr::Claim { args, .. } = op else {
+        let Prop::Claim { args, .. } = op else {
             panic!("expected Claim");
         };
         assert!(
@@ -994,12 +1007,12 @@ fn forall_inside_parens_composes_with_outer() {
     // (forall x in xs: P(x)) and Q(z)
     // Without parens, body would greedily consume `and Q(z)`.
     let got = parse_expression("(forall x in xs: P(x)) and Q(z)").unwrap();
-    let Expr::And(ops) = got else {
+    let Prop::And(ops) = got else {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    assert!(matches!(ops[0], Expr::Forall { .. }));
-    assert!(matches!(ops[1], Expr::Claim { .. }));
+    assert!(matches!(ops[0], Prop::Forall { .. }));
+    assert!(matches!(ops[1], Prop::Claim { .. }));
 }
 
 // ---- in (membership) vs forall-in (structural) disambiguation ----
@@ -1010,10 +1023,10 @@ fn in_as_comparator_inside_forall_body() {
     // Outer `in` is structural (binds source); inner `in` is
     // the membership comparator.
     let got = parse_expression("forall x in xs: y in zs").unwrap();
-    let Expr::Forall { body, .. } = got else {
+    let Prop::Forall { body, .. } = got else {
         panic!("expected Forall");
     };
-    assert!(matches!(*body, Expr::In(_, _)));
+    assert!(matches!(*body, Prop::In(_, _)));
 }
 
 // ============================================================
@@ -1067,14 +1080,15 @@ fn forall_source_rejects_sum_expression() {
     assert!(!errs.is_empty());
 }
 
-/// Parenthesised sources pass through as-is. The user signalled
-/// explicit intent by parenthesising. If they put a value-shaped
-/// expression inside parens, the kernel will reject it at runtime;
-/// the parser does not second-guess.
+/// Parenthesised proposition sources pass through as-is - the user
+/// signalled explicit intent by parenthesising. A value-shaped
+/// expression inside parens is still not a proposition, so it fails at
+/// parse time (the source production is proposition-shaped), not as an
+/// ill-shaped case the kernel has to catch.
 #[test]
 fn forall_source_accepts_parenthesised_predicate_form() {
     let got = parse_expression("forall x in (x in lines): P(x)").unwrap();
-    let Expr::Forall {
+    let Prop::Forall {
         binding, source, ..
     } = got
     else {
@@ -1083,7 +1097,7 @@ fn forall_source_accepts_parenthesised_predicate_form() {
     assert_eq!(binding, "x");
     // Source was an explicit `In(_, _)` inside parens; passes
     // through without auto-lift.
-    assert!(matches!(*source, Expr::In(_, _)));
+    assert!(matches!(*source, Prop::In(_, _)));
 }
 
 /// Date-literal lexer is strict about 4-2-2 digit shape. Wrong
@@ -1110,8 +1124,11 @@ fn date_literal_strict_shape_accepts_valid() {
     // Sanity: the strict shape still accepts well-formed dates.
     for source in ["@2026-05-22", "@1999-01-01", "@9999-12-31"] {
         let got =
-            parse_expression(source).unwrap_or_else(|_| panic!("expected `{source}` to parse"));
-        assert!(matches!(got, Expr::Term(Term::Literal(Value::Date(_)))));
+            parse_value_expr(source).unwrap_or_else(|_| panic!("expected `{source}` to parse"));
+        assert!(matches!(
+            got,
+            ValueExpr::Term(Term::Literal(Value::Date(_)))
+        ));
     }
 }
 
@@ -1144,7 +1161,7 @@ fn forall_rejects_actor_as_binder() {
 
 #[test]
 fn sum_rejects_actor_as_target() {
-    let errs = parse_expression("sum(actor | MayApprove(actor, _))")
+    let errs = parse_value_expr("sum(actor | MayApprove(actor, _))")
         .expect_err("actor as sum target should fail");
     assert!(
         errs.iter().any(|d| d.message.contains("`actor`")),
@@ -1166,7 +1183,7 @@ fn forall_body_can_be_indented_on_next_line() {
     let program =
         morpholog_surface::parse_program(source).expect("indented quantifier body should parse");
     let body = &program.invariants[0].body;
-    assert!(matches!(body, Expr::Forall { .. }));
+    assert!(matches!(body, Prop::Forall { .. }));
 }
 
 // ============================================================
@@ -1181,8 +1198,8 @@ fn on_or_before_lowers_to_date_le() {
         cmp(
             CompareOp::Le,
             OrderedDomain::Date,
-            var_expr("from_date"),
-            var_expr("action_date"),
+            var_value("from_date"),
+            var_value("action_date"),
         )
     );
 }
@@ -1196,8 +1213,8 @@ fn decimal_le_still_lowers_to_le() {
         cmp(
             CompareOp::Le,
             OrderedDomain::Decimal,
-            var_expr("amount"),
-            var_expr("limit"),
+            var_value("amount"),
+            var_value("limit"),
         )
     );
 }
@@ -1207,7 +1224,7 @@ fn on_or_before_at_same_precedence_as_le() {
     // `a + 1 on_or_before b` parses as `(a + 1) on_or_before b`,
     // matching `<=`'s precedence (arithmetic binds tighter).
     let got = parse_expression("a + 1 on_or_before b").unwrap();
-    let Expr::Compare {
+    let Prop::Compare {
         left: lhs,
         right: rhs,
         ..
@@ -1215,8 +1232,8 @@ fn on_or_before_at_same_precedence_as_le() {
     else {
         panic!("expected a comparison, got non-Compare");
     };
-    assert!(matches!(*lhs, Expr::Add(_, _)));
-    assert_eq!(*rhs, var_expr("b"));
+    assert!(matches!(*lhs, ValueExpr::Add(_, _)));
+    assert_eq!(*rhs, var_value("b"));
 }
 
 #[test]
@@ -1224,14 +1241,14 @@ fn on_or_before_inside_and_chain() {
     // Realistic shape from the clinical-trial example:
     // `from on_or_before date and date on_or_before to`.
     let got = parse_expression("from on_or_before date and date on_or_before to").unwrap();
-    let Expr::And(ops) = got else {
+    let Prop::And(ops) = got else {
         panic!("expected And, got {got:?}");
     };
     assert_eq!(ops.len(), 2);
-    let is_date_le = |e: &Expr| {
+    let is_date_le = |e: &Prop| {
         matches!(
             e,
-            Expr::Compare {
+            Prop::Compare {
                 op: CompareOp::Le,
                 domain: OrderedDomain::Date,
                 ..

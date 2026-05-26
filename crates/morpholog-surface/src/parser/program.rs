@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use crate::diagnostics::{Diagnostic, Span};
 use crate::lexer::{Token, lex, token_stream};
 
-use super::expr::expression_parser;
+use super::expr::{expression_parser, value_expr_parser};
 use super::stmt::statement_parser;
 
 /// Parse a Morpholog source string into a [`Program`].
@@ -366,7 +366,7 @@ where
     let value_clause = just(Token::KwValue)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
-        .then(expression_parser())
+        .then(value_expr_parser())
         .map(|(name, expr)| DerivedValue { name, expr });
     let derived_body = just(Token::Indent)
         .ignore_then(over_clause)

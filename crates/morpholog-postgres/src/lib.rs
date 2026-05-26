@@ -338,7 +338,7 @@ async fn load_state(
 /// - Every predicate read by every statement in the transformation
 ///   body (via `morpholog_core::predicates_read_by_stmt`).
 /// - Every predicate referenced by every invariant body (via
-///   `morpholog_core::predicates_referenced_by_expr`). Invariants
+///   `morpholog_core::predicates_referenced_by_prop`). Invariants
 ///   evaluate against the candidate state, so any predicate an
 ///   invariant inspects must be loaded.
 ///
@@ -352,7 +352,7 @@ fn compute_load_scope(transformation: &Transformation, invariants: &[Invariant])
         morpholog_core::predicates_read_by_stmt(stmt, &mut scope);
     }
     for inv in invariants {
-        morpholog_core::predicates_referenced_by_expr(&inv.body, &mut scope);
+        morpholog_core::predicates_referenced_by_prop(&inv.body, &mut scope);
     }
     scope.into_iter().collect()
 }
@@ -1442,8 +1442,8 @@ pub async fn mark_compensation_failed(
 ///
 /// The predicate-scoped load is safe because the footprint analysis's
 /// exhaustive `match` fails to compile if a new predicate-referencing
-/// `Expr` variant is added without handling it, so this read path
-/// cannot silently produce wrong answers under a partial state.
+/// `Prop` or `ValueExpr` variant is added without handling it, so this
+/// read path cannot silently produce wrong answers under a partial state.
 ///
 /// Errors:
 /// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying

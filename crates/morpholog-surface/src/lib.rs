@@ -18,8 +18,9 @@
 //!
 //! Entry points: [`parse_program`] returns the full
 //! [`morpholog_core::Program`]; [`parse_expression`] returns a
-//! standalone expression. Both return diagnostics rich enough to
-//! render via `ariadne`.
+//! standalone proposition, [`parse_value_expr`] a standalone value
+//! expression. All return diagnostics rich enough to render via
+//! `ariadne`.
 //!
 //! Module layout:
 //!
@@ -41,4 +42,4 @@ pub mod lexer;
 mod parser;
 
 pub use diagnostics::{Diagnostic, Severity, Span};
-pub use parser::{parse_expression, parse_program};
+pub use parser::{parse_expression, parse_program, parse_value_expr};

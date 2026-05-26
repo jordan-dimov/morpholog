@@ -98,7 +98,7 @@ pub enum TracedProposal {
 /// `iterations` carry a sub-trace per loop iteration.
 ///
 /// Variants that record an expression render it via
-/// [`crate::format::format_expr_inline`]; the exact string format is
+/// [`crate::format::format_prop_inline`]; the exact string format is
 /// not pinned by type, so formatter improvements propagate here.
 ///
 /// Serde derives carry the wire format the CLI's `--trace` flag emits.
@@ -172,7 +172,7 @@ pub enum RequireOutcome {
     Rejected {
         reason: String,
         /// The most specific sub-expression responsible for the
-        /// rejection, rendered via `format_expr_inline`, when the kernel
+        /// rejection, rendered via `format_prop_inline`, when the kernel
         /// can identify one (see [`crate::EvalError`] and the
         /// `find_failing_subexpr` drill-down rules). `None` for `Exists`,
         /// `Not`, `Or`, and leaf expressions. Carries only the rendered
@@ -364,13 +364,13 @@ pub(crate) fn propose_inner(
 
     for inv in invariants {
         // Pass both pre_state and candidate. Invariants that contain
-        // `Expr::Pre` flip into pre-state lookup for the wrapped
+        // `Prop::Pre` flip into pre-state lookup for the wrapped
         // subtree; invariants that don't are unaffected.
         let held = eval_invariant(inv, &candidate, Some(pre_state))?;
         if trace.is_on() {
             trace.push(TraceEntry::InvariantCheck {
                 name: inv.name.clone(),
-                expression: format::format_expr_inline(&inv.body),
+                expression: format::format_prop_inline(&inv.body),
                 held,
             });
         }
@@ -404,14 +404,14 @@ pub(crate) fn execute_stmt(
         Stmt::Require(expr) => {
             // Transformation bodies read pre-state as the only state in
             // scope. Passing `None` for pre_state is what makes
-            // `Expr::Pre` inside a `require` surface as
+            // `Prop::Pre` inside a `require` surface as
             // `EvalError::PreStateUnavailable`.
             let ctx = EvalContext::new(pre_state, None, bindings, actor);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
                 // Render once; reused for both the reason string and the
                 // trace entry.
-                let rendered = format::format_expr_inline(expr);
+                let rendered = format::format_prop_inline(expr);
                 let reason = format!("require failed: {rendered} did not hold over pre-state");
                 if trace.is_on() {
                     let failing = find_failing_subexpr(expr, &ctx);
@@ -429,7 +429,7 @@ pub(crate) fn execute_stmt(
             } else {
                 if trace.is_on() {
                     trace.push(TraceEntry::Require {
-                        expression: format::format_expr_inline(expr),
+                        expression: format::format_prop_inline(expr),
                         outcome: RequireOutcome::Held {
                             match_count: matches.len(),
                         },
@@ -448,7 +448,7 @@ pub(crate) fn execute_stmt(
             let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
                 0 => {
-                    let rendered = format::format_expr_inline(expr);
+                    let rendered = format::format_prop_inline(expr);
                     let reason = format!("bind_one failed: {rendered} matched no candidates");
                     if trace.is_on() {
                         let failing = find_failing_subexpr(expr, &ctx);
@@ -472,7 +472,7 @@ pub(crate) fn execute_stmt(
                             .collect();
                         sorted.sort_by(|a, b| a.0.cmp(&b.0));
                         trace.push(TraceEntry::BindOne {
-                            expression: format::format_expr_inline(expr),
+                            expression: format::format_prop_inline(expr),
                             outcome: BindOneOutcome::Bound { bindings: sorted },
                         });
                     }
@@ -480,7 +480,7 @@ pub(crate) fn execute_stmt(
                     Ok(StmtOutcome::Continue)
                 }
                 n => {
-                    let rendered = format::format_expr_inline(expr);
+                    let rendered = format::format_prop_inline(expr);
                     let err_msg = format!(
                         "bind_one matched {n} candidates; expected exactly one: {rendered}"
                     );

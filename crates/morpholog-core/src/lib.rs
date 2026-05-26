@@ -26,8 +26,8 @@ mod state;
 mod validate;
 
 pub use analysis::{
-    predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_expr,
-    predicates_referenced_by_stmt, transformations_asserting,
+    predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_prop,
+    predicates_referenced_by_stmt, predicates_referenced_by_value, transformations_asserting,
 };
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::{EvalError, RenderedClaim};
@@ -37,8 +37,9 @@ pub use explain::{
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
-    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Expr, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Stmt, Term, Transformation, Value,
+    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
+    Value, ValueExpr,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -58,66 +59,67 @@ mod tests {
     use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
 
     // The eight comparator variants were collapsed into one
-    // `Expr::Compare { op, domain }`. These boxed-operand builders keep the
-    // test call sites as terse as the old tuple variants were.
-    fn le_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    // `Prop::Compare { op, domain }`. These boxed-operand builders keep the
+    // test call sites as terse as the old tuple variants were. Operands
+    // are value expressions; the comparison itself is a proposition.
+    fn le_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Le,
             domain: OrderedDomain::Decimal,
             left: l,
             right: r,
         }
     }
-    fn lt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn lt_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Lt,
             domain: OrderedDomain::Decimal,
             left: l,
             right: r,
         }
     }
-    fn ge_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn ge_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Ge,
             domain: OrderedDomain::Decimal,
             left: l,
             right: r,
         }
     }
-    fn gt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn gt_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Gt,
             domain: OrderedDomain::Decimal,
             left: l,
             right: r,
         }
     }
-    fn date_le_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn date_le_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Le,
             domain: OrderedDomain::Date,
             left: l,
             right: r,
         }
     }
-    fn date_lt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn date_lt_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Lt,
             domain: OrderedDomain::Date,
             left: l,
             right: r,
         }
     }
-    fn date_ge_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn date_ge_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Ge,
             domain: OrderedDomain::Date,
             left: l,
             right: r,
         }
     }
-    fn date_gt_(l: Box<Expr>, r: Box<Expr>) -> Expr {
-        Expr::Compare {
+    fn date_gt_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
+        Prop::Compare {
             op: CompareOp::Gt,
             domain: OrderedDomain::Date,
             left: l,
@@ -134,7 +136,7 @@ mod tests {
         EvalContext::new(state, None, bindings, None)
     }
 
-    /// No-actor EvalContext with both pre and post states, for `Expr::Pre`
+    /// No-actor EvalContext with both pre and post states, for `Prop::Pre`
     /// tests where the wrapped subtree flips into pre-state lookup.
     fn ctx_with_pre<'a>(
         state: &'a State,
@@ -295,72 +297,65 @@ mod tests {
         );
     }
 
-    /// Pins `predicates_referenced_by_expr`: an `Expr` touching every
-    /// variant that carries a nested `Expr` or `Claim` node, each site
+    /// Pins `predicates_referenced_by_prop`: a `Prop` touching every
+    /// variant that carries a nested `Prop` or `Claim` node, each site
     /// using a unique predicate name, must extract every planted name.
+    /// Comparator operands are value expressions, so the planted names
+    /// at those positions arrive via `Sum`/`ValueOf` (the value walk).
     #[test]
-    fn predicates_referenced_by_expr_covers_every_variant() {
-        let claim = |p: &str| Expr::Claim {
+    fn predicates_referenced_by_prop_covers_every_variant() {
+        let claim = |p: &str| Prop::Claim {
             predicate: p.to_string(),
             args: vec![],
         };
-        // ValueOf carries its own predicate and an optional default
-        // expression that may carry more.
-        let value_of = |p: &str, default: Option<Expr>| Expr::ValueOf {
-            predicate: p.to_string(),
-            args: vec![Term::Wildcard],
-            default: default.map(Box::new),
+        // A value expression that plants one predicate name (a `Sum`
+        // whose body is a claim), to reach the comparator-operand path.
+        let value_with = |p: &str| ValueExpr::Sum {
+            value: Term::Var("v".to_string()),
+            body: Box::new(claim(p)),
         };
 
-        let expr = Expr::And(vec![
-            Expr::Implies {
+        let prop = Prop::And(vec![
+            Prop::Implies {
                 left: Box::new(claim("P_implies_left")),
                 right: Box::new(claim("P_implies_right")),
             },
-            Expr::Exists {
+            Prop::Exists {
                 binding: "x".to_string(),
                 body: Box::new(claim("P_exists_body")),
             },
-            Expr::Not(Box::new(claim("P_not_body"))),
-            Expr::Eq(Box::new(claim("P_eq_left")), Box::new(claim("P_eq_right"))),
-            le_(Box::new(claim("P_le_left")), Box::new(claim("P_le_right"))),
+            Prop::Not(Box::new(claim("P_not_body"))),
+            Prop::Eq(
+                Box::new(value_with("P_eq_left")),
+                Box::new(value_with("P_eq_right")),
+            ),
+            le_(
+                Box::new(value_with("P_le_left")),
+                Box::new(value_with("P_le_right")),
+            ),
             date_le_(
-                Box::new(claim("P_datele_left")),
-                Box::new(claim("P_datele_right")),
+                Box::new(value_with("P_datele_left")),
+                Box::new(value_with("P_datele_right")),
             ),
-            Expr::Sub(
-                Box::new(claim("P_sub_left")),
-                Box::new(claim("P_sub_right")),
-            ),
-            Expr::Add(
-                Box::new(claim("P_add_left")),
-                Box::new(claim("P_add_right")),
-            ),
-            Expr::Sum {
-                value: Term::Var("v".to_string()),
-                body: Box::new(claim("P_sum_body")),
-            },
-            Expr::Forall {
+            Prop::Forall {
                 binding: "y".to_string(),
                 source: Box::new(claim("P_forall_source")),
                 body: Box::new(claim("P_forall_body")),
             },
-            value_of("P_valueof_self", Some(claim("P_valueof_default"))),
-            Expr::Or(vec![claim("P_or_left"), claim("P_or_right")]),
-            Expr::Pre(Box::new(claim("P_pre_inner"))),
+            Prop::Or(vec![claim("P_or_left"), claim("P_or_right")]),
+            Prop::Pre(Box::new(claim("P_pre_inner"))),
             // Variants carrying no predicate references: must contribute
             // nothing. The exhaustive set comparison below would catch
             // any spurious entry.
-            Expr::Neq(
-                Box::new(Expr::Term(Term::Var("a".to_string()))),
-                Box::new(Expr::Term(Term::Var("b".to_string()))),
+            Prop::Neq(
+                Box::new(ValueExpr::Term(Term::Var("a".to_string()))),
+                Box::new(ValueExpr::Term(Term::Var("b".to_string()))),
             ),
-            Expr::Term(Term::Var("z".to_string())),
-            Expr::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
+            Prop::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
         ]);
 
         let mut got = BTreeSet::new();
-        predicates_referenced_by_expr(&expr, &mut got);
+        predicates_referenced_by_prop(&prop, &mut got);
 
         let expected: BTreeSet<String> = [
             "P_implies_left",
@@ -373,15 +368,8 @@ mod tests {
             "P_le_right",
             "P_datele_left",
             "P_datele_right",
-            "P_sub_left",
-            "P_sub_right",
-            "P_add_left",
-            "P_add_right",
-            "P_sum_body",
             "P_forall_source",
             "P_forall_body",
-            "P_valueof_self",
-            "P_valueof_default",
             "P_or_left",
             "P_or_right",
             "P_pre_inner",
@@ -392,7 +380,52 @@ mod tests {
 
         assert_eq!(
             got, expected,
-            "every Expr variant that carries a predicate reference must contribute it"
+            "every Prop variant that carries a predicate reference must contribute it"
+        );
+    }
+
+    /// Pins `predicates_referenced_by_value`: a `ValueExpr` touching
+    /// every variant that carries a nested predicate reference (a
+    /// `ValueOf`, a `Sum` body, an arithmetic operand subtree) must
+    /// extract every planted name. `Term` carries none.
+    #[test]
+    fn predicates_referenced_by_value_covers_every_variant() {
+        let claim = |p: &str| Prop::Claim {
+            predicate: p.to_string(),
+            args: vec![],
+        };
+        let value_of = |p: &str, default: Option<ValueExpr>| ValueExpr::ValueOf {
+            predicate: p.to_string(),
+            args: vec![Term::Wildcard],
+            default: default.map(Box::new),
+        };
+
+        let expr = ValueExpr::Add(
+            Box::new(ValueExpr::Sub(
+                Box::new(ValueExpr::Sum {
+                    value: Term::Var("v".to_string()),
+                    body: Box::new(claim("P_sum_body")),
+                }),
+                Box::new(value_of(
+                    "P_valueof_self",
+                    Some(value_of("P_valueof_default", None)),
+                )),
+            )),
+            // A bare term carries no predicate reference.
+            Box::new(ValueExpr::Term(Term::Var("z".to_string()))),
+        );
+
+        let mut got = BTreeSet::new();
+        predicates_referenced_by_value(&expr, &mut got);
+
+        let expected: BTreeSet<String> = ["P_sum_body", "P_valueof_self", "P_valueof_default"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        assert_eq!(
+            got, expected,
+            "every ValueExpr variant that carries a predicate reference must contribute it"
         );
     }
 
@@ -406,7 +439,7 @@ mod tests {
         let body = vec![
             require(claim("P_require", vec![var("x")])),
             bind_one(claim("P_bind", vec![var("y"), var("z")])),
-            let_("v", claim("P_let", vec![var("y")])),
+            let_("v", value_of("P_let", vec![var("y"), wildcard()])),
             // Writes only: P_assert MUST NOT appear in the read set.
             assert_("P_assert", vec![var("y")]),
             retract("P_retract", vec![wildcard()]),
@@ -441,13 +474,15 @@ mod tests {
         );
     }
 
-    /// `Expr::Add` returns the decimal sum of its operands when both
+    /// `ValueExpr::Add` returns the decimal sum of its operands when both
     /// evaluate to decimals.
     #[test]
     fn add_sums_two_decimals() {
-        let expr = Expr::Add(
-            Box::new(Expr::Term(Term::Literal(Value::Decimal("10".to_string())))),
-            Box::new(Expr::Term(Term::Literal(Value::Decimal(
+        let expr = ValueExpr::Add(
+            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                "10".to_string(),
+            )))),
+            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                 "32.5".to_string(),
             )))),
         );
@@ -459,9 +494,11 @@ mod tests {
     /// falling through silently. Same contract as `Sub`.
     #[test]
     fn add_with_non_decimal_operand_is_type_mismatch() {
-        let expr = Expr::Add(
-            Box::new(Expr::Term(Term::Literal(Value::Decimal("10".to_string())))),
-            Box::new(Expr::Term(Term::Literal(Value::Subject(
+        let expr = ValueExpr::Add(
+            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                "10".to_string(),
+            )))),
+            Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
                 "oops".to_string(),
             )))),
         );
@@ -473,8 +510,8 @@ mod tests {
         }
     }
 
-    fn date_lit(s: &str) -> Expr {
-        Expr::Term(Term::Literal(Value::Date(s.to_string())))
+    fn date_lit(s: &str) -> ValueExpr {
+        ValueExpr::Term(Term::Literal(Value::Date(s.to_string())))
     }
 
     /// `DateLe(a, b)` admits when `a < b`. The successful match
@@ -526,7 +563,9 @@ mod tests {
     #[test]
     fn date_le_type_mismatch_decimal_vs_date() {
         let expr = date_le_(
-            Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
+            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                "1".to_string(),
+            )))),
             Box::new(date_lit("2026-03-12")),
         );
         let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
@@ -544,7 +583,7 @@ mod tests {
     fn date_le_type_mismatch_date_vs_subject() {
         let expr = date_le_(
             Box::new(date_lit("2026-03-12")),
-            Box::new(Expr::Term(Term::Literal(Value::Subject(
+            Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
                 "oops".to_string(),
             )))),
         );
@@ -580,8 +619,12 @@ mod tests {
     /// direction: `Gt`/`Lt` are strict, `Ge` includes equality.
     #[test]
     fn decimal_strict_comparators_pin_direction() {
-        let d = |s: &str| Box::new(Expr::Term(Term::Literal(Value::Decimal(s.to_string()))));
-        let admits = |e: Expr| {
+        let d = |s: &str| {
+            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                s.to_string(),
+            ))))
+        };
+        let admits = |e: Prop| {
             !find_matches(&e, &ctx(&State::from_claims(vec![]), &Bindings::new()))
                 .unwrap()
                 .is_empty()
@@ -600,7 +643,7 @@ mod tests {
     /// (`DateGe`) includes equality.
     #[test]
     fn date_strict_comparators_pin_direction() {
-        let admits = |e: Expr| {
+        let admits = |e: Prop| {
             !find_matches(&e, &ctx(&State::from_claims(vec![]), &Bindings::new()))
                 .unwrap()
                 .is_empty()
@@ -635,14 +678,14 @@ mod tests {
             )],
         };
         let state = State::from_claims(vec![claim]);
-        let expr = Expr::Claim {
+        let expr = Prop::Claim {
             predicate: "OnDate".to_string(),
             args: vec![Term::Literal(Value::Date("2026-03-12".to_string()))],
         };
         let matches = find_matches(&expr, &ctx(&state, &Bindings::new())).unwrap();
         assert_eq!(matches.len(), 1, "literal date arg must unify");
 
-        let other = Expr::Claim {
+        let other = Prop::Claim {
             predicate: "OnDate".to_string(),
             args: vec![Term::Literal(Value::Date("2026-03-13".to_string()))],
         };
@@ -658,13 +701,16 @@ mod tests {
     /// composition so the kernel cannot drift.
     #[test]
     fn add_nests_under_le_for_cumulative_cap() {
-        let running = Expr::Term(Term::Literal(Value::Decimal("60".to_string())));
-        let proposed = Expr::Term(Term::Literal(Value::Decimal("40".to_string())));
-        let cap = Expr::Term(Term::Literal(Value::Decimal("100".to_string())));
+        let running = ValueExpr::Term(Term::Literal(Value::Decimal("60".to_string())));
+        let proposed = ValueExpr::Term(Term::Literal(Value::Decimal("40".to_string())));
+        let cap = ValueExpr::Term(Term::Literal(Value::Decimal("100".to_string())));
 
         // 60 + 40 <= 100 admits (binding pass-through).
         let under_cap = le_(
-            Box::new(Expr::Add(Box::new(running.clone()), Box::new(proposed))),
+            Box::new(ValueExpr::Add(
+                Box::new(running.clone()),
+                Box::new(proposed),
+            )),
             Box::new(cap.clone()),
         );
         let matches = find_matches(
@@ -676,9 +722,11 @@ mod tests {
 
         // 60 + 50 <= 100 fails (empty match set).
         let over_cap = le_(
-            Box::new(Expr::Add(
+            Box::new(ValueExpr::Add(
                 Box::new(running),
-                Box::new(Expr::Term(Term::Literal(Value::Decimal("50".to_string())))),
+                Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "50".to_string(),
+                )))),
             )),
             Box::new(cap),
         );
@@ -690,7 +738,7 @@ mod tests {
         assert!(matches.is_empty(), "60 + 50 <= 100 should reject");
     }
 
-    /// `Expr::Or` returns the concatenation of each branch's binding
+    /// `Prop::Or` returns the concatenation of each branch's binding
     /// sets, with no deduplication, mirroring `find_conjunction`'s
     /// multiplicity-preserving convention. Pins the four load-bearing
     /// cases: one branch matches, both branches match (multiplicity
@@ -715,21 +763,21 @@ mod tests {
             },
         ]);
 
-        let a_x = Expr::Claim {
+        let a_x = Prop::Claim {
             predicate: "A".to_string(),
             args: vec![Term::Var("x".to_string())],
         };
-        let b_x = Expr::Claim {
+        let b_x = Prop::Claim {
             predicate: "B".to_string(),
             args: vec![Term::Var("x".to_string())],
         };
-        let c_x = Expr::Claim {
+        let c_x = Prop::Claim {
             predicate: "C".to_string(),
             args: vec![Term::Var("x".to_string())],
         };
 
         // Both branches match: two A extensions + one B extension = 3.
-        let both = Expr::Or(vec![a_x.clone(), b_x.clone()]);
+        let both = Prop::Or(vec![a_x.clone(), b_x.clone()]);
         let matches = find_matches(&both, &ctx(&state, &Bindings::new())).unwrap();
         assert_eq!(
             matches.len(),
@@ -749,7 +797,7 @@ mod tests {
 
         // One branch matches, one doesn't: only the matching branch's
         // extensions are returned.
-        let one_matches = Expr::Or(vec![a_x.clone(), c_x.clone()]);
+        let one_matches = Prop::Or(vec![a_x.clone(), c_x.clone()]);
         let matches = find_matches(&one_matches, &ctx(&state, &Bindings::new())).unwrap();
         assert_eq!(
             matches.len(),
@@ -758,7 +806,7 @@ mod tests {
         );
 
         // Neither branch matches: empty.
-        let none = Expr::Or(vec![c_x.clone(), c_x]);
+        let none = Prop::Or(vec![c_x.clone(), c_x]);
         let matches = find_matches(&none, &ctx(&state, &Bindings::new())).unwrap();
         assert!(
             matches.is_empty(),
@@ -767,7 +815,7 @@ mod tests {
 
         // No deduplication: two branches admitting the same extension
         // appear twice, matching find_conjunction's convention.
-        let dup = Expr::Or(vec![a_x.clone(), a_x]);
+        let dup = Prop::Or(vec![a_x.clone(), a_x]);
         let matches = find_matches(&dup, &ctx(&state, &Bindings::new())).unwrap();
         assert_eq!(
             matches.len(),
@@ -777,7 +825,7 @@ mod tests {
     }
 
     // ============================================================
-    // Expr::Pre - pre-state opt-in
+    // Prop::Pre - pre-state opt-in
     // ============================================================
 
     /// `pre(inner)` flips state lookup: the inner expression sees
@@ -796,22 +844,24 @@ mod tests {
         }]);
 
         // Counter(n) and pre(Counter(m)) implies n = m + 1
-        let body = Expr::Implies {
-            left: Box::new(Expr::And(vec![
-                Expr::Claim {
+        let body = Prop::Implies {
+            left: Box::new(Prop::And(vec![
+                Prop::Claim {
                     predicate: "Counter".to_string(),
                     args: vec![Term::Var("n".to_string())],
                 },
-                Expr::Pre(Box::new(Expr::Claim {
+                Prop::Pre(Box::new(Prop::Claim {
                     predicate: "Counter".to_string(),
                     args: vec![Term::Var("m".to_string())],
                 })),
             ])),
-            right: Box::new(Expr::Eq(
-                Box::new(Expr::Term(Term::Var("n".to_string()))),
-                Box::new(Expr::Add(
-                    Box::new(Expr::Term(Term::Var("m".to_string()))),
-                    Box::new(Expr::Term(Term::Literal(Value::Decimal("1".to_string())))),
+            right: Box::new(Prop::Eq(
+                Box::new(ValueExpr::Term(Term::Var("n".to_string()))),
+                Box::new(ValueExpr::Add(
+                    Box::new(ValueExpr::Term(Term::Var("m".to_string()))),
+                    Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                        "1".to_string(),
+                    )))),
                 )),
             )),
         };
@@ -837,14 +887,14 @@ mod tests {
         );
     }
 
-    /// `Expr::Pre` in a context with no pre_state in scope errors
+    /// `Prop::Pre` in a context with no pre_state in scope errors
     /// `PreStateUnavailable`. This is what enforces the doctrine:
     /// derived-claim bodies, transformation `require` bodies, and
     /// standalone evaluator callers cannot reach for `pre()`.
     #[test]
     fn pre_without_pre_state_errors_pre_state_unavailable() {
         let post = State::from_claims(vec![]);
-        let body = Expr::Pre(Box::new(Expr::Claim {
+        let body = Prop::Pre(Box::new(Prop::Claim {
             predicate: "Anything".to_string(),
             args: vec![],
         }));
@@ -859,7 +909,7 @@ mod tests {
     fn nested_pre_errors_pre_state_unavailable() {
         let pre = State::from_claims(vec![]);
         let post = State::from_claims(vec![]);
-        let body = Expr::Pre(Box::new(Expr::Pre(Box::new(Expr::Claim {
+        let body = Prop::Pre(Box::new(Prop::Pre(Box::new(Prop::Claim {
             predicate: "Anything".to_string(),
             args: vec![],
         }))));
@@ -891,13 +941,13 @@ mod tests {
         // `pre(forall a in Account: Balance(a))`: in pre-state there
         // are no Account claims, so the source is empty and the
         // body is vacuously satisfied.
-        let outside = Expr::Pre(Box::new(Expr::Forall {
+        let outside = Prop::Pre(Box::new(Prop::Forall {
             binding: "a".to_string(),
-            source: Box::new(Expr::Claim {
+            source: Box::new(Prop::Claim {
                 predicate: "Account".to_string(),
                 args: vec![Term::Var("a".to_string())],
             }),
-            body: Box::new(Expr::Claim {
+            body: Box::new(Prop::Claim {
                 predicate: "Balance".to_string(),
                 args: vec![Term::Var("a".to_string())],
             }),
@@ -912,13 +962,13 @@ mod tests {
         // single post-state Account, and asks whether Balance(a)
         // held in pre. Pre has no Balance, so the body fails for
         // the iterated a.
-        let inside = Expr::Forall {
+        let inside = Prop::Forall {
             binding: "a".to_string(),
-            source: Box::new(Expr::Claim {
+            source: Box::new(Prop::Claim {
                 predicate: "Account".to_string(),
                 args: vec![Term::Var("a".to_string())],
             }),
-            body: Box::new(Expr::Pre(Box::new(Expr::Claim {
+            body: Box::new(Prop::Pre(Box::new(Prop::Claim {
                 predicate: "Balance".to_string(),
                 args: vec![Term::Var("a".to_string())],
             }))),
@@ -1221,27 +1271,11 @@ mod tests {
         );
     }
 
-    /// A value-producing expression (e.g. `Add`) inside `bind_one`
-    /// surfaces as `EvalError::NotPredicate`. The public DSL permits
-    /// the construction; the runtime enforces the predicate-shaped
-    /// contract.
-    #[test]
-    fn bind_one_rejects_value_expr_as_not_predicate() {
-        use ir_builder::*;
-        let state = State::default();
-        let t = single_stmt_transformation(
-            "misuse_value_expr",
-            vec![bind_one(add(
-                term(Term::Literal(Value::Decimal("1".to_string()))),
-                term(Term::Literal(Value::Decimal("2".to_string()))),
-            ))],
-        );
-        let err = run(&t, &state).expect_err("expected EvalError");
-        assert!(
-            matches!(err, EvalError::NotPredicate),
-            "expected NotPredicate, got {err:?}"
-        );
-    }
+    // The two-sort IR makes a value-producing expression inside
+    // `bind_one` unrepresentable - `BindOne` holds a `Prop`, and `add`
+    // builds a `ValueExpr` - so the former `bind_one_rejects_value_expr`
+    // test (which depended on the now-deleted `EvalError::NotPredicate`)
+    // no longer has a construction to exercise.
 
     // ============================================================
     // Program::validate() - strict arity validation.

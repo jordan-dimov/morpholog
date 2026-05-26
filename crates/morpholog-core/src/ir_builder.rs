@@ -29,13 +29,13 @@
 //!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{
-    ArgDecl, Claim, CompareOp, Expr, Intent, OrderedDomain, PredicateArgKind, PredicateDecl, Stmt,
-    Term, Value,
+    ArgDecl, Claim, CompareOp, Intent, OrderedDomain, PredicateArgKind, PredicateDecl, Prop, Stmt,
+    Term, Value, ValueExpr,
 };
 
-/// Build an [`Expr::Compare`] for the comparator constructors below.
-fn compare(op: CompareOp, domain: OrderedDomain, lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Compare {
+/// Build a [`Prop::Compare`] for the comparator constructors below.
+fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr) -> Prop {
+    Prop::Compare {
         op,
         domain,
         left: Box::new(lhs),
@@ -54,8 +54,8 @@ pub fn var(name: &str) -> Term {
     Term::Var(name.to_string())
 }
 
-/// Match anything at this position. Valid inside `Expr::Claim`,
-/// `Stmt::Retract`, and `Expr::ValueOf` patterns. Invalid in `Term`-as-
+/// Match anything at this position. Valid inside `Prop::Claim`,
+/// `Stmt::Retract`, and `ValueExpr::ValueOf` patterns. Invalid in `Term`-as-
 /// value positions (resolves to `EvalError::TypeMismatch`).
 pub fn wildcard() -> Term {
     Term::Wildcard
@@ -98,128 +98,132 @@ pub fn role(s: &str) -> Term {
 }
 
 // ============================================================
-// Expr constructors
+// Prop constructors (the predicate-shaped sort)
 // ============================================================
 
 /// Claim pattern. Each `args` term is either a variable to bind, a
 /// wildcard, a literal to match, or `actor()`. Match semantics:
 /// every position must unify against the candidate claim.
-pub fn claim(predicate: &str, args: Vec<Term>) -> Expr {
-    Expr::Claim {
+pub fn claim(predicate: &str, args: Vec<Term>) -> Prop {
+    Prop::Claim {
         predicate: predicate.to_string(),
         args,
     }
 }
 
-/// Lift a [`Term`] into value position. Used wherever a sub-expression
-/// must evaluate to a value (e.g. inside `Le`, `DateLe`, `Add`, `Sub`,
-/// `Sum.value`).
-pub fn term(t: Term) -> Expr {
-    Expr::Term(t)
+pub fn and(props: Vec<Prop>) -> Prop {
+    Prop::And(props)
 }
 
-pub fn and(exprs: Vec<Expr>) -> Expr {
-    Expr::And(exprs)
+pub fn or(props: Vec<Prop>) -> Prop {
+    Prop::Or(props)
 }
 
-pub fn or(exprs: Vec<Expr>) -> Expr {
-    Expr::Or(exprs)
-}
-
-pub fn not(inner: Expr) -> Expr {
-    Expr::Not(Box::new(inner))
+pub fn not(inner: Prop) -> Prop {
+    Prop::Not(Box::new(inner))
 }
 
 /// Opt the wrapped subtree into pre-transition state lookup.
 /// Legal only inside invariant bodies during a proposal; surfaces
 /// [`crate::EvalError::PreStateUnavailable`] anywhere else.
-pub fn pre(inner: Expr) -> Expr {
-    Expr::Pre(Box::new(inner))
+pub fn pre(inner: Prop) -> Prop {
+    Prop::Pre(Box::new(inner))
 }
 
-pub fn implies(left: Expr, right: Expr) -> Expr {
-    Expr::Implies {
+pub fn implies(left: Prop, right: Prop) -> Prop {
+    Prop::Implies {
         left: Box::new(left),
         right: Box::new(right),
     }
 }
 
-pub fn exists(binding: &str, body: Expr) -> Expr {
-    Expr::Exists {
+pub fn exists(binding: &str, body: Prop) -> Prop {
+    Prop::Exists {
         binding: binding.to_string(),
         body: Box::new(body),
     }
 }
 
-pub fn forall(binding: &str, source: Expr, body: Expr) -> Expr {
-    Expr::Forall {
+pub fn forall(binding: &str, source: Prop, body: Prop) -> Prop {
+    Prop::Forall {
         binding: binding.to_string(),
         source: Box::new(source),
         body: Box::new(body),
     }
 }
 
-pub fn eq(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Eq(Box::new(lhs), Box::new(rhs))
+pub fn eq(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
+    Prop::Eq(Box::new(lhs), Box::new(rhs))
 }
 
-/// `Expr::Neq` over two terms - the common authoring case (comparing two
+/// `Prop::Neq` over two terms - the common authoring case (comparing two
 /// variables or literals). The IR's `Neq` is symmetric with `Eq` and
-/// accepts full expressions; build `Expr::Neq` directly for the rarer
-/// expression-on-either-side case.
-pub fn neq(t1: Term, t2: Term) -> Expr {
-    Expr::Neq(Box::new(Expr::Term(t1)), Box::new(Expr::Term(t2)))
+/// accepts full value expressions; build `Prop::Neq` directly for the
+/// rarer expression-on-either-side case.
+pub fn neq(t1: Term, t2: Term) -> Prop {
+    Prop::Neq(Box::new(ValueExpr::Term(t1)), Box::new(ValueExpr::Term(t2)))
 }
 
-pub fn le(lhs: Expr, rhs: Expr) -> Expr {
+pub fn le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Le, OrderedDomain::Decimal, lhs, rhs)
 }
 
-pub fn lt(lhs: Expr, rhs: Expr) -> Expr {
+pub fn lt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Lt, OrderedDomain::Decimal, lhs, rhs)
 }
 
-pub fn ge(lhs: Expr, rhs: Expr) -> Expr {
+pub fn ge(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Ge, OrderedDomain::Decimal, lhs, rhs)
 }
 
-pub fn gt(lhs: Expr, rhs: Expr) -> Expr {
+pub fn gt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Gt, OrderedDomain::Decimal, lhs, rhs)
 }
 
-pub fn date_le(lhs: Expr, rhs: Expr) -> Expr {
+pub fn date_le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Le, OrderedDomain::Date, lhs, rhs)
 }
 
-pub fn date_lt(lhs: Expr, rhs: Expr) -> Expr {
+pub fn date_lt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs)
 }
 
-pub fn date_ge(lhs: Expr, rhs: Expr) -> Expr {
+pub fn date_ge(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs)
 }
 
-pub fn date_gt(lhs: Expr, rhs: Expr) -> Expr {
+pub fn date_gt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs)
 }
 
-pub fn sub(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Sub(Box::new(lhs), Box::new(rhs))
+pub fn in_(elem: Term, coll: Term) -> Prop {
+    Prop::In(elem, coll)
 }
 
-pub fn add(lhs: Expr, rhs: Expr) -> Expr {
-    Expr::Add(Box::new(lhs), Box::new(rhs))
+// ============================================================
+// ValueExpr constructors (the value-producing sort)
+// ============================================================
+
+/// Lift a [`Term`] into value position. Used wherever a sub-expression
+/// must evaluate to a value (e.g. inside `le`, `date_le`, `add`, `sub`,
+/// `sum`'s value).
+pub fn term(t: Term) -> ValueExpr {
+    ValueExpr::Term(t)
 }
 
-pub fn sum(value: Term, body: Expr) -> Expr {
-    Expr::Sum {
+pub fn sub(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Sub(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn add(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Add(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn sum(value: Term, body: Prop) -> ValueExpr {
+    ValueExpr::Sum {
         value,
         body: Box::new(body),
     }
-}
-
-pub fn in_(elem: Term, coll: Term) -> Expr {
-    Expr::In(elem, coll)
 }
 
 /// Functional lookup: match exactly one claim and yield its
@@ -233,8 +237,8 @@ pub fn in_(elem: Term, coll: Term) -> Expr {
 /// zero matches. Reach for `value_of` only in value-producing
 /// positions (arithmetic, comparisons, `Sum`, `Let`, or a
 /// `DerivedClaim` value expression) where a statement form does not fit.
-pub fn value_of(predicate: &str, args: Vec<Term>) -> Expr {
-    Expr::ValueOf {
+pub fn value_of(predicate: &str, args: Vec<Term>) -> ValueExpr {
+    ValueExpr::ValueOf {
         predicate: predicate.to_string(),
         args,
         default: None,
@@ -243,8 +247,8 @@ pub fn value_of(predicate: &str, args: Vec<Term>) -> Expr {
 
 /// `value_of` with a fallback expression evaluated when zero matches.
 /// Multiple matches still error.
-pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: Expr) -> Expr {
-    Expr::ValueOf {
+pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: ValueExpr) -> ValueExpr {
+    ValueExpr::ValueOf {
         predicate: predicate.to_string(),
         args,
         default: Some(Box::new(default)),
@@ -255,8 +259,8 @@ pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: Expr) ->
 // Stmt constructors
 // ============================================================
 
-pub fn require(expr: Expr) -> Stmt {
-    Stmt::Require(expr)
+pub fn require(prop: Prop) -> Stmt {
+    Stmt::Require(prop)
 }
 
 /// Deterministic unique-lookup binding statement. The companion to
@@ -272,8 +276,8 @@ pub fn require(expr: Expr) -> Stmt {
 /// ```
 ///
 /// binds both `policy_id` and `aggregate_limit` for the rest of the body.
-pub fn bind_one(expr: Expr) -> Stmt {
-    Stmt::BindOne(expr)
+pub fn bind_one(prop: Prop) -> Stmt {
+    Stmt::BindOne(prop)
 }
 
 pub fn assert_(predicate: &str, args: Vec<Term>) -> Stmt {
@@ -297,7 +301,7 @@ pub fn emit(name: &str, args: Vec<Term>) -> Stmt {
     })
 }
 
-pub fn let_(name: &str, value: Expr) -> Stmt {
+pub fn let_(name: &str, value: ValueExpr) -> Stmt {
     Stmt::Let {
         name: name.to_string(),
         value,
@@ -310,7 +314,7 @@ pub fn let_new_subject(name: &str) -> Stmt {
     }
 }
 
-pub fn for_(binding: &str, collection: Expr, body: Vec<Stmt>) -> Stmt {
+pub fn for_(binding: &str, collection: ValueExpr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         binding: binding.to_string(),
         collection,
