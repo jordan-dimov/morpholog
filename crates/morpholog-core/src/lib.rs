@@ -51,7 +51,7 @@ pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, Invariant,
     OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term,
-    Transformation, Value, ValueExpr,
+    Transformation, Value, ValueExpr, Var,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -319,7 +319,7 @@ mod tests {
         // A value expression that plants one predicate name (a `Sum`
         // whose body is a claim), to reach the comparator-operand path.
         let value_with = |p: &str| ValueExpr::Sum {
-            value: Term::Var("v".to_string()),
+            value: Term::Var("v".into()),
             body: Box::new(claim(p)),
         };
 
@@ -329,7 +329,7 @@ mod tests {
                 right: Box::new(claim("P_implies_right")),
             },
             Prop::Exists {
-                binding: "x".to_string(),
+                binding: "x".into(),
                 body: Box::new(claim("P_exists_body")),
             },
             Prop::Not(Box::new(claim("P_not_body"))),
@@ -346,7 +346,7 @@ mod tests {
                 Box::new(value_with("P_datele_right")),
             ),
             Prop::Forall {
-                binding: "y".to_string(),
+                binding: "y".into(),
                 source: Box::new(claim("P_forall_source")),
                 body: Box::new(claim("P_forall_body")),
             },
@@ -356,10 +356,10 @@ mod tests {
             // nothing. The exhaustive set comparison below would catch
             // any spurious entry.
             Prop::Neq(
-                Box::new(ValueExpr::Term(Term::Var("a".to_string()))),
-                Box::new(ValueExpr::Term(Term::Var("b".to_string()))),
+                Box::new(ValueExpr::Term(Term::Var("a".into()))),
+                Box::new(ValueExpr::Term(Term::Var("b".into()))),
             ),
-            Prop::In(Term::Var("e".to_string()), Term::Var("coll".to_string())),
+            Prop::In(Term::Var("e".into()), Term::Var("coll".into())),
         ]);
 
         let mut got = BTreeSet::new();
@@ -411,7 +411,7 @@ mod tests {
         let expr = ValueExpr::Add(
             Box::new(ValueExpr::Sub(
                 Box::new(ValueExpr::Sum {
-                    value: Term::Var("v".to_string()),
+                    value: Term::Var("v".into()),
                     body: Box::new(claim("P_sum_body")),
                 }),
                 Box::new(value_of(
@@ -420,7 +420,7 @@ mod tests {
                 )),
             )),
             // A bare term carries no predicate reference.
-            Box::new(ValueExpr::Term(Term::Var("z".to_string()))),
+            Box::new(ValueExpr::Term(Term::Var("z".into()))),
         );
 
         let mut got = BTreeSet::new();
@@ -773,15 +773,15 @@ mod tests {
 
         let a_x = Prop::Claim {
             predicate: "A".to_string(),
-            args: vec![Term::Var("x".to_string())],
+            args: vec![Term::Var("x".into())],
         };
         let b_x = Prop::Claim {
             predicate: "B".to_string(),
-            args: vec![Term::Var("x".to_string())],
+            args: vec![Term::Var("x".into())],
         };
         let c_x = Prop::Claim {
             predicate: "C".to_string(),
-            args: vec![Term::Var("x".to_string())],
+            args: vec![Term::Var("x".into())],
         };
 
         // Both branches match: two A extensions + one B extension = 3.
@@ -794,10 +794,12 @@ mod tests {
         );
         let bound_x: Vec<_> = matches
             .iter()
-            .map(|b| match b.get("x").expect("x bound in every extension") {
-                EvalValue::Subject(s) => s.as_str().to_string(),
-                _ => panic!("x must be a subject"),
-            })
+            .map(
+                |b| match b.get(&Var::from("x")).expect("x bound in every extension") {
+                    EvalValue::Subject(s) => s.as_str().to_string(),
+                    _ => panic!("x must be a subject"),
+                },
+            )
             .collect();
         assert!(bound_x.contains(&"a1".to_string()));
         assert!(bound_x.contains(&"a2".to_string()));
@@ -856,17 +858,17 @@ mod tests {
             left: Box::new(Prop::And(vec![
                 Prop::Claim {
                     predicate: "Counter".to_string(),
-                    args: vec![Term::Var("n".to_string())],
+                    args: vec![Term::Var("n".into())],
                 },
                 Prop::Pre(Box::new(Prop::Claim {
                     predicate: "Counter".to_string(),
-                    args: vec![Term::Var("m".to_string())],
+                    args: vec![Term::Var("m".into())],
                 })),
             ])),
             right: Box::new(Prop::Eq(
-                Box::new(ValueExpr::Term(Term::Var("n".to_string()))),
+                Box::new(ValueExpr::Term(Term::Var("n".into()))),
                 Box::new(ValueExpr::Add(
-                    Box::new(ValueExpr::Term(Term::Var("m".to_string()))),
+                    Box::new(ValueExpr::Term(Term::Var("m".into()))),
                     Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                         "1".to_string(),
                     )))),
@@ -950,14 +952,14 @@ mod tests {
         // are no Account claims, so the source is empty and the
         // body is vacuously satisfied.
         let outside = Prop::Pre(Box::new(Prop::Forall {
-            binding: "a".to_string(),
+            binding: "a".into(),
             source: Box::new(Prop::Claim {
                 predicate: "Account".to_string(),
-                args: vec![Term::Var("a".to_string())],
+                args: vec![Term::Var("a".into())],
             }),
             body: Box::new(Prop::Claim {
                 predicate: "Balance".to_string(),
-                args: vec![Term::Var("a".to_string())],
+                args: vec![Term::Var("a".into())],
             }),
         }));
         let matches = find_matches(&outside, &ctx_with_pre(&post, &pre, &Bindings::new())).unwrap();
@@ -971,14 +973,14 @@ mod tests {
         // held in pre. Pre has no Balance, so the body fails for
         // the iterated a.
         let inside = Prop::Forall {
-            binding: "a".to_string(),
+            binding: "a".into(),
             source: Box::new(Prop::Claim {
                 predicate: "Account".to_string(),
-                args: vec![Term::Var("a".to_string())],
+                args: vec![Term::Var("a".into())],
             }),
             body: Box::new(Prop::Pre(Box::new(Prop::Claim {
                 predicate: "Balance".to_string(),
-                args: vec![Term::Var("a".to_string())],
+                args: vec![Term::Var("a".into())],
             }))),
         };
         let matches = find_matches(&inside, &ctx_with_pre(&post, &pre, &Bindings::new())).unwrap();
@@ -1646,8 +1648,8 @@ mod tests {
         };
         // Sorted by variable name: limit, pid.
         assert_eq!(bindings.len(), 2);
-        assert_eq!(bindings[0].0, "limit");
-        assert_eq!(bindings[1].0, "pid");
+        assert_eq!(bindings[0].0.as_str(), "limit");
+        assert_eq!(bindings[1].0.as_str(), "pid");
     }
 
     /// BindOne multi-match is a kernel error. The trace MUST still
@@ -1828,7 +1830,7 @@ mod tests {
         else {
             panic!("expected InvariantCheck, got {:?}", trace[1]);
         };
-        assert_eq!(name, "x_implies_y");
+        assert_eq!(name.as_str(), "x_implies_y");
         assert!(!held);
         assert!(expression.contains("implies"));
     }

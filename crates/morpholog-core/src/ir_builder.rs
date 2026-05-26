@@ -51,7 +51,7 @@ fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr)
 /// transformation parameter, a `let`, a `for`, an `exists`, or the
 /// match positions of an enclosing claim pattern).
 pub fn var(name: &str) -> Term {
-    Term::Var(name.to_string())
+    Term::Var(name.into())
 }
 
 /// Match anything at this position. Valid inside `Prop::Claim`,
@@ -139,14 +139,14 @@ pub fn implies(left: Prop, right: Prop) -> Prop {
 
 pub fn exists(binding: &str, body: Prop) -> Prop {
     Prop::Exists {
-        binding: binding.to_string(),
+        binding: binding.into(),
         body: Box::new(body),
     }
 }
 
 pub fn forall(binding: &str, source: Prop, body: Prop) -> Prop {
     Prop::Forall {
-        binding: binding.to_string(),
+        binding: binding.into(),
         source: Box::new(source),
         body: Box::new(body),
     }
@@ -303,20 +303,18 @@ pub fn emit(name: &str, args: Vec<Term>) -> Stmt {
 
 pub fn let_(name: &str, value: ValueExpr) -> Stmt {
     Stmt::Let {
-        name: name.to_string(),
+        name: name.into(),
         value,
     }
 }
 
 pub fn let_new_subject(name: &str) -> Stmt {
-    Stmt::LetNewSubject {
-        name: name.to_string(),
-    }
+    Stmt::LetNewSubject { name: name.into() }
 }
 
 pub fn for_(binding: &str, collection: ValueExpr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
-        binding: binding.to_string(),
+        binding: binding.into(),
         collection,
         body,
     }

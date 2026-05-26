@@ -32,7 +32,7 @@ use morpholog_surface::{parse_expression, parse_value_expr};
 // ---- Helpers ----
 
 fn var(name: &str) -> Term {
-    Term::Var(name.to_string())
+    Term::Var(name.into())
 }
 
 fn dec(s: &str) -> Term {
@@ -603,7 +603,7 @@ fn date_literal_in_claim_args() {
         panic!("expected Claim");
     };
     assert_eq!(predicate, "EffectiveFrom");
-    assert_eq!(args[0], Term::Var("verification".to_string()));
+    assert_eq!(args[0], Term::Var("verification".into()));
     assert_eq!(
         args[1],
         Term::Literal(Value::Date("2026-05-22".to_string()))
@@ -617,7 +617,7 @@ fn subject_literal_in_claim_args() {
         panic!("expected Claim");
     };
     assert_eq!(predicate, "Purpose");
-    assert_eq!(args[0], Term::Var("asset".to_string()));
+    assert_eq!(args[0], Term::Var("asset".into()));
     assert_eq!(
         args[1],
         Term::Literal(Value::Subject("BANK_DEBT_SERVICE".into()))
@@ -631,10 +631,7 @@ fn parses_membership_between_variables() {
     let got = parse_expression("line in lines").unwrap();
     assert_eq!(
         got,
-        Prop::In(
-            Term::Var("line".to_string()),
-            Term::Var("lines".to_string()),
-        )
+        Prop::In(Term::Var("line".into()), Term::Var("lines".into()),)
     );
 }
 
@@ -657,10 +654,10 @@ fn parses_exists_with_simple_body() {
     assert_eq!(
         got,
         Prop::Exists {
-            binding: "x".to_string(),
+            binding: "x".into(),
             body: Box::new(Prop::Claim {
                 predicate: "Foo".to_string(),
-                args: vec![Term::Var("x".to_string())],
+                args: vec![Term::Var("x".into())],
             }),
         }
     );
@@ -673,7 +670,7 @@ fn exists_body_extends_greedily() {
     let Prop::Exists { binding, body } = got else {
         panic!("expected Exists");
     };
-    assert_eq!(binding, "x");
+    assert_eq!(binding.as_str(), "x");
     assert!(matches!(*body, Prop::And(_)));
 }
 
@@ -690,15 +687,12 @@ fn forall_with_variable_source_wraps_as_in() {
     else {
         panic!("expected Forall");
     };
-    assert_eq!(binding, "line");
+    assert_eq!(binding.as_str(), "line");
     // Source must be lifted from `lines` (a Term::Var) to
     // `In(Var("line"), Var("lines"))` so the kernel can iterate.
     assert_eq!(
         *source,
-        Prop::In(
-            Term::Var("line".to_string()),
-            Term::Var("lines".to_string()),
-        )
+        Prop::In(Term::Var("line".into()), Term::Var("lines".into()),)
     );
     assert!(matches!(*body, Prop::Claim { .. }));
 }
@@ -717,7 +711,7 @@ fn forall_with_claim_source_used_as_is() {
     else {
         panic!("expected Forall");
     };
-    assert_eq!(binding, "claim_id");
+    assert_eq!(binding.as_str(), "claim_id");
     // Source is a claim, used as-is (not wrapped in In).
     assert!(matches!(*source, Prop::Claim { .. }));
     if let Prop::Claim { predicate, .. } = *source {
@@ -750,14 +744,14 @@ fn nested_forall() {
     else {
         panic!("expected outer Forall");
     };
-    assert_eq!(outer_b, "x");
+    assert_eq!(outer_b.as_str(), "x");
     let Prop::Forall {
         binding: inner_b, ..
     } = *outer_body
     else {
         panic!("expected inner Forall");
     };
-    assert_eq!(inner_b, "y");
+    assert_eq!(inner_b.as_str(), "y");
 }
 
 // ---- sum aggregator ----
@@ -768,7 +762,7 @@ fn parses_sum() {
     let ValueExpr::Sum { value, body } = got else {
         panic!("expected Sum");
     };
-    assert_eq!(value, Term::Var("amount".to_string()));
+    assert_eq!(value, Term::Var("amount".into()));
     assert!(matches!(*body, Prop::Claim { .. }));
 }
 
@@ -884,10 +878,7 @@ fn before_and_after_remain_usable_as_variable_names() {
     };
     assert_eq!(
         args,
-        vec![
-            Term::Var("before".to_string()),
-            Term::Var("after".to_string()),
-        ]
+        vec![Term::Var("before".into()), Term::Var("after".into()),]
     );
 }
 
@@ -906,7 +897,7 @@ fn parses_value_without_default() {
     };
     assert_eq!(predicate, "Policy");
     assert_eq!(args.len(), 2);
-    assert_eq!(args[0], Term::Var("policy_id".to_string()));
+    assert_eq!(args[0], Term::Var("policy_id".into()));
     assert_eq!(args[1], Term::Wildcard);
     assert!(default.is_none());
 }
@@ -968,7 +959,7 @@ fn realistic_verified_revenue_admissibility() {
     let Prop::Exists { binding, body } = got else {
         panic!("expected Exists");
     };
-    assert_eq!(binding, "g");
+    assert_eq!(binding.as_str(), "g");
     assert!(matches!(*body, Prop::Claim { .. }));
 }
 
@@ -1092,7 +1083,7 @@ fn forall_source_accepts_parenthesised_predicate_form() {
     else {
         panic!("expected Forall");
     };
-    assert_eq!(binding, "x");
+    assert_eq!(binding.as_str(), "x");
     // Source was an explicit `In(_, _)` inside parens; passes
     // through without auto-lift.
     assert!(matches!(*source, Prop::In(_, _)));

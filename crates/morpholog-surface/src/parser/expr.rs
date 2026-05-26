@@ -142,7 +142,7 @@ where
                 if name == "actor" {
                     Term::Actor
                 } else {
-                    Term::Var(name)
+                    Term::Var(name.into())
                 }
             }),
         ));
@@ -397,7 +397,7 @@ where
                     ));
                 }
                 Prop::Exists {
-                    binding,
+                    binding: binding.into(),
                     body: Box::new(body),
                 }
             });
@@ -442,7 +442,7 @@ where
                 None => ForallSource::BareTerm(if name == "actor" {
                     Term::Actor
                 } else {
-                    Term::Var(name)
+                    Term::Var(name.into())
                 }),
             }),
         ));
@@ -465,11 +465,11 @@ where
                 // an In-proposition binding the variable; anything
                 // already predicate-shaped is used as-is.
                 let source_prop = match source {
-                    ForallSource::BareTerm(t) => Prop::In(Term::Var(binding.clone()), t),
+                    ForallSource::BareTerm(t) => Prop::In(Term::Var(binding.clone().into()), t),
                     ForallSource::Prop(p) => p,
                 };
                 Prop::Forall {
-                    binding,
+                    binding: binding.into(),
                     source: Box::new(source_prop),
                     body: Box::new(body),
                 }
@@ -510,7 +510,7 @@ where
             if name == "actor" {
                 Term::Actor
             } else {
-                Term::Var(name)
+                Term::Var(name.into())
             }
         }),
     ));
@@ -562,7 +562,7 @@ where
             if name == "actor" {
                 ValueExpr::Term(Term::Actor)
             } else {
-                ValueExpr::Term(Term::Var(name))
+                ValueExpr::Term(Term::Var(name.into()))
             }
         });
 
@@ -573,7 +573,7 @@ where
         // into a count of matches (`sum(1 | ...)`). `actor` lexes as a
         // plain identifier, so it must be rejected here.
         let sum_target = choice((
-            ident.map(Term::Var),
+            ident.map(|name| Term::Var(name.into())),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
         ));
         let sum_expr = just(Token::KwSum)
@@ -584,7 +584,7 @@ where
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .validate(|(target, body): (Term, Prop), e, emitter| {
-                if matches!(&target, Term::Var(n) if n == "actor") {
+                if matches!(&target, Term::Var(n) if n.as_str() == "actor") {
                     let span: SimpleSpan = e.span();
                     emitter.emit(Rich::custom(
                         span,

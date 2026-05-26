@@ -212,7 +212,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         }],
         domain: Prop::Claim {
             predicate: "Tag".to_string(),
-            args: vec![Term::Var("k".to_string())],
+            args: vec![Term::Var("k".into())],
         },
     };
 
@@ -237,7 +237,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         }],
         domain: Prop::Claim {
             predicate: "Tag".to_string(),
-            args: vec![Term::Var("k".to_string())],
+            args: vec![Term::Var("k".into())],
         },
     };
 

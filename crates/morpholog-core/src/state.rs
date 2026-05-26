@@ -12,7 +12,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::ir::Subject;
+use crate::ir::{Subject, Var};
 
 /// A runtime value flowing through evaluation. Distinct from the IR's
 /// `Value` (which holds literals only).
@@ -186,7 +186,7 @@ impl State {
 /// Variable bindings used during expression evaluation and
 /// transformation execution. Maps variable name to resolved
 /// [`EvalValue`].
-pub type Bindings = HashMap<String, EvalValue>;
+pub type Bindings = HashMap<Var, EvalValue>;
 /// A resolved intent: all args are values, ready to be enqueued in an outbox.
 ///
 /// JSON encoding shape: `{ "name": "...", "args": [ ... ] }`.
