@@ -4,7 +4,7 @@ Status: design doctrine. The IR and runtime are implemented in `crates/morpholog
 
 Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`design-history.md`](design-history.md), which records retrospectively which worked example forced each design decision.
 
-This doc uses IR names (`Stmt::BindOne`, `Stmt::Assert`, `Term::Actor`) because it describes the kernel. The `.morph` surface uses domain-flavoured verbs that map one-to-one: `bind`, `admit`, `actor` and so on - the full table is in [`scope-and-ambition.md`](scope-and-ambition.md). When this doc says `bind_one`, the surface says `bind`.
+This doc uses IR names (`Stmt::BindOne`, `Stmt::Assert`, `Term::Actor`) because it describes the kernel. The `.morph` surface uses domain-flavoured verbs that map one-to-one: `bind`, `admit`, `actor` and so on - the full table is in the [Surface-to-IR mapping](#surface-to-ir-mapping) section below. When this doc says `bind_one`, the surface says `bind`.
 
 ## Conceptual core
 
@@ -147,6 +147,28 @@ AuditRecord
   emitted_intents
   committed_at
 ```
+
+## Surface-to-IR mapping
+
+The `.morph` surface verbs map one-to-one onto the IR constructs above. The renames are domain-flavour and layout only: the surface is more business-native than the IR but never more expressive than it (the doctrine, and what it rules out, is in [`scope-and-ambition.md`](scope-and-ambition.md#surface-syntax-and-the-ir)). This table is the exact correspondence, with the reason each surface form is spelled the way it is.
+
+| Surface verb | IR construct | Reason |
+|---|---|---|
+| `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
+| `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
+| `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. Decimal-only operands; the domain is carried explicitly, so there is no operator overloading by operand kind. |
+| `on_or_before` `before` `on_or_after` `after` (infix) | `Prop::Compare { op, domain: Date }` | Distinct keywords (not overloaded `<=`) for civil-date comparison; `on_or_*` are inclusive, `before`/`after` strict. Reads as business prose and aligns with the `[from, to]` inclusive-window doctrine. `before`/`after` are matched contextually (comparator position only), so they remain usable as variable names. Operands are type-checked as `EvalValue::Date`; using them on decimals surfaces as a runtime `TypeMismatch`. |
+| `=`, `!=` (infix) | `Prop::Eq` (ValueExpr, ValueExpr), `Prop::Neq` (ValueExpr, ValueExpr) | Both operate on full expressions and are symmetric: `a + 1 != b` is as legal as `a + 1 = b`. Not tied to one domain like the ordered comparators, but the two operands must share a kind - `=`/`!=` are kind-strict, with no silent coercion. |
+| `+`, `-`, `*`, `/`, `%` (infix) | `ValueExpr::Arith { op, .. }` with `op: ArithOp::Add` / `Sub` / `Mul` / `Div` / `Mod` (decimal) | Standard arithmetic, decimal-only and exact; `*`/`/`/`%` bind tighter than `+`/`-`. The operator is a field, not a per-operator variant - the value-sort analogue of `Prop::Compare` carrying a `CompareOp`. Admission gates express ratio rules in multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact; `/` is reserved for read-side projections, where a rounded figure is wanted; `%` is remainder, for parity and cyclic rules (`(file + rank) % 2`). A zero divisor on `/` or `%` surfaces `EvalError::DivisionByZero`. No unary minus until forced. |
+| `min(a, b)`, `max(a, b)` | `ValueExpr::Arith { op, .. }` with `op: ArithOp::Min` / `Max` (decimal) | Floor and cap as self-delimiting functions, not infix - no extra precedence tier. Express layered limits, e.g. `min(limit, max(0, x))`. The `ArithOp::is_infix` predicate is what splits the printer (and the surface) between the infix operators above and these function-shaped ones. |
+| `not`, `and`, `or`, `xor`, `implies` (keywords) | `Prop::Not`, `Prop::And`, `Prop::Or`, `Prop::Xor`, `Prop::Implies` | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Prop::And(Vec<Prop>)` and `or` into `Prop::Or(Vec<Prop>)`; `implies` is right-associative. `xor` is exactly-one: it adds no expressiveness (it is `(a or b) and not (a and b)`, evaluated by lowering to exactly that), but reads far better than that hand-written form where the operands are long claim patterns. Binary, not flattened (n-ary xor is ambiguous); it sits between `and` and `or` in precedence. |
+| `forall x in coll: body`, `exists x: body` | `Prop::Forall`, `Prop::Exists` | Bounded quantification is mathematical convention. The `in` clause on `forall` makes unbounded quantification syntactically impossible. `exists` carries no source clause because the IR's `Prop::Exists` doesn't model one - the bound variable is whatever the body matches. |
+| `sum(target | body)` | `ValueExpr::Sum` | Set-builder notation. The target is a variable to sum, or a decimal literal - `sum(1 | body)` counts the matches (the chess material census forced this). A general expression target awaits an example that needs it. |
+| `value Pred(args)` (with optional `default expr`) | `ValueExpr::ValueOf` | Claim-pattern form. The wildcard `_` in `args` marks the value position to extract. The kernel's `ValueOf { predicate, args, default }` is shaped this way deliberately; a `value(target | body)` shape would imply a general query and be more expressive than the IR. |
+| `x in xs` (membership) | `Prop::In(Term, Term)` | Infix at comparator precedence. Distinct from the structural `in` in `forall x in xs: body`; disambiguated positionally (the structural `in` comes immediately after the binder in `forall`). |
+| `@2026-05-22` | `Value::Date("2026-05-22")` | `@` sigil avoids the lexer ambiguity between bare ISO-8601 dates and arithmetic (e.g. `2026 - 05 - 22`). |
+| `#NAME` | `Value::Subject("NAME")` | `#` sigil makes subject literals visibly distinct from variables and reflects that subjects are opaque symbolic identifiers, not strings. |
 
 ## Execution semantics
 
