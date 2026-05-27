@@ -524,7 +524,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a.min(b))),
                 _ => Err(EvalError::TypeMismatch(
-                    "min expects decimal operands".into(),
+                    "Min expects decimal operands".into(),
                 )),
             }
         }
@@ -534,7 +534,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a.max(b))),
                 _ => Err(EvalError::TypeMismatch(
-                    "max expects decimal operands".into(),
+                    "Max expects decimal operands".into(),
                 )),
             }
         }

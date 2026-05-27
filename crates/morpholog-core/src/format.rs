@@ -595,6 +595,16 @@ mod tests {
 
         let vo = value_of("X", vec![var("k"), wildcard()]);
         assert!(format_value_inline(&vo).contains("value X(k, _)"));
+
+        // Mul, Div, Min, Max - including the nested collar shape
+        // `min(_, max(0, _))`; min/max are self-delimiting, so their
+        // operands render without extra parens.
+        let collar = min(
+            mul(term(var("a")), term(var("b"))),
+            max(term(dec("0")), div(term(var("c")), term(var("d")))),
+        );
+        let printed = format_value_inline(&collar);
+        assert_eq!(printed, "min(a * b, max(0, c / d))");
     }
 
     #[test]
