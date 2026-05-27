@@ -19,7 +19,9 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::ir::{CompareOp, OrderedDomain, PredicateName, Prop, Subject, Term, Value, ValueExpr};
+use crate::ir::{
+    ArithOp, CompareOp, OrderedDomain, PredicateName, Prop, Subject, Term, Value, ValueExpr,
+};
 use crate::state::{Bindings, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -53,7 +55,7 @@ pub enum EvalError {
     /// evaluation context, not AST position, so future contexts that
     /// carry both states share the primitive without IR change.
     PreStateUnavailable,
-    /// `ValueExpr::Div` evaluated with a zero divisor. A rule that
+    /// An `ArithOp::Div` evaluated with a zero divisor. A rule that
     /// divides by zero cannot be evaluated, so it surfaces here rather
     /// than producing a value; the proposal is rejected (or the derived
     /// read errors). Gates avoid this by cross-multiplying with `Mul`.
@@ -475,67 +477,29 @@ pub(crate) fn find_in_matches(
 pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
     match e {
         ValueExpr::Term(t) => resolve_term(t, ctx.bindings, ctx.actor),
-        ValueExpr::Sub(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
+        ValueExpr::Arith { op, left, right } => {
+            let l = eval_value(left, ctx)?;
+            let r = eval_value(right, ctx)?;
             match (l, r) {
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a - b)),
-                _ => Err(EvalError::TypeMismatch(
-                    "Sub expects decimal operands".into(),
-                )),
-            }
-        }
-        ValueExpr::Add(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a + b)),
-                _ => Err(EvalError::TypeMismatch(
-                    "Add expects decimal operands".into(),
-                )),
-            }
-        }
-        ValueExpr::Mul(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a * b)),
-                _ => Err(EvalError::TypeMismatch(
-                    "Mul expects decimal operands".into(),
-                )),
-            }
-        }
-        ValueExpr::Div(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Decimal(_), EvalValue::Decimal(b)) if b == Decimal::ZERO => {
-                    Err(EvalError::DivisionByZero)
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => {
+                    let result = match op {
+                        ArithOp::Add => a + b,
+                        ArithOp::Sub => a - b,
+                        ArithOp::Mul => a * b,
+                        ArithOp::Div => {
+                            if b == Decimal::ZERO {
+                                return Err(EvalError::DivisionByZero);
+                            }
+                            a / b
+                        }
+                        ArithOp::Min => a.min(b),
+                        ArithOp::Max => a.max(b),
+                    };
+                    Ok(EvalValue::Decimal(result))
                 }
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a / b)),
-                _ => Err(EvalError::TypeMismatch(
-                    "Div expects decimal operands".into(),
-                )),
-            }
-        }
-        ValueExpr::Min(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a.min(b))),
-                _ => Err(EvalError::TypeMismatch(
-                    "Min expects decimal operands".into(),
-                )),
-            }
-        }
-        ValueExpr::Max(lhs, rhs) => {
-            let l = eval_value(lhs, ctx)?;
-            let r = eval_value(rhs, ctx)?;
-            match (l, r) {
-                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a.max(b))),
-                _ => Err(EvalError::TypeMismatch(
-                    "Max expects decimal operands".into(),
-                )),
+                _ => Err(EvalError::TypeMismatch(format!(
+                    "{op:?} expects decimal operands"
+                ))),
             }
         }
         ValueExpr::Sum { value, body } => {

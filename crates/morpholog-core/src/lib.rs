@@ -49,7 +49,7 @@ pub use explain::{
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
-    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, IntentName,
+    ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, IntentName,
     Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName,
     Program, Prop, Stmt, Subject, Term, Transformation, TransformationName, Value, ValueExpr, Var,
 };
@@ -408,20 +408,22 @@ mod tests {
             default: default.map(Box::new),
         };
 
-        let expr = ValueExpr::Add(
-            Box::new(ValueExpr::Sub(
-                Box::new(ValueExpr::Sum {
+        let expr = ValueExpr::Arith {
+            op: ArithOp::Add,
+            left: Box::new(ValueExpr::Arith {
+                op: ArithOp::Sub,
+                left: Box::new(ValueExpr::Sum {
                     value: Term::Var("v".into()),
                     body: Box::new(claim("P_sum_body")),
                 }),
-                Box::new(value_of(
+                right: Box::new(value_of(
                     "P_valueof_self",
                     Some(value_of("P_valueof_default", None)),
                 )),
-            )),
+            }),
             // A bare term carries no predicate reference.
-            Box::new(ValueExpr::Term(Term::Var("z".into()))),
-        );
+            right: Box::new(ValueExpr::Term(Term::Var("z".into()))),
+        };
 
         let mut got = BTreeSet::new();
         predicates_referenced_by_value(&expr, &mut got);
@@ -483,18 +485,19 @@ mod tests {
         );
     }
 
-    /// `ValueExpr::Add` returns the decimal sum of its operands when both
+    /// `ArithOp::Add` returns the decimal sum of its operands when both
     /// evaluate to decimals.
     #[test]
     fn add_sums_two_decimals() {
-        let expr = ValueExpr::Add(
-            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+        let expr = ValueExpr::Arith {
+            op: ArithOp::Add,
+            left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                 "10".to_string(),
             )))),
-            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+            right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                 "32.5".to_string(),
             )))),
-        );
+        };
         let v = eval_value(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new())).unwrap();
         assert_eq!(v, EvalValue::Decimal(Decimal::new(425, 1)));
     }
@@ -503,14 +506,15 @@ mod tests {
     /// falling through silently. Same contract as `Sub`.
     #[test]
     fn add_with_non_decimal_operand_is_type_mismatch() {
-        let expr = ValueExpr::Add(
-            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+        let expr = ValueExpr::Arith {
+            op: ArithOp::Add,
+            left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                 "10".to_string(),
             )))),
-            Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
+            right: Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
                 "oops".into(),
             )))),
-        );
+        };
         let err = eval_value(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
             .expect_err("expected TypeMismatch");
         match err {
@@ -705,7 +709,7 @@ mod tests {
         );
     }
 
-    /// The cumulative-cap shape: `Le(Add(running, proposed), cap)`,
+    /// The cumulative-cap shape: `Le(Arith::Add(running, proposed), cap)`,
     /// gating an authorisation under an aggregate limit. Pins the
     /// composition so the kernel cannot drift.
     #[test]
@@ -716,10 +720,11 @@ mod tests {
 
         // 60 + 40 <= 100 admits (binding pass-through).
         let under_cap = le_(
-            Box::new(ValueExpr::Add(
-                Box::new(running.clone()),
-                Box::new(proposed),
-            )),
+            Box::new(ValueExpr::Arith {
+                op: ArithOp::Add,
+                left: Box::new(running.clone()),
+                right: Box::new(proposed),
+            }),
             Box::new(cap.clone()),
         );
         let matches = find_matches(
@@ -731,12 +736,13 @@ mod tests {
 
         // 60 + 50 <= 100 fails (empty match set).
         let over_cap = le_(
-            Box::new(ValueExpr::Add(
-                Box::new(running),
-                Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+            Box::new(ValueExpr::Arith {
+                op: ArithOp::Add,
+                left: Box::new(running),
+                right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                     "50".to_string(),
                 )))),
-            )),
+            }),
             Box::new(cap),
         );
         let matches = find_matches(
@@ -868,12 +874,13 @@ mod tests {
             ])),
             right: Box::new(Prop::Eq(
                 Box::new(ValueExpr::Term(Term::Var("n".into()))),
-                Box::new(ValueExpr::Add(
-                    Box::new(ValueExpr::Term(Term::Var("m".into()))),
-                    Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                Box::new(ValueExpr::Arith {
+                    op: ArithOp::Add,
+                    left: Box::new(ValueExpr::Term(Term::Var("m".into()))),
+                    right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
                         "1".to_string(),
                     )))),
-                )),
+                }),
             )),
         };
 

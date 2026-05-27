@@ -14,7 +14,7 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
+use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
 
 /// Build a `Prop::Compare` from a factored operator and domain. The
 /// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
@@ -617,21 +617,22 @@ where
         // min / max functions: `min ( <value> , <value> )` and the same
         // for `max`. Binary, both operands full value expressions. (Not
         // aggregators - `sum` is the aggregator; these take two values.)
-        let min_max_expr = choice((just(Token::KwMin).to(true), just(Token::KwMax).to(false)))
-            .then(
-                value
-                    .clone()
-                    .then_ignore(just(Token::Comma))
-                    .then(value.clone())
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|(is_min, (lhs, rhs))| {
-                if is_min {
-                    ValueExpr::Min(Box::new(lhs), Box::new(rhs))
-                } else {
-                    ValueExpr::Max(Box::new(lhs), Box::new(rhs))
-                }
-            });
+        let min_max_expr = choice((
+            just(Token::KwMin).to(ArithOp::Min),
+            just(Token::KwMax).to(ArithOp::Max),
+        ))
+        .then(
+            value
+                .clone()
+                .then_ignore(just(Token::Comma))
+                .then(value.clone())
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map(|(op, (lhs, rhs))| ValueExpr::Arith {
+            op,
+            left: Box::new(lhs),
+            right: Box::new(rhs),
+        });
 
         let primary = choice((
             sum_expr,
@@ -649,30 +650,34 @@ where
         //
         // The multiplicative layer binds tighter than `+`/`-`, so
         // `a + b * c` parses as `Add(a, Mul(b, c))`.
-        let mul_op = choice((just(Token::Star).to(true), just(Token::Slash).to(false)));
-        let factor = primary.clone().foldl(
-            mul_op.then(primary.clone()).repeated(),
-            |lhs, (is_mul, rhs)| {
-                if is_mul {
-                    ValueExpr::Mul(Box::new(lhs), Box::new(rhs))
-                } else {
-                    ValueExpr::Div(Box::new(lhs), Box::new(rhs))
-                }
-            },
-        );
+        let mul_op = choice((
+            just(Token::Star).to(ArithOp::Mul),
+            just(Token::Slash).to(ArithOp::Div),
+        ));
+        let factor =
+            primary
+                .clone()
+                .foldl(mul_op.then(primary.clone()).repeated(), |lhs, (op, rhs)| {
+                    ValueExpr::Arith {
+                        op,
+                        left: Box::new(lhs),
+                        right: Box::new(rhs),
+                    }
+                });
 
         // arith ::= factor (("+" | "-") factor)*  (left-assoc)
         //
         // foldl builds the left-associative tree: a + b + c -> Add(Add(a, b), c).
-        let arith_op = choice((just(Token::Plus).to(true), just(Token::Minus).to(false)));
+        let arith_op = choice((
+            just(Token::Plus).to(ArithOp::Add),
+            just(Token::Minus).to(ArithOp::Sub),
+        ));
         factor.clone().foldl(
             arith_op.then(factor.clone()).repeated(),
-            |lhs, (is_plus, rhs)| {
-                if is_plus {
-                    ValueExpr::Add(Box::new(lhs), Box::new(rhs))
-                } else {
-                    ValueExpr::Sub(Box::new(lhs), Box::new(rhs))
-                }
+            |lhs, (op, rhs)| ValueExpr::Arith {
+                op,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
             },
         )
     })

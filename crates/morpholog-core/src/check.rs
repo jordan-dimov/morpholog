@@ -31,7 +31,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::format::compare_token;
+use crate::format::{arith_token, compare_token};
 use crate::ir::{
     OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value, ValueExpr,
     Var,
@@ -612,10 +612,10 @@ impl CheckCtx<'_> {
     }
 
     /// Infer the kind of a value expression. A bare variable is a use
-    /// (must be bound); literals carry their kind; `Add`/`Sub`
-    /// recursively check Decimal operands and return Decimal; `Sum`
-    /// returns Decimal after a body-first walk under a cloned scope;
-    /// `ValueOf` returns its wildcard slot's declared kind.
+    /// (must be bound); literals carry their kind; `Arith` recursively
+    /// checks Decimal operands and returns Decimal; `Sum` returns Decimal
+    /// after a body-first walk under a cloned scope; `ValueOf` returns its
+    /// wildcard slot's declared kind.
     fn infer_value(&mut self, expr: &ValueExpr, scope: &mut Scope) -> InferredKind {
         match expr {
             ValueExpr::Term(term) => {
@@ -624,21 +624,8 @@ impl CheckCtx<'_> {
                 }
                 resolved_term_kind(term, &scope.kinds)
             }
-            ValueExpr::Add(left, right)
-            | ValueExpr::Sub(left, right)
-            | ValueExpr::Mul(left, right)
-            | ValueExpr::Div(left, right)
-            | ValueExpr::Min(left, right)
-            | ValueExpr::Max(left, right) => {
-                let operator = match expr {
-                    ValueExpr::Add(_, _) => "+",
-                    ValueExpr::Sub(_, _) => "-",
-                    ValueExpr::Mul(_, _) => "*",
-                    ValueExpr::Div(_, _) => "/",
-                    ValueExpr::Min(_, _) => "min",
-                    ValueExpr::Max(_, _) => "max",
-                    _ => unreachable!("non-arithmetic ValueExpr in the arithmetic kind-check arm"),
-                };
+            ValueExpr::Arith { op, left, right } => {
+                let operator = arith_token(*op);
                 self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
                 self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
                 InferredKind::Known(PredicateArgKind::Decimal)
@@ -948,12 +935,9 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
             args.iter().any(is_actor) || default.as_ref().is_some_and(|d| value_mentions_actor(d))
         }
         ValueExpr::Sum { value, body } => is_actor(value) || prop_mentions_actor(body),
-        ValueExpr::Add(left, right)
-        | ValueExpr::Sub(left, right)
-        | ValueExpr::Mul(left, right)
-        | ValueExpr::Div(left, right)
-        | ValueExpr::Min(left, right)
-        | ValueExpr::Max(left, right) => value_mentions_actor(left) || value_mentions_actor(right),
+        ValueExpr::Arith { left, right, .. } => {
+            value_mentions_actor(left) || value_mentions_actor(right)
+        }
     }
 }
 

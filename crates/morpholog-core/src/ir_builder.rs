@@ -29,7 +29,7 @@
 //!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{
-    ArgDecl, Claim, CompareOp, DerivedClaim, Intent, IntentDecl, Invariant, OrderedDomain,
+    ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, Intent, IntentDecl, Invariant, OrderedDomain,
     PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term, Transformation, Value,
     ValueExpr, Var,
 };
@@ -212,28 +212,36 @@ pub fn term(t: Term) -> ValueExpr {
     ValueExpr::Term(t)
 }
 
+fn arith(op: ArithOp, lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Arith {
+        op,
+        left: Box::new(lhs),
+        right: Box::new(rhs),
+    }
+}
+
 pub fn sub(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    ValueExpr::Sub(Box::new(lhs), Box::new(rhs))
+    arith(ArithOp::Sub, lhs, rhs)
 }
 
 pub fn add(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    ValueExpr::Add(Box::new(lhs), Box::new(rhs))
+    arith(ArithOp::Add, lhs, rhs)
 }
 
 pub fn mul(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    ValueExpr::Mul(Box::new(lhs), Box::new(rhs))
+    arith(ArithOp::Mul, lhs, rhs)
 }
 
 pub fn div(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    ValueExpr::Div(Box::new(lhs), Box::new(rhs))
+    arith(ArithOp::Div, lhs, rhs)
 }
 
 pub fn min(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    ValueExpr::Min(Box::new(lhs), Box::new(rhs))
+    arith(ArithOp::Min, lhs, rhs)
 }
 
 pub fn max(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    ValueExpr::Max(Box::new(lhs), Box::new(rhs))
+    arith(ArithOp::Max, lhs, rhs)
 }
 
 pub fn sum(value: Term, body: Prop) -> ValueExpr {
