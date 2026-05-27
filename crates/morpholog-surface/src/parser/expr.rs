@@ -614,8 +614,28 @@ where
                 default: default.map(Box::new),
             });
 
+        // min / max functions: `min ( <value> , <value> )` and the same
+        // for `max`. Binary, both operands full value expressions. (Not
+        // aggregators - `sum` is the aggregator; these take two values.)
+        let min_max_expr = choice((just(Token::KwMin).to(true), just(Token::KwMax).to(false)))
+            .then(
+                value
+                    .clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(value.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|(is_min, (lhs, rhs))| {
+                if is_min {
+                    ValueExpr::Min(Box::new(lhs), Box::new(rhs))
+                } else {
+                    ValueExpr::Max(Box::new(lhs), Box::new(rhs))
+                }
+            });
+
         let primary = choice((
             sum_expr,
+            min_max_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,

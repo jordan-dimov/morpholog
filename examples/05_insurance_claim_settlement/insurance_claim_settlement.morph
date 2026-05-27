@@ -65,6 +65,10 @@ predicate SettlementAuthorised(claim_id: Subject, settlement_id: Subject, amount
 predicate SettlementPaid(policy_id: Subject, claim_id: Subject, settlement_id: Subject, amount: Decimal)
 predicate PolicyHeadroom(policy_id: Subject, remaining: Decimal)
 predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
+-- An optional per-claim layer that sits inside the aggregate cap: a
+-- deductible the insured bears, and a per-claim limit. When set, a claim
+-- pays the loss above the deductible, capped at the per-claim limit.
+predicate CoverageTerms(policy_id: Subject, deductible: Decimal, per_claim_limit: Decimal)
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits - a policy was issued, a claim reported, a payment
@@ -74,6 +78,7 @@ intent PolicyIssued(policy_id: Subject)
 intent ClaimReported(claim_id: Subject)
 intent SettlementAuthorityGranted(principal: Subject, limit: Decimal)
 intent ClaimPaymentRequested(settlement_id: Subject, amount: Decimal, actor: Subject)
+intent CoverageTermsSet(policy_id: Subject)
 
 
 -- The rules that must always hold. Any change that would leave the
@@ -125,6 +130,33 @@ invariant headroom_consumed_by_payment:
     PolicyHeadroom(p, after) and pre(PolicyHeadroom(p, before))
     implies after = before - sum(amt | SettlementPaid(p, _, s, amt) and not pre(SettlementPaid(p, _, s, amt)))
 
+-- The per-claim layer, when coverage terms are set for the policy. A
+-- settlement may never exceed the *eligible payout*: the loss above the
+-- deductible, capped at the per-claim limit -
+-- min(per_claim_limit, max(0, loss - deductible)). The max(0, ...) floors
+-- a below-deductible loss at zero; the min(...) caps it at the per-claim
+-- limit. A policy with no coverage terms set is unaffected - the rule is
+-- vacuous without a CoverageTerms claim - so this layer composes with,
+-- and sits inside, the aggregate cap above.
+invariant settlement_within_eligible_payout:
+    SettlementAuthorised(claim_id, _, amount, _)
+    and ClaimReported(claim_id, policy_id, loss)
+    and CoverageTerms(policy_id, deductible, per_claim_limit)
+    implies amount <= min(per_claim_limit, max(0, loss - deductible))
+
+-- A policy has at most one set of coverage terms; two competing sets
+-- would make the eligible-payout rule ambiguous.
+invariant at_most_one_coverage_terms_per_policy:
+    CoverageTerms(p, ded_a, lim_a) and CoverageTerms(p, ded_b, lim_b) implies (ded_a = ded_b and lim_a = lim_b)
+
+-- Coverage terms must make business sense: a deductible is non-negative
+-- (zero means no deductible), and a per-claim limit is strictly positive
+-- (a zero or negative limit would make the eligible-payout rule
+-- nonsensical - no claim could ever pay out).
+invariant coverage_terms_within_range:
+    CoverageTerms(p, deductible, per_claim_limit)
+    implies (0 <= deductible and 0 < per_claim_limit)
+
 
 
 -- The only ways state may change. A transformation proposes a set of
@@ -152,6 +184,17 @@ transformation report_claim(claim_id, policy_id, claimed_amount):
 transformation grant_settlement_authority(principal, limit):
     admit SettlementAuthority(principal, limit)
     emit SettlementAuthorityGranted(principal, limit)
+
+-- Set the per-claim coverage layer for a policy: a deductible and a
+-- per-claim limit. Optional - a policy without it has only the aggregate
+-- cap. The gate insists the policy exists and that terms are not already
+-- set. Once set, the eligible-payout invariant above bounds every
+-- settlement on the policy's claims.
+transformation set_coverage_terms(policy_id, deductible, per_claim_limit):
+    require Policy(policy_id, _)
+    require not CoverageTerms(policy_id, _, _)
+    admit CoverageTerms(policy_id, deductible, per_claim_limit)
+    emit CoverageTermsSet(policy_id)
 
 -- Authorise a settlement against a reported claim - the heart of the
 -- example. It first looks up the claim, its policy, and the policy's

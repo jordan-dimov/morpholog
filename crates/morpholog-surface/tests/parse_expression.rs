@@ -239,6 +239,47 @@ fn mul_and_div_share_one_precedence_level() {
     );
 }
 
+#[test]
+fn parses_min() {
+    let got = parse_value_expr("min(a, b)").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Min(Box::new(var_value("a")), Box::new(var_value("b")))
+    );
+}
+
+#[test]
+fn parses_max_with_arithmetic_arg() {
+    // `max(0, a - b)` - the second arg is a full value expression.
+    let got = parse_value_expr("max(0, a - b)").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Max(
+            Box::new(dec_value("0")),
+            Box::new(ValueExpr::Sub(
+                Box::new(var_value("a")),
+                Box::new(var_value("b")),
+            )),
+        )
+    );
+}
+
+#[test]
+fn parses_nested_min_max() {
+    // `min(cap, max(floor, x))` - the collar shape.
+    let got = parse_value_expr("min(cap, max(floor, x))").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Min(
+            Box::new(var_value("cap")),
+            Box::new(ValueExpr::Max(
+                Box::new(var_value("floor")),
+                Box::new(var_value("x")),
+            )),
+        )
+    );
+}
+
 // ---- Comparators ----
 
 #[test]

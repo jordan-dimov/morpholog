@@ -271,6 +271,14 @@ pub enum ValueExpr {
     /// for read-side ratio projections - governed admission decisions
     /// use the exact `Mul` form above, never a rounded quotient.
     Div(Box<ValueExpr>, Box<ValueExpr>),
+    /// Decimal minimum of two operands; both must evaluate to
+    /// `EvalValue::Decimal`. Surface form `min(a, b)`. Expresses a cap
+    /// (the lesser of a value and a ceiling).
+    Min(Box<ValueExpr>, Box<ValueExpr>),
+    /// Decimal maximum of two operands; both must evaluate to
+    /// `EvalValue::Decimal`. Surface form `max(a, b)`. Expresses a floor
+    /// (the greater of a value and a floor).
+    Max(Box<ValueExpr>, Box<ValueExpr>),
     /// Sums `value` over every binding the `body` produces. `value` is
     /// usually a variable bound by the body (`sum(amount | ...)`); a
     /// decimal-literal `value` turns the sum into a count of matches

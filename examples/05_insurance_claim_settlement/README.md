@@ -41,6 +41,7 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | `ClaimReported(claim_id, policy_id, claimed_amount)` | A reported loss against a policy. The claimed amount is informational - it does not directly cap the settlement. |
 | `SettlementAuthorised(claim_id, settlement_id, amount, actor)` | The audit record of an authorising decision. Records who decided what. |
 | `SettlementPaid(policy_id, claim_id, settlement_id, amount)` | The payment record itself. |
+| `CoverageTerms(policy_id, deductible, per_claim_limit)` | An optional per-claim layer: a deductible the insured bears and a per-claim limit, sitting *inside* the aggregate cap. |
 
 ### Invariants
 
@@ -53,6 +54,9 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | `at_most_one_headroom_per_policy` | A policy has at most one current headroom claim. Two competing headroom values would mean two answers to "how much is left?". |
 | `settlement_id_uniquely_identifies_payment` | A settlement id identifies at most one payment. |
 | `headroom_consumed_by_payment` | A *transition* invariant: the only one in this example that compares the state before a transaction to the state after. It says that the change in `PolicyHeadroom` for a policy must equal the total of newly-admitted `SettlementPaid` amounts for that policy. If a payment was admitted, the headroom must have gone down by exactly that amount. See "How payments consume headroom" below for the full story. |
+| `settlement_within_eligible_payout` | When coverage terms are set, a settlement may not exceed the *eligible payout* - `min(per_claim_limit, max(0, loss - deductible))`: the loss above the deductible (`max(0, ...)` floors it at zero), capped at the per-claim limit (`min`). Vacuous for policies with no coverage terms, so it composes with, and sits inside, the aggregate cap. |
+| `at_most_one_coverage_terms_per_policy` | A policy has at most one set of coverage terms. |
+| `coverage_terms_within_range` | Coverage terms make business sense: the deductible is non-negative and the per-claim limit strictly positive. |
 
 The absence of an invariant tying `SettlementAuthority` to historical `SettlementAuthorised` is deliberate. Future revocation of authority must not invalidate the historical record - same pattern as the verified-revenue and approval-controls examples. Authority is checked at admission; the record stands.
 
@@ -63,6 +67,7 @@ The absence of an invariant tying `SettlementAuthority` to historical `Settlemen
 | `issue_policy(policy_id, aggregate_limit)` | Opens a policy. Admits two claims: the immutable `Policy` and an initial `PolicyHeadroom` equal to the aggregate (no spend yet). |
 | `report_claim(claim_id, policy_id, claimed_amount)` | Records a reported loss. Requires the policy to exist. |
 | `grant_settlement_authority(actor, limit)` | Grants a claims handler their authority ceiling. |
+| `set_coverage_terms(policy_id, deductible, per_claim_limit)` | Optionally sets the per-claim layer for a policy. Once set, the `settlement_within_eligible_payout` invariant bounds every settlement on the policy's claims. |
 | `authorise_settlement(claim_id, settlement_id, amount)` | The main transformation. Does not take an `actor` parameter - the proposing actor flows through transition context. Checks three things up front: the claim was reported, the proposing actor has authority covering the amount, and the cumulative cap rule holds. If all three pass, it retracts the current headroom and admits a new one with `amount` subtracted, then admits the authorisation and payment records, then emits a payment-request intent. |
 
 ### Derived claims
@@ -118,7 +123,6 @@ Each pattern below is either already pinned by an earlier example or genuinely d
 - **Reserve estimates.** Setting and revising loss reserves brings restatement-with-supersession into a domain where the current value is read frequently. A natural next example.
 - **Standing for purpose.** "This coverage basis may be relied on for reserve-setting but not for final settlement" is the verified-revenue `AdmissibleFor` pattern. Adding it here would re-illustrate without teaching.
 - **Effective time as a separate axis.** Whether the policy was in force at the loss date, whether the authority was active at the authorisation date - both are answerable today by admitting effective-time claims and querying as-of. A worked example that combines admission time with effective time across many transitions is on the roadmap.
-- **Per-claim limits and deductibles.** More require clauses using the same primitives; no new IR shape. Future work, not blocked on anything.
 - **Vulnerable customer handling and consumer-duty gates.** Real and load-bearing for the FCA story; they sit naturally as additional require clauses against admitted vulnerability flags.
 - **Per-target reinsurance, treaty cessions, retrocession.** A full insurance evidence regime eventually reaches into reinsurance. Each layer is its own forcing scenario.
 

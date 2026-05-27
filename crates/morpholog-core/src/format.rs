@@ -324,7 +324,12 @@ pub fn format_prop_inline(p: &Prop) -> String {
 fn value_primary(e: &ValueExpr) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
-        ValueExpr::Sum { .. } | ValueExpr::ValueOf { .. } => format_value_inline(e),
+        // Self-delimiting forms (a keyword and its own parens/brackets)
+        // need no extra wrapping.
+        ValueExpr::Sum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Min(_, _)
+        | ValueExpr::Max(_, _) => format_value_inline(e),
         ValueExpr::Add(_, _)
         | ValueExpr::Sub(_, _)
         | ValueExpr::Mul(_, _)
@@ -359,6 +364,20 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
         ValueExpr::Sub(l, r) => format!("{} - {}", value_primary(l), value_primary(r)),
         ValueExpr::Mul(l, r) => format!("{} * {}", value_primary(l), value_primary(r)),
         ValueExpr::Div(l, r) => format!("{} / {}", value_primary(l), value_primary(r)),
+        ValueExpr::Min(l, r) => {
+            format!(
+                "min({}, {})",
+                format_value_inline(l),
+                format_value_inline(r)
+            )
+        }
+        ValueExpr::Max(l, r) => {
+            format!(
+                "max({}, {})",
+                format_value_inline(l),
+                format_value_inline(r)
+            )
+        }
     }
 }
 
@@ -576,6 +595,16 @@ mod tests {
 
         let vo = value_of("X", vec![var("k"), wildcard()]);
         assert!(format_value_inline(&vo).contains("value X(k, _)"));
+
+        // Mul, Div, Min, Max - including the nested collar shape
+        // `min(_, max(0, _))`; min/max are self-delimiting, so their
+        // operands render without extra parens.
+        let collar = min(
+            mul(term(var("a")), term(var("b"))),
+            max(term(dec("0")), div(term(var("c")), term(var("d")))),
+        );
+        let printed = format_value_inline(&collar);
+        assert_eq!(printed, "min(a * b, max(0, c / d))");
     }
 
     #[test]

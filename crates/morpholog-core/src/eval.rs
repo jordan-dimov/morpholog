@@ -518,6 +518,26 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 )),
             }
         }
+        ValueExpr::Min(lhs, rhs) => {
+            let l = eval_value(lhs, ctx)?;
+            let r = eval_value(rhs, ctx)?;
+            match (l, r) {
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a.min(b))),
+                _ => Err(EvalError::TypeMismatch(
+                    "Min expects decimal operands".into(),
+                )),
+            }
+        }
+        ValueExpr::Max(lhs, rhs) => {
+            let l = eval_value(lhs, ctx)?;
+            let r = eval_value(rhs, ctx)?;
+            match (l, r) {
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a.max(b))),
+                _ => Err(EvalError::TypeMismatch(
+                    "Max expects decimal operands".into(),
+                )),
+            }
+        }
         ValueExpr::Sum { value, body } => {
             let matches = find_matches(body, ctx)?;
             let mut total = Decimal::ZERO;
@@ -826,7 +846,7 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir_builder::{dec, div, mul, subj, term};
+    use crate::ir_builder::{dec, div, max, min, mul, subj, term};
     use crate::state::State;
 
     // Evaluate a literal-only value expression against empty state/bindings.
@@ -865,6 +885,30 @@ mod tests {
     fn mul_rejects_non_decimal_operands() {
         assert!(matches!(
             eval_lit(&mul(term(subj("x")), term(dec("2")))),
+            Err(EvalError::TypeMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn min_takes_the_lesser_operand() {
+        assert_eq!(
+            eval_lit(&min(term(dec("3")), term(dec("4")))).unwrap(),
+            eval_lit(&term(dec("3"))).unwrap(),
+        );
+    }
+
+    #[test]
+    fn max_takes_the_greater_operand() {
+        assert_eq!(
+            eval_lit(&max(term(dec("3")), term(dec("4")))).unwrap(),
+            eval_lit(&term(dec("4"))).unwrap(),
+        );
+    }
+
+    #[test]
+    fn min_rejects_non_decimal_operands() {
+        assert!(matches!(
+            eval_lit(&min(term(subj("x")), term(dec("2")))),
             Err(EvalError::TypeMismatch(_))
         ));
     }
