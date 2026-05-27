@@ -360,7 +360,10 @@ fn value_exceeds_depth(expr: &ValueExpr, budget: usize) -> bool {
     };
     match expr {
         ValueExpr::Term(_) => false,
-        ValueExpr::Sub(left, right) | ValueExpr::Add(left, right) => {
+        ValueExpr::Sub(left, right)
+        | ValueExpr::Add(left, right)
+        | ValueExpr::Mul(left, right)
+        | ValueExpr::Div(left, right) => {
             value_exceeds_depth(left, budget) || value_exceeds_depth(right, budget)
         }
         ValueExpr::Sum { body, .. } => prop_exceeds_depth(body, budget),

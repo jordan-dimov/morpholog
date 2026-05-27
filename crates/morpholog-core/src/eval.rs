@@ -53,6 +53,11 @@ pub enum EvalError {
     /// evaluation context, not AST position, so future contexts that
     /// carry both states share the primitive without IR change.
     PreStateUnavailable,
+    /// `ValueExpr::Div` evaluated with a zero divisor. A rule that
+    /// divides by zero cannot be evaluated, so it surfaces here rather
+    /// than producing a value; the proposal is rejected (or the derived
+    /// read errors). Gates avoid this by cross-multiplying with `Mul`.
+    DivisionByZero,
 }
 
 impl std::fmt::Display for EvalError {
@@ -74,6 +79,7 @@ impl std::fmt::Display for EvalError {
                 f,
                 "Prop::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
             ),
+            EvalError::DivisionByZero => write!(f, "division by zero"),
         }
     }
 }
@@ -489,6 +495,29 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 )),
             }
         }
+        ValueExpr::Mul(lhs, rhs) => {
+            let l = eval_value(lhs, ctx)?;
+            let r = eval_value(rhs, ctx)?;
+            match (l, r) {
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a * b)),
+                _ => Err(EvalError::TypeMismatch(
+                    "Mul expects decimal operands".into(),
+                )),
+            }
+        }
+        ValueExpr::Div(lhs, rhs) => {
+            let l = eval_value(lhs, ctx)?;
+            let r = eval_value(rhs, ctx)?;
+            match (l, r) {
+                (EvalValue::Decimal(_), EvalValue::Decimal(b)) if b == Decimal::ZERO => {
+                    Err(EvalError::DivisionByZero)
+                }
+                (EvalValue::Decimal(a), EvalValue::Decimal(b)) => Ok(EvalValue::Decimal(a / b)),
+                _ => Err(EvalError::TypeMismatch(
+                    "Div expects decimal operands".into(),
+                )),
+            }
+        }
         ValueExpr::Sum { value, body } => {
             let matches = find_matches(body, ctx)?;
             let mut total = Decimal::ZERO;
@@ -791,5 +820,52 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
             let inner: Vec<String> = items.iter().map(render_eval_value).collect();
             format!("[{}]", inner.join(", "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir_builder::{dec, div, mul, subj, term};
+    use crate::state::State;
+
+    // Evaluate a literal-only value expression against empty state/bindings.
+    fn eval_lit(e: &ValueExpr) -> Result<EvalValue, EvalError> {
+        let state = State::default();
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(&state, None, &bindings, None);
+        eval_value(e, &ctx)
+    }
+
+    #[test]
+    fn mul_multiplies_decimal_operands_exactly() {
+        assert_eq!(
+            eval_lit(&mul(term(dec("3")), term(dec("4")))).unwrap(),
+            eval_lit(&term(dec("12"))).unwrap(),
+        );
+    }
+
+    #[test]
+    fn div_divides_decimal_operands() {
+        assert_eq!(
+            eval_lit(&div(term(dec("12")), term(dec("4")))).unwrap(),
+            eval_lit(&term(dec("3"))).unwrap(),
+        );
+    }
+
+    #[test]
+    fn div_by_zero_surfaces_division_by_zero() {
+        assert!(matches!(
+            eval_lit(&div(term(dec("10")), term(dec("0")))),
+            Err(EvalError::DivisionByZero)
+        ));
+    }
+
+    #[test]
+    fn mul_rejects_non_decimal_operands() {
+        assert!(matches!(
+            eval_lit(&mul(term(subj("x")), term(dec("2")))),
+            Err(EvalError::TypeMismatch(_))
+        ));
     }
 }

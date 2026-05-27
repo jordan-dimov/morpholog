@@ -325,7 +325,12 @@ fn value_primary(e: &ValueExpr) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
         ValueExpr::Sum { .. } | ValueExpr::ValueOf { .. } => format_value_inline(e),
-        ValueExpr::Add(_, _) | ValueExpr::Sub(_, _) => format!("({})", format_value_inline(e)),
+        ValueExpr::Add(_, _)
+        | ValueExpr::Sub(_, _)
+        | ValueExpr::Mul(_, _)
+        | ValueExpr::Div(_, _) => {
+            format!("({})", format_value_inline(e))
+        }
     }
 }
 
@@ -352,6 +357,8 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
         }
         ValueExpr::Add(l, r) => format!("{} + {}", value_primary(l), value_primary(r)),
         ValueExpr::Sub(l, r) => format!("{} - {}", value_primary(l), value_primary(r)),
+        ValueExpr::Mul(l, r) => format!("{} * {}", value_primary(l), value_primary(r)),
+        ValueExpr::Div(l, r) => format!("{} / {}", value_primary(l), value_primary(r)),
     }
 }
 

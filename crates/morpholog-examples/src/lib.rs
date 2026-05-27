@@ -51,6 +51,7 @@ pub(crate) fn derived(program: &Program, predicate: &str) -> morpholog_core::Der
 }
 
 pub mod approval_controls;
+pub mod borrowing_base;
 pub mod carbon_credit_provenance;
 pub mod chess_transition_invariants;
 pub mod clinical_trial_enrolment;
@@ -82,5 +83,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         kyc_sanctions_screening::program(),
         carbon_credit_provenance::program(),
         trade_lifecycle::program(),
+        borrowing_base::program(),
     ]
 }

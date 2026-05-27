@@ -220,6 +220,14 @@ pub fn add(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     ValueExpr::Add(Box::new(lhs), Box::new(rhs))
 }
 
+pub fn mul(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Mul(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn div(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Div(Box::new(lhs), Box::new(rhs))
+}
+
 pub fn sum(value: Term, body: Prop) -> ValueExpr {
     ValueExpr::Sum {
         value,
