@@ -1,0 +1,222 @@
+-- Trade lifecycle - taking a commodity trade from booking to
+-- settlement, with the rules about who may confirm a price and which
+-- price may be settled on enforced by the runtime instead of by a
+-- status column and a prayer.
+--
+-- A quick tour of the domain. A trader strikes a deal - buy or sell a
+-- quantity of some commodity (power, gas, oil) for delivery over a
+-- future period - and *captures* it: the terms, plus the price they
+-- believe they struck. That captured price is only the trader's word
+-- for it. Before anyone settles money against the trade, a separate
+-- desk - the middle office - independently *confirms* it against the
+-- counterparty's own record, and the price they confirm becomes the
+-- official one. The trade then *settles*: the agreed quantity changes
+-- hands and is paid for. Capture, confirmation, correction of an
+-- official price, and settlement are all modelled below.
+--
+-- Two ideas do the real work, and this example is built around both.
+--
+-- First, a trade is never in a single "status". It is captured, then
+-- also confirmed, then also settled - each step admits another claim,
+-- and the earlier claims stay on the record. There is no
+-- `status = "confirmed"` field to overwrite: a trade is "confirmed"
+-- precisely because a confirmation claim stands for it. The phase is
+-- the accumulation of admitted claims, and the history reads itself.
+--
+-- Second, the same trade carries two prices at two standings. The
+-- trader's captured price is an estimate - real, recorded, but not
+-- something anyone may settle on. The middle office's confirmed price
+-- is the official one, marked by a pointer to the figure currently in
+-- force, and settlement will rely on that. Existence and
+-- admissibility-for-settlement are different things: a captured price
+-- exists without ever being settleable. If the middle office later
+-- finds it set the wrong official price, it corrects it the honest way:
+-- the old figure stays on the record, a corrected figure is admitted
+-- alongside it, and the in-force pointer moves to the new one - so
+-- "what was the official price on the day we acted?" always has a
+-- truthful answer.
+--
+-- Here is how Morpholog thinks about this. It does not store "facts" -
+-- it stores *claims* it has agreed to admit because they obey the
+-- rules. Two kinds of rule do the work:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would
+--     break one - a trade can never be settled for more than the
+--     quantity that was captured.
+--   * a `require` is a gate on a single action, checked the moment you
+--     act and never again. Whether the actor confirming a price holds
+--     authority for that commodity is settled when they act; a
+--     confirmation made today stays valid even if that authority is
+--     later withdrawn. An invariant governs what is true; a gate
+--     governs what you may do.
+
+program trade_lifecycle
+
+-- The vocabulary. `TradeCaptured` is the trade's terms; `CapturedPrice`
+-- the trader's estimate, recorded but carrying no settlement standing.
+-- `MayConfirm` is a desk's authority to confirm prices for a commodity,
+-- granted by `grant_confirm_authority`. `TradeConfirmed` records the
+-- confirmation event against the counterparty, stamping in the actor who
+-- confirmed it. `OfficialPrice` is an
+-- official price figure; `CurrentOfficialPrice` is the retractable
+-- pointer naming which official figure is in force for the trade right
+-- now - the one moving part, which a price correction moves.
+-- `Supersedes` records the lineage when one official figure replaces
+-- another. `TradeSettled` records a completed settlement and the
+-- official price id it relied on.
+predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject, quantity: Decimal, delivery_period: Subject)
+predicate CapturedPrice(trade: Subject, price: Decimal)
+predicate MayConfirm(principal: Subject, commodity: Subject)
+predicate TradeConfirmed(trade: Subject, counterparty: Subject, confirmation_id: Subject, confirmed_by: Subject)
+predicate OfficialPrice(trade: Subject, price: Decimal, official_price_id: Subject)
+predicate CurrentOfficialPrice(trade: Subject, official_price_id: Subject)
+predicate Supersedes(new_official_price_id: Subject, prior_official_price_id: Subject)
+predicate TradeSettled(trade: Subject, settled_qty: Decimal, settlement_id: Subject, official_price_id: Subject)
+
+-- Intents are messages the system sends to the outside world after a
+-- change commits - a trade was captured, an authority granted, a trade
+-- confirmed, an official price corrected. The settlement-request intent
+-- is the one that asks a downstream system to actually move the money
+-- and the commodity: Morpholog records that the settlement is
+-- legitimate and leaves the execution of it outside.
+intent TradeCapturedAdmitted(trade: Subject)
+intent ConfirmAuthorityGranted(principal: Subject, commodity: Subject)
+intent TradeConfirmedAdmitted(trade: Subject, confirmation_id: Subject, official_price_id: Subject)
+intent OfficialPriceCorrected(trade: Subject, new_official_price_id: Subject, prior_official_price_id: Subject)
+intent TradeSettlementRequested(settlement_id: Subject, trade: Subject, settled_qty: Decimal)
+
+
+-- The rules that must always hold. Any change that would leave the
+-- world violating one of these is rejected outright. Read `implies` as
+-- "whenever the left is true, the right must be too".
+
+-- The official price in force can never point at nothing: every current
+-- pointer must name an official price figure that actually exists. You
+-- cannot end up settling on a price with no record behind it.
+invariant current_official_price_has_a_figure:
+    CurrentOfficialPrice(trade, official_price_id) implies OfficialPrice(trade, _, official_price_id)
+
+-- There is exactly one official price in force at a time for a trade.
+-- The pointer is a singleton: two different current official prices for
+-- the same trade cannot coexist.
+invariant at_most_one_current_official_price:
+    CurrentOfficialPrice(trade, a) and CurrentOfficialPrice(trade, b) implies a = b
+
+-- An official price id identifies one figure: two OfficialPrice claims
+-- sharing the id must agree on the trade and the price. The in-force
+-- pointer and the audit question "what price did we settle at?" both
+-- resolve a figure by its id, so the id must be unambiguous.
+invariant official_price_id_identifies_one_figure:
+    OfficialPrice(trade_a, price_a, opid) and OfficialPrice(trade_b, price_b, opid) implies (trade_a = trade_b and price_a = price_b)
+
+-- An official price always belongs to a trade that was actually
+-- captured. Together with the rule above, this gives a clean provenance
+-- chain: the in-force pointer names a real figure, and that figure
+-- names a real trade.
+invariant official_price_has_captured_trade:
+    OfficialPrice(trade, _, _) implies TradeCaptured(trade, _, _, _, _)
+
+-- The correction history stays a clean chain, never a fork: an official
+-- price figure can be superseded by at most one direct successor.
+invariant at_most_one_direct_successor:
+    Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
+
+-- The quantitative rule at the heart of settlement: a trade can never be
+-- settled for more than the quantity that was captured. The comparison
+-- is inclusive - settling exactly the captured quantity is fine.
+invariant settled_quantity_within_captured:
+    TradeSettled(trade, settled_qty, _, _) and TradeCaptured(trade, _, _, captured_qty, _) implies settled_qty <= captured_qty
+
+-- A trade id identifies one captured trade: two TradeCaptured claims
+-- sharing the id must agree on every term. This pins the structural
+-- uniqueness that lets "the captured quantity of this trade" above be a
+-- single well-defined number rather than an ambiguous one.
+invariant at_most_one_capture_per_trade:
+    TradeCaptured(trade, commodity_a, direction_a, quantity_a, period_a) and TradeCaptured(trade, commodity_b, direction_b, quantity_b, period_b) implies (commodity_a = commodity_b and direction_a = direction_b and quantity_a = quantity_b and period_a = period_b)
+
+-- Settlement can never run ahead of confirmation: a settled trade must
+-- have been confirmed. The settle action does not gate this directly -
+-- it relies on the official price in force, which only a confirmed trade
+-- has - so this invariant is what guarantees the property for all
+-- admitted state, by any path.
+invariant settled_trade_was_confirmed:
+    TradeSettled(trade, _, _, _) implies TradeConfirmed(trade, _, _, _)
+
+
+-- The only ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every invariant still holds
+-- once they are in place. `admit` adds a claim; `emit` queues a message
+-- to the outside world for after the commit.
+
+-- A trader captures a new trade: its terms and the price they believe
+-- they struck. The gate refuses a second capture under the same trade
+-- id, so a trade's terms are fixed once booked - a change of terms is a
+-- new trade, never a silent overwrite. The captured price is recorded
+-- but carries no settlement standing on its own; only a confirmed price
+-- will.
+transformation capture_trade(trade, commodity, direction, quantity, delivery_period, price):
+    require not TradeCaptured(trade, _, _, _, _)
+    admit TradeCaptured(trade, commodity, direction, quantity, delivery_period)
+    admit CapturedPrice(trade, price)
+    emit TradeCapturedAdmitted(trade)
+
+-- Grant a desk the authority to confirm prices for a commodity.
+-- Confirmation is a middle-office responsibility, scoped per commodity
+-- and kept separate from whoever captured the trade.
+transformation grant_confirm_authority(principal, commodity):
+    admit MayConfirm(principal, commodity)
+    emit ConfirmAuthorityGranted(principal, commodity)
+
+-- The middle office confirms the trade against the counterparty and
+-- sets the official price. The first gate does two things at once: it
+-- looks up the trade's commodity and checks that whoever is proposing
+-- this holds confirmation authority for that commodity - so the
+-- authority is tied to the trade's own commodity, not just any
+-- commodity the actor happens to hold. The remaining gates insist the
+-- trade has not already been confirmed and has no official price in
+-- force yet. Confirming records the confirmation event, the official
+-- price figure, and the pointer marking that figure as the one in force
+-- for settlement.
+transformation confirm_trade(trade, counterparty, confirmation_id, official_price_id, confirmed_price):
+    require TradeCaptured(trade, commodity, _, _, _) and MayConfirm(actor, commodity)
+    require not TradeConfirmed(trade, _, _, _)
+    require not CurrentOfficialPrice(trade, _)
+    admit TradeConfirmed(trade, counterparty, confirmation_id, actor)
+    admit OfficialPrice(trade, confirmed_price, official_price_id)
+    admit CurrentOfficialPrice(trade, official_price_id)
+    emit TradeConfirmedAdmitted(trade, confirmation_id, official_price_id)
+
+-- Correct an official price the honest way. The old figure stays on the
+-- record; a corrected figure is admitted alongside it; the in-force
+-- pointer moves to the new figure; a lineage link records that the new
+-- one supersedes the old. The gates require confirmation authority for
+-- the trade's commodity, that the prior figure is the one currently in
+-- force, and that it has not already been superseded, so the correction
+-- chain never forks. A settlement already made under the prior official
+-- price is left untouched - it stays a true record of what was settled
+-- that day; the correction governs only what may be settled next.
+transformation correct_official_price(trade, prior_official_price_id, new_official_price_id, corrected_price):
+    require TradeCaptured(trade, commodity, _, _, _) and MayConfirm(actor, commodity)
+    require CurrentOfficialPrice(trade, prior_official_price_id)
+    require not Supersedes(_, prior_official_price_id)
+    admit OfficialPrice(trade, corrected_price, new_official_price_id)
+    admit Supersedes(new_official_price_id, prior_official_price_id)
+    retract CurrentOfficialPrice(trade, prior_official_price_id)
+    admit CurrentOfficialPrice(trade, new_official_price_id)
+    emit OfficialPriceCorrected(trade, new_official_price_id, prior_official_price_id)
+
+-- Settle the trade. The gates are the operational preconditions: there
+-- must be an official price in force to settle on (the gate binds which
+-- one), and the trade must not already be settled. The settlement
+-- records the official price id it relied on, so "what price did we
+-- settle at?" keeps a truthful answer even after a later correction
+-- moves the pointer. The structural truths are left to the invariants:
+-- that a settled trade was confirmed, and that the settled quantity
+-- never exceeds the captured quantity. How much money moves is computed
+-- downstream; Morpholog governs only that the settlement is legitimate.
+transformation settle_trade(trade, settled_qty, settlement_id, official_price_id):
+    require CurrentOfficialPrice(trade, official_price_id)
+    require not TradeSettled(trade, _, _, _)
+    admit TradeSettled(trade, settled_qty, settlement_id, official_price_id)
+    emit TradeSettlementRequested(settlement_id, trade, settled_qty)

@@ -58,6 +58,7 @@ pub mod double_entry_ledger;
 pub mod insurance_claim_settlement;
 pub mod kyc_sanctions_screening;
 pub mod settlement_netting;
+pub mod trade_lifecycle;
 pub mod verified_revenue;
 
 /// All built-in worked example programs, in the order they were
@@ -80,5 +81,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         chess_transition_invariants::program(),
         kyc_sanctions_screening::program(),
         carbon_credit_provenance::program(),
+        trade_lifecycle::program(),
     ]
 }
