@@ -63,8 +63,9 @@ program trade_lifecycle
 -- pointer naming which official figure is in force for the trade right
 -- now - the one moving part, which a price correction moves.
 -- `Supersedes` records the lineage when one official figure replaces
--- another. `TradeSettled` records a completed settlement and the
--- official price id it relied on.
+-- another. `TradeSettled` records one settlement slice and the official
+-- price id it relied on; a trade settles in slices, so several can stand
+-- for one trade, and their quantities sum against the captured total.
 predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject, quantity: Decimal, delivery_period: Subject)
 predicate CapturedPrice(trade: Subject, price: Decimal)
 predicate MayConfirm(principal: Subject, commodity: Subject)
@@ -123,10 +124,25 @@ invariant at_most_one_direct_successor:
     Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 -- The quantitative rule at the heart of settlement: a trade can never be
--- settled for more than the quantity that was captured. The comparison
--- is inclusive - settling exactly the captured quantity is fine.
+-- settled for more than the quantity that was captured. A real trade
+-- settles in slices - delivery days, invoices - so what must stay in
+-- bounds is the *total* across every settlement, not any one slice. We
+-- sum the settled quantities for the trade and insist the total never
+-- exceeds the captured quantity. The comparison is inclusive - settling
+-- exactly the captured quantity, in one slice or several, is fine. (The
+-- cumulative cap is the same shape the insurance example enforces against
+-- a policy aggregate.)
 invariant settled_quantity_within_captured:
-    TradeSettled(trade, settled_qty, _, _) and TradeCaptured(trade, _, _, captured_qty, _) implies settled_qty <= captured_qty
+    TradeCaptured(trade, _, _, captured_qty, _)
+    implies sum(q | TradeSettled(trade, q, _, _)) <= captured_qty
+
+-- A settlement id names one settlement: two TradeSettled claims sharing
+-- the id must agree on the trade, quantity, and official price relied on.
+-- This pins the structural uniqueness the cumulative sum above depends on
+-- - without it a single settlement could be double-counted, or two
+-- conflicting settlements could hide under one id.
+invariant settlement_id_identifies_one_settlement:
+    TradeSettled(trade_a, qty_a, sid, opid_a) and TradeSettled(trade_b, qty_b, sid, opid_b) implies (trade_a = trade_b and qty_a = qty_b and opid_a = opid_b)
 
 -- A trade id identifies one captured trade: two TradeCaptured claims
 -- sharing the id must agree on every term. This pins the structural
@@ -206,17 +222,17 @@ transformation correct_official_price(trade, prior_official_price_id, new_offici
     admit CurrentOfficialPrice(trade, new_official_price_id)
     emit OfficialPriceCorrected(trade, new_official_price_id, prior_official_price_id)
 
--- Settle the trade. The gates are the operational preconditions: there
--- must be an official price in force to settle on (the gate binds which
--- one), and the trade must not already be settled. The settlement
--- records the official price id it relied on, so "what price did we
--- settle at?" keeps a truthful answer even after a later correction
--- moves the pointer. The structural truths are left to the invariants:
--- that a settled trade was confirmed, and that the settled quantity
--- never exceeds the captured quantity. How much money moves is computed
--- downstream; Morpholog governs only that the settlement is legitimate.
+-- Settle the trade, in whole or in a slice. The only gate is the
+-- operational precondition: there must be an official price in force to
+-- settle on (the gate binds which one). A trade may settle more than once
+-- - each slice records the official price id it relied on, so "what price
+-- did we settle at?" keeps a truthful answer per slice even after a later
+-- correction moves the pointer. The structural truths are left to the
+-- invariants: that a settled trade was confirmed, and that the *total*
+-- settled across every slice never exceeds the captured quantity. How
+-- much money moves is computed downstream; Morpholog governs only that
+-- the settlement is legitimate.
 transformation settle_trade(trade, settled_qty, settlement_id, official_price_id):
     require CurrentOfficialPrice(trade, official_price_id)
-    require not TradeSettled(trade, _, _, _)
     admit TradeSettled(trade, settled_qty, settlement_id, official_price_id)
     emit TradeSettlementRequested(settlement_id, trade, settled_qty)

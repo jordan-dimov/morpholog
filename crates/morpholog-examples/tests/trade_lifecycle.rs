@@ -2,10 +2,11 @@
 //! (`examples/10_trade_lifecycle/`).
 //!
 //! Outcome-level tests over the parsed example: capture, commodity-scoped
-//! confirmation authority, official-price correction as restatement, and
-//! settlement gated on the in-force official price. The heart of the
-//! suite is the last test - a correction after settlement leaves the
-//! prior settlement standing, the trade-lifecycle form of the
+//! confirmation authority, official-price correction as restatement,
+//! settlement gated on the in-force official price, and settling in slices
+//! against a cumulative captured-quantity cap. The heart of the suite is
+//! the last test - a correction after settlement leaves the prior
+//! settlement standing, the trade-lifecycle form of the
 //! `02_verified_revenue` lesson.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -329,6 +330,93 @@ fn settlement_over_captured_quantity_is_rejected() {
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn trade_settles_in_slices_within_captured_quantity() {
+    // Capture 100, settle 60 then 40 - both slices admit and both
+    // TradeSettled claims stand, summing to exactly the captured quantity.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let first = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(60), subj("s1"), subj("op1")],
+        confirmed,
+        &invariants(),
+    );
+    let second = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(40), subj("s2"), subj("op1")],
+        first,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &second,
+        "TradeSettled",
+        &[subj("t1"), dec(60), subj("s1"), subj("op1")],
+    ));
+    assert!(has_claim(
+        &second,
+        "TradeSettled",
+        &[subj("t1"), dec(40), subj("s2"), subj("op1")],
+    ));
+}
+
+#[test]
+fn slices_summing_over_captured_quantity_are_rejected() {
+    // Capture 100, settle 60 (fine), then 60 more - 60 alone is within
+    // cap, but the cumulative total 120 exceeds 100, so the second slice
+    // is rejected by the cumulative settled_quantity_within_captured.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let first = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(60), subj("s1"), subj("op1")],
+        confirmed,
+        &invariants(),
+    );
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(60), subj("s2"), subj("op1")],
+        &first,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("settled_quantity_within_captured"),
+            "expected the cumulative cap to reject the over-total slice, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("slices summing over the captured quantity must be rejected")
+        }
+    }
+}
+
+#[test]
+fn reusing_a_settlement_id_across_slices_is_rejected() {
+    // Two slices may not share an id - settlement_id_identifies_one_
+    // settlement keeps each id unambiguous so the cumulative sum cannot be
+    // gamed by hiding two settlements under one id.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let first = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(40), subj("s1"), subj("op1")],
+        confirmed,
+        &invariants(),
+    );
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(30), subj("s1"), subj("op1")],
+        &first,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("settlement_id_identifies_one_settlement"),
+            "expected the id-uniqueness invariant to reject the reuse, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => panic!("reusing a settlement id must be rejected"),
+    }
 }
 
 #[test]

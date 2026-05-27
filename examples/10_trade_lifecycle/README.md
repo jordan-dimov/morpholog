@@ -84,7 +84,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | `OfficialPrice(trade, price, official_price_id)` | An official price figure. Append-only; a correction admits a new one alongside the old. |
 | `CurrentOfficialPrice(trade, official_price_id)` | The retractable pointer naming which official figure is in force - the settlement figure. The one moving part. |
 | `Supersedes(new_official_price_id, prior_official_price_id)` | Correction lineage: which official figure replaced which. |
-| `TradeSettled(trade, settled_qty, settlement_id, official_price_id)` | A settlement, recording the official price id it relied on. |
+| `TradeSettled(trade, settled_qty, settlement_id, official_price_id)` | A settlement slice, recording the official price id it relied on. A trade settles in slices, so several can stand for one trade. |
 
 ### Invariants
 
@@ -95,7 +95,8 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | `official_price_id_identifies_one_figure` | An official price id names one figure (same trade, same price), so the in-force pointer and the audit price lookup are unambiguous. |
 | `official_price_has_captured_trade` | An official price belongs to a trade that was actually captured. With the rule above, a clean pointer -> figure -> trade provenance chain. |
 | `at_most_one_direct_successor` | The correction chain stays linear: a figure has at most one direct successor. |
-| `settled_quantity_within_captured` | A trade can never be settled for more than the quantity captured (inclusive). |
+| `settled_quantity_within_captured` | The *total* settled across every slice can never exceed the captured quantity (inclusive) - the cumulative-cap shape the insurance example pins against a policy aggregate. |
+| `settlement_id_identifies_one_settlement` | A settlement id names one settlement (same trade, quantity, official price), so slices cannot be double-counted or hidden under a shared id. |
 | `at_most_one_capture_per_trade` | A trade id identifies one captured trade, so "the captured quantity" is a single well-defined number. |
 | `settled_trade_was_confirmed` | Settlement can never run ahead of confirmation, for all admitted state by any path. |
 
@@ -107,7 +108,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | `grant_confirm_authority(principal, commodity)` | Grants a desk per-commodity confirmation authority. |
 | `confirm_trade(...)` | The middle office confirms the trade and sets the official price in force. Gated on commodity-scoped authority tied to the trade's own commodity, and on the trade not already being confirmed. |
 | `correct_official_price(...)` | Restates the official price: admits the corrected figure, moves the in-force pointer, records the supersession. The prior figure and any settlement made under it stay on the record. |
-| `settle_trade(...)` | Records a settlement against the official price in force, and emits a downstream settlement-request intent. |
+| `settle_trade(...)` | Records a settlement slice against the official price in force, and emits a downstream settlement-request intent. May run more than once per trade; the cumulative cap is an invariant, not a gate. |
 
 ## How to run it
 
@@ -119,9 +120,10 @@ The tests cover capture and duplicate-capture; the commodity-scoped
 confirmation authority (unauthorised, wrong-commodity, authorised); double
 confirmation; correction moving the in-force pointer while preserving
 history; wrong-commodity correction; settlement before confirmation,
-within quantity, and over quantity; and the heart of the example - a
-correction after settlement leaving the prior settlement standing, still
-pointing at the official price it relied on.
+within quantity, and over quantity; settling in slices within the captured
+total, with rejection of slices that overrun it or reuse a settlement id;
+and the heart of the example - a correction after settlement leaving the
+prior settlement standing, still pointing at the official price it relied on.
 
 ## What this example deliberately does not cover
 
@@ -135,11 +137,6 @@ simplification, not a gap, deferred until a forcing scenario arrives.
   example forces them. This example covers the happy path plus correction,
   and deliberately claims no more.
 
-- **Partial or multiple settlements.** `settle_trade` admits one settlement
-  per trade. Real commodity trades settle in slices (delivery days,
-  invoices, imbalance adjustments). The natural extension is a settlement
-  *line* claim with a `sum(...) <= captured_qty` invariant - the cumulative
-  pattern the insurance example already pins.
 - **Effective time as a separate axis.** "Amend a trade effective as of an
   earlier date, then replay the book" needs effective time distinct from
   the transaction-time replay as-of already supports. A later slice.
