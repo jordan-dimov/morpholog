@@ -710,3 +710,55 @@ fn record_match_emits_match_raised_intent() {
         "expected MatchRaised intent; got {emitted_intents:?}"
     );
 }
+
+#[test]
+fn adjudicate_as_confirmed_emits_match_confirmed_intent() {
+    let program = kyc_sanctions_screening::program();
+    let alice = "alice";
+
+    let state = run(
+        &program,
+        "register_customer",
+        vec![subj(alice)],
+        State::default(),
+    );
+    let state = run(
+        &program,
+        "request_screening",
+        vec![
+            subj("scr_match"),
+            subj(alice),
+            subj(SANCTIONS),
+            date("2026-01-01"),
+        ],
+        state,
+    );
+    let state = run(
+        &program,
+        "record_match_screening_result",
+        vec![
+            subj("scr_match"),
+            date("2026-01-02"),
+            date("2027-01-02"),
+            date("2026-01-02"),
+        ],
+        state,
+    );
+    let outcome = try_run(
+        &program,
+        "adjudicate_match_as_confirmed",
+        vec![subj("scr_match"), date("2026-01-03"), date("2027-01-03")],
+        &state,
+    )
+    .expect("propose should not error");
+    let Outcome::Accepted {
+        emitted_intents, ..
+    } = outcome
+    else {
+        panic!("expected accept; got {outcome:?}");
+    };
+    assert!(
+        emitted_intents.iter().any(|i| i.name == "MatchConfirmed"),
+        "expected MatchConfirmed intent; got {emitted_intents:?}"
+    );
+}
