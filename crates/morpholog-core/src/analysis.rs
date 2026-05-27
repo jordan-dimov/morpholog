@@ -82,14 +82,9 @@ pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<Predi
                 predicates_referenced_by_value(d, out);
             }
         }
-        ValueExpr::Sub(l, r)
-        | ValueExpr::Add(l, r)
-        | ValueExpr::Mul(l, r)
-        | ValueExpr::Div(l, r)
-        | ValueExpr::Min(l, r)
-        | ValueExpr::Max(l, r) => {
-            predicates_referenced_by_value(l, out);
-            predicates_referenced_by_value(r, out);
+        ValueExpr::Arith { left, right, .. } => {
+            predicates_referenced_by_value(left, out);
+            predicates_referenced_by_value(right, out);
         }
         ValueExpr::Sum { body, .. } => {
             predicates_referenced_by_prop(body, out);

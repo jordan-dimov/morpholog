@@ -27,9 +27,9 @@
 
 use morpholog_core::ir_builder::*;
 use morpholog_core::{
-    ArgDecl, Claim, CompareOp, DerivedClaim, DerivedValue, IntentDecl, Invariant, OrderedDomain,
-    PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Term, Transformation,
-    ValidationError, Value, ValueExpr, Var,
+    ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, DerivedValue, IntentDecl, Invariant,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Term,
+    Transformation, ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
@@ -77,6 +77,19 @@ fn arb_args() -> impl Strategy<Value = Vec<Term>> {
 
 // ---------- value-expression generator ----------
 
+/// Every arithmetic operator, so the value generator exercises the whole
+/// `ArithOp` catalogue rather than a representative pair.
+fn arb_arith_op() -> impl Strategy<Value = ArithOp> {
+    prop_oneof![
+        Just(ArithOp::Add),
+        Just(ArithOp::Sub),
+        Just(ArithOp::Mul),
+        Just(ArithOp::Div),
+        Just(ArithOp::Min),
+        Just(ArithOp::Max),
+    ]
+}
+
 /// A bounded value expression. `Sum` ranges over a (leaf-only)
 /// proposition, so the value generator can recurse without forming an
 /// unbounded mutual cycle with `arb_prop`; the property under test only
@@ -92,10 +105,13 @@ fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
         prop_oneof![
-            (inner.clone(), inner.clone())
-                .prop_map(|(l, r)| ValueExpr::Add(Box::new(l), Box::new(r))),
-            (inner.clone(), inner.clone())
-                .prop_map(|(l, r)| ValueExpr::Sub(Box::new(l), Box::new(r))),
+            (arb_arith_op(), inner.clone(), inner.clone()).prop_map(|(op, l, r)| {
+                ValueExpr::Arith {
+                    op,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                }
+            }),
             (arb_term(), arb_prop_leaf()).prop_map(|(value, body)| ValueExpr::Sum {
                 value,
                 body: Box::new(body),
@@ -354,8 +370,16 @@ fn nest_value(node: usize, depth: usize) -> Prop {
     let mut e = ValueExpr::Term(Term::Wildcard);
     for _ in 0..depth {
         e = match node {
-            0 => ValueExpr::Add(Box::new(e), filler()),
-            1 => ValueExpr::Sub(Box::new(e), filler()),
+            0 => ValueExpr::Arith {
+                op: ArithOp::Add,
+                left: Box::new(e),
+                right: filler(),
+            },
+            1 => ValueExpr::Arith {
+                op: ArithOp::Sub,
+                left: Box::new(e),
+                right: filler(),
+            },
             _ => ValueExpr::ValueOf {
                 predicate: "P".into(),
                 args: vec![],

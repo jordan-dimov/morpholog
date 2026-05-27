@@ -252,33 +252,19 @@ pub enum Prop {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueExpr {
     Term(Term),
-    /// Decimal subtraction; both operands must evaluate to
-    /// `EvalValue::Decimal`, result is left minus right.
-    Sub(Box<ValueExpr>, Box<ValueExpr>),
-    /// Decimal addition; both operands must evaluate to
-    /// `EvalValue::Decimal`, result is left plus right.
-    Add(Box<ValueExpr>, Box<ValueExpr>),
-    /// Decimal multiplication; both operands must evaluate to
-    /// `EvalValue::Decimal`, result is left times right. Exact, like
-    /// `Add` / `Sub`. Admission gates express ratio rules with `Mul` by
-    /// cross-multiplication (`a/b <= c` as `a <= c*b`), keeping the
-    /// decision exact.
-    Mul(Box<ValueExpr>, Box<ValueExpr>),
-    /// Decimal division; both operands must evaluate to
-    /// `EvalValue::Decimal`. A zero divisor surfaces
-    /// [`crate::EvalError::DivisionByZero`]; the quotient otherwise
-    /// follows `rust_decimal` division (rounded to its scale). Reserved
-    /// for read-side ratio projections - governed admission decisions
-    /// use the exact `Mul` form above, never a rounded quotient.
-    Div(Box<ValueExpr>, Box<ValueExpr>),
-    /// Decimal minimum of two operands; both must evaluate to
-    /// `EvalValue::Decimal`. Surface form `min(a, b)`. Expresses a cap
-    /// (the lesser of a value and a ceiling).
-    Min(Box<ValueExpr>, Box<ValueExpr>),
-    /// Decimal maximum of two operands; both must evaluate to
-    /// `EvalValue::Decimal`. Surface form `max(a, b)`. Expresses a floor
-    /// (the greater of a value and a floor).
-    Max(Box<ValueExpr>, Box<ValueExpr>),
+    /// Binary decimal arithmetic: `left <op> right`, both operands
+    /// evaluating to `EvalValue::Decimal`. The operator is the [`ArithOp`]
+    /// field rather than a variant per operator - the value-sort analogue
+    /// of [`Prop::Compare`] carrying a [`CompareOp`]. `Div` (and a future
+    /// `Mod`) surface [`crate::EvalError::DivisionByZero`] on a zero
+    /// divisor; the rest are total. Admission gates express ratio rules in
+    /// the multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact;
+    /// `Div` is reserved for read-side projections.
+    Arith {
+        op: ArithOp,
+        left: Box<ValueExpr>,
+        right: Box<ValueExpr>,
+    },
     /// Sums `value` over every binding the `body` produces. `value` is
     /// usually a variable bound by the body (`sum(amount | ...)`); a
     /// decimal-literal `value` turns the sum into a count of matches
@@ -314,6 +300,33 @@ pub enum CompareOp {
     Lt,
     Ge,
     Gt,
+}
+
+/// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];
+/// the value-sort analogue of [`CompareOp`], replacing what would be a flat
+/// variant per operator. A new operator (e.g. `Mod`) is one row here, not a
+/// fresh `ValueExpr` variant rippled across every match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Min,
+    Max,
+}
+
+impl ArithOp {
+    /// Infix operators (`+` `-` `*` `/`) render `left <op> right` and
+    /// parenthesise inside another arithmetic operand; the function-form
+    /// operators (`min` / `max`) render `op(left, right)` and are
+    /// self-delimiting, needing no parens.
+    pub fn is_infix(self) -> bool {
+        matches!(
+            self,
+            ArithOp::Add | ArithOp::Sub | ArithOp::Mul | ArithOp::Div
+        )
+    }
 }
 
 /// The ordered domain an [`Prop::Compare`] compares over. Explicit in the

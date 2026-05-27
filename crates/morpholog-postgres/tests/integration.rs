@@ -2011,7 +2011,7 @@ async fn approval_controls_full_chain_through_pg() {
 /// grant, a first under-cap settlement (admitted), a boundary-equality
 /// settlement that exactly fills the aggregate (admitted), an over-cap
 /// attempt (rejected, no audit/outbox), and the `PolicyLimitUsage`
-/// derived claim read back. Pins the `ValueExpr::Add` aggregate under
+/// derived claim read back. Pins the addition-based aggregate under
 /// durable commit semantics.
 #[tokio::test]
 async fn insurance_claim_settlement_full_chain_through_pg() {

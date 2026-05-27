@@ -11,9 +11,9 @@
 //!   exceeds the actor's limit; admits at the boundary.
 //!
 //! - **Cumulative aggregate-limit gate.** This is the load-bearing
-//!   `ValueExpr::Add` shape. Pins under-cap admission, exact-fill boundary
-//!   equality, and over-cap rejection that surfaces from the
-//!   `Le(Add(running, proposed), aggregate)` require.
+//!   addition (`ValueExpr::Arith`) shape. Pins under-cap admission,
+//!   exact-fill boundary equality, and over-cap rejection that surfaces
+//!   from the `running + proposed <= aggregate` require.
 //!
 //! - **Read-side projection.** `PolicyLimitUsage` enumeration matches
 //!   the sum of admitted `SettlementPaid` per policy.
@@ -314,7 +314,7 @@ fn authorise_settlement_at_actor_boundary_admits() {
 }
 
 // ============================================================
-// Cumulative aggregate-limit gate (the ValueExpr::Add forcing function)
+// Cumulative aggregate-limit gate (the addition forcing function)
 // ============================================================
 
 /// Setup for cumulative-cap tests: actor authority high enough that

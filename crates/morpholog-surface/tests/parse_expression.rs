@@ -15,7 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::format::format_prop_inline;
-use morpholog_core::{CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
+use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
 
 /// Build a `Prop::Compare` for the assertions below (the eight comparator
 /// variants were collapsed into one `Compare { op, domain }`).
@@ -23,6 +23,16 @@ fn cmp(op: CompareOp, domain: OrderedDomain, l: ValueExpr, r: ValueExpr) -> Prop
     Prop::Compare {
         op,
         domain,
+        left: Box::new(l),
+        right: Box::new(r),
+    }
+}
+
+/// Build a `ValueExpr::Arith` for the assertions below (the per-operator
+/// arithmetic variants were collapsed into one `Arith { op, .. }`).
+fn arith(op: ArithOp, l: ValueExpr, r: ValueExpr) -> ValueExpr {
+    ValueExpr::Arith {
+        op,
         left: Box::new(l),
         right: Box::new(r),
     }
@@ -141,19 +151,13 @@ fn parens_change_grouping() {
 #[test]
 fn parses_addition() {
     let got = parse_value_expr("a + b").unwrap();
-    assert_eq!(
-        got,
-        ValueExpr::Add(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
+    assert_eq!(got, arith(ArithOp::Add, var_value("a"), var_value("b")));
 }
 
 #[test]
 fn parses_subtraction() {
     let got = parse_value_expr("a - b").unwrap();
-    assert_eq!(
-        got,
-        ValueExpr::Sub(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
+    assert_eq!(got, arith(ArithOp::Sub, var_value("a"), var_value("b")));
 }
 
 #[test]
@@ -162,12 +166,10 @@ fn arithmetic_is_left_associative() {
     let got = parse_value_expr("a + b - c").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Sub(
-            Box::new(ValueExpr::Add(
-                Box::new(var_value("a")),
-                Box::new(var_value("b")),
-            )),
-            Box::new(var_value("c")),
+        arith(
+            ArithOp::Sub,
+            arith(ArithOp::Add, var_value("a"), var_value("b")),
+            var_value("c"),
         )
     );
 }
@@ -175,19 +177,13 @@ fn arithmetic_is_left_associative() {
 #[test]
 fn parses_multiplication() {
     let got = parse_value_expr("a * b").unwrap();
-    assert_eq!(
-        got,
-        ValueExpr::Mul(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
+    assert_eq!(got, arith(ArithOp::Mul, var_value("a"), var_value("b")));
 }
 
 #[test]
 fn parses_division() {
     let got = parse_value_expr("a / b").unwrap();
-    assert_eq!(
-        got,
-        ValueExpr::Div(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
+    assert_eq!(got, arith(ArithOp::Div, var_value("a"), var_value("b")));
 }
 
 #[test]
@@ -197,12 +193,10 @@ fn multiplication_binds_tighter_than_addition() {
     let got = parse_value_expr("a + b * c").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Add(
-            Box::new(var_value("a")),
-            Box::new(ValueExpr::Mul(
-                Box::new(var_value("b")),
-                Box::new(var_value("c")),
-            )),
+        arith(
+            ArithOp::Add,
+            var_value("a"),
+            arith(ArithOp::Mul, var_value("b"), var_value("c")),
         )
     );
 }
@@ -213,12 +207,10 @@ fn division_is_left_associative() {
     let got = parse_value_expr("a / b / c").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Div(
-            Box::new(ValueExpr::Div(
-                Box::new(var_value("a")),
-                Box::new(var_value("b")),
-            )),
-            Box::new(var_value("c")),
+        arith(
+            ArithOp::Div,
+            arith(ArithOp::Div, var_value("a"), var_value("b")),
+            var_value("c"),
         )
     );
 }
@@ -229,12 +221,10 @@ fn mul_and_div_share_one_precedence_level() {
     let got = parse_value_expr("a * b / c").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Div(
-            Box::new(ValueExpr::Mul(
-                Box::new(var_value("a")),
-                Box::new(var_value("b")),
-            )),
-            Box::new(var_value("c")),
+        arith(
+            ArithOp::Div,
+            arith(ArithOp::Mul, var_value("a"), var_value("b")),
+            var_value("c"),
         )
     );
 }
@@ -242,10 +232,7 @@ fn mul_and_div_share_one_precedence_level() {
 #[test]
 fn parses_min() {
     let got = parse_value_expr("min(a, b)").unwrap();
-    assert_eq!(
-        got,
-        ValueExpr::Min(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
+    assert_eq!(got, arith(ArithOp::Min, var_value("a"), var_value("b")));
 }
 
 #[test]
@@ -254,12 +241,10 @@ fn parses_max_with_arithmetic_arg() {
     let got = parse_value_expr("max(0, a - b)").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Max(
-            Box::new(dec_value("0")),
-            Box::new(ValueExpr::Sub(
-                Box::new(var_value("a")),
-                Box::new(var_value("b")),
-            )),
+        arith(
+            ArithOp::Max,
+            dec_value("0"),
+            arith(ArithOp::Sub, var_value("a"), var_value("b")),
         )
     );
 }
@@ -270,12 +255,10 @@ fn parses_nested_min_max() {
     let got = parse_value_expr("min(cap, max(floor, x))").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Min(
-            Box::new(var_value("cap")),
-            Box::new(ValueExpr::Max(
-                Box::new(var_value("floor")),
-                Box::new(var_value("x")),
-            )),
+        arith(
+            ArithOp::Min,
+            var_value("cap"),
+            arith(ArithOp::Max, var_value("floor"), var_value("x")),
         )
     );
 }
@@ -323,10 +306,7 @@ fn neq_accepts_arithmetic_operand() {
     assert_eq!(
         got,
         Prop::Neq(
-            Box::new(ValueExpr::Add(
-                Box::new(var_value("a")),
-                Box::new(dec_value("1"))
-            )),
+            Box::new(arith(ArithOp::Add, var_value("a"), dec_value("1"))),
             Box::new(var_value("b")),
         )
     );
@@ -341,7 +321,7 @@ fn arithmetic_binds_tighter_than_comparison() {
         cmp(
             CompareOp::Le,
             OrderedDomain::Decimal,
-            ValueExpr::Add(Box::new(var_value("a")), Box::new(dec_value("5"))),
+            arith(ArithOp::Add, var_value("a"), dec_value("5")),
             var_value("limit"),
         )
     );
@@ -616,7 +596,12 @@ fn realistic_insurance_cap_rule() {
     else {
         panic!("expected Le");
     };
-    let ValueExpr::Add(a, b) = *lhs else {
+    let ValueExpr::Arith {
+        op: ArithOp::Add,
+        left: a,
+        right: b,
+    } = *lhs
+    else {
         panic!("expected Add on LHS");
     };
     assert_eq!(*a, var_value("already_paid"));
@@ -1040,7 +1025,12 @@ fn realistic_insurance_aggregate_cap() {
     else {
         panic!("expected Le");
     };
-    let ValueExpr::Add(a, b) = *lhs else {
+    let ValueExpr::Arith {
+        op: ArithOp::Add,
+        left: a,
+        right: b,
+    } = *lhs
+    else {
         panic!("expected Add on LHS of Le");
     };
     assert!(matches!(*a, ValueExpr::Sum { .. }));
@@ -1329,7 +1319,13 @@ fn on_or_before_at_same_precedence_as_le() {
     else {
         panic!("expected a comparison, got non-Compare");
     };
-    assert!(matches!(*lhs, ValueExpr::Add(_, _)));
+    assert!(matches!(
+        *lhs,
+        ValueExpr::Arith {
+            op: ArithOp::Add,
+            ..
+        }
+    ));
     assert_eq!(*rhs, var_value("b"));
 }
 

@@ -80,8 +80,9 @@ Prop                             -- a proposition: searches a state, yields bind
 ValueExpr                        -- a value expression: computes exactly one value.
                                     Evaluated by eval_value.
   Term                           -- a leaf (Var, Wildcard, Literal, Actor)
-  Add | Sub | Mul | Div          -- decimal arithmetic (infix + - * /)
-  Min | Max                      -- decimal floor / cap (min(a,b), max(a,b))
+  Arith { op: ArithOp, left, right }  -- decimal arithmetic; op is one of
+                                    Add | Sub | Mul | Div (infix + - * /) or
+                                    Min | Max (floor / cap, min(a,b) / max(a,b))
   Sum { value, body: Prop }      -- sum a value over a proposition's matches
   ValueOf { predicate, args, default }  -- unique-lookup value extraction
                                     (the two sorts are mutually recursive: a Compare
@@ -180,7 +181,7 @@ Four statement classes serve different binding purposes; conflating them is the 
   
   `bind_one` is not iteration and does not branch. Use `for` for iteration. Use `require` for gates that should not export bindings. Use `let` for value-producing expressions.
 
-- **`let name = ValueExpr`** is the **value-producing binding** primitive. It evaluates the `ValueExpr` to a single value and binds `name` in the active scope for every subsequent statement. Use `let` for `Sum`, `Add`, `Sub`, `ValueOf` inside value position, and any other expression that computes rather than looks up.
+- **`let name = ValueExpr`** is the **value-producing binding** primitive. It evaluates the `ValueExpr` to a single value and binds `name` in the active scope for every subsequent statement. Use `let` for `Sum`, `Arith` (arithmetic), `ValueOf` inside value position, and any other expression that computes rather than looks up.
 
 - **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
 
