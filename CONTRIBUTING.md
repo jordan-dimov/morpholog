@@ -59,7 +59,7 @@ The PG-backed test suites share one schema and truncate it between tests; they m
 
 ```
 crates/
-  morpholog-cli/           # binary `morpholog`; inspect, propose, parse, check
+  morpholog-cli/           # binary `morpholog`; inspect, run, parse, check, explain
   morpholog-core/          # synchronous semantic kernel - no I/O
   morpholog-examples/      # worked-example IR + registry (depends on core)
   morpholog-postgres/      # async PostgreSQL persistence adapter

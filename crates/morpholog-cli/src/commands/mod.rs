@@ -23,7 +23,6 @@ pub(crate) mod explain;
 pub(crate) mod inspect;
 pub(crate) mod outbox;
 pub(crate) mod parse;
-pub(crate) mod propose;
 pub(crate) mod run;
 
 /// Read a `.morph` source file and parse it. On parse failure,

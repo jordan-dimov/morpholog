@@ -10,7 +10,7 @@ The kernel, PG adapter, CLI, polling outbox worker, and the worked examples are 
 
 The kernel's identifiers are opaque newtypes, not bare strings - subjects, the transition actor, bound variables, and predicate names - so the compiler keeps the kernel's nouns distinct and a class of runtime checks (e.g. "the actor must be a subject") becomes unrepresentable rather than enforced. Intent and declaration names are the remaining few. The migration discipline for these codebase-wide type changes lives in [`refactoring-playbook.md`](refactoring-playbook.md).
 
-The `.morph` parser arc is closed, and the worked examples are now authored *solely* as `.morph`: the built-in registry embeds and parses each source, with no hand-written IR to drift. A round-trip property test couples the formatter and parser. The CLI exposes `parse` (source -> IR JSON), `check` (parse + `Program::validate()`, silent on clean), and `run` (parse + validate + propose against PostgreSQL, the non-built-in counterpart of `propose`).
+The `.morph` parser arc is closed, and the worked examples are now authored *solely* as `.morph`: each example module embeds and parses its source, with no hand-written IR to drift. A round-trip property test couples the formatter and parser. The CLI is uniformly file-path-driven - it parses whatever `.morph` you point it at and bundles no programmes: `parse` (source -> IR JSON), `check` (parse + `Program::validate()`, silent on clean), `run` (parse + validate + propose against PostgreSQL), and `inspect` / `explain`.
 
 Outbox intents are declared vocabulary too. `IntentDecl` (parallel to `PredicateDecl`) names every intent type the programme may emit; a misspelled `emit` is a validation error rather than a silent route-to-nowhere on the outbox.
 

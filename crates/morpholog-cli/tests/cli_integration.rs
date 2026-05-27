@@ -56,9 +56,20 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     )
 }
 
-/// Issue a balanced journal entry via the CLI's `propose` subcommand.
-/// Returns the `transition_id` from the receipt so subsequent tests
-/// can use it as an as-of coordinate.
+/// Absolute path to the shipped double-entry-ledger example source, so
+/// the CLI's file-path subcommands (`run`, `inspect derived`) can parse
+/// it directly. Resolved from the crate manifest dir so it is robust to
+/// the test process's working directory.
+fn ledger_morph() -> String {
+    format!(
+        "{}/../../examples/03_double_entry_ledger/ledger.morph",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// Issue a balanced journal entry via the CLI's `run` subcommand against
+/// the shipped ledger example. Returns the `transition_id` from the
+/// receipt so subsequent tests can use it as an as-of coordinate.
 fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
     let args_json = format!(
         r#"[
@@ -71,8 +82,8 @@ fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
         ]"#
     );
     let (status, stdout, stderr) = run_cli(&[
-        "propose",
-        "double_entry_ledger",
+        "run",
+        &ledger_morph(),
         "post_simple_entry",
         "--actor",
         "alex",
@@ -81,7 +92,7 @@ fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
     ]);
     assert!(
         status.success(),
-        "propose post_simple_entry should succeed; stderr: {stderr}"
+        "run post_simple_entry should succeed; stderr: {stderr}"
     );
     let receipt: Value = serde_json::from_str(&stdout).expect("receipt is JSON");
     assert_eq!(receipt["status"], "committed");
@@ -92,67 +103,18 @@ fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
 }
 
 // ============================================================
-// `propose` subcommand
+// `run` against the shipped ledger example (commit/reject/malformed
+// args). Parse failure, unknown transformation, and invariant rejection
+// against a user-supplied temp `.morph` are covered in the `run` section
+// further down.
 // ============================================================
 
 #[tokio::test(flavor = "current_thread")]
-async fn propose_commits_a_balanced_entry_and_emits_committed_receipt() {
-    reset_db().await;
-    let tid = post_balanced_entry("entry_001", 100);
-    assert!(!tid.is_nil());
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn propose_unknown_program_errors_with_available_list_on_stderr() {
+async fn run_malformed_args_json_errors_to_stderr() {
     reset_db().await;
     let (status, _stdout, stderr) = run_cli(&[
-        "propose",
-        "not_a_real_program",
-        "post_simple_entry",
-        "--actor",
-        "alex",
-        "--args",
-        "[]",
-    ]);
-    assert!(!status.success(), "unknown program must exit non-zero");
-    assert!(
-        stderr.contains("not_a_real_program"),
-        "stderr should name the unknown program: {stderr}"
-    );
-    assert!(
-        stderr.contains("Available built-in programs"),
-        "stderr should list available programs: {stderr}"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn propose_unknown_transformation_errors_with_available_list_on_stderr() {
-    reset_db().await;
-    let (status, _stdout, stderr) = run_cli(&[
-        "propose",
-        "double_entry_ledger",
-        "not_a_real_transformation",
-        "--actor",
-        "alex",
-        "--args",
-        "[]",
-    ]);
-    assert!(
-        !status.success(),
-        "unknown transformation must exit non-zero"
-    );
-    assert!(
-        stderr.contains("not_a_real_transformation"),
-        "stderr should name the unknown transformation: {stderr}"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn propose_malformed_args_json_errors_to_stderr() {
-    reset_db().await;
-    let (status, _stdout, stderr) = run_cli(&[
-        "propose",
-        "double_entry_ledger",
+        "run",
+        &ledger_morph(),
         "post_simple_entry",
         "--actor",
         "alex",
@@ -167,13 +129,13 @@ async fn propose_malformed_args_json_errors_to_stderr() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn propose_business_rejection_exits_one_with_rejected_receipt_on_stdout() {
+async fn run_business_rejection_exits_one_with_rejected_receipt_on_stdout() {
     reset_db().await;
     // Close q1_2026, then attempt to post into the closed period - the
     // require gate rejects.
     let (status, _stdout, _stderr) = run_cli(&[
-        "propose",
-        "double_entry_ledger",
+        "run",
+        &ledger_morph(),
         "close_period",
         "--actor",
         "alex",
@@ -183,8 +145,8 @@ async fn propose_business_rejection_exits_one_with_rejected_receipt_on_stdout() 
     assert!(status.success(), "close_period should commit");
 
     let (status, stdout, _stderr) = run_cli(&[
-        "propose",
-        "double_entry_ledger",
+        "run",
+        &ledger_morph(),
         "post_simple_entry",
         "--actor",
         "alex",
@@ -291,12 +253,8 @@ async fn inspect_derived_trial_balance_reflects_admitted_postings() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
 
-    let (status, stdout, stderr) = run_cli(&[
-        "inspect",
-        "derived",
-        "double_entry_ledger",
-        "TrialBalanceRow",
-    ]);
+    let ledger = ledger_morph();
+    let (status, stdout, stderr) = run_cli(&["inspect", "derived", &ledger, "TrialBalanceRow"]);
     assert!(status.success(), "inspect derived should succeed; {stderr}");
     let rows: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
     let array = rows.as_array().expect("derived returns an array");
@@ -307,33 +265,30 @@ async fn inspect_derived_trial_balance_reflects_admitted_postings() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn inspect_derived_unknown_program_errors_to_stderr() {
+async fn inspect_derived_unknown_file_errors_to_stderr() {
     reset_db().await;
     let (status, _stdout, stderr) = run_cli(&[
         "inspect",
         "derived",
-        "not_a_real_program",
+        "/no/such/program.morph",
         "TrialBalanceRow",
     ]);
     assert!(
         !status.success(),
-        "unknown program in inspect derived must exit non-zero"
+        "a missing source file must exit non-zero"
     );
     assert!(
-        stderr.contains("not_a_real_program"),
-        "stderr should name the unknown program: {stderr}"
+        !stderr.is_empty(),
+        "stderr should carry an error explanation: {stderr}"
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_derived_unknown_derived_name_errors_to_stderr() {
     reset_db().await;
-    let (status, _stdout, stderr) = run_cli(&[
-        "inspect",
-        "derived",
-        "double_entry_ledger",
-        "NotARealDerivedClaim",
-    ]);
+    let ledger = ledger_morph();
+    let (status, _stdout, stderr) =
+        run_cli(&["inspect", "derived", &ledger, "NotARealDerivedClaim"]);
     assert!(
         !status.success(),
         "unknown derived-claim name must exit non-zero"

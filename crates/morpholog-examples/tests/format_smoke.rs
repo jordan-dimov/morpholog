@@ -3,8 +3,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
+use common::all_programs;
 use morpholog_core::format::format_program;
-use morpholog_examples::all_programs;
 
 #[test]
 fn every_program_pretty_prints_with_header_and_recognisable_content() {

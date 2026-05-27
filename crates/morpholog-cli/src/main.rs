@@ -49,17 +49,6 @@ enum Command {
         what: Inspect,
     },
 
-    /// Propose a named transformation from a built-in program against a
-    /// Morpholog PostgreSQL database. Arguments are supplied as a JSON
-    /// array of `EvalValue`s. On commit, prints the outcome as JSON and
-    /// exits zero. On business rejection (a `require` failing or an
-    /// invariant violated on the candidate state), prints the rejection
-    /// reason as JSON and exits one. On any other error (bad arguments,
-    /// unknown program, connection failure, JSON encoding error),
-    /// prints an error message to stderr and exits one via anyhow's
-    /// default.
-    Propose(ProposeArgs),
-
     /// Parse a `.morph` source file. On success, prints the parsed
     /// `Program` as JSON and exits zero. On parse failure, renders
     /// ariadne-formatted diagnostics to stderr and exits one.
@@ -74,11 +63,13 @@ enum Command {
     /// failure.
     Check(SourceFileArgs),
 
-    /// Propose a transformation defined in a user-supplied `.morph`
-    /// source file. The non-built-in counterpart of `propose`: parses
-    /// and validates the source file, then proposes the named
-    /// transformation with the supplied actor and JSON args. Same JSON
-    /// output and exit-code semantics as `propose`.
+    /// Propose a transformation defined in a `.morph` source file against
+    /// a Morpholog PostgreSQL database. Parses and validates the source,
+    /// then proposes the named transformation with the supplied actor and
+    /// a JSON array of `EvalValue` args. On commit, prints the outcome as
+    /// JSON and exits zero; on business rejection, prints the reason and
+    /// exits one; on any other error (bad args, unknown transformation,
+    /// connection failure), prints to stderr and exits one.
     Run(RunArgs),
 
     /// Explain why a transformation from a `.morph` source file would be
@@ -243,17 +234,17 @@ pub(crate) enum Inspect {
 /// declarations are programme metadata, not state.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectPredicatesArgs {
-    /// Built-in program name (e.g. `double_entry_ledger`).
-    pub(crate) program: String,
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
 }
 
 /// Arguments for `inspect guarantees`. Like `inspect predicates`, a
-/// static read over a built-in program; `--json` switches the prose view
-/// for the structured form.
+/// static read over a parsed `.morph` programme; `--json` switches the
+/// prose view for the structured form.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectGuaranteesArgs {
-    /// Built-in program name (e.g. `carbon_credit_provenance`).
-    pub(crate) program: String,
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
     /// Emit the structured JSON form instead of prose.
     #[arg(long)]
     pub(crate) json: bool,
@@ -278,8 +269,8 @@ pub(crate) struct InspectClaimsArgs {
 /// Arguments for `inspect derived`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectDerivedArgs {
-    /// Built-in program name (e.g. `double_entry_ledger`).
-    pub(crate) program: String,
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
 
     /// Derived claim predicate name (e.g. `TrialBalanceRow`). Looked
     /// up against the program's `derived_claims` by `predicate`.
@@ -361,51 +352,9 @@ pub(crate) struct SourceFileArgs {
     pub(crate) file: PathBuf,
 }
 
-/// Arguments for the `propose` subcommand.
-#[derive(clap::Args, Debug)]
-pub(crate) struct ProposeArgs {
-    /// Built-in program name (e.g. `double_entry_ledger`). The full
-    /// list is in the per-example READMEs under `examples/`.
-    pub(crate) program: String,
-
-    /// Transformation name within the program (e.g. `post_simple_entry`).
-    /// Its parameters and expected argument shape are in the per-example
-    /// README.
-    pub(crate) transformation: String,
-
-    /// JSON array of arguments matching the transformation's parameter
-    /// list. Each element is an `EvalValue` in the codec's tagged form:
-    /// `{"type":"subject","value":"..."}`, `{"type":"decimal",
-    /// "value":"100"}`, `{"type":"bool","value":true}`, or
-    /// `{"type":"collection","value":[...]}`.
-    #[arg(long)]
-    pub(crate) args: String,
-
-    /// Subject identifying the actor under whose authority this
-    /// transition is proposed. Free-form subject string (e.g. `jordan`,
-    /// `desk:fx_spot`), wrapped as an `EvalValue::Subject` and persisted
-    /// to `morpholog.audit.actor`. Required: every transition carries an
-    /// actor.
-    #[arg(long)]
-    pub(crate) actor: String,
-
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
-
-    /// When set, emit a structured per-statement trace alongside the
-    /// outcome: `{"result": <PgProposalOutcome>, "trace":
-    /// [<TraceEntry>...]}` on commit or rejection. The trace shows which
-    /// require/bind fired, what bindings each statement produced, and
-    /// which invariant (if any) failed. Kernel errors at the PG boundary
-    /// still surface via the anyhow error chain on stderr.
-    #[arg(long)]
-    pub(crate) trace: bool,
-}
-
-/// Arguments for the `run` subcommand. The `propose`-shaped fields
-/// match `propose` exactly; the difference is `file` (a user-supplied
-/// `.morph` source) in place of `program` (a built-in registry name).
+/// Arguments for the `run` subcommand: a `.morph` source file plus the
+/// transformation, JSON args, actor, connection string, and optional
+/// trace flag.
 #[derive(clap::Args, Debug)]
 pub(crate) struct RunArgs {
     /// Path to a `.morph` source file containing the programme.
@@ -475,7 +424,6 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Inspect { what } => commands::inspect::run(what).await,
-        Command::Propose(args) => commands::propose::run(args).await,
         Command::Parse(args) => commands::parse::run(args),
         Command::Check(args) => commands::check::run(args),
         Command::Run(args) => commands::run::run(args).await,
@@ -696,11 +644,11 @@ mod tests {
     }
 
     #[test]
-    fn propose_with_all_args_parses() {
+    fn run_with_all_args_parses() {
         let cli = Cli::parse_from([
             "morpholog",
-            "propose",
-            "double_entry_ledger",
+            "run",
+            "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--args",
             "[]",
@@ -709,10 +657,13 @@ mod tests {
             "--database-url",
             "postgres:///morpholog_dev",
         ]);
-        let Command::Propose(args) = cli.command else {
-            panic!("expected Propose, got {:?}", cli.command);
+        let Command::Run(args) = cli.command else {
+            panic!("expected Run, got {:?}", cli.command);
         };
-        assert_eq!(args.program, "double_entry_ledger");
+        assert_eq!(
+            args.file,
+            std::path::PathBuf::from("examples/03_double_entry_ledger/ledger.morph")
+        );
         assert_eq!(args.transformation, "post_simple_entry");
         assert_eq!(args.args, "[]");
         assert_eq!(args.actor, "jordan");
@@ -720,11 +671,11 @@ mod tests {
     }
 
     #[test]
-    fn propose_missing_args_flag_errors() {
+    fn run_missing_args_flag_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "propose",
-            "double_entry_ledger",
+            "run",
+            "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--actor",
             "jordan",
@@ -736,11 +687,11 @@ mod tests {
     }
 
     #[test]
-    fn propose_missing_actor_flag_errors() {
+    fn run_missing_actor_flag_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "propose",
-            "double_entry_ledger",
+            "run",
+            "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--args",
             "[]",
@@ -752,11 +703,11 @@ mod tests {
     }
 
     #[test]
-    fn propose_missing_positional_errors() {
+    fn run_missing_positional_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "propose",
-            "double_entry_ledger",
+            "run",
+            "examples/03_double_entry_ledger/ledger.morph",
             // missing transformation positional
             "--args",
             "[]",
@@ -775,7 +726,7 @@ mod tests {
             "morpholog",
             "inspect",
             "derived",
-            "double_entry_ledger",
+            "examples/03_double_entry_ledger/ledger.morph",
             "TrialBalanceRow",
             "--database-url",
             "postgres:///morpholog_dev",
@@ -786,21 +737,24 @@ mod tests {
         let Inspect::Derived(args) = what else {
             panic!("expected Inspect::Derived, got {what:?}");
         };
-        assert_eq!(args.program, "double_entry_ledger");
+        assert_eq!(
+            args.file,
+            std::path::PathBuf::from("examples/03_double_entry_ledger/ledger.morph")
+        );
         assert_eq!(args.derived, "TrialBalanceRow");
         assert_eq!(args.database_url, "postgres:///morpholog_dev");
     }
 
     #[test]
     fn inspect_derived_missing_derived_name_errors() {
-        // Two positionals are required (program + derived name). Omit
-        // the derived name; clap must surface MissingRequiredArgument
-        // rather than silently taking the flag as the missing arg.
+        // Two positionals are required (file + derived name). Omit the
+        // derived name; clap must surface MissingRequiredArgument rather
+        // than silently taking the flag as the missing arg.
         let err = Cli::try_parse_from([
             "morpholog",
             "inspect",
             "derived",
-            "double_entry_ledger",
+            "examples/03_double_entry_ledger/ledger.morph",
             "--database-url",
             "postgres:///morpholog_dev",
         ])
@@ -808,16 +762,16 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
-    /// `inspect predicates <program>` parses to `Inspect::Predicates`
-    /// with the program name on the args struct. No `--database-url`
-    /// flag: predicate declarations are programme metadata, not state.
+    /// `inspect predicates <file.morph>` parses to `Inspect::Predicates`
+    /// with the file path on the args struct. No `--database-url` flag:
+    /// predicate declarations are programme metadata, not state.
     #[test]
-    fn inspect_predicates_parses_with_program_argument() {
+    fn inspect_predicates_parses_with_file_argument() {
         let cli = Cli::parse_from([
             "morpholog",
             "inspect",
             "predicates",
-            "clinical_trial_enrolment",
+            "examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph",
         ]);
         let Command::Inspect { what } = cli.command else {
             panic!("expected Inspect, got {:?}", cli.command);
@@ -825,29 +779,31 @@ mod tests {
         let Inspect::Predicates(args) = what else {
             panic!("expected Inspect::Predicates, got {what:?}");
         };
-        assert_eq!(args.program, "clinical_trial_enrolment");
+        assert_eq!(
+            args.file,
+            std::path::PathBuf::from(
+                "examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph"
+            )
+        );
     }
 
-    /// Omitting the program positional must produce a clap
-    /// MissingRequiredArgument error - the program name is required
-    /// for the subcommand to identify which programme's vocabulary
-    /// to render.
+    /// Omitting the file positional must produce a clap
+    /// MissingRequiredArgument error.
     #[test]
-    fn inspect_predicates_missing_program_errors() {
+    fn inspect_predicates_missing_file_errors() {
         let err = Cli::try_parse_from(["morpholog", "inspect", "predicates"])
-            .expect_err("missing program positional should error");
+            .expect_err("missing file positional should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
-    /// `propose --trace` parses to a `ProposeArgs` with `trace: true`.
-    /// All other propose-subcommand fields keep their existing
-    /// behaviour.
+    /// `run --trace` parses to a `RunArgs` with `trace: true`. All other
+    /// fields keep their existing behaviour.
     #[test]
-    fn propose_with_trace_flag_parses() {
+    fn run_with_trace_flag_parses() {
         let cli = Cli::parse_from([
             "morpholog",
-            "propose",
-            "settlement_netting",
+            "run",
+            "examples/01_settlement_netting/netting.morph",
             "create_net_settlement",
             "--actor",
             "jordan",
@@ -857,23 +813,22 @@ mod tests {
             "postgres:///morpholog_dev",
             "--trace",
         ]);
-        let Command::Propose(args) = cli.command else {
-            panic!("expected Propose, got {:?}", cli.command);
+        let Command::Run(args) = cli.command else {
+            panic!("expected Run, got {:?}", cli.command);
         };
         assert!(args.trace, "expected trace flag to be set");
-        assert_eq!(args.program, "settlement_netting");
         assert_eq!(args.transformation, "create_net_settlement");
         assert_eq!(args.actor, "jordan");
     }
 
-    /// Without `--trace`, `ProposeArgs.trace` defaults to false. The
-    /// non-trace propose path must not be affected by the new flag.
+    /// Without `--trace`, `RunArgs.trace` defaults to false. The non-trace
+    /// path must not be affected by the flag.
     #[test]
-    fn propose_without_trace_flag_defaults_to_false() {
+    fn run_without_trace_flag_defaults_to_false() {
         let cli = Cli::parse_from([
             "morpholog",
-            "propose",
-            "settlement_netting",
+            "run",
+            "examples/01_settlement_netting/netting.morph",
             "create_net_settlement",
             "--actor",
             "jordan",
@@ -882,8 +837,8 @@ mod tests {
             "--database-url",
             "postgres:///morpholog_dev",
         ]);
-        let Command::Propose(args) = cli.command else {
-            panic!("expected Propose, got {:?}", cli.command);
+        let Command::Run(args) = cli.command else {
+            panic!("expected Run, got {:?}", cli.command);
         };
         assert!(!args.trace, "expected trace flag to default to false");
     }

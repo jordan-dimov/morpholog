@@ -6,8 +6,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
+use common::all_programs;
 use morpholog_core::{Guarantee, guarantees, render_guarantees};
-use morpholog_examples::{all_programs, approval_controls, carbon_credit_provenance as cc};
+use morpholog_examples::{approval_controls, carbon_credit_provenance as cc};
 
 #[test]
 fn every_registered_program_yields_one_guarantee_per_invariant() {

@@ -262,7 +262,7 @@ Diagnostics carry no source spans in v0 - the IR drops parser spans on lowering,
 
 `Program::validate` also bounds nesting depth: a body whose expressions or `for`-statements nest past a fixed limit is rejected (`NestingTooDeep`) before any recursive walk runs on it. The evaluator and the check itself descend one stack frame per level, so an unbounded body could exhaust the stack during `propose`. This is the teeth behind the rule that **untrusted IR must be validated before it is proposed**: `propose` trusts the IR it is handed and does no programme-level check of its own, so a deployment that accepts IR from outside must run `Program::validate` first.
 
-`Program::validate` is **not** called automatically by `propose`. The kernel boundary is statement-level, not programme-level; revalidating on every proposal would muddle that distinction and add overhead. The `morpholog check` CLI subcommand runs it explicitly; tests on the built-in registry do the same.
+`Program::validate` is **not** called automatically by `propose`. The kernel boundary is statement-level, not programme-level; revalidating on every proposal would muddle that distinction and add overhead. The `morpholog check` CLI subcommand runs it explicitly; tests over the worked examples do the same.
 
 ## Atomicity boundary
 
