@@ -192,11 +192,25 @@ fn apply_cmp<T: PartialOrd>(op: CompareOp, a: T, b: T) -> bool {
     }
 }
 
+/// `a xor b` is defined as exactly-one: `(a or b) and not (a and b)`.
+/// Lowering to that combination keeps XOR's binding semantics identical
+/// to the hand-written form - it is a spelling, not new evaluation. The
+/// single definition of what xor expands to: `find_matches` evaluates it,
+/// and the validator measures *this* shape's depth (not the one binary
+/// node) so a deep xor cannot pass the depth guard yet overflow eval.
+pub(crate) fn lower_xor(left: &Prop, right: &Prop) -> Prop {
+    Prop::And(vec![
+        Prop::Or(vec![left.clone(), right.clone()]),
+        Prop::Not(Box::new(Prop::And(vec![left.clone(), right.clone()]))),
+    ])
+}
+
 pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
     match p {
         Prop::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
         Prop::And(props) => find_conjunction(props, ctx),
         Prop::Or(props) => find_disjunction(props, ctx),
+        Prop::Xor(left, right) => find_matches(&lower_xor(left, right), ctx),
         Prop::Not(inner) => {
             let m = find_matches(inner, ctx)?;
             Ok(if m.is_empty() {
@@ -677,6 +691,7 @@ pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option
         // No useful drill-down for these:
         Prop::Not(_)
         | Prop::Or(_)
+        | Prop::Xor(..)
         | Prop::Pre(_)
         | Prop::Exists { .. }
         | Prop::Claim { .. }

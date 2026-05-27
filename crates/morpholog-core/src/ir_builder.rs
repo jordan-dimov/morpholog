@@ -124,6 +124,10 @@ pub fn not(inner: Prop) -> Prop {
     Prop::Not(Box::new(inner))
 }
 
+pub fn xor(left: Prop, right: Prop) -> Prop {
+    Prop::Xor(Box::new(left), Box::new(right))
+}
+
 /// Opt the wrapped subtree into pre-transition state lookup.
 /// Legal only inside invariant bodies during a proposal; surfaces
 /// [`crate::EvalError::PreStateUnavailable`] anywhere else.

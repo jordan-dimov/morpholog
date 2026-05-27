@@ -70,6 +70,7 @@ Prop                             -- a proposition: searches a state, yields bind
                                     boolean. Evaluated by find_matches.
   Claim(predicate, args)         -- match a claim
   And | Or | Not | Implies       -- boolean composition
+  Xor(Prop, Prop)                -- exactly-one; lowers to (a or b) and not (a and b)
   Exists | Forall                -- bounded quantification
   Pre(Prop)                      -- evaluate the subtree against pre-state
   Eq | Neq | Compare             -- value (in)equality and ordered comparison;

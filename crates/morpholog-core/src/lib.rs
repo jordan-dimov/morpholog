@@ -842,6 +842,45 @@ mod tests {
         );
     }
 
+    /// `Prop::Xor` holds exactly when one operand matches and the other
+    /// does not - the truth table of the `(a or b) and not (a and b)` it
+    /// lowers to. Pins all four cases with ground (binding-free) operands.
+    #[test]
+    fn xor_holds_for_exactly_one_operand() {
+        let l = Prop::Claim {
+            predicate: "L".into(),
+            args: vec![],
+        };
+        let r = Prop::Claim {
+            predicate: "R".into(),
+            args: vec![],
+        };
+        let xor = Prop::Xor(Box::new(l), Box::new(r));
+
+        let l_claim = ClaimInstance {
+            predicate: "L".into(),
+            args: vec![],
+        };
+        let r_claim = ClaimInstance {
+            predicate: "R".into(),
+            args: vec![],
+        };
+
+        let holds = |claims: Vec<ClaimInstance>| {
+            !find_matches(&xor, &ctx(&State::from_claims(claims), &Bindings::new()))
+                .unwrap()
+                .is_empty()
+        };
+
+        assert!(holds(vec![l_claim.clone()]), "left only: xor holds");
+        assert!(holds(vec![r_claim.clone()]), "right only: xor holds");
+        assert!(
+            !holds(vec![l_claim.clone(), r_claim]),
+            "both: xor fails (not exclusive)"
+        );
+        assert!(!holds(vec![]), "neither: xor fails");
+    }
+
     // ============================================================
     // Prop::Pre - pre-state opt-in
     // ============================================================

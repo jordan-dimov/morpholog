@@ -207,6 +207,15 @@ pub enum Prop {
     /// only the body - they diverge when the iteration set changes.
     Pre(Box<Prop>),
     Not(Box<Prop>),
+    /// Exclusive or: exactly one of the two operands holds. Defined as,
+    /// and evaluated by lowering to, `(left or right) and not (left and
+    /// right)` - so it is purely a more legible spelling of that
+    /// combination, with identical binding semantics, not new
+    /// expressiveness. Binary, not flattened: `a xor b xor c` would be
+    /// ambiguous (exactly-one versus odd-parity), so chained `xor` nests
+    /// rather than forming one node. Earns its place where the operands
+    /// are long claim patterns and the hand-written form reads poorly.
+    Xor(Box<Prop>, Box<Prop>),
     /// Value equality and inequality. Both operate on [`ValueExpr`]
     /// operands (a bare `Term`, arithmetic, `Sum`, or `ValueOf`),
     /// evaluated to a value and compared. Predicate-shaped: the unchanged

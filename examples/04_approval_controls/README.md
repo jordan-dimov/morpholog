@@ -40,7 +40,7 @@ Tying recorded approvals to live authority via an invariant would force the runt
 | `approve_document(doc_id, doc_type)` | The unconditional approval. **Declares no `actor` parameter.** The proposing actor flows through transition context, is consulted via `$actor` in the require, and is stamped onto the asserted `Approval`. |
 | `grant_approval_limit(actor, doc_type, limit)` | Asserts `ApprovalLimit`. Ungated. |
 | `revoke_approval_limit(actor, doc_type, limit)` | Requires the specific `(actor, doc_type, limit)` triple; retracts it. |
-| `approve_within_limit(doc_id, doc_type, amount)` | The quantitative approval. No `actor` parameter. Require: `ApprovalLimit($actor, doc_type, limit) and amount <= limit` - binds `limit` from the authority claim; `Expr::Le` compares the proposed amount. Boundary equality is inclusive. |
+| `approve_within_limit(doc_id, doc_type, amount)` | The quantitative approval. No `actor` parameter. Require: `ApprovalLimit($actor, doc_type, limit) and amount <= limit` - binds `limit` from the authority claim; the `<=` comparison checks the proposed amount. Boundary equality is inclusive. |
 
 ## How to run it
 
@@ -62,7 +62,7 @@ In-memory tests cover both shapes, the rule that revoking authority preserves th
 
 ### Typing assumption
 
-`Expr::Le` requires both operands to evaluate to `EvalValue::Decimal`. A non-decimal value in the `limit` position of an admitted `ApprovalLimit` makes the require's `Le` raise `TypeMismatch`, not a business rejection. That is correct: a structurally-malformed claim is corruption, not lawful rejection.
+The `<=` comparison requires both operands to evaluate to `EvalValue::Decimal`. A non-decimal value in the `limit` position of an admitted `ApprovalLimit` makes the require raise `TypeMismatch`, not a business rejection. That is correct: a structurally-malformed claim is corruption, not lawful rejection.
 
 Typed predicate declarations and `morpholog check` now catch the *static* form of this mistake: a non-decimal literal in the `limit` slot, or a variable whose kind conflicts with the `Decimal` declaration, fails validation before the programme runs. What stays trusted to the caller is the *runtime* argument value - `propose`'s tagged-JSON args are not yet checked against declared kinds, so a caller passing a subject where a decimal belongs still surfaces as `TypeMismatch` at evaluation rather than a pre-admission rejection.
 

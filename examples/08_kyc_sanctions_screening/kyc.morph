@@ -48,6 +48,7 @@ predicate Screening(screening_id: Subject, customer: Subject, list_type: Subject
 predicate ScreeningResult(screening_id: Subject, disposition: Subject, completed_on: Date, expires_on: Date)
 predicate CurrentScreening(customer: Subject, list_type: Subject, screening_id: Subject)
 predicate MatchUnderReview(screening_id: Subject, raised_on: Date)
+predicate MatchAdjudicated(screening_id: Subject)
 predicate OnboardedCustomer(customer: Subject, onboarded_on: Date)
 
 
@@ -59,6 +60,7 @@ predicate OnboardedCustomer(customer: Subject, onboarded_on: Date)
 -- a mistyped message cannot silently vanish into a queue nobody reads.
 intent ScreeningRequested(screening_id: Subject, customer: Subject, list_type: Subject)
 intent MatchRaised(screening_id: Subject, customer: Subject, list_type: Subject)
+intent MatchConfirmed(screening_id: Subject, customer: Subject, list_type: Subject)
 intent CustomerOnboarded(customer: Subject, onboarded_on: Date)
 intent CustomerRejected(customer: Subject, reason: Subject)
 
@@ -109,6 +111,31 @@ invariant onboarded_requires_no_unresolved_match:
         Screening(s, c, _, _) and MatchUnderReview(s, _)
     )
 
+-- When an analyst adjudicates a flagged match, the review resolves it
+-- exactly one way: either a false positive (the names merely collided)
+-- or a confirmed hit. Never both, and - once adjudicated - never
+-- neither. `xor` says exactly that: of the two outcomes, precisely one
+-- holds. It reads the way the rule sounds; spelling it the long way,
+-- `(clear or confirmed) and not (clear and confirmed)`, would bury the
+-- intent under bookkeeping. The `MatchAdjudicated` marker is what says
+-- "this match has been reviewed" - an un-reviewed match has neither
+-- outcome, and the rule simply does not apply to it.
+invariant adjudicated_match_resolves_exactly_one_way:
+    MatchAdjudicated(s) implies (
+        ScreeningResult(s, #adjudicated_clear, _, _)
+        xor ScreeningResult(s, #adjudicated_confirmed, _, _)
+    )
+
+-- A confirmed hit blocks onboarding for good. Clearing the match flag on
+-- adjudication (so the "no unresolved match" rule above no longer bites)
+-- must not open a back door: a confirmed match is a durable bar, even if
+-- an older clean screening is still the current one. So no customer with
+-- any confirmed-match result on file can be onboarded.
+invariant onboarded_requires_no_confirmed_match:
+    OnboardedCustomer(c, _) implies not (
+        Screening(s, c, _, _) and ScreeningResult(s, #adjudicated_confirmed, _, _)
+    )
+
 
 -- The ways state may change. A transformation proposes a set of
 -- changes; the runtime applies them only if every invariant still holds
@@ -153,17 +180,32 @@ transformation record_match_screening_result(screening_id, completed_on, expires
     emit MatchRaised(screening_id, customer, list_type)
 
 -- An analyst decides a flagged match was a false positive - the names
--- collided, but it is not the same person. The match flag is cleared and
--- this screening becomes the current result. (A confirmed true match
--- would instead lead to rejecting the customer; that path is not modelled
--- here.)
+-- collided, but it is not the same person. The match flag is cleared,
+-- the screening is marked adjudicated, and it becomes the current result.
+-- The confirmed-hit path is the next transformation; the invariant above
+-- pins that a match resolves down exactly one of these two.
 transformation adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on):
     require MatchUnderReview(screening_id, _)
     bind Screening(screening_id, customer, list_type, _)
     admit ScreeningResult(screening_id, #adjudicated_clear, adjudicated_on, expires_on)
+    admit MatchAdjudicated(screening_id)
     retract MatchUnderReview(screening_id, _)
     retract CurrentScreening(customer, list_type, _)
     admit CurrentScreening(customer, list_type, screening_id)
+
+-- The other side of the fork: an analyst confirms the match is a genuine
+-- hit. The screening is recorded as a confirmed result and marked
+-- adjudicated, and the review flag is cleared - but, unlike a false
+-- positive, it does NOT become the current clean result, and the
+-- confirmed-match invariant above bars the customer from onboarding for
+-- good. The emitted message routes the confirmed hit to compliance.
+transformation adjudicate_match_as_confirmed(screening_id, adjudicated_on, expires_on):
+    require MatchUnderReview(screening_id, _)
+    bind Screening(screening_id, customer, list_type, _)
+    admit ScreeningResult(screening_id, #adjudicated_confirmed, adjudicated_on, expires_on)
+    admit MatchAdjudicated(screening_id)
+    retract MatchUnderReview(screening_id, _)
+    emit MatchConfirmed(screening_id, customer, list_type)
 
 -- Onboard the customer - open the account. This step itself only checks
 -- that the customer exists and is not already onboarded; the heavy
