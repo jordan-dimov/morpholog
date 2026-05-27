@@ -8,7 +8,7 @@
 
 use std::sync::LazyLock;
 
-use morpholog_core::{Invariant, Program, Transformation};
+use morpholog_core::{DerivedClaim, Invariant, Program, Transformation};
 
 static PROGRAM: LazyLock<Program> = LazyLock::new(|| {
     crate::parse_example(
@@ -29,6 +29,10 @@ pub fn capture_trade() -> Transformation {
     crate::transformation(&PROGRAM, "capture_trade")
 }
 
+pub fn amend_trade_terms() -> Transformation {
+    crate::transformation(&PROGRAM, "amend_trade_terms")
+}
+
 pub fn grant_confirm_authority() -> Transformation {
     crate::transformation(&PROGRAM, "grant_confirm_authority")
 }
@@ -43,4 +47,8 @@ pub fn correct_official_price() -> Transformation {
 
 pub fn settle_trade() -> Transformation {
     crate::transformation(&PROGRAM, "settle_trade")
+}
+
+pub fn terms_timeline() -> DerivedClaim {
+    crate::derived(&PROGRAM, "TermsTimeline")
 }
