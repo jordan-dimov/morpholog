@@ -85,7 +85,9 @@ pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<Predi
         ValueExpr::Sub(l, r)
         | ValueExpr::Add(l, r)
         | ValueExpr::Mul(l, r)
-        | ValueExpr::Div(l, r) => {
+        | ValueExpr::Div(l, r)
+        | ValueExpr::Min(l, r)
+        | ValueExpr::Max(l, r) => {
             predicates_referenced_by_value(l, out);
             predicates_referenced_by_value(r, out);
         }

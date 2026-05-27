@@ -228,6 +228,14 @@ pub fn div(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     ValueExpr::Div(Box::new(lhs), Box::new(rhs))
 }
 
+pub fn min(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Min(Box::new(lhs), Box::new(rhs))
+}
+
+pub fn max(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    ValueExpr::Max(Box::new(lhs), Box::new(rhs))
+}
+
 pub fn sum(value: Term, body: Prop) -> ValueExpr {
     ValueExpr::Sum {
         value,
