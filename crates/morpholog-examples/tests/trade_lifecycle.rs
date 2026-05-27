@@ -848,3 +848,133 @@ fn correction_after_settlement_leaves_the_settlement_standing() {
         &[subj("op2"), subj("op1")],
     ));
 }
+
+// ============================================================
+// Effective-terms preconditions and quantity sanity
+// ============================================================
+
+#[test]
+fn settlement_before_any_effective_terms_is_rejected() {
+    // Terms are effective from 2026-01-15. A slice effective 2026-01-01 -
+    // before the trade had any terms - has no quantity to be capped
+    // against. The settle gate refuses it on the ordinary path.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![
+            subj("t1"),
+            dec(50),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-01"),
+        ],
+        &confirmed,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
+    // The path the settle gate cannot see: a transformation admitting a
+    // TradeSettled effective before any terms version exists. Without the
+    // backstop the effective cap would pass vacuously (no terms to compare
+    // against); settled_date_has_effective_terms refuses it instead.
+    use morpholog_core::ir_builder;
+
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let bad = ir_builder::transformation(
+        "settle_before_terms",
+        ir_builder::params(&["trade", "qty", "sid", "opid", "eff"]),
+        vec![ir_builder::assert_(
+            "TradeSettled",
+            vec![
+                ir_builder::var("trade"),
+                ir_builder::var("qty"),
+                ir_builder::var("sid"),
+                ir_builder::var("opid"),
+                ir_builder::var("eff"),
+            ],
+        )],
+    );
+    let outcome = propose_with_test_actor(
+        &bad,
+        vec![
+            subj("t1"),
+            dec(50),
+            subj("s_early"),
+            subj("op1"),
+            date("2026-01-01"),
+        ],
+        &confirmed,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("settled_date_has_effective_terms"),
+            "expected the no-effective-terms backstop to reject, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("a settlement effective before any terms must be rejected")
+        }
+    }
+}
+
+#[test]
+fn negative_terms_quantity_is_rejected() {
+    // A terms quantity must be positive; an amendment to -10 is refused by
+    // trade_terms_quantity_is_positive.
+    let pre = grant(captured(100), "mo", "power");
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(-10),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        &pre,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("trade_terms_quantity_is_positive"),
+            "expected the positive-terms-quantity invariant, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => panic!("a negative terms quantity must be rejected"),
+    }
+}
+
+#[test]
+fn negative_settlement_quantity_is_rejected() {
+    // A settled quantity must be positive; a -10 slice is refused by
+    // settled_quantity_is_positive, so a negative slice cannot make room
+    // under the running cap for an over-large positive one.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![
+            subj("t1"),
+            dec(-10),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
+        &confirmed,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("settled_quantity_is_positive"),
+            "expected the positive-settlement-quantity invariant, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => panic!("a negative settlement quantity must be rejected"),
+    }
+}

@@ -154,6 +154,12 @@ invariant terms_belong_to_captured_trade:
 invariant terms_version_id_identifies_one_record:
     TradeTerms(trade_a, v, qty_a, period_a, ef_a) and TradeTerms(trade_b, v, qty_b, period_b, ef_b) implies (trade_a = trade_b and qty_a = qty_b and period_a = period_b and ef_a = ef_b)
 
+-- A terms quantity is a positive figure. A trade for zero or a negative
+-- quantity is not a trade; forbidding it keeps the effective cap, which
+-- sums signed quantities, honest about what it is bounding.
+invariant trade_terms_quantity_is_positive:
+    TradeTerms(_, _, qty, _, _) implies qty > 0
+
 -- At most one terms version per effective date for a trade. Two versions
 -- tied on the same effective date would make "the quantity effective on
 -- that date" ambiguous, and the latest-effective lookup below relies on
@@ -178,12 +184,23 @@ invariant trade_terms_chain_no_fork:
 -- an amendment to a higher quantity (effective on or before `d`) lifts
 -- the cap governing the slices effective on `d`, so a slice that was over
 -- the old quantity but within the new one becomes admissible. The
--- comparison is inclusive.
+-- comparison is inclusive. Which version is "in force on `d`" is decided
+-- by effective dates alone, never by the amendment chain - the chain
+-- (`TradeTermsSupersedes`) is audit lineage, not the semantic timeline.
 invariant settled_within_effective_terms:
     (TradeSettled(trade, _, _, _, d)
      and TradeTerms(trade, _, qty, _, ef) and ef on_or_before d
      and not (exists later_ef: TradeTerms(trade, _, _, _, later_ef) and later_ef on_or_before d and later_ef after ef))
     implies sum(s | TradeSettled(trade, s, _, _, sd) and sd on_or_before d) <= qty
+
+-- Every settled date has terms effective by it. Without this, a slice
+-- effective before the trade's first terms version would face no cap at
+-- all - the effective-cap invariant above would find no terms version to
+-- compare against and pass vacuously. The settle gate refuses this on the
+-- ordinary path; this invariant is the backstop that closes it for any
+-- other path, so the effective cap is never vacuous for a real slice.
+invariant settled_date_has_effective_terms:
+    TradeSettled(trade, _, _, _, d) implies (exists ef: TradeTerms(trade, _, _, _, ef) and ef on_or_before d)
 
 -- A settlement id names one settlement slice: two TradeSettled claims
 -- sharing the id must agree on every field. The settle gate already
@@ -191,6 +208,14 @@ invariant settled_within_effective_terms:
 -- any other path, keeping the cumulative sum above honest.
 invariant settlement_id_identifies_one_settlement:
     TradeSettled(trade_a, qty_a, sid, opid_a, eff_a) and TradeSettled(trade_b, qty_b, sid, opid_b, eff_b) implies (trade_a = trade_b and qty_a = qty_b and opid_a = opid_b and eff_a = eff_b)
+
+-- A settled quantity is a positive figure. A "slice" of zero or a
+-- negative amount is not a settlement; forbidding it stops a negative
+-- slice from being smuggled past the running cap to make room for an
+-- over-large positive one. Reversals, if ever modelled, would be an
+-- explicit claim of their own, not a negative settlement.
+invariant settled_quantity_is_positive:
+    TradeSettled(_, qty, _, _, _) implies qty > 0
 
 -- Settlement can never run ahead of confirmation: a settled trade must
 -- have been confirmed. The settle action relies on the official price in
@@ -277,21 +302,25 @@ transformation correct_official_price(trade, prior_official_price_id, new_offici
     emit OfficialPriceCorrected(trade, new_official_price_id, prior_official_price_id)
 
 -- Settle the trade, in whole or in a slice effective on a business date.
--- Two gates, both operational preconditions: there must be an official
--- price in force to settle on (the gate binds which one), and the
--- settlement id must be unused. That second gate makes the settlement id
--- an *idempotency key* - replaying a settlement is refused before it can
--- request a second downstream payment. A trade may settle many times,
--- each slice under its own fresh id, recording the official price id it
--- relied on and the business date it is effective on, so "what price did
--- we settle at?" keeps a truthful answer per slice even after a later
--- correction moves the pointer. The structural truths are left to the
--- invariants: that a settled trade was confirmed, and that the total
--- settled effective on or before any date never exceeds the quantity the
--- terms in force on that date allow. How much money moves is computed
--- downstream; Morpholog governs only that the settlement is legitimate.
+-- Three gates, all operational preconditions: there must be an official
+-- price in force to settle on (the gate binds which one), there must be
+-- terms effective by the settlement date (you cannot settle for a date
+-- before the trade had any terms), and the settlement id must be unused.
+-- That last gate makes the settlement id an *idempotency key* - replaying
+-- a settlement is refused before it can request a second downstream
+-- payment. A trade may settle many times, each slice under its own fresh
+-- id, recording the official price id it relied on and the business date
+-- it is effective on, so "what price did we settle at?" keeps a truthful
+-- answer per slice even after a later correction moves the pointer. The
+-- structural truths are left to the invariants: that a settled trade was
+-- confirmed, that every settled date has terms effective by it, and that
+-- the total settled effective on or before any date never exceeds the
+-- quantity the terms in force on that date allow. How much money moves is
+-- computed downstream; Morpholog governs only that the settlement is
+-- legitimate.
 transformation settle_trade(trade, settled_qty, settlement_id, official_price_id, effective_on):
     require CurrentOfficialPrice(trade, official_price_id)
+    require TradeTerms(trade, _, _, _, ef) and ef on_or_before effective_on
     require not TradeSettled(_, _, settlement_id, _, _)
     admit TradeSettled(trade, settled_qty, settlement_id, official_price_id, effective_on)
     emit TradeSettlementRequested(settlement_id, trade, settled_qty)

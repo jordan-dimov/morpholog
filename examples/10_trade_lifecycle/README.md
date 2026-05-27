@@ -63,8 +63,9 @@ An auditor later can ask, and the model answers by construction:
   records the actor who confirmed it (its `confirmed_by`); the
   `MayConfirm(_, power)` authority that satisfied the gate when the
   confirmation was admitted.
-- *Could a trade be settled for more than its terms allowed?* No - the
-  runtime would not have admitted it.
+- *Could a trade be settled for more than its terms allowed - or before
+  any terms were effective at all?* No to either - the runtime would not
+  have admitted it.
 
 ## The two clocks
 
@@ -124,7 +125,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | --- | --- |
 | `TradeCaptured(trade, commodity, direction)` | The trade's immutable identity. Fixed once captured; the quantity lives on the versioned terms. |
 | `TradeTerms(trade, version_id, quantity, delivery_period, effective_from)` | A versioned terms record carrying the date its quantity takes force. Capture admits the first; an amendment admits a later one. |
-| `TradeTermsSupersedes(new_version_id, prior_version_id)` | Amendment lineage: which terms version amended which. |
+| `TradeTermsSupersedes(new_version_id, prior_version_id)` | Amendment lineage: which terms version amended which. Audit only - which version is in force on a date is decided by effective dates, not this chain. |
 | `CapturedPrice(trade, price)` | The trader's price estimate. Recorded, but never settleable on its own. |
 | `MayConfirm(principal, commodity)` | A desk's authority to confirm or amend for a commodity. Granted by `grant_confirm_authority`. |
 | `TradeConfirmed(trade, counterparty, confirmation_id, confirmed_by)` | The confirmation event against the counterparty, stamping in the actor who confirmed it. Happens once. |
@@ -154,8 +155,11 @@ money actually moves (that is computed downstream).
 | `one_terms_version_per_effective_date` | At most one terms version per effective date, so "the quantity effective on that date" is a single number. An amendment must take a distinct effective date. |
 | `trade_terms_chain_no_fork` | The amendment chain stays linear: a terms version has at most one direct successor. |
 | `settled_within_effective_terms` | The total settled effective on or before any date may never exceed the quantity the terms in force on that date allow (inclusive) - the cumulative cap, judged on the effective clock. |
+| `settled_date_has_effective_terms` | Every settled date has a terms version effective by it, so a slice cannot fall before the trade had any terms and escape the cap by vacuity. |
 | `settlement_id_identifies_one_settlement` | A settlement id names one slice, so slices cannot be double-counted or hidden under a shared id. |
 | `settled_trade_was_confirmed` | Settlement can never run ahead of confirmation, for all admitted state by any path. |
+| `trade_terms_quantity_is_positive` | A terms quantity is positive - no zero-size or negative trade. |
+| `settled_quantity_is_positive` | A settled slice is positive - a negative slice cannot make room under the running cap for an over-large one. |
 
 ### Transformations
 
@@ -166,7 +170,7 @@ money actually moves (that is computed downstream).
 | `grant_confirm_authority(principal, commodity)` | Grants a desk per-commodity authority to confirm and amend. |
 | `confirm_trade(...)` | The middle office confirms the trade and sets the official price in force. Gated on commodity-scoped authority tied to the trade's own commodity, and on the trade not already being confirmed. |
 | `correct_official_price(...)` | Restates the official price: admits the corrected figure, moves the in-force pointer, records the supersession. The prior figure and any settlement made under it stay on the record. |
-| `settle_trade(...)` | Records a settlement slice against the official price in force, effective on a business date, and emits a downstream settlement-request intent. May run more than once per trade, each slice under a fresh settlement id - the id is an idempotency key, so replaying one is refused before the emit. The effective cap is an invariant, not a gate. |
+| `settle_trade(...)` | Records a settlement slice against the official price in force, effective on a business date, and emits a downstream settlement-request intent. Gated on an in-force official price, on terms effective by the settlement date, and on a fresh settlement id (an idempotency key, so replaying one is refused before the emit). May run more than once per trade. The cumulative effective cap is an invariant, not a gate. |
 
 ## How to run it
 
@@ -184,7 +188,8 @@ confirmation authority; amendment (new version, unknown-version and
 already-amended rejection, the distinct-effective-date and version-id
 uniqueness rules); official-price correction as restatement; settlement
 before confirmation, within and over the effective quantity, in slices and
-with cumulative overrun rejected; the headline pair - a backdated amendment
+with cumulative overrun rejected; settlement before any terms are effective,
+and the positive-quantity rules on terms and slices; the headline pair - a backdated amendment
 lifting the cap so a previously-refused slice admits, and a settlement made
 under the prior terms staying standing after a later amendment; and the
 price-axis counterpart, a correction after settlement leaving the prior
