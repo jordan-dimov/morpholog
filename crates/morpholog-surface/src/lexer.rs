@@ -15,7 +15,7 @@
 //!   `rust_decimal::Decimal`, never to a float.
 //! - Punctuation: `(`, `)`, `:`, `,`.
 //! - Comparators: `=`, `!=`, `<=`, `<`, `>=`, `>`.
-//! - Arithmetic: `+`, `-`.
+//! - Arithmetic: `+`, `-`, `*`, `/` (infix); `min` / `max` (functions).
 //! - Wildcard: `_`.
 //!
 //! Each reserved word maps to a specific `Token::*` variant so the
@@ -154,9 +154,9 @@ pub enum Token {
     KwForall,
     /// `sum` aggregator keyword.
     KwSum,
-    /// `min` aggregator keyword (binary decimal minimum: `min(a, b)`).
+    /// `min` function keyword (binary decimal minimum: `min(a, b)`).
     KwMin,
-    /// `max` aggregator keyword (binary decimal maximum: `max(a, b)`).
+    /// `max` function keyword (binary decimal maximum: `max(a, b)`).
     KwMax,
     /// `value` claim-lookup keyword.
     KwValue,

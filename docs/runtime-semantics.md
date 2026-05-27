@@ -80,7 +80,8 @@ Prop                             -- a proposition: searches a state, yields bind
 ValueExpr                        -- a value expression: computes exactly one value.
                                     Evaluated by eval_value.
   Term                           -- a leaf (Var, Wildcard, Literal, Actor)
-  Add | Sub                      -- decimal arithmetic (no other arithmetic yet)
+  Add | Sub | Mul | Div          -- decimal arithmetic (infix + - * /)
+  Min | Max                      -- decimal floor / cap (min(a,b), max(a,b))
   Sum { value, body: Prop }      -- sum a value over a proposition's matches
   ValueOf { predicate, args, default }  -- unique-lookup value extraction
                                     (the two sorts are mutually recursive: a Compare

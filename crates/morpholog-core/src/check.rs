@@ -636,7 +636,8 @@ impl CheckCtx<'_> {
                     ValueExpr::Mul(_, _) => "*",
                     ValueExpr::Div(_, _) => "/",
                     ValueExpr::Min(_, _) => "min",
-                    _ => "max",
+                    ValueExpr::Max(_, _) => "max",
+                    _ => unreachable!("non-arithmetic ValueExpr in the arithmetic kind-check arm"),
                 };
                 self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
                 self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);

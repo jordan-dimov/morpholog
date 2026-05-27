@@ -614,8 +614,9 @@ where
                 default: default.map(Box::new),
             });
 
-        // min / max aggregators: `min ( <value> , <value> )` and the same
-        // for `max`. Binary, both operands full value expressions.
+        // min / max functions: `min ( <value> , <value> )` and the same
+        // for `max`. Binary, both operands full value expressions. (Not
+        // aggregators - `sum` is the aggregator; these take two values.)
         let min_max_expr = choice((just(Token::KwMin).to(true), just(Token::KwMax).to(false)))
             .then(
                 value
