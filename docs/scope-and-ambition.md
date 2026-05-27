@@ -63,24 +63,11 @@ The doctrinal statement, in one sentence:
 
 That sentence determines the shape of every integration. There is no synchronous call-out from inside a transformation - it would break the atomicity guarantee and couple the kernel to whatever the called system was doing. There is no "Morpholog drives the simulation" - the simulation lives in the compute zone, in whatever language and framework suits it, and submits its result back as a candidate claim. There is no "external system polls and mutates" - state changes always come through `propose`.
 
-### The input boundary (compute -> commit)
+**Input (compute -> commit).** External compute proposes a transformation by name, with an actor and typed arguments (a `Vec<EvalValue>`, the same codec across the CLI's `run` / `propose` and the Rust `propose_against_pg`). The input is deliberately narrow: Morpholog owns whether to admit; the caller owns what to propose.
 
-External compute proposes a transformation by name with typed arguments. Three paths today, all equivalent in semantics:
+**Output (commit -> compute).** Intents a committed transformation emitted land in the outbox, delivered at-least-once post-commit - either by an in-process Rust `Deliverer` (the polling worker) or out-of-process through the `morpholog outbox` CLI's claim/complete lease protocol, whichever suits the deployment.
 
-- **`morpholog run <file.morph> <transformation> --actor X --args '[json]'`** for an external programme.
-- **`morpholog propose <built_in> <transformation> --actor X --args '[json]'`** for a built-in.
-- The Rust API `propose_against_pg(...)` for an in-process integration.
-
-The input is deliberately narrow: a transformation name, an actor, and a `Vec<EvalValue>` (the same tagged JSON codec across CLI and library). Morpholog owns the question of whether to admit; the caller owns the question of what to propose.
-
-### The output boundary (commit -> compute)
-
-Once a transformation commits, any intents it emitted land in the outbox. Two delivery paths, each suited to a different deployment shape:
-
-- **In-process Rust deliverer.** Implement the `Deliverer` trait in `morpholog-outbox`, run the polling worker. Right for HTTP-with-custom-retry-policy, Kafka, SQS, anything where the delivery code naturally lives in Rust.
-- **Out-of-process via the `morpholog outbox` CLI.** A non-Rust deliverer claims rows with `morpholog outbox claim --intent-type X`, does the work in any language, and resolves the row with `morpholog outbox complete --outcome delivered|transient|failed`. The lease protocol is the same one the in-process worker uses; the CLI is a thin shell around it.
-
-The pattern that emerges from this split - request transformation, outbox intent, external compute, result transformation - is the *round-trip compute pattern*. The next section in [`outbox-sketch.md`](outbox-sketch.md) walks through it concretely.
+The pattern across the two - request transformation, outbox intent, external compute, result transformation - is the *round-trip compute pattern*, walked through concretely in [`outbox-sketch.md`](outbox-sketch.md).
 
 ## The expansion principle
 
@@ -119,7 +106,7 @@ Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predic
 
 This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
 
-**Status:** landed. Every `Program` carries a `Vec<PredicateDecl>` with argument names and kinds (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`). `Program::validate()` enforces strict arity (every claim/assert/retract/value_of/derived-claim reference must target a declared predicate) and kind/type compatibility (predicate arg slots, comparator and arithmetic operands, equality, variable refinement across claims and let-bindings). The CLI exposes the declarations via `morpholog inspect predicates <program>` and the validator via `morpholog check`.
+**Status:** landed. Every `Program` carries typed `PredicateDecl`s; `Program::validate()` enforces strict arity and kind/type compatibility, surfaced through `morpholog check`. Intent declarations (`IntentDecl`) followed, giving outbox effects the same typed, strictly-validated vocabulary.
 
 ### 2. Derived claims
 
@@ -267,13 +254,9 @@ Proven by:
 
 ### Level 2 - Governed standing, restatement, read-side projection, and authority
 
-The richer worked examples, each combining several of the patterns the language needs. The flagship is **[verified revenue](../examples/02_verified_revenue/)**: contested legitimacy in two woven patterns - *currentness with restatement* (the verifier corrects a figure; the original stays admitted; a singleton pointer moves; lineage records the change) and *admissibility-for-purpose* (different authorities grant standing for the same figure and can revoke it without touching the underlying claim; historical decisions survive a correction). The others span double-entry accounting with a trial-balance read side, approval authority, cumulative settlement against an aggregate limit, date-window validity, transition invariants, KYC screening with declared outbox vocabulary, and carbon-credit provenance with retire-by-deadline obligations - the flagship the explanation engine points at. Each lives under [`examples/`](../examples/); [`design-history.md`](design-history.md) records which kernel primitive each forced and why.
+The richer worked examples, each combining several of the patterns the language needs. The flagship is **[verified revenue](../examples/02_verified_revenue/)**: contested legitimacy in two woven patterns - *currentness with restatement* (the verifier corrects a figure; the original stays admitted; a singleton pointer moves; lineage records the change) and *admissibility-for-purpose* (different authorities grant standing for the same figure and can revoke it without touching the underlying claim; historical decisions survive a correction). The others span double-entry accounting, approval authority, cumulative settlement, date-window validity, transition invariants, KYC screening, and carbon-credit provenance - the flagship the explanation engine points at. Each lives under [`examples/`](../examples/); [`design-history.md`](design-history.md) records which kernel primitive each forced and why.
 
-Alongside the examples, an authoring-surface refactor arc made the IR pleasant to construct in Rust - a public `ir_builder` module (the test-time IR construction kit, originally named `dsl`), `Stmt::BindOne` (collapsing the older `require + let + value_of` workaround), predicate and intent declarations with strict validation, structured `propose_with_trace`, predicate-scoped PG loading, a submodule split - without touching the kernel discipline. After it, a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with structurally inspectable execution.
-
-As-of evaluation also landed: `reconstruct_state_at` and friends replay the audit log to any `transition_id`, exposed as `--as-of` on `inspect claims` and `inspect derived`.
-
-The candidate affordances driven by Level 2 - predicate declarations, kind/type checking, intent declarations - are landed. The next forced moves (higher-order authority, effective time as a separate axis, validity windows, materialised derived claims) await the examples that demand them; the operational plan lives in [`roadmap.md`](roadmap.md).
+After this level a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with structurally inspectable execution and as-of replay over the audit log. The candidate affordances it drove - predicate and intent declarations, kind/type checking, as-of - are landed; the next forced moves (higher-order authority, effective time as a separate axis, materialised derived claims) await the examples that demand them, per [`roadmap.md`](roadmap.md).
 
 ### Level 3 - Governed external and integration provenance
 
