@@ -1,0 +1,124 @@
+-- Borrowing base - lending against a pool of collateral without ever
+-- letting the loan outgrow what that collateral safely supports.
+--
+-- A quick tour of the domain, in case asset-backed lending is not your
+-- world. A lender opens a revolving *facility* for a borrower and agrees
+-- to advance money against a pool of pledged collateral - receivables,
+-- inventory, whatever the borrower can post. One number governs how much
+-- may be borrowed: the *advance rate*, the fraction of the eligible
+-- collateral the lender will actually lend against - 80%, say, never the
+-- full value, so there is always a cushion. As collateral is pledged and
+-- money is drawn, the rule must keep holding: the total drawn can never
+-- exceed the advance rate times the collateral. Months later an examiner
+-- asks: on the day of this drawdown, was the facility within its advance
+-- limit? The answer should be one lookup, not a spreadsheet dig.
+--
+-- The thing this example adds to the others is the *arithmetic* such a
+-- rule needs. "At most 80% of the collateral" is a multiplication; "what
+-- fraction has been drawn?" is a division. Earlier examples only added
+-- and subtracted; here a rule multiplies, and a reporting view divides.
+--
+-- Here is how Morpholog thinks about it. It does not store bare "facts" -
+-- it stores *claims* it has agreed to admit because they obey the rules.
+-- Two kinds of rule do the work below, and the split is the usual lesson:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. The runtime refuses to commit any change that would break
+--     one - the total drawn can never exceed the advance rate times the
+--     eligible collateral. A drawdown that would breach the limit is
+--     rejected outright, with nothing recorded.
+--   * a `require` is a gate on a single action, checked the moment you
+--     act. Here the gates are the plain operational preconditions - the
+--     facility exists, this drawdown id is new - while the proportional
+--     limit lives in the invariant, so no path can leave the books over
+--     the line.
+--
+-- A note on the arithmetic. The advance-limit rule is written by
+-- cross-multiplying - `drawn <= advance_rate * base` rather than
+-- `drawn / base <= advance_rate` - so the admission decision stays exact,
+-- with no rounding. Division appears only in the read-only reporting view
+-- at the bottom, where a rounded utilisation percentage is exactly what a
+-- human reading a report wants.
+
+program borrowing_base
+
+-- The vocabulary. `Facility` carries the advance rate, set when the
+-- facility opens. `EligibleCollateral` is one pledged asset and its
+-- value. `Drawdown` is one advance of money against the facility.
+predicate Facility(facility: Subject, advance_rate: Decimal)
+predicate EligibleCollateral(facility: Subject, asset: Subject, collateral_value: Decimal)
+predicate Drawdown(facility: Subject, draw_id: Subject, amount: Decimal)
+-- A read-only reporting view (see the derived claim at the bottom of the
+-- file): each facility's drawn-to-collateral utilisation.
+predicate FacilityUtilisation(facility: Subject, utilisation: Decimal)
+
+-- Intents are messages the system sends to the outside world after a
+-- change commits. The drawdown intent is how a downstream treasury system
+-- learns it should actually move the money; Morpholog records only that
+-- the drawdown is within the facility's limit.
+intent FacilityOpened(facility: Subject)
+intent CollateralPledged(facility: Subject, asset: Subject)
+intent DrawdownRequested(facility: Subject, draw_id: Subject, amount: Decimal)
+
+
+-- The rules that must always hold. Any change that would leave the world
+-- violating one of these is rejected outright. Read `implies` as
+-- "whenever the left is true, the right must be too".
+
+-- A facility id identifies one facility: two Facility claims sharing the
+-- id must agree on the advance rate. Pins the structural uniqueness that
+-- lets "this facility's advance rate" below be a single well-defined
+-- number rather than an ambiguous one.
+invariant at_most_one_facility_per_id:
+    Facility(f, rate_a) and Facility(f, rate_b) implies rate_a = rate_b
+
+-- The advance limit. The total drawn against a facility can never exceed
+-- its advance rate times the value of its eligible collateral. Written by
+-- cross-multiplying, so the check is exact: `drawn <= rate * base` rather
+-- than a rounded `drawn / base <= rate`.
+invariant outstanding_within_advance_limit:
+    Facility(facility, advance_rate)
+    implies sum(d | Drawdown(facility, _, d)) <= advance_rate * sum(v | EligibleCollateral(facility, _, v))
+
+
+-- The only ways state may change. A transformation proposes a set of
+-- changes; the runtime applies them only if every invariant still holds
+-- once they are in place.
+
+-- Open a facility, fixing its advance rate. The gate refuses a second
+-- facility under the same id.
+transformation open_facility(facility, advance_rate):
+    require not Facility(facility, _)
+    admit Facility(facility, advance_rate)
+    emit FacilityOpened(facility)
+
+-- Pledge an eligible asset to the facility. The gate insists the facility
+-- exists; the asset and its value go on the record, raising the base the
+-- advance limit is measured against.
+transformation pledge_collateral(facility, asset, collateral_value):
+    require Facility(facility, _)
+    admit EligibleCollateral(facility, asset, collateral_value)
+    emit CollateralPledged(facility, asset)
+
+-- Draw money against the facility. The gates are operational only - the
+-- facility exists, and this drawdown id has not been used. Whether the
+-- new total stays within the advance limit is the invariant's job, so a
+-- drawdown that would breach the limit is rejected with nothing recorded.
+transformation draw(facility, draw_id, amount):
+    require Facility(facility, _)
+    require not Drawdown(facility, draw_id, _)
+    admit Drawdown(facility, draw_id, amount)
+    emit DrawdownRequested(facility, draw_id, amount)
+
+
+-- A reporting view: each facility's utilisation, the fraction of its
+-- pledged collateral that has been drawn. This is a *derived* claim -
+-- read-only, recomputed on demand, never stored - so it can never drift
+-- from the drawdowns and collateral it is built from. It is the one place
+-- division is used: a rounded fraction is what a human reading a report
+-- wants, where the admission rule above stays exact by cross-multiplying.
+-- Defined over facilities that have pledged collateral, so the base it
+-- divides by is never zero.
+derived FacilityUtilisation(facility):
+    over EligibleCollateral(facility, _, _)
+    value utilisation = sum(d | Drawdown(facility, _, d)) / sum(v | EligibleCollateral(facility, _, v))
