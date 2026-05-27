@@ -2,10 +2,11 @@
 //! (`examples/10_trade_lifecycle/`).
 //!
 //! Outcome-level tests over the parsed example: capture, commodity-scoped
-//! confirmation authority, official-price correction as restatement, and
-//! settlement gated on the in-force official price. The heart of the
-//! suite is the last test - a correction after settlement leaves the
-//! prior settlement standing, the trade-lifecycle form of the
+//! confirmation authority, official-price correction as restatement,
+//! settlement gated on the in-force official price, and settling in slices
+//! against a cumulative captured-quantity cap. The heart of the suite is
+//! the last test - a correction after settlement leaves the prior
+//! settlement standing, the trade-lifecycle form of the
 //! `02_verified_revenue` lesson.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -329,6 +330,143 @@ fn settlement_over_captured_quantity_is_rejected() {
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn trade_settles_in_slices_within_captured_quantity() {
+    // Capture 100, settle 60 then 40 - both slices admit and both
+    // TradeSettled claims stand, summing to exactly the captured quantity.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let first = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(60), subj("s1"), subj("op1")],
+        confirmed,
+        &invariants(),
+    );
+    let second = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(40), subj("s2"), subj("op1")],
+        first,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &second,
+        "TradeSettled",
+        &[subj("t1"), dec(60), subj("s1"), subj("op1")],
+    ));
+    assert!(has_claim(
+        &second,
+        "TradeSettled",
+        &[subj("t1"), dec(40), subj("s2"), subj("op1")],
+    ));
+}
+
+#[test]
+fn slices_summing_over_captured_quantity_are_rejected() {
+    // Capture 100, settle 60 (fine), then 60 more - 60 alone is within
+    // cap, but the cumulative total 120 exceeds 100, so the second slice
+    // is rejected by the cumulative settled_quantity_within_captured.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let first = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(60), subj("s1"), subj("op1")],
+        confirmed,
+        &invariants(),
+    );
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(60), subj("s2"), subj("op1")],
+        &first,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("settled_quantity_within_captured"),
+            "expected the cumulative cap to reject the over-total slice, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("slices summing over the captured quantity must be rejected")
+        }
+    }
+}
+
+#[test]
+fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
+    // The settlement id is an idempotency key. Settling s1, then replaying
+    // the exact same settle_trade, is refused by the freshness gate - so a
+    // duplicate TradeSettlementRequested never reaches the outbox. (An
+    // exact-duplicate claim would dedup in state and pass the invariant; it
+    // is the re-emit the gate exists to stop.)
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let first = must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(40), subj("s1"), subj("op1")],
+        confirmed,
+        &invariants(),
+    );
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(40), subj("s1"), subj("op1")],
+        &first,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "replaying a settlement id must be rejected before a second request; got {outcome:?}"
+    );
+}
+
+#[test]
+fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
+    // The path the settle gate cannot see: a single transformation
+    // admitting two TradeSettled with the same id but different quantities.
+    // settlement_id_identifies_one_settlement is the backstop that refuses
+    // it, keeping the cumulative sum honest against hand-constructed state.
+    use morpholog_core::ir_builder;
+
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let bad = ir_builder::transformation(
+        "double_settle_one_id",
+        ir_builder::params(&["trade", "sid", "opid"]),
+        vec![
+            ir_builder::assert_(
+                "TradeSettled",
+                vec![
+                    ir_builder::var("trade"),
+                    ir_builder::dec("40"),
+                    ir_builder::var("sid"),
+                    ir_builder::var("opid"),
+                ],
+            ),
+            ir_builder::assert_(
+                "TradeSettled",
+                vec![
+                    ir_builder::var("trade"),
+                    ir_builder::dec("30"),
+                    ir_builder::var("sid"),
+                    ir_builder::var("opid"),
+                ],
+            ),
+        ],
+    );
+    let outcome = propose_with_test_actor(
+        &bad,
+        vec![subj("t1"), subj("s1"), subj("op1")],
+        &confirmed,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("settlement_id_identifies_one_settlement"),
+            "expected the id-uniqueness invariant to reject conflicting tuples, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("two conflicting settlements under one id must be rejected")
+        }
+    }
 }
 
 #[test]
