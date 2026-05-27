@@ -217,6 +217,10 @@ pub enum Token {
     Plus,
     /// `-` (Sub).
     Minus,
+    /// `*` (Mul).
+    Star,
+    /// `/` (Div).
+    Slash,
 }
 
 impl fmt::Display for Token {
@@ -272,6 +276,8 @@ impl fmt::Display for Token {
             Token::Gt => write!(f, "`>`"),
             Token::Plus => write!(f, "`+`"),
             Token::Minus => write!(f, "`-`"),
+            Token::Star => write!(f, "`*`"),
+            Token::Slash => write!(f, "`/`"),
         }
     }
 }
@@ -404,6 +410,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         just('=').to(Token::Eq),
         just('+').to(Token::Plus),
         just('-').to(Token::Minus),
+        just('*').to(Token::Star),
+        just('/').to(Token::Slash),
         just('|').to(Token::Pipe),
     ));
 

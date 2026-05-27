@@ -172,6 +172,41 @@ fn arithmetic_is_left_associative() {
     );
 }
 
+#[test]
+fn parses_multiplication() {
+    let got = parse_value_expr("a * b").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Mul(Box::new(var_value("a")), Box::new(var_value("b")))
+    );
+}
+
+#[test]
+fn parses_division() {
+    let got = parse_value_expr("a / b").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Div(Box::new(var_value("a")), Box::new(var_value("b")))
+    );
+}
+
+#[test]
+fn multiplication_binds_tighter_than_addition() {
+    // `a + b * c` parses as `Add(a, Mul(b, c))` - the multiplicative
+    // layer binds tighter than the additive one.
+    let got = parse_value_expr("a + b * c").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Add(
+            Box::new(var_value("a")),
+            Box::new(ValueExpr::Mul(
+                Box::new(var_value("b")),
+                Box::new(var_value("c")),
+            )),
+        )
+    );
+}
+
 // ---- Comparators ----
 
 #[test]

@@ -625,12 +625,28 @@ where
             bare_ident,
         ));
 
-        // arith ::= primary (("+" | "-") primary)*  (left-assoc)
+        // factor ::= primary (("*" | "/") primary)*  (left-assoc)
+        //
+        // The multiplicative layer binds tighter than `+`/`-`, so
+        // `a + b * c` parses as `Add(a, Mul(b, c))`.
+        let mul_op = choice((just(Token::Star).to(true), just(Token::Slash).to(false)));
+        let factor = primary.clone().foldl(
+            mul_op.then(primary.clone()).repeated(),
+            |lhs, (is_mul, rhs)| {
+                if is_mul {
+                    ValueExpr::Mul(Box::new(lhs), Box::new(rhs))
+                } else {
+                    ValueExpr::Div(Box::new(lhs), Box::new(rhs))
+                }
+            },
+        );
+
+        // arith ::= factor (("+" | "-") factor)*  (left-assoc)
         //
         // foldl builds the left-associative tree: a + b + c -> Add(Add(a, b), c).
         let arith_op = choice((just(Token::Plus).to(true), just(Token::Minus).to(false)));
-        primary.clone().foldl(
-            arith_op.then(primary.clone()).repeated(),
+        factor.clone().foldl(
+            arith_op.then(factor.clone()).repeated(),
             |lhs, (is_plus, rhs)| {
                 if is_plus {
                     ValueExpr::Add(Box::new(lhs), Box::new(rhs))
