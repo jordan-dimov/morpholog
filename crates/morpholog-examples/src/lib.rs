@@ -61,28 +61,3 @@ pub mod kyc_sanctions_screening;
 pub mod settlement_netting;
 pub mod trade_lifecycle;
 pub mod verified_revenue;
-
-/// All built-in worked example programs, in the order they were
-/// developed. Returned as owned [`morpholog_core::Program`] values so callers
-/// can iterate, look up a specific one by `name`, or hand each to
-/// `propose_against_pg`.
-///
-/// Used by the CLI's `propose` subcommand to resolve a program name
-/// supplied on the command line to its [`morpholog_core::Program`] value. The
-/// list is the canonical built-in registry; future user-supplied
-/// programs (post-parser) would live alongside, not replace, these.
-pub fn all_programs() -> Vec<morpholog_core::Program> {
-    vec![
-        settlement_netting::program(),
-        verified_revenue::program(),
-        double_entry_ledger::program(),
-        approval_controls::program(),
-        insurance_claim_settlement::program(),
-        clinical_trial_enrolment::program(),
-        chess_transition_invariants::program(),
-        kyc_sanctions_screening::program(),
-        carbon_credit_provenance::program(),
-        trade_lifecycle::program(),
-        borrowing_base::program(),
-    ]
-}

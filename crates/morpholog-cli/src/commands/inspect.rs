@@ -8,7 +8,7 @@ use morpholog_postgres::{
 };
 
 use crate::Inspect;
-use crate::commands::{connect, print_json};
+use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 /// Dispatch every `inspect` variant. Each variant either runs inline
 /// (the simple list-claims/audit/outbox ones) or delegates to a
@@ -52,28 +52,13 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
 /// state via `--as-of`).
 ///
 /// Errors:
-/// - Unknown program: surfaces the list of available built-in programs
-///   in the error message.
+/// - Parse failure: rendered diagnostics, exits non-zero (the `check`/`run` path).
 /// - Unknown derived claim: surfaces the list of derived predicates
-///   declared on the matched program.
+///   declared on the parsed programme.
 /// - Connection failure or kernel error: propagated via anyhow context.
 async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> {
-    let programs = morpholog_examples::all_programs();
-    let program = programs
-        .iter()
-        .find(|p| p.name == args.program)
-        .ok_or_else(|| {
-            let available = programs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "program `{}` not found. Available built-in programs: {}",
-                args.program,
-                available
-            )
-        })?;
+    let (program, _source, _name) = parse_or_exit(&args.file)?;
+    validate_or_exit(&program);
 
     let derived = program.derived_claim(&args.derived).ok_or_else(|| {
         let available = program
@@ -83,12 +68,12 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
             .collect::<Vec<_>>()
             .join(", ");
         if available.is_empty() {
-            anyhow!("program `{}` declares no derived claims", args.program)
+            anyhow!("`{}` declares no derived claims", args.file.display())
         } else {
             anyhow!(
-                "derived claim `{}` not found in program `{}`. Available: {}",
+                "derived claim `{}` not found in `{}`. Available: {}",
                 args.derived,
-                args.program,
+                args.file.display(),
                 available
             )
         }
@@ -106,50 +91,21 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
     print_json(&rows)
 }
 
-/// Run `inspect predicates <program>`. Looks up the program by name
-/// in the built-in registry, then prints its declared predicates as
-/// JSON. Read-only and synchronous; no database connection.
+/// Run `inspect predicates <file.morph>`. Parses the source file, then
+/// prints its declared predicates as JSON. Read-only and synchronous; no
+/// database connection.
 fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> {
-    let programs = morpholog_examples::all_programs();
-    let program = programs
-        .iter()
-        .find(|p| p.name == args.program)
-        .ok_or_else(|| {
-            let available = programs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "program `{}` not found. Available built-in programs: {}",
-                args.program,
-                available
-            )
-        })?;
+    let (program, _source, _name) = parse_or_exit(&args.file)?;
     print_json(&program.predicates)
 }
 
-/// Show what a built-in program makes impossible: its guarantees, one per
+/// Show what a parsed programme makes impossible: its guarantees, one per
 /// invariant. Static and read-only - no database. Prose by default;
 /// `--json` emits the structured form.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
-    let programs = morpholog_examples::all_programs();
-    let program = programs
-        .iter()
-        .find(|p| p.name == args.program)
-        .ok_or_else(|| {
-            let available = programs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "program `{}` not found. Available built-in programs: {}",
-                args.program,
-                available
-            )
-        })?;
-    let guarantees = morpholog_core::guarantees(program);
+    let (program, _source, _name) = parse_or_exit(&args.file)?;
+    validate_or_exit(&program);
+    let guarantees = morpholog_core::guarantees(&program);
     if args.json {
         print_json(&guarantees)
     } else {

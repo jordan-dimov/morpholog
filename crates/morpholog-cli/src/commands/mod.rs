@@ -23,7 +23,6 @@ pub(crate) mod explain;
 pub(crate) mod inspect;
 pub(crate) mod outbox;
 pub(crate) mod parse;
-pub(crate) mod propose;
 pub(crate) mod run;
 
 /// Read a `.morph` source file and parse it. On parse failure,
@@ -46,6 +45,21 @@ pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<(Program, String, Str
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// Validate a parsed programme; on failure, print each diagnostic to
+/// stderr and exit 1. The gate every subcommand that acts on a `.morph`
+/// file's *semantics* applies after parsing - `run` and `explain` before
+/// touching the database, `inspect derived`/`guarantees` before reading
+/// or rendering - so an arbitrary file is held to the same vocabulary
+/// contract the kernel would otherwise enforce only at proposal time.
+pub(crate) fn validate_or_exit(program: &Program) {
+    if let Err(errors) = program.validate() {
+        for err in &errors {
+            eprintln!("error: {err}");
+        }
+        std::process::exit(1);
     }
 }
 

@@ -1,16 +1,12 @@
-//! `morpholog run` - propose a transformation defined in a `.morph`
-//! source file against a Morpholog PostgreSQL database.
-//!
-//! The non-built-in counterpart of `propose`: where `propose` resolves
-//! its program from the built-in registry (`morpholog_examples::all_programs`),
-//! `run` parses and validates a user-supplied source file. From that
-//! point the two subcommands share the same shape: JSON-encoded args,
-//! a required `--actor`, optional `--trace`, identical exit-code
-//! semantics, identical output JSON.
+//! `morpholog run` - parse and validate a `.morph` source file, then
+//! propose a named transformation against a Morpholog PostgreSQL
+//! database. The CLI's commit path: JSON-encoded args, a required
+//! `--actor`, optional `--trace`, committed/rejected JSON output and the
+//! matching exit code.
 //!
 //! This closes the input boundary of the compute/commit/outbox split:
-//! an external system can now propose against its own programme
-//! without forking the CLI or compiling Rust.
+//! an external system proposes against its own `.morph` programme by
+//! path, without forking the CLI or compiling Rust.
 
 use anyhow::{Context, anyhow};
 use morpholog_core::{EvalValue, Subject, Transition};
@@ -19,7 +15,7 @@ use morpholog_postgres::{
 };
 
 use crate::RunArgs;
-use crate::commands::{connect, parse_or_exit, print_json};
+use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
@@ -29,12 +25,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     // 2. Validate. Same error shape as `check`; exits non-zero on
     //    validation failure so a malformed programme never reaches
     //    the proposal path.
-    if let Err(errors) = program.validate() {
-        for err in &errors {
-            eprintln!("error: {err}");
-        }
-        std::process::exit(1);
-    }
+    validate_or_exit(&program);
 
     // 3. Resolve the transformation.
     let transformation = program

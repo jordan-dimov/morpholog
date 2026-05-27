@@ -15,7 +15,7 @@
 //!
 //! The corpus is the worked-example sources under `examples/`, read from
 //! disk - so this test depends only on the parser and formatter, not on
-//! the example registry. Adding a new `.morph` example extends the
+//! the example enumeration. Adding a new `.morph` example extends the
 //! property's coverage automatically; no per-example test is needed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]

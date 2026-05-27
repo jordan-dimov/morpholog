@@ -1,13 +1,16 @@
 //! Integration tests for `inspect guarantees` (`morpholog_core::guarantees`).
 //!
-//! Exercised across the *whole* registry, not just carbon, so the
+//! Exercised across *every* worked example, not just carbon, so the
 //! derivation is demonstrably general - a mechanical reading of any
 //! programme's invariants, never handcrafted to flatter one example.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
+use common::all_programs;
 use morpholog_core::{Guarantee, guarantees, render_guarantees};
-use morpholog_examples::{all_programs, approval_controls, carbon_credit_provenance as cc};
+use morpholog_examples::{approval_controls, carbon_credit_provenance as cc};
 
 #[test]
 fn every_registered_program_yields_one_guarantee_per_invariant() {

@@ -83,10 +83,10 @@ The PG integration test walks the full post -> close -> restate sequence through
 
 ```bash
 # Current trial balance
-morpholog inspect derived double_entry_ledger TrialBalanceRow
+morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow
 
 # As it stood at a past transition
-morpholog inspect derived double_entry_ledger TrialBalanceRow \
+morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow \
     --as-of 019231ab-...-...-...-...-...
 ```
 

@@ -79,7 +79,7 @@ export DATABASE_URL=postgres:///my_books
 Post a journal entry - debit $100 to cash, credit $100 to revenue:
 
 ```bash
-morpholog propose double_entry_ledger post_simple_entry \
+morpholog run examples/03_double_entry_ledger/ledger.morph post_simple_entry \
   --actor jordan \
   --args '[
     {"type":"subject","value":"entry_001"},
@@ -96,8 +96,8 @@ The receipt carries the transition id, the actor, the asserted claims, and the e
 Now the trial balance, then the trial balance *as it stood right after the first transition*:
 
 ```bash
-morpholog inspect derived double_entry_ledger TrialBalanceRow
-morpholog inspect derived double_entry_ledger TrialBalanceRow --as-of <transition_id>
+morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow
+morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow --as-of <transition_id>
 ```
 
 The report is exactly what an auditor would have seen at that moment - recomputed from the audit log, no bitemporal columns anywhere in your schema.
@@ -131,7 +131,7 @@ cargo install --path crates/morpholog-cli
 morpholog check examples/01_settlement_netting/netting.morph
 ```
 
-`check` parses the file and runs `Program::validate()` against the IR - one command answers "is this program well-formed?" `parse` prints the parsed `Program` as JSON when you want to see the structure. `propose` and `inspect` run against PostgreSQL once `DATABASE_URL` is set; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for local-database setup.
+`check` parses the file and runs `Program::validate()` against the IR - one command answers "is this program well-formed?" `parse` prints the parsed `Program` as JSON when you want to see the structure. `run` and `inspect` take a `.morph` file path and run against PostgreSQL once `DATABASE_URL` is set; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for local-database setup.
 
 ## Status
 
