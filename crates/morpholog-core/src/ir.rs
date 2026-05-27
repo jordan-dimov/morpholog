@@ -574,7 +574,7 @@ impl Program {
     /// kernel boundary is statement-level, not programme-level;
     /// adding a programme validation pass to every proposal would
     /// muddle that distinction. `morpholog check` runs it
-    /// explicitly; tests on the built-in registry do the same.
+    /// explicitly; tests over the worked examples do the same.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
         validate_program(self)
     }

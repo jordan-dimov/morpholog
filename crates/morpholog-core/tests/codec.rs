@@ -170,7 +170,7 @@ fn transition_deserialize_rejects_non_subject_actor() {
 // ============================================================
 // Trace wire format
 //
-// The CLI's `morpholog propose --trace` flag emits a JSON object
+// The CLI's `morpholog run --trace` flag emits a JSON object
 // whose `trace` field is a Vec<TraceEntry>. The tests below pin the
 // serde-derived wire shape so that an accidental serde-attribute
 // change (renaming a `kind` tag, switching from snake_case, etc.)

@@ -1,6 +1,6 @@
 //! Integration tests for `inspect guarantees` (`morpholog_core::guarantees`).
 //!
-//! Exercised across the *whole* registry, not just carbon, so the
+//! Exercised across *every* worked example, not just carbon, so the
 //! derivation is demonstrably general - a mechanical reading of any
 //! programme's invariants, never handcrafted to flatter one example.
 

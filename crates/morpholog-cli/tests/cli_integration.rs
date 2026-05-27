@@ -302,10 +302,8 @@ async fn inspect_derived_unknown_derived_name_errors_to_stderr() {
 // ============================================================
 // `morpholog run` subcommand
 //
-// Parses a user-supplied `.morph` file and proposes a transformation
-// from it. Same JSON output and exit-code semantics as `propose`;
-// the only difference is that the programme comes from a file path
-// rather than the built-in registry.
+// Parses a user-supplied `.morph` file by path, validates it, and
+// proposes a transformation from it - the CLI's commit path.
 // ============================================================
 
 /// Write a minimal balanced-ledger programme to a temp .morph file
@@ -894,8 +892,8 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
 
     // 1. INPUT BOUNDARY: a Python-shaped consumer writes its own
     //    `.morph` file and invokes `morpholog run` to admit a
-    //    transformation against PostgreSQL. The same shape would
-    //    work with `morpholog propose` for built-in programmes.
+    //    transformation against PostgreSQL - no Rust, no baked-in
+    //    programmes, just a file path.
     let path = write_temp_ledger_morph();
     let args_json = r#"[
         {"type":"subject","value":"e2e_entry"},
