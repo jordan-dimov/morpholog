@@ -96,7 +96,7 @@ In-memory tests pin: happy-path admission, boundary equality at both window endp
 
 ### Why civil-date comparison was added to the runtime
 
-This example is the reason Morpholog gained a date type and a date-comparison operator (`on_or_before` in the surface, `Expr::DateLe` in the IR). The validity-window rule
+This example is the reason Morpholog gained a date type and date comparison (`on_or_before` in the surface, lowering to `Prop::Compare` over the date domain in the IR). The validity-window rule
 
 ```text
 effective_from on_or_before action_date and action_date on_or_before effective_to
