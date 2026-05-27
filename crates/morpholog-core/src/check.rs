@@ -624,11 +624,15 @@ impl CheckCtx<'_> {
                 }
                 resolved_term_kind(term, &scope.kinds)
             }
-            ValueExpr::Add(left, right) | ValueExpr::Sub(left, right) => {
-                let operator = if matches!(expr, ValueExpr::Add(_, _)) {
-                    "+"
-                } else {
-                    "-"
+            ValueExpr::Add(left, right)
+            | ValueExpr::Sub(left, right)
+            | ValueExpr::Mul(left, right)
+            | ValueExpr::Div(left, right) => {
+                let operator = match expr {
+                    ValueExpr::Add(_, _) => "+",
+                    ValueExpr::Sub(_, _) => "-",
+                    ValueExpr::Mul(_, _) => "*",
+                    _ => "/",
                 };
                 self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
                 self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
@@ -939,9 +943,10 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
             args.iter().any(is_actor) || default.as_ref().is_some_and(|d| value_mentions_actor(d))
         }
         ValueExpr::Sum { value, body } => is_actor(value) || prop_mentions_actor(body),
-        ValueExpr::Add(left, right) | ValueExpr::Sub(left, right) => {
-            value_mentions_actor(left) || value_mentions_actor(right)
-        }
+        ValueExpr::Add(left, right)
+        | ValueExpr::Sub(left, right)
+        | ValueExpr::Mul(left, right)
+        | ValueExpr::Div(left, right) => value_mentions_actor(left) || value_mentions_actor(right),
     }
 }
 

@@ -256,10 +256,21 @@ pub enum ValueExpr {
     /// `EvalValue::Decimal`, result is left minus right.
     Sub(Box<ValueExpr>, Box<ValueExpr>),
     /// Decimal addition; both operands must evaluate to
-    /// `EvalValue::Decimal`, result is left plus right. With `Sub`, the
-    /// whole decimal-arithmetic surface in v0 - no multiplication or
-    /// division until an example forces them.
+    /// `EvalValue::Decimal`, result is left plus right.
     Add(Box<ValueExpr>, Box<ValueExpr>),
+    /// Decimal multiplication; both operands must evaluate to
+    /// `EvalValue::Decimal`, result is left times right. Exact, like
+    /// `Add` / `Sub`. Admission gates express ratio rules with `Mul` by
+    /// cross-multiplication (`a/b <= c` as `a <= c*b`), keeping the
+    /// decision exact.
+    Mul(Box<ValueExpr>, Box<ValueExpr>),
+    /// Decimal division; both operands must evaluate to
+    /// `EvalValue::Decimal`. A zero divisor surfaces
+    /// [`crate::EvalError::DivisionByZero`]; the quotient otherwise
+    /// follows `rust_decimal` division (rounded to its scale). Reserved
+    /// for read-side ratio projections - governed admission decisions
+    /// use the exact `Mul` form above, never a rounded quotient.
+    Div(Box<ValueExpr>, Box<ValueExpr>),
     /// Sums `value` over every binding the `body` produces. `value` is
     /// usually a variable bound by the body (`sum(amount | ...)`); a
     /// decimal-literal `value` turns the sum into a count of matches
