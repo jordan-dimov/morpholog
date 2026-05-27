@@ -224,29 +224,6 @@ Finance, KYC, insurance, clinical trials, and energy settlement score high - but
 
 The boundary discipline holds across every one of these: Morpholog governs the *admission of the official-standing claim* - the permit is issued, the action approved, the credit retired - never the physical or computational act behind it (the switching hardware, the AI agent's reasoning and drift, the meter). Those stay outside and return as admitted evidence. It is the discipline that keeps "official state is everywhere" from eroding the inside/outside line.
 
-## Roadmap
-
-Three levels. Each one is proven by a worked example before any language affordance is locked in.
-
-### Level 1 - Governed writes (today)
-
-Transformations and invariants over admitted claims. One PostgreSQL `SERIALIZABLE` transaction per proposal. Audit and outbox written atomically with the claim mutations.
-
-Proven by:
-- **[Settlement netting](../examples/01_settlement_netting/).** Transactional correctness: arithmetic, exclusion, double-use prevention, atomic rollback. The foundational example: invariants check the *candidate state*, not just the pre-state.
-
-### Level 2 - Governed standing, restatement, read-side projection, and authority
-
-The richer worked examples, each combining several of the patterns the language needs. The flagship is **[verified revenue](../examples/02_verified_revenue/)**: contested legitimacy in two woven patterns - *currentness with restatement* (the verifier corrects a figure; the original stays admitted; a singleton pointer moves; lineage records the change) and *admissibility-for-purpose* (different authorities grant standing for the same figure and can revoke it without touching the underlying claim; historical decisions survive a correction). The others span double-entry accounting, approval authority, cumulative settlement, date-window validity, transition invariants, KYC screening, and carbon-credit provenance - the flagship the explanation engine points at. Each lives under [`examples/`](../examples/); [`design-history.md`](design-history.md) records which kernel primitive each forced and why.
-
-After this level a Morpholog programme is **a declared vocabulary of admissible claim shapes plus transformations and invariants over that vocabulary**, with structurally inspectable execution and as-of replay over the audit log. The candidate affordances it drove - predicate and intent declarations, kind/type checking, as-of - are landed; the next forced moves (higher-order authority, effective time as a separate axis, materialised derived claims) await the examples that demand them, per [`roadmap.md`](roadmap.md).
-
-### Level 3 - Governed external and integration provenance
-
-The same primitive (claims), now reaching to the system's edges. External-computation results admitted as provenance claims; outbox intents acquire delivery/acknowledgement claims; actor authority extends to delegated and external actors.
-
-No example specified yet, and none should be: planning Level 3 in detail before Level 2 stabilises would violate the smallest-increment discipline.
-
 ## Non-goals
 
 These are floors. They do not get relaxed by accumulation of pressure; they get relaxed only by explicit revisit with reasons recorded.

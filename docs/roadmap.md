@@ -63,6 +63,7 @@ Each lands when an example actually demands the shape. None are pre-decided.
 - **Migrations framework.** A small one. The schema is hand-written today; with multiple deployments and an evolving claim vocabulary, a migrations story will be forced. The shape should be claim-shaped (migration as transformation, schema version as admitted claim).
 - **Date arithmetic, civil intervals.** The comparator set is now complete per kind (`<=` `<` `>=` `>` for decimal; `on_or_before` `before` `on_or_after` `after` for civil dates). What remains deferred is arithmetic *on* dates - adding a duration to a date, the length of an interval - which awaits a worked example that needs it.
 - **`morph fmt` (canonical formatter as a CLI).** The formatter exists in `morpholog-core::format` and is coupled to the parser by the round-trip property test. A CLI front-end (`morpholog fmt <file.morph>` or `--check` mode) lands when a project's worth of `.morph` files starts to feel like editorial drift; not before.
+- **Integration / external-compute provenance.** The same primitive (claims) reaching the system's edges: external-computation results admitted as provenance claims, outbox intents acquiring delivery/acknowledgement claims, and actor authority extending to delegated and external actors. The longest-horizon direction; deliberately unspecified in detail until the embedder forces a concrete shape.
 
 ## Deliberately out of scope (revisit only with explicit reason)
 
