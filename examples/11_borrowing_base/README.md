@@ -36,8 +36,8 @@ a rounded fraction for a human to read.
 The two operators sit on the right side of Morpholog's boundary, in
 different ways:
 
-- The **advance-limit rule multiplies, and stays exact.** It is written by
-  cross-multiplying - `drawn <= advance_rate * base` rather than
+- The **advance-limit rule multiplies, and stays exact.** It is written in
+  multiplied form - `drawn <= advance_rate * base` rather than
   `drawn / base <= advance_rate` - so the admission decision never depends
   on rounding a quotient. This is `Mul` expressing an admission rule.
 - The **utilisation view divides, and may round.** It is a read-side
@@ -69,7 +69,10 @@ See [`borrowing_base.morph`](borrowing_base.morph) for the surface form.
 | Invariant | What it says |
 | --- | --- |
 | `at_most_one_facility_per_id` | A facility id identifies one facility, so its advance rate is a single well-defined number. |
-| `outstanding_within_advance_limit` | The total drawn never exceeds `advance_rate * eligible collateral` (cross-multiplied, exact). |
+| `advance_rate_within_unit_interval` | An advance rate is a fraction, `0 <= rate <= 1`. |
+| `collateral_value_is_positive` | Every pledged value is strictly positive, so the utilisation divisor is never zero under any admitted state. |
+| `drawdown_amount_is_non_negative` | A drawdown moves money out, never in (repayments are out of scope). |
+| `outstanding_within_advance_limit` | The total drawn never exceeds `advance_rate * eligible collateral` (in multiplied form, exact). |
 
 ### Transformations
 
@@ -83,7 +86,7 @@ See [`borrowing_base.morph`](borrowing_base.morph) for the surface form.
 
 | Derived | Definition |
 | --- | --- |
-| `FacilityUtilisation(facility, utilisation)` | `drawn / pledged collateral` per facility, over facilities that have collateral (so the divisor is never zero). The one use of division. |
+| `FacilityUtilisation(facility, utilisation)` | `drawn / pledged collateral` per facility, over facilities that have collateral - every value of which is positive by invariant, so the divisor is never zero. The one use of division. |
 
 ## How to run it
 

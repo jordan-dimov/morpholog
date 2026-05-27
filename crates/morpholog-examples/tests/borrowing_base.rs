@@ -108,3 +108,54 @@ fn facility_utilisation_reports_drawn_over_collateral() {
         "expected utilisation 0.6; got: {rows:#?}"
     );
 }
+
+#[test]
+fn zero_value_collateral_pledge_is_rejected() {
+    // collateral_value_is_positive rejects a zero pledge - which is what
+    // keeps the utilisation view's divisor non-zero under all admitted
+    // state, not just on the intended path.
+    let state = must_accept(
+        &borrowing_base::open_facility(),
+        vec![subj("f1"), dec_str("0.8")],
+        State::default(),
+        &invariants(),
+    );
+    let outcome = propose_with_test_actor(
+        &borrowing_base::pledge_collateral(),
+        vec![subj("f1"), subj("asset_1"), dec(0)],
+        &state,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn negative_drawdown_is_rejected() {
+    // A drawdown moves money out, never in; drawdown_amount_is_non_negative
+    // rejects a negative amount (which would otherwise model a repayment).
+    let pre = facility_with_collateral(100);
+    let outcome = propose_with_test_actor(
+        &borrowing_base::draw(),
+        vec![subj("f1"), subj("draw_1"), dec(-10)],
+        &pre,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn advance_rate_above_one_is_rejected() {
+    // An advance rate is a fraction in [0, 1]; advance_rate_within_unit_interval
+    // rejects a rate above 1 (lending more than the collateral is worth).
+    let empty = State::default();
+    let outcome = propose_with_test_actor(
+        &borrowing_base::open_facility(),
+        vec![subj("f1"), dec_str("1.5")],
+        &empty,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}

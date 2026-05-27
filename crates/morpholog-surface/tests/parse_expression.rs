@@ -207,6 +207,38 @@ fn multiplication_binds_tighter_than_addition() {
     );
 }
 
+#[test]
+fn division_is_left_associative() {
+    // `a / b / c` parses as `Div(Div(a, b), c)`.
+    let got = parse_value_expr("a / b / c").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Div(
+            Box::new(ValueExpr::Div(
+                Box::new(var_value("a")),
+                Box::new(var_value("b")),
+            )),
+            Box::new(var_value("c")),
+        )
+    );
+}
+
+#[test]
+fn mul_and_div_share_one_precedence_level() {
+    // `a * b / c` parses as `Div(Mul(a, b), c)` - same level, left-assoc.
+    let got = parse_value_expr("a * b / c").unwrap();
+    assert_eq!(
+        got,
+        ValueExpr::Div(
+            Box::new(ValueExpr::Mul(
+                Box::new(var_value("a")),
+                Box::new(var_value("b")),
+            )),
+            Box::new(var_value("c")),
+        )
+    );
+}
+
 // ---- Comparators ----
 
 #[test]

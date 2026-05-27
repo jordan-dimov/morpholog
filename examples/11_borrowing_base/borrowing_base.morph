@@ -33,8 +33,8 @@
 --     limit lives in the invariant, so no path can leave the books over
 --     the line.
 --
--- A note on the arithmetic. The advance-limit rule is written by
--- cross-multiplying - `drawn <= advance_rate * base` rather than
+-- A note on the arithmetic. The advance-limit rule is written in
+-- multiplied form - `drawn <= advance_rate * base` rather than
 -- `drawn / base <= advance_rate` - so the admission decision stays exact,
 -- with no rounding. Division appears only in the read-only reporting view
 -- at the bottom, where a rounded utilisation percentage is exactly what a
@@ -72,9 +72,25 @@ intent DrawdownRequested(facility: Subject, draw_id: Subject, amount: Decimal)
 invariant at_most_one_facility_per_id:
     Facility(f, rate_a) and Facility(f, rate_b) implies rate_a = rate_b
 
+-- The values have to make business sense, and keeping them sane is what
+-- lets the rules below mean what they say. An advance rate is a fraction
+-- of the whole - between 0% and 100%. Collateral is worth something
+-- strictly positive: a zero or negative pledge is meaningless, and a zero
+-- collateral base is exactly what the utilisation view at the bottom
+-- would divide by. A drawdown moves money out, never in - modelling
+-- repayments would be a separate action this example leaves out.
+invariant advance_rate_within_unit_interval:
+    Facility(facility, rate) implies (0 <= rate and rate <= 1)
+
+invariant collateral_value_is_positive:
+    EligibleCollateral(facility, _, v) implies 0 < v
+
+invariant drawdown_amount_is_non_negative:
+    Drawdown(facility, _, amount) implies 0 <= amount
+
 -- The advance limit. The total drawn against a facility can never exceed
--- its advance rate times the value of its eligible collateral. Written by
--- cross-multiplying, so the check is exact: `drawn <= rate * base` rather
+-- its advance rate times the value of its eligible collateral. Written in
+-- multiplied form, so the check is exact: `drawn <= rate * base` rather
 -- than a rounded `drawn / base <= rate`.
 invariant outstanding_within_advance_limit:
     Facility(facility, advance_rate)
@@ -116,8 +132,9 @@ transformation draw(facility, draw_id, amount):
 -- read-only, recomputed on demand, never stored - so it can never drift
 -- from the drawdowns and collateral it is built from. It is the one place
 -- division is used: a rounded fraction is what a human reading a report
--- wants, where the admission rule above stays exact by cross-multiplying.
--- Defined over facilities that have pledged collateral, so the base it
+-- wants, where the admission rule above stays exact in multiplied form.
+-- Defined over facilities that have pledged collateral, and every
+-- collateral value is positive (the invariant above), so the base it
 -- divides by is never zero.
 derived FacilityUtilisation(facility):
     over EligibleCollateral(facility, _, _)
