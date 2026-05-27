@@ -60,6 +60,12 @@ transformation post_simple_entry(entry_id, posting_date, period, debit_account, 
 
 The invariant says debits and credits must balance for every posted entry. The transformation is the only way a journal entry can enter the books, and only when the period is open and the result balances. If the math is off by a penny, the commit is rejected atomically and the database looks exactly as it did before the attempt.
 
+## Behaviour you can't drift from
+
+Behaviour-driven development asks you to write the behaviour first - *given* this state, *when* someone does that, *then* this must hold - and to keep the system honest against it. The catch is that the scenarios and the code are separate artifacts, so they drift, and the glue between them quietly goes stale.
+
+In Morpholog the behaviour *is* the system. An invariant and a transformation's gates are the *given / when / then*: given the admitted claims, when an actor proposes a change, then it commits only if every rule still holds. There is no second implementation to drift from - the specification is the runtime's admission law, enforced on every change, whoever or whatever proposed it. **Morpholog delivers what BDD promises - an executable behavioural specification that cannot drift from the system - without the ceremony.** `morpholog explain` turns a rejected proposal into the failing-scenario report; `morpholog inspect guarantees` lists what the rules make impossible before anything runs.
+
 ## A sixty-second tour
 
 One-time setup (PostgreSQL 17+):
@@ -111,6 +117,7 @@ Each runs both in memory (against the kernel) and durably (against PostgreSQL). 
 - [**Chess transition invariants**](examples/07_chess_transition_invariants/) - the one non-business example: an isolated demonstration of *transition invariants*, rules that relate the state before a change to the state after (move count strictly increases; piece count never rises). The same `pre(...)` mechanism enforces a real per-policy conservation law in the insurance example.
 - [**KYC sanctions and PEP screening**](examples/08_kyc_sanctions_screening/) - onboarding is gated by current, clean screenings against both the sanctions and PEP lists; an unresolved match on *any* of a customer's screenings blocks admission until it is adjudicated. Each step emits a **declared intent** to a distinct downstream consumer - misspelling `MatchRaised` is a validation error, not a silently-dropped compliance event.
 - [**Carbon-credit provenance**](examples/09_carbon_credit_provenance/) - the explanation engine's flagship: a green claim becomes official only on an admissible, *current* provenance chain - verified measurement, attestation, an accredited verifier - with double-counting forbidden in both directions, single custody, and terminal retirement. Retire-by-deadline obligations are swept by an outside coordinator that hands the date in. **No green claim without admissible provenance.**
+- [**Trade lifecycle**](examples/10_trade_lifecycle/) - a commodity trade through capture, confirmation, official-price correction, and settlement, with the **phase modelled as accumulated admitted claims, not a status field**. The confirmation event is split from the official price figure, so a later price correction is a restatement that moves the in-force pointer and leaves a settlement made under the prior figure standing. A trade can never be settled for more than the quantity captured. Morpholog's first **external-embedder** target.
 
 Morpholog is not the whole stack. UIs, dashboards, dataloaders, ML pipelines stay in normal tools. What Morpholog owns is the line where *"may this be admitted as a valid record?"* needs a definite answer - the small fraction of any real business system that, when it fails, makes the news.
 
