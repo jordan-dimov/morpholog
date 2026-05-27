@@ -339,7 +339,7 @@ fn prop_exceeds_depth(prop: &Prop, budget: usize) -> bool {
         Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
             prop_exceeds_depth(inner, budget)
         }
-        Prop::Implies { left, right } => {
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
             prop_exceeds_depth(left, budget) || prop_exceeds_depth(right, budget)
         }
         Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {

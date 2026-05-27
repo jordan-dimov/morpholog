@@ -483,6 +483,59 @@ fn and_binds_tighter_than_or() {
 }
 
 #[test]
+fn parses_xor_two_operands() {
+    let got = parse_expression("A(x) xor B(x)").unwrap();
+    let expected = Prop::Xor(
+        Box::new(Prop::Claim {
+            predicate: "A".into(),
+            args: vec![var("x")],
+        }),
+        Box::new(Prop::Claim {
+            predicate: "B".into(),
+            args: vec![var("x")],
+        }),
+    );
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn xor_does_not_flatten_it_nests() {
+    // Unlike `and`/`or`, `xor` is binary: `A xor B xor C` nests
+    // left-associatively into `Xor(Xor(A, B), C)`, not a flat node.
+    let got = parse_expression("A() xor B() xor C()").unwrap();
+    let Prop::Xor(left, right) = got else {
+        panic!("expected Xor, got {got:?}");
+    };
+    assert!(matches!(*left, Prop::Xor(_, _)), "left should nest a Xor");
+    assert!(matches!(*right, Prop::Claim { .. }));
+}
+
+#[test]
+fn and_binds_tighter_than_xor() {
+    // `A and B xor C and D` parses as `(A and B) xor (C and D)` - the
+    // natural "exactly one of these two conjunctions" reading.
+    let got = parse_expression("A() and B() xor C() and D()").unwrap();
+    let Prop::Xor(left, right) = got else {
+        panic!("expected Xor, got {got:?}");
+    };
+    assert!(matches!(*left, Prop::And(_)));
+    assert!(matches!(*right, Prop::And(_)));
+}
+
+#[test]
+fn xor_binds_tighter_than_or() {
+    // `A xor B or C` parses as `(A xor B) or C`: xor sits between and
+    // and or, so the disjunction's first branch is the Xor.
+    let got = parse_expression("A() xor B() or C()").unwrap();
+    let Prop::Or(ops) = got else {
+        panic!("expected Or, got {got:?}");
+    };
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(ops[0], Prop::Xor(_, _)));
+    assert!(matches!(ops[1], Prop::Claim { .. }));
+}
+
+#[test]
 fn or_binds_tighter_than_implies() {
     // `A or B implies C` parses as `(A or B) implies C`.
     let got = parse_expression("A() or B() implies C()").unwrap();

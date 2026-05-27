@@ -34,7 +34,7 @@ pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<PredicateNa
         Prop::Claim { predicate, .. } => {
             out.insert(predicate.clone());
         }
-        Prop::Implies { left, right } => {
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
             predicates_referenced_by_prop(left, out);
             predicates_referenced_by_prop(right, out);
         }

@@ -303,6 +303,9 @@ pub fn format_prop_inline(p: &Prop) -> String {
             let inner: Vec<String> = props.iter().map(prop_primary).collect();
             inner.join(" or ")
         }
+        Prop::Xor(left, right) => {
+            format!("{} xor {}", prop_primary(left), prop_primary(right))
+        }
         Prop::Implies { left, right } => {
             format!("{} implies {}", prop_primary(left), prop_primary(right))
         }

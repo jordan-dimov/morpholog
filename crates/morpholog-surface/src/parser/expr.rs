@@ -304,17 +304,30 @@ where
                 }
             });
 
-        // or_expr ::= and_expr ("or" and_expr)*  (left-assoc,
+        // xor_expr ::= and_expr ("xor" and_expr)*  (left-assoc, binary)
+        //
+        // `xor` sits between `and` and `or`: tighter than `or`, looser
+        // than `and`, so `a and b xor c and d` parses as
+        // `(a and b) xor (c and d)` - the natural "exactly one of these
+        // two" reading. Unlike `and`/`or` it does not flatten (xor is
+        // binary); a chain `a xor b xor c` nests left-associatively into
+        // `Xor(Xor(a, b), c)`.
+        let xor_expr = and_expr.clone().foldl(
+            just(Token::KwXor).ignore_then(and_expr.clone()).repeated(),
+            |left, right| Prop::Xor(Box::new(left), Box::new(right)),
+        );
+
+        // or_expr ::= xor_expr ("or" xor_expr)*  (left-assoc,
         // flattened into a single Prop::Or(Vec<Prop>))
         //
-        // Standard logical precedence: `and` tighter than `or` tighter
-        // than `implies`, so `a and b or c implies d` parses as
-        // `((a and b) or c) implies d`.
-        let or_expr = and_expr
+        // Standard logical precedence: `and` tighter than `xor` tighter
+        // than `or` tighter than `implies`, so `a and b or c implies d`
+        // parses as `((a and b) or c) implies d`.
+        let or_expr = xor_expr
             .clone()
             .then(
                 just(Token::KwOr)
-                    .ignore_then(and_expr.clone())
+                    .ignore_then(xor_expr.clone())
                     .repeated()
                     .collect::<Vec<Prop>>(),
             )

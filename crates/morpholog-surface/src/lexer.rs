@@ -135,6 +135,10 @@ pub enum Token {
     /// `or` infix operator. Lowers to `Prop::Or`. Sits at lower
     /// precedence than `and`, higher than `implies`.
     KwOr,
+    /// `xor` infix operator. Lowers to `Prop::Xor` (exactly-one). Sits
+    /// between `and` and `or` in precedence: tighter than `or`, looser
+    /// than `and`.
+    KwXor,
     /// `implies` infix operator.
     KwImplies,
     /// `pre` function-call-shape primary. Lowers to `Prop::Pre`. Always
@@ -255,6 +259,7 @@ impl fmt::Display for Token {
             Token::KwNot => write!(f, "`not`"),
             Token::KwAnd => write!(f, "`and`"),
             Token::KwOr => write!(f, "`or`"),
+            Token::KwXor => write!(f, "`xor`"),
             Token::KwImplies => write!(f, "`implies`"),
             Token::KwPre => write!(f, "`pre`"),
             Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
@@ -345,6 +350,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "not" => Token::KwNot,
         "and" => Token::KwAnd,
         "or" => Token::KwOr,
+        "xor" => Token::KwXor,
         "implies" => Token::KwImplies,
         "pre" => Token::KwPre,
         // Bounded forms and membership keywords
