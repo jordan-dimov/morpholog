@@ -77,6 +77,19 @@ fn arb_args() -> impl Strategy<Value = Vec<Term>> {
 
 // ---------- value-expression generator ----------
 
+/// Every arithmetic operator, so the value generator exercises the whole
+/// `ArithOp` catalogue rather than a representative pair.
+fn arb_arith_op() -> impl Strategy<Value = ArithOp> {
+    prop_oneof![
+        Just(ArithOp::Add),
+        Just(ArithOp::Sub),
+        Just(ArithOp::Mul),
+        Just(ArithOp::Div),
+        Just(ArithOp::Min),
+        Just(ArithOp::Max),
+    ]
+}
+
 /// A bounded value expression. `Sum` ranges over a (leaf-only)
 /// proposition, so the value generator can recurse without forming an
 /// unbounded mutual cycle with `arb_prop`; the property under test only
@@ -92,15 +105,12 @@ fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
         prop_oneof![
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| ValueExpr::Arith {
-                op: ArithOp::Add,
-                left: Box::new(l),
-                right: Box::new(r),
-            }),
-            (inner.clone(), inner.clone()).prop_map(|(l, r)| ValueExpr::Arith {
-                op: ArithOp::Sub,
-                left: Box::new(l),
-                right: Box::new(r),
+            (arb_arith_op(), inner.clone(), inner.clone()).prop_map(|(op, l, r)| {
+                ValueExpr::Arith {
+                    op,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                }
             }),
             (arb_term(), arb_prop_leaf()).prop_map(|(value, body)| ValueExpr::Sum {
                 value,
