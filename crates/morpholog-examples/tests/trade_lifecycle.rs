@@ -392,10 +392,12 @@ fn slices_summing_over_captured_quantity_are_rejected() {
 }
 
 #[test]
-fn reusing_a_settlement_id_across_slices_is_rejected() {
-    // Two slices may not share an id - settlement_id_identifies_one_
-    // settlement keeps each id unambiguous so the cumulative sum cannot be
-    // gamed by hiding two settlements under one id.
+fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
+    // The settlement id is an idempotency key. Settling s1, then replaying
+    // the exact same settle_trade, is refused by the freshness gate - so a
+    // duplicate TradeSettlementRequested never reaches the outbox. (An
+    // exact-duplicate claim would dedup in state and pass the invariant; it
+    // is the re-emit the gate exists to stop.)
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let first = must_accept(
         &trade_lifecycle::settle_trade(),
@@ -405,17 +407,65 @@ fn reusing_a_settlement_id_across_slices_is_rejected() {
     );
     let outcome = propose_with_test_actor(
         &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(30), subj("s1"), subj("op1")],
+        vec![subj("t1"), dec(40), subj("s1"), subj("op1")],
         &first,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "replaying a settlement id must be rejected before a second request; got {outcome:?}"
+    );
+}
+
+#[test]
+fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
+    // The path the settle gate cannot see: a single transformation
+    // admitting two TradeSettled with the same id but different quantities.
+    // settlement_id_identifies_one_settlement is the backstop that refuses
+    // it, keeping the cumulative sum honest against hand-constructed state.
+    use morpholog_core::ir_builder;
+
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let bad = ir_builder::transformation(
+        "double_settle_one_id",
+        ir_builder::params(&["trade", "sid", "opid"]),
+        vec![
+            ir_builder::assert_(
+                "TradeSettled",
+                vec![
+                    ir_builder::var("trade"),
+                    ir_builder::dec("40"),
+                    ir_builder::var("sid"),
+                    ir_builder::var("opid"),
+                ],
+            ),
+            ir_builder::assert_(
+                "TradeSettled",
+                vec![
+                    ir_builder::var("trade"),
+                    ir_builder::dec("30"),
+                    ir_builder::var("sid"),
+                    ir_builder::var("opid"),
+                ],
+            ),
+        ],
+    );
+    let outcome = propose_with_test_actor(
+        &bad,
+        vec![subj("t1"), subj("s1"), subj("op1")],
+        &confirmed,
         &invariants(),
     )
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
             reason.contains("settlement_id_identifies_one_settlement"),
-            "expected the id-uniqueness invariant to reject the reuse, got: {reason}"
+            "expected the id-uniqueness invariant to reject conflicting tuples, got: {reason}"
         ),
-        Outcome::Accepted { .. } => panic!("reusing a settlement id must be rejected"),
+        Outcome::Accepted { .. } => {
+            panic!("two conflicting settlements under one id must be rejected")
+        }
     }
 }
 

@@ -138,9 +138,10 @@ invariant settled_quantity_within_captured:
 
 -- A settlement id names one settlement: two TradeSettled claims sharing
 -- the id must agree on the trade, quantity, and official price relied on.
--- This pins the structural uniqueness the cumulative sum above depends on
--- - without it a single settlement could be double-counted, or two
--- conflicting settlements could hide under one id.
+-- The settle gate already refuses to reuse an id by the ordinary path;
+-- this invariant is the backstop for any other path, forbidding two
+-- conflicting settlements from hiding under one id and so keeping the
+-- cumulative sum above honest.
 invariant settlement_id_identifies_one_settlement:
     TradeSettled(trade_a, qty_a, sid, opid_a) and TradeSettled(trade_b, qty_b, sid, opid_b) implies (trade_a = trade_b and qty_a = qty_b and opid_a = opid_b)
 
@@ -222,11 +223,15 @@ transformation correct_official_price(trade, prior_official_price_id, new_offici
     admit CurrentOfficialPrice(trade, new_official_price_id)
     emit OfficialPriceCorrected(trade, new_official_price_id, prior_official_price_id)
 
--- Settle the trade, in whole or in a slice. The only gate is the
--- operational precondition: there must be an official price in force to
--- settle on (the gate binds which one). A trade may settle more than once
--- - each slice records the official price id it relied on, so "what price
--- did we settle at?" keeps a truthful answer per slice even after a later
+-- Settle the trade, in whole or in a slice. Two gates, both operational
+-- preconditions: there must be an official price in force to settle on
+-- (the gate binds which one), and the settlement id must be unused. That
+-- second gate makes the settlement id an *idempotency key* - replaying a
+-- settlement is refused before it can request a second downstream
+-- payment, which matters the moment a trade settles in more than one
+-- slice. A trade may settle many times, each slice under its own fresh
+-- id, recording the official price id it relied on, so "what price did we
+-- settle at?" keeps a truthful answer per slice even after a later
 -- correction moves the pointer. The structural truths are left to the
 -- invariants: that a settled trade was confirmed, and that the *total*
 -- settled across every slice never exceeds the captured quantity. How
@@ -234,5 +239,6 @@ transformation correct_official_price(trade, prior_official_price_id, new_offici
 -- the settlement is legitimate.
 transformation settle_trade(trade, settled_qty, settlement_id, official_price_id):
     require CurrentOfficialPrice(trade, official_price_id)
+    require not TradeSettled(_, _, settlement_id, _)
     admit TradeSettled(trade, settled_qty, settlement_id, official_price_id)
     emit TradeSettlementRequested(settlement_id, trade, settled_qty)

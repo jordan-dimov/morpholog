@@ -63,11 +63,12 @@ because they answer different questions:
   hold for all admitted state, forever. It is an invariant: no path,
   however the books are reached, may leave an over-settled trade behind.
 
-`settle_trade` shows the split cleanly. Its gates are only the operational
+`settle_trade` shows the split cleanly. Its gates are operational
 preconditions - there must be an official price in force to settle on, and
-the trade must not already be settled. The structural truths (a settled
-trade was confirmed; the settled quantity is within the captured quantity)
-are left to the invariants.
+the settlement id must be unused, so replaying a settlement cannot request
+a second downstream payment. The structural truths (a settled trade was
+confirmed; the *total* settled stays within the captured quantity) are
+left to the invariants.
 
 ## The program
 
@@ -108,7 +109,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | `grant_confirm_authority(principal, commodity)` | Grants a desk per-commodity confirmation authority. |
 | `confirm_trade(...)` | The middle office confirms the trade and sets the official price in force. Gated on commodity-scoped authority tied to the trade's own commodity, and on the trade not already being confirmed. |
 | `correct_official_price(...)` | Restates the official price: admits the corrected figure, moves the in-force pointer, records the supersession. The prior figure and any settlement made under it stay on the record. |
-| `settle_trade(...)` | Records a settlement slice against the official price in force, and emits a downstream settlement-request intent. May run more than once per trade; the cumulative cap is an invariant, not a gate. |
+| `settle_trade(...)` | Records a settlement slice against the official price in force, and emits a downstream settlement-request intent. May run more than once per trade, each slice under a fresh settlement id - the id is an idempotency key, so replaying one is refused before the emit. The cumulative cap is an invariant, not a gate. |
 
 ## How to run it
 
