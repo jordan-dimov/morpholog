@@ -108,28 +108,11 @@ This is the smallest possible step toward making claim vocabulary at scale manag
 
 **Status:** landed. Every `Program` carries typed `PredicateDecl`s; `Program::validate()` enforces strict arity and kind/type compatibility, surfaced through `morpholog check`. Intent declarations (`IntentDecl`) followed, giving outbox effects the same typed, strictly-validated vocabulary.
 
-### 2. Derived claims
+### 2. Derived claims *(first cut landed)*
 
-A first-class declaration of the form:
+A named, read-only computation over admitted claims - a trial balance, a running total, a report row - declared alongside the rules and computed by the same kernel, so a read can never show what an invariant would refuse. This single construct subsumes most of what other systems call "projections" or "read models": phase/lifecycle naming, balances and totals, current pointers re-expressed as derivable, report rows. It is how Morpholog owns the read side without becoming a query engine - the read side is a governed artefact, not a free query surface.
 
-```
-derived TrialBalance(entity, period, account, balance)
-    where balance == sum { x | JournalLine(_, entity, period, account, debit, credit), x = debit - credit }
-    governed by [balanced_per_account, entry_signs_consistent]
-```
-
-A derived claim is true iff its defining expression holds over admitted claims. It can be **materialised** (written to a table for fast reads, with a provenance link to the inputs that produced it) or computed on demand. Invariants may quantify over derived claims as if they were primary.
-
-This single construct subsumes:
-- phase / lifecycle naming (a derived claim that says "all the parts of Confirmed hold"),
-- balances and totals (sum-derived claims),
-- current pointers when re-expressed as derivable from history,
-- report rows,
-- most of what other systems call "projections" or "read models."
-
-Derived claims are the answer to "how does Morpholog own the read side without becoming a query engine?" - by making the read side a governed artefact rather than a free query surface.
-
-The first cut of derived claims landed with the double-entry ledger example (trial balance): `DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, no materialisation, no recursion, not visible to invariants or transformations. Later questions - materialisation, invalidation, provenance, recursion through other derived claims, visibility to invariants - remain design-history territory; see [`design-history.md`](design-history.md) for what it forced and what was explicitly deferred.
+**Status:** the first cut landed with the double-entry ledger's trial balance (`DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, computed on demand). Materialisation, invalidation, recursion, and visibility to invariants are deferred; see [`design-history.md`](design-history.md).
 
 ### 3. As-of, as a single operator
 

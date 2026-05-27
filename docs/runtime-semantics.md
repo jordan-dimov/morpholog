@@ -44,7 +44,7 @@ These are not contradictions. They are four admitted claims from four authoritie
 
 **v0 implications:** claims carry only `(predicate_name, arguments)`. Authority, epoch, validity windows, and exception status are deliberately deferred until a real example demands them. The minimalism rule stands: do not add fields without forcing pressure from a worked example. When a property wants to be metadata, first try to re-express it as a separate claim (a "claim about a claim").
 
-**Programme vocabulary contract.** A [`Program`] declares two vocabularies: admissible claim shapes via `Program::predicates: Vec<PredicateDecl>`, and outbox intent shapes via `Program::intents: Vec<IntentDecl>`. Both carry a name and a positional argument list with named, kinded positions (the shared `ArgDecl`). The kernel's `Program::validate()` is strict: every `claim`/`assert`/`retract`/`value_of`/derived-claim reference must target a declared predicate, every `emit` must target a declared intent, and every reference must match the declared arity. Argument **kinds** (`Subject`, `Decimal`, `Date`, `Bool`, `Collection`, `Any`) are enforced: the kind checker validates values flowing through claim slots, intent emits, comparator and arithmetic operands, equality, and variable refinement across the binding context. Predicates and intents are separate namespaces - a predicate and an intent may share a name without collision (see the "Authoring-time checks" section for the full validation contract).
+**Programme vocabulary contract.** A [`Program`] declares two vocabularies: admissible claim shapes via `Program::predicates: Vec<PredicateDecl>` and outbox intent shapes via `Program::intents: Vec<IntentDecl>`, each a name plus a positional list of named, kinded arguments (the shared `ArgDecl`). Predicates and intents are separate namespaces. `Program::validate()` enforces the vocabulary strictly; the full contract is the "Authoring-time checks" section below.
 
 ## Claim semantics
 
@@ -236,18 +236,9 @@ Quantifier composition is non-commutative by design. `pre(forall x in S: body)` 
 
 One trace entry per transformation statement and per invariant check. `For` is nested - its `iterations` carry a sub-trace plus the iteration item per element. `Retract` records the actual retracted claims, not just a count. `BindOne` on a unique match records the full new binding context (sorted by variable name). `Require` records `match_count` on success, `reason` on rejection. Every proposition-bearing entry renders its proposition via `format_prop_inline`, so callers can assert on the failing predicate name instead of pattern-matching on reason strings.
 
-**Scope: statement-level plus failure-walk on rejection paths.** Every statement that runs produces one trace entry. When a `require` or `bind_one` rejects, the trace's `failing_sub_expression` field (on `RequireOutcome::Rejected` and `BindOneOutcome::NoMatch`) carries the most specific sub-expression responsible:
+**Scope: statement-level plus failure-walk on rejection paths.** Every statement that runs produces one trace entry. When a `require` or `bind_one` rejects, the trace's `failing_sub_expression` field carries the most specific responsible sub-expression - a failing conjunct of an `And`, an `Implies`'s consequent, a `Forall`'s body - recursing into compound ones; `Not`, `Exists`, and leaves return `None` (no single responsible sub-expression, or already maximally specific). The walk runs **only on rejection paths**, so success-path performance is unchanged, and the field is omitted from JSON when `None`. A fuller structural trace (success-path drill-downs, witness extraction, binding substitution) is deferred until an example forces it.
 
-- `And(A, B, C)` failing at B: walker drills to B (recursively if B is itself compound).
-- `Implies(left, right)` failing with left held: walker drills to `right`.
-- `Forall { binding, source, body }` failing at some iteration: walker drills to `body`. Binding values are not substituted into the rendered string in v0; callers correlate iteration separately.
-- `Not`, `Exists`, leaf expressions (`Claim`, `Le`, arithmetic, `Sum`, `ValueOf`, etc.): `None`. Either structurally has no single sub-expression that's "the one responsible," or the leaf is already as specific as the kernel can be.
-
-The walker runs **only on rejection paths**. Success-path performance is unchanged. The field is omitted from JSON when `None` (`skip_serializing_if`), so existing trace consumers see no shape change.
-
-A fuller structural trace (mirroring the IR with success-path drill-downs, exists-witness extraction, forall-binding substitution, etc.) is a separate larger refactor and remains deferred until a worked example forces it.
-
-`propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum. The non-trace path allocates no trace storage and the `On`-vs-`Off` check at each statement is a single-variant enum match the optimiser collapses to nothing meaningful; the trace path opts in by passing `TraceSink::On(&mut Vec<TraceEntry>)`. There is no separate "traced evaluator" that could drift from `propose`.
+`propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum, so there is no separate traced evaluator that could drift; the non-trace path allocates nothing.
 
 ## Authoring-time checks (`Program::validate`)
 
