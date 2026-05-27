@@ -15,7 +15,7 @@
 -- re-agreed, a mis-keyed figure corrected - sometimes effective from a
 -- date in the past.
 --
--- Three ideas do the real work, and this example is built around them.
+-- A few ideas do the real work, and this example is built around them.
 --
 -- First, a trade is never in a single "status". It is captured, then
 -- also confirmed, then also settled - each step admits another claim,
