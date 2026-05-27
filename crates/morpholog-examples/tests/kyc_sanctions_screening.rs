@@ -1,14 +1,17 @@
 //! Integration tests for the KYC sanctions/PEP screening example
 //! (`examples/08_kyc_sanctions_screening/`).
 //!
-//! The example's reason to exist is to force `IntentDecl` into the
-//! kernel: a domain with four distinct intent types and distinct
-//! downstream consumers (screening provider, analyst queue, core
-//! banking, compliance reporting). These tests pin the load-bearing
-//! claims: onboarding requires current clean screenings on both
-//! lists; an unresolved match against a current screening blocks
+//! The example's first reason to exist is to force `IntentDecl` into the
+//! kernel: a domain with distinct intent types and distinct downstream
+//! consumers (screening provider, analyst queue, core banking, compliance
+//! reporting). It is also the forcing home for `Prop::Xor`: the
+//! adjudication fork (a reviewed match is a false positive xor a confirmed
+//! hit) is a genuine exactly-one decision. These tests pin the
+//! load-bearing claims: onboarding requires current clean screenings on
+//! both lists; an unresolved match against a current screening blocks
 //! admission; the round-trip request/result pattern advances the
-//! currentness pointer correctly.
+//! currentness pointer correctly; and the xor invariant rejects both an
+//! adjudicated marker with no disposition and a confirmed-hit back door.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -105,7 +108,7 @@ fn program_validates() {
 }
 
 #[test]
-fn program_declares_the_four_outbox_intents() {
+fn program_declares_its_outbox_intents() {
     let program = kyc_sanctions_screening::program();
     let names: Vec<&str> = program.intents.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(
@@ -113,6 +116,7 @@ fn program_declares_the_four_outbox_intents() {
         vec![
             "ScreeningRequested",
             "MatchRaised",
+            "MatchConfirmed",
             "CustomerOnboarded",
             "CustomerRejected",
         ],
@@ -420,6 +424,147 @@ fn match_adjudicated_false_positive_enables_onboarding() {
         matches!(outcome, Outcome::Accepted { .. }),
         "onboarding after match adjudicated false-positive should accept; got {outcome:?}"
     );
+}
+
+/// The other side of the adjudication fork: a confirmed match is a
+/// durable bar that closes a back door. Bob has an older clean sanctions
+/// screening (still the current one) and a clean PEP, so the current-clean
+/// rules are satisfied - but a newer re-screen was adjudicated a confirmed
+/// hit. Confirming clears the review flag, so the "no unresolved match"
+/// rule no longer bites; `onboarded_requires_no_confirmed_match` is what
+/// keeps onboarding refused.
+#[test]
+fn confirmed_match_blocks_onboarding_even_behind_a_clean_current_screening() {
+    let program = kyc_sanctions_screening::program();
+    let bob = "bob";
+
+    // Clean sanctions + PEP, both current - bob would be onboardable.
+    let state = registered_and_screened(&program, State::default(), bob);
+
+    // A newer sanctions re-screen returns a match, adjudicated confirmed.
+    // It never becomes current, so the older clean screening still stands.
+    let state = run(
+        &program,
+        "request_screening",
+        vec![
+            subj("bob_sanctions_2"),
+            subj(bob),
+            subj(SANCTIONS),
+            date("2026-01-10"),
+        ],
+        state,
+    );
+    let state = run(
+        &program,
+        "record_match_screening_result",
+        vec![
+            subj("bob_sanctions_2"),
+            date("2026-01-11"),
+            date("2027-01-11"),
+            date("2026-01-11"),
+        ],
+        state,
+    );
+    let state = run(
+        &program,
+        "adjudicate_match_as_confirmed",
+        vec![
+            subj("bob_sanctions_2"),
+            date("2026-01-12"),
+            date("2027-01-12"),
+        ],
+        state,
+    );
+
+    let outcome = try_run(
+        &program,
+        "onboard_customer",
+        vec![subj(bob), date("2026-02-01")],
+        &state,
+    )
+    .expect("propose should not error");
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("onboarded_requires_no_confirmed_match"),
+            "expected the confirmed-match bar to reject onboarding, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("a confirmed match must bar onboarding even behind a clean current screening")
+        }
+    }
+}
+
+/// The XOR invariant's distinctive teeth: it forbids not just *both*
+/// dispositions but *neither*. A hand-built transformation that marks a
+/// match adjudicated without recording any adjudicated disposition is
+/// rejected by `adjudicated_match_resolves_exactly_one_way` - the
+/// "at least one" half a plain `not (clear and confirmed)` exclusion
+/// would miss. This is what `xor` buys over hand-written exclusion.
+#[test]
+fn adjudicated_marker_without_a_disposition_is_rejected() {
+    use morpholog_core::ir_builder;
+
+    let mut program = kyc_sanctions_screening::program();
+    let carol = "carol";
+
+    // A screening that came back as a match, awaiting review.
+    let state = State::default();
+    let state = run(&program, "register_customer", vec![subj(carol)], state);
+    let state = run(
+        &program,
+        "request_screening",
+        vec![
+            subj("scr_sanctions_1"),
+            subj(carol),
+            subj(SANCTIONS),
+            date("2026-01-01"),
+        ],
+        state,
+    );
+    let state = run(
+        &program,
+        "record_match_screening_result",
+        vec![
+            subj("scr_sanctions_1"),
+            date("2026-01-02"),
+            date("2027-01-02"),
+            date("2026-01-02"),
+        ],
+        state,
+    );
+
+    // Adversarial (IR-builder) transformation: stamp the screening
+    // adjudicated but record no disposition - exactly the "neither" case
+    // the XOR's totality half must reject.
+    let bad = ir_builder::transformation(
+        "adjudicate_without_disposition",
+        ir_builder::params(&["screening_id"]),
+        vec![ir_builder::assert_(
+            "MatchAdjudicated",
+            vec![ir_builder::var("screening_id")],
+        )],
+    );
+    program.transformations.push(bad);
+    let bad = program
+        .transformation("adjudicate_without_disposition")
+        .expect("just pushed");
+
+    let outcome = propose_with_test_actor(
+        bad,
+        vec![subj("scr_sanctions_1")],
+        &state,
+        &program.invariants,
+    )
+    .expect("kernel must not error");
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("adjudicated_match_resolves_exactly_one_way"),
+            "expected the xor invariant to reject a marker with no disposition, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("an adjudicated marker with neither disposition must be rejected")
+        }
+    }
 }
 
 // ============================================================

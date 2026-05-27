@@ -28,14 +28,15 @@ See [`kyc.morph`](kyc.morph) for the surface syntax.
 | --- | --- |
 | `Customer(customer_id)` | A registered customer. Append-only. |
 | `Screening(screening_id, customer, list_type, requested_on)` | A screening request against a named list (`#sanctions`, `#pep`). Append-only. |
-| `ScreeningResult(screening_id, disposition, completed_on, expires_on)` | The provider's result - disposition `#clean`, `#match`, or `#adjudicated_clear` - with an inclusive expiry. Append-only. |
+| `ScreeningResult(screening_id, disposition, completed_on, expires_on)` | The provider's result - disposition `#clean`, `#match`, `#adjudicated_clear`, or `#adjudicated_confirmed` - with an inclusive expiry. Append-only. |
 | `CurrentScreening(customer, list_type, screening_id)` | Singleton retractable pointer to the screening that counts now for a `(customer, list_type)`. Moves as fresh clean / cleared results arrive; a match never becomes current. |
 | `MatchUnderReview(screening_id, raised_on)` | A possible match awaiting analyst adjudication. Retractable - cleared when adjudicated. |
+| `MatchAdjudicated(screening_id)` | A match that an analyst has reviewed and resolved (either way). Append-only - the durable marker the exactly-one-outcome invariant keys off. |
 | `OnboardedCustomer(customer, onboarded_on)` | Onboarded standing. Append-only. |
 
 ### Intents
 
-Each outbox intent routes to a distinct downstream consumer, declared by name so a misspelled `emit` is a validation error rather than a silent route-to-nowhere: `ScreeningRequested` (external provider), `MatchRaised` (analyst queue), `CustomerOnboarded` (core banking), `CustomerRejected` (compliance reporting).
+Each outbox intent routes to a distinct downstream consumer, declared by name so a misspelled `emit` is a validation error rather than a silent route-to-nowhere: `ScreeningRequested` (external provider), `MatchRaised` (analyst queue), `MatchConfirmed` (compliance, on a confirmed hit), `CustomerOnboarded` (core banking), `CustomerRejected` (compliance reporting).
 
 ### Invariants
 
@@ -45,6 +46,8 @@ Each outbox intent routes to a distinct downstream consumer, declared by name so
 | `onboarded_requires_current_clean_sanctions` | An onboarded customer must have a current sanctions screening, clean or adjudicated-clear, not expired by the onboarding date. |
 | `onboarded_requires_current_clean_pep` | The same for the PEP list - separate legal weight, so a clean sanctions result does not cover the PEP obligation. |
 | `onboarded_requires_no_unresolved_match` | An onboarded customer has **no** `MatchUnderReview` on *any* of their screenings, current or not - a re-screen hit blocks onboarding even when an older clean result is still current. |
+| `adjudicated_match_resolves_exactly_one_way` | A reviewed match carries **exactly one** outcome: `#adjudicated_clear` **xor** `#adjudicated_confirmed`. Never both, and - once marked adjudicated - never neither. This is `xor`, reading as the rule sounds rather than as `(clear or confirmed) and not (clear and confirmed)`. |
+| `onboarded_requires_no_confirmed_match` | A confirmed hit is a durable bar: no onboarding while any `#adjudicated_confirmed` result is on file, even behind an older clean current screening. |
 
 ### Transformations
 
@@ -54,7 +57,8 @@ Each outbox intent routes to a distinct downstream consumer, declared by name so
 | `request_screening(screening_id, customer, list_type, requested_on)` | Records a screening request and emits `ScreeningRequested` to the provider; requires the customer to exist. |
 | `record_clean_screening_result(screening_id, completed_on, expires_on)` | Records a `#clean` result and makes it the current screening, replacing the prior pointer. |
 | `record_match_screening_result(screening_id, completed_on, expires_on, raised_on)` | Records a `#match`, flags `MatchUnderReview`, emits `MatchRaised`. Does **not** become current. |
-| `adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on)` | An analyst clears a flagged match: requires the match under review, records `#adjudicated_clear`, clears the flag, makes it current. |
+| `adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on)` | An analyst clears a flagged match: requires the match under review, records `#adjudicated_clear`, marks it adjudicated, clears the review flag, makes it current. |
+| `adjudicate_match_as_confirmed(screening_id, adjudicated_on, expires_on)` | The other side of the fork: an analyst confirms a genuine hit. Records `#adjudicated_confirmed`, marks it adjudicated, clears the review flag - but does **not** become current, and the confirmed-match invariant bars onboarding for good. Emits `MatchConfirmed`. |
 | `onboard_customer(customer, onboarded_on)` | Opens the account. Only checks the customer exists and is not already onboarded; the invariants do the heavy lifting. Emits `CustomerOnboarded`. |
 | `reject_customer(customer, reason)` | Rejects a customer outright; nothing is removed, so the decision and its reason survive in the audit trail. Emits `CustomerRejected`. |
 
@@ -72,7 +76,9 @@ The in-memory tests pin the load-bearing path: a clean screening becomes current
 
 ### What this example forces
 
-This is the worked-example reason for `IntentDecl` to exist in the kernel. Each emitted intent - `ScreeningRequested`, `MatchRaised`, `CustomerOnboarded`, `CustomerRejected` - routes to a distinct downstream consumer (provider API, analyst queue, core banking, compliance reporting). If `MatchRaised` were a stringly-typed emit and someone wrote `MatchRased`, it would silently create a new outbox partition that no analyst reviews. Declaring intents as first-class vocabulary, parallel to predicates, makes that impossible at validation time.
+This is the worked-example reason for `IntentDecl` to exist in the kernel. Each emitted intent - `ScreeningRequested`, `MatchRaised`, `MatchConfirmed`, `CustomerOnboarded`, `CustomerRejected` - routes to a distinct downstream consumer (provider API, analyst queue, core banking, compliance reporting). If `MatchRaised` were a stringly-typed emit and someone wrote `MatchRased`, it would silently create a new outbox partition that no analyst reviews. Declaring intents as first-class vocabulary, parallel to predicates, makes that impossible at validation time.
+
+It is also the forcing home for the `xor` connective. The adjudication fork - a reviewed match is either a false positive or a confirmed hit - is a genuine exactly-one decision, and `adjudicated_match_resolves_exactly_one_way` states it as `clear xor confirmed` over two full `ScreeningResult(...)` patterns. `xor` adds no expressiveness (it lowers to `(a or b) and not (a and b)`), but with operands that long, the hand-written form buries the intent. The date fields are wildcards so the operands stay ground and the `xor` means true exactly-one; its distinctive bite is the totality half, rejecting an adjudicated marker that records *neither* disposition - which a plain `not (clear and confirmed)` exclusion would let through.
 
 ### The round-trip compute pattern
 
@@ -87,6 +93,7 @@ request_screening -> outbox ScreeningRequested -> external provider
                                               |
                                               v
                               (false positive) adjudicate_match_as_false_positive
+                              (confirmed hit)  adjudicate_match_as_confirmed
 ```
 
 The bank's transactional state stays inside Morpholog. The screening call - whether the name matches anything on World-Check or Refinitiv - happens outside. The result lands as a separate transformation that admits the disposition into the commit zone, where the invariants gate onboarding.
