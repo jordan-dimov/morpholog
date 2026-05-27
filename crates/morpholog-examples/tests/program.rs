@@ -192,21 +192,18 @@ fn unknown_lookups_return_none() {
 }
 
 #[test]
-fn all_programs_registry_contains_every_per_example_program() {
-    // `examples::all_programs()` is the canonical built-in registry
-    // the CLI uses to resolve a `--program` name supplied on the
-    // command line. If a new worked example lands but the contributor
-    // forgets to add its `program()` constructor to `all_programs()`,
-    // `morpholog propose <new_example> ...` would silently fail with
-    // "program not found".
+fn example_enumeration_contains_every_per_example_program() {
+    // `common::all_programs()` is the cross-example test enumeration the
+    // property tests (round-trip, format-smoke, validation, guarantees)
+    // iterate. If a new worked example lands but the contributor forgets
+    // to add its `program()` to the enumeration, those tests would
+    // silently skip it.
     //
-    // Pin the contract by checking that every per-example `program()`
-    // is reachable through the registry by name. The list below is
-    // load-bearing: it should be updated whenever a new example is
-    // added, in the same commit that adds the example to
-    // `all_programs()`.
-    let registry = common::all_programs();
-    let registry_names: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
+    // Pin the contract by checking that every per-example `program()` is
+    // present by name. The list below is load-bearing: update it in the
+    // same commit that adds a new example to the enumeration.
+    let enumeration = common::all_programs();
+    let names: Vec<&str> = enumeration.iter().map(|p| p.name.as_str()).collect();
 
     for expected_name in [
         settlement_netting::program().name.as_str(),
@@ -217,35 +214,29 @@ fn all_programs_registry_contains_every_per_example_program() {
         clinical_trial_enrolment::program().name.as_str(),
     ] {
         assert!(
-            registry_names.contains(&expected_name),
-            "all_programs() registry must include `{expected_name}`; \
-             currently contains: {registry_names:?}"
+            names.contains(&expected_name),
+            "the example enumeration must include `{expected_name}`; \
+             currently contains: {names:?}"
         );
     }
 }
 
 #[test]
-fn all_programs_registry_has_unique_names() {
-    // The CLI resolves a `--program` name by linear search through
-    // `all_programs()` and returns the first match. Duplicate names
+fn example_enumeration_has_unique_names() {
+    // A program is found by name via linear search; duplicate names
     // would make one of the duplicates unreachable, silently. Pin
-    // uniqueness so the failure surfaces immediately rather than at
-    // CLI invocation time.
-    let registry = common::all_programs();
-    let mut names: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
+    // uniqueness so the failure surfaces immediately.
+    let enumeration = common::all_programs();
+    let mut names: Vec<&str> = enumeration.iter().map(|p| p.name.as_str()).collect();
     let total = names.len();
     names.sort();
     names.dedup();
-    assert_eq!(
-        names.len(),
-        total,
-        "program names in all_programs() must be unique"
-    );
+    assert_eq!(names.len(), total, "example program names must be unique");
 }
 
 #[test]
-fn every_registered_program_passes_strict_arity_validation() {
-    // PR C contract: every built-in programme must declare every
+fn every_example_program_passes_strict_arity_validation() {
+    // Every worked programme must declare every
     // predicate it uses, with matching arity at every call site
     // (transformation bodies, invariant bodies, derived-claim
     // domains/shapes). The validator runs in strict mode - undeclared

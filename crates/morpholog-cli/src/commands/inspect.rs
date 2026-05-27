@@ -8,7 +8,7 @@ use morpholog_postgres::{
 };
 
 use crate::Inspect;
-use crate::commands::{connect, parse_or_exit, print_json};
+use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 /// Dispatch every `inspect` variant. Each variant either runs inline
 /// (the simple list-claims/audit/outbox ones) or delegates to a
@@ -58,6 +58,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
 /// - Connection failure or kernel error: propagated via anyhow context.
 async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> {
     let (program, _source, _name) = parse_or_exit(&args.file)?;
+    validate_or_exit(&program);
 
     let derived = program.derived_claim(&args.derived).ok_or_else(|| {
         let available = program
@@ -103,6 +104,7 @@ fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> 
 /// `--json` emits the structured form.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let (program, _source, _name) = parse_or_exit(&args.file)?;
+    validate_or_exit(&program);
     let guarantees = morpholog_core::guarantees(&program);
     if args.json {
         print_json(&guarantees)

@@ -213,17 +213,17 @@ pub(crate) enum Inspect {
     /// `delivered|failed|in-progress` for a specific slice. `--as-of`
     /// does not apply: outbox is delivery state, not claim state.
     Outbox(InspectOutboxArgs),
-    /// Enumerate a derived claim from a built-in program against the
+    /// Enumerate a derived claim from a `.morph` source file against the
     /// current state, or against the state at a past `transition_id`
     /// via `--as-of`. Read-only: no claims are written, no audit row
     /// is produced.
     Derived(InspectDerivedArgs),
-    /// List the declared predicate vocabulary for a built-in program.
+    /// List the declared predicate vocabulary of a `.morph` source file.
     /// Read-only: no database connection, no state. The declarations
     /// are static programme metadata, the same data `Program::validate`
     /// checks references against.
     Predicates(InspectPredicatesArgs),
-    /// Show the states a built-in program makes impossible - one entry
+    /// Show the states a `.morph` programme makes impossible - one entry
     /// per invariant, naming the forbidden state where it is
     /// mechanically obvious. Read-only and static: no database, no
     /// state. Prose by default; `--json` for the structured form.

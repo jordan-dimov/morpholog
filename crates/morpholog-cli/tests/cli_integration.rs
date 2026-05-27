@@ -972,3 +972,45 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
         "no rows should remain pending"
     );
 }
+
+// ============================================================
+// File-path subcommands validate before acting
+// ============================================================
+
+/// Write a temp `.morph` that parses but fails `Program::validate()`:
+/// the invariant references an undeclared predicate `Bar`. Now that the
+/// CLI parses arbitrary files, the file-path subcommands must hold them
+/// to the vocabulary contract.
+fn write_temp_invalid_morph() -> std::path::PathBuf {
+    let body = r#"
+program temp_invalid
+
+predicate Foo(x: Subject)
+
+invariant references_undeclared:
+    Bar(x) implies Foo(x)
+"#;
+    let dir = std::env::temp_dir().join(format!("morpholog_invalid_test_{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("invalid.morph");
+    std::fs::write(&path, body).expect("write temp .morph");
+    path
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_derived_validates_before_touching_the_database() {
+    // A parseable-but-invalid programme (undeclared predicate) is refused
+    // with validation diagnostics before the derived lookup or any
+    // database connection - the same gate `run` applies.
+    let path = write_temp_invalid_morph();
+    let (status, _stdout, stderr) =
+        run_cli(&["inspect", "derived", path.to_str().unwrap(), "AnyDerived"]);
+    assert!(
+        !status.success(),
+        "inspect derived on an invalid programme must exit non-zero"
+    );
+    assert!(
+        stderr.contains("Bar"),
+        "stderr should name the undeclared predicate: {stderr}"
+    );
+}

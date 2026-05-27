@@ -19,18 +19,13 @@ use morpholog_core::{EvalValue, Subject, Transition, explain};
 use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
-use crate::commands::{connect, parse_or_exit, print_json};
+use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same parse + validate front-end as `run`: a malformed programme
     // never reaches the explanation path.
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
-    if let Err(errors) = program.validate() {
-        for err in &errors {
-            eprintln!("error: {err}");
-        }
-        std::process::exit(1);
-    }
+    validate_or_exit(&program);
 
     let transformation = program
         .transformation(&args.transformation)
