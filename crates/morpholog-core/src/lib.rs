@@ -709,9 +709,10 @@ mod tests {
         );
     }
 
-    /// The cumulative-cap shape: `Le(Arith::Add(running, proposed), cap)`,
-    /// gating an authorisation under an aggregate limit. Pins the
-    /// composition so the kernel cannot drift.
+    /// The cumulative-cap shape: an `Arith` addition nested under a `<=`
+    /// comparison (`running + proposed <= cap`), gating an authorisation
+    /// under an aggregate limit. Pins the composition so the kernel cannot
+    /// drift.
     #[test]
     fn add_nests_under_le_for_cumulative_cap() {
         let running = ValueExpr::Term(Term::Literal(Value::Decimal("60".to_string())));

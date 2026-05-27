@@ -13,7 +13,7 @@
 //! - **Cumulative aggregate-limit gate.** This is the load-bearing
 //!   addition (`ValueExpr::Arith`) shape. Pins under-cap admission,
 //!   exact-fill boundary equality, and over-cap rejection that surfaces
-//!   from the `Le(Add(running, proposed), aggregate)` require.
+//!   from the `running + proposed <= aggregate` require.
 //!
 //! - **Read-side projection.** `PolicyLimitUsage` enumeration matches
 //!   the sum of admitted `SettlementPaid` per policy.
