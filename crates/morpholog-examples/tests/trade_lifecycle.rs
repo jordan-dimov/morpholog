@@ -2,19 +2,22 @@
 //! (`examples/10_trade_lifecycle/`).
 //!
 //! Outcome-level tests over the parsed example: capture, commodity-scoped
-//! confirmation authority, official-price correction as restatement,
-//! settlement gated on the in-force official price, and settling in slices
-//! against a cumulative captured-quantity cap. The heart of the suite is
-//! the last test - a correction after settlement leaves the prior
-//! settlement standing, the trade-lifecycle form of the
-//! `02_verified_revenue` lesson.
+//! confirmation authority, effective-dated terms and amendment,
+//! official-price correction as restatement, settlement gated on the
+//! in-force official price, and the effective-quantity cap (cumulative
+//! settled, by effective date, against the terms in force on that date).
+//! Two tests carry the weight: a backdated amendment lifts the cap so a
+//! previously-rejected slice becomes admissible, and a settlement made
+//! under the prior terms stays standing after a later amendment - the
+//! trade-lifecycle form of the `02_verified_revenue` lesson, now on the
+//! effective-time axis.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
 use common::{
-    dec, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
+    date, dec, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
 };
 use morpholog_core::{Invariant, Outcome, State};
 use morpholog_examples::trade_lifecycle;
@@ -23,8 +26,9 @@ fn invariants() -> Vec<Invariant> {
     trade_lifecycle::all_invariants()
 }
 
-// A power trade `t1`, captured for `qty` at a trader price of 50. Capture
-// carries no authority gate, so the default actor is fine.
+// A power trade `t1`, captured for `qty` at a trader price of 50, terms
+// version `tv1` effective from the trade date. Capture carries no
+// authority gate, so the default actor is fine.
 fn captured(qty: i64) -> State {
     must_accept(
         &trade_lifecycle::capture_trade(),
@@ -32,8 +36,10 @@ fn captured(qty: i64) -> State {
             subj("t1"),
             subj("power"),
             subj("buy"),
+            subj("tv1"),
             dec(qty),
             subj("cal26"),
+            date("2026-01-15"),
             dec(50),
         ],
         State::default(),
@@ -67,22 +73,39 @@ fn confirm_as(state: State, actor: &str, opid: &str, price: i64) -> State {
     )
 }
 
+// Settle a slice of `t1`: `qty` under settlement id `sid` and official
+// price `opid`, effective on business date `eff`.
+fn settle(state: State, qty: i64, sid: &str, opid: &str, eff: &str) -> State {
+    must_accept(
+        &trade_lifecycle::settle_trade(),
+        vec![subj("t1"), dec(qty), subj(sid), subj(opid), date(eff)],
+        state,
+        &invariants(),
+    )
+}
+
 // ============================================================
 // Capture
 // ============================================================
 
 #[test]
-fn capture_records_terms_and_trader_price() {
+fn capture_records_identity_terms_and_trader_price() {
     let post = captured(100);
+    // Identity is immutable; quantity lives on the versioned terms.
     assert!(has_claim(
         &post,
         "TradeCaptured",
+        &[subj("t1"), subj("power"), subj("buy")],
+    ));
+    assert!(has_claim(
+        &post,
+        "TradeTerms",
         &[
             subj("t1"),
-            subj("power"),
-            subj("buy"),
+            subj("tv1"),
             dec(100),
-            subj("cal26")
+            subj("cal26"),
+            date("2026-01-15"),
         ],
     ));
     assert!(has_claim(&post, "CapturedPrice", &[subj("t1"), dec(50)]));
@@ -97,8 +120,10 @@ fn duplicate_capture_is_rejected() {
             subj("t1"),
             subj("power"),
             subj("sell"),
+            subj("tv9"),
             dec(200),
             subj("cal26"),
+            date("2026-01-15"),
             dec(60),
         ],
         &pre,
@@ -115,8 +140,8 @@ fn duplicate_capture_is_rejected() {
 #[test]
 fn confirm_before_capture_is_rejected() {
     // Authority exists, but the trade was never captured: the gate
-    // `TradeCaptured(trade, commodity, _, _, _) and MayConfirm(...)`
-    // cannot be satisfied.
+    // `TradeCaptured(trade, commodity, _) and MayConfirm(...)` cannot be
+    // satisfied.
     let pre = grant(State::default(), "mo", "power");
     let outcome = propose_as(
         &trade_lifecycle::confirm_trade(),
@@ -194,6 +219,180 @@ fn second_confirmation_is_rejected() {
 }
 
 // ============================================================
+// Effective-dated terms and amendment
+// ============================================================
+
+#[test]
+fn amendment_admits_a_new_version_and_keeps_the_old() {
+    // Capture terms version tv1 (qty 100, effective 2026-01-15), then amend
+    // to tv2 (qty 120, effective 2026-02-01). Both versions stand on the
+    // record; the lineage link names which amended which.
+    let pre = grant(captured(100), "mo", "power");
+    let post = must_accept_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        pre,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &post,
+        "TradeTerms",
+        &[
+            subj("t1"),
+            subj("tv1"),
+            dec(100),
+            subj("cal26"),
+            date("2026-01-15"),
+        ],
+    ));
+    assert!(has_claim(
+        &post,
+        "TradeTerms",
+        &[
+            subj("t1"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+    ));
+    assert!(has_claim(
+        &post,
+        "TradeTermsSupersedes",
+        &[subj("tv2"), subj("tv1")],
+    ));
+}
+
+#[test]
+fn amending_an_unknown_version_is_rejected() {
+    // The version being amended must exist: the gate
+    // `require TradeTerms(trade, prior_version_id, _, _, _)` fails for tv9.
+    let pre = grant(captured(100), "mo", "power");
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv9"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        &pre,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn amending_an_already_amended_version_is_rejected() {
+    // The amendment chain never forks: once tv1 has been amended to tv2,
+    // a second amendment of tv1 is refused by `not TradeTermsSupersedes`.
+    let amended = must_accept_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        grant(captured(100), "mo", "power"),
+        &invariants(),
+    );
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv3"),
+            dec(130),
+            subj("cal26"),
+            date("2026-03-01"),
+        ],
+        "mo",
+        &amended,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn two_versions_on_the_same_effective_date_are_rejected() {
+    // Amendments must take distinct effective dates: a second version
+    // effective 2026-01-15 (tv1's date) violates
+    // one_terms_version_per_effective_date.
+    let pre = grant(captured(100), "mo", "power");
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-01-15"),
+        ],
+        "mo",
+        &pre,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("one_terms_version_per_effective_date"),
+            "expected the per-effective-date uniqueness invariant, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => panic!("two versions on one effective date must be rejected"),
+    }
+}
+
+#[test]
+fn reusing_a_version_id_for_a_different_record_is_rejected() {
+    // tv1 already names (t1, 100, cal26, 2026-01-15). Amending with tv1 as
+    // the *new* version id would make tv1 name a second, conflicting record
+    // - terms_version_id_identifies_one_record refuses it.
+    let pre = grant(captured(100), "mo", "power");
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv1"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        &pre,
+        &invariants(),
+    )
+    .unwrap();
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("terms_version_id_identifies_one_record"),
+            "expected the version-id uniqueness invariant, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("reusing a version id for a new record must be rejected")
+        }
+    }
+}
+
+// ============================================================
 // Official-price correction (restatement)
 // ============================================================
 
@@ -230,7 +429,11 @@ fn correction_moves_the_pointer_and_preserves_history() {
         &[subj("t1"), subj("op1")],
     ));
     // Lineage recorded.
-    assert!(has_claim(&post, "Supersedes", &[subj("op2"), subj("op1")]));
+    assert!(has_claim(
+        &post,
+        "OfficialPriceSupersedes",
+        &[subj("op2"), subj("op1")],
+    ));
 }
 
 #[test]
@@ -265,8 +468,10 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
             subj("t2"),
             subj("power"),
             subj("buy"),
+            subj("tv2"),
             dec(50),
             subj("cal26"),
+            date("2026-01-15"),
             dec(40),
         ],
         state,
@@ -284,7 +489,7 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
 }
 
 // ============================================================
-// Settlement
+// Settlement and the effective-quantity cap
 // ============================================================
 
 #[test]
@@ -293,7 +498,13 @@ fn settle_before_confirmation_is_rejected() {
     let pre = captured(100);
     let outcome = propose_with_test_actor(
         &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(100), subj("s1"), subj("op1")],
+        vec![
+            subj("t1"),
+            dec(100),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
         &pre,
         &invariants(),
     )
@@ -302,29 +513,36 @@ fn settle_before_confirmation_is_rejected() {
 }
 
 #[test]
-fn settlement_within_captured_quantity_succeeds() {
+fn settlement_within_the_effective_quantity_succeeds() {
     let pre = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let post = must_accept(
-        &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(100), subj("s1"), subj("op1")],
-        pre,
-        &invariants(),
-    );
+    let post = settle(pre, 100, "s1", "op1", "2026-01-20");
     assert!(has_claim(
         &post,
         "TradeSettled",
-        &[subj("t1"), dec(100), subj("s1"), subj("op1")],
+        &[
+            subj("t1"),
+            dec(100),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
     ));
 }
 
 #[test]
-fn settlement_over_captured_quantity_is_rejected() {
-    // Captured 100, settling 150 - the settled_quantity_within_captured
-    // invariant rejects the candidate state.
+fn settlement_over_the_effective_quantity_is_rejected() {
+    // Terms in force on the settlement date are qty 100; settling 150
+    // breaks settled_within_effective_terms.
     let pre = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let outcome = propose_with_test_actor(
         &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(150), subj("s1"), subj("op1")],
+        vec![
+            subj("t1"),
+            dec(150),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
         &pre,
         &invariants(),
     )
@@ -333,62 +551,174 @@ fn settlement_over_captured_quantity_is_rejected() {
 }
 
 #[test]
-fn trade_settles_in_slices_within_captured_quantity() {
-    // Capture 100, settle 60 then 40 - both slices admit and both
-    // TradeSettled claims stand, summing to exactly the captured quantity.
+fn trade_settles_in_slices_within_the_effective_quantity() {
+    // Capture 100, settle 60 effective Jan 20 then 40 effective Jan 25 -
+    // both slices admit and stand, the running total reaching exactly 100.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let first = must_accept(
-        &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(60), subj("s1"), subj("op1")],
-        confirmed,
-        &invariants(),
-    );
-    let second = must_accept(
-        &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(40), subj("s2"), subj("op1")],
-        first,
-        &invariants(),
-    );
+    let first = settle(confirmed, 60, "s1", "op1", "2026-01-20");
+    let second = settle(first, 40, "s2", "op1", "2026-01-25");
     assert!(has_claim(
         &second,
         "TradeSettled",
-        &[subj("t1"), dec(60), subj("s1"), subj("op1")],
+        &[
+            subj("t1"),
+            dec(60),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
     ));
     assert!(has_claim(
         &second,
         "TradeSettled",
-        &[subj("t1"), dec(40), subj("s2"), subj("op1")],
+        &[
+            subj("t1"),
+            dec(40),
+            subj("s2"),
+            subj("op1"),
+            date("2026-01-25"),
+        ],
     ));
 }
 
 #[test]
-fn slices_summing_over_captured_quantity_are_rejected() {
-    // Capture 100, settle 60 (fine), then 60 more - 60 alone is within
-    // cap, but the cumulative total 120 exceeds 100, so the second slice
-    // is rejected by the cumulative settled_quantity_within_captured.
+fn slices_summing_over_the_effective_quantity_are_rejected() {
+    // Capture 100, settle 60 effective Jan 20 (fine), then 60 more effective
+    // Jan 25. 60 alone is within cap, but the cumulative total effective by
+    // Jan 25 is 120, over the 100 in force then - rejected by the running
+    // total in settled_within_effective_terms.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let first = must_accept(
-        &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(60), subj("s1"), subj("op1")],
-        confirmed,
-        &invariants(),
-    );
+    let first = settle(confirmed, 60, "s1", "op1", "2026-01-20");
     let outcome = propose_with_test_actor(
         &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(60), subj("s2"), subj("op1")],
+        vec![
+            subj("t1"),
+            dec(60),
+            subj("s2"),
+            subj("op1"),
+            date("2026-01-25"),
+        ],
         &first,
         &invariants(),
     )
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("settled_quantity_within_captured"),
-            "expected the cumulative cap to reject the over-total slice, got: {reason}"
+            reason.contains("settled_within_effective_terms"),
+            "expected the cumulative effective cap to reject the over-total slice, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
-            panic!("slices summing over the captured quantity must be rejected")
+            panic!("slices summing over the effective quantity must be rejected")
         }
     }
+}
+
+#[test]
+fn backdated_amendment_lifts_the_effective_cap() {
+    // The headline of the effective-time story. Confirm at qty 100; a slice
+    // of 110 effective 2026-02-20 is rejected (over the 100 in force then).
+    // The desk then backdates an amendment to qty 120 effective 2026-02-01
+    // - before the settlement date, after the original 2026-01-15. Now the
+    // terms in force on 2026-02-20 allow 120, and the very same slice
+    // admits. The rejected attempt never happened; the amendment changed
+    // what is admissible.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+
+    let before = propose_with_test_actor(
+        &trade_lifecycle::settle_trade(),
+        vec![
+            subj("t1"),
+            dec(110),
+            subj("s1"),
+            subj("op1"),
+            date("2026-02-20"),
+        ],
+        &confirmed,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(
+        matches!(before, Outcome::Rejected { .. }),
+        "110 over the original 100 must be rejected before the amendment; got {before:?}"
+    );
+
+    let amended = must_accept_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        confirmed,
+        &invariants(),
+    );
+
+    let after = settle(amended, 110, "s1", "op1", "2026-02-20");
+    assert!(has_claim(
+        &after,
+        "TradeSettled",
+        &[
+            subj("t1"),
+            dec(110),
+            subj("s1"),
+            subj("op1"),
+            date("2026-02-20"),
+        ],
+    ));
+}
+
+#[test]
+fn settlement_under_prior_terms_remains_standing_after_amendment() {
+    // The effective-time form of the verified-revenue lesson. A slice of 80
+    // is settled effective 2026-01-20, well within the 100 in force then.
+    // The desk later backdates an amendment *down* to qty 50, effective
+    // 2026-02-01. Because the cap is judged per effective date against the
+    // terms in force on that date, the Jan 20 slice - governed by the 100
+    // still in force on Jan 20 - stays admitted. A backdated re-cut does not
+    // retroactively invalidate a settlement that was legitimate when made.
+    let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
+    let settled = settle(confirmed, 80, "s1", "op1", "2026-01-20");
+    let post = must_accept_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(50),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        settled,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &post,
+        "TradeSettled",
+        &[
+            subj("t1"),
+            dec(80),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
+    ));
+    // The lower terms now stand for dates from 2026-02-01 onward.
+    assert!(has_claim(
+        &post,
+        "TradeTerms",
+        &[
+            subj("t1"),
+            subj("tv2"),
+            dec(50),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+    ));
 }
 
 #[test]
@@ -399,15 +729,16 @@ fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
     // exact-duplicate claim would dedup in state and pass the invariant; it
     // is the re-emit the gate exists to stop.)
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let first = must_accept(
-        &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(40), subj("s1"), subj("op1")],
-        confirmed,
-        &invariants(),
-    );
+    let first = settle(confirmed, 40, "s1", "op1", "2026-01-20");
     let outcome = propose_with_test_actor(
         &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(40), subj("s1"), subj("op1")],
+        vec![
+            subj("t1"),
+            dec(40),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
         &first,
         &invariants(),
     )
@@ -429,7 +760,7 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let bad = ir_builder::transformation(
         "double_settle_one_id",
-        ir_builder::params(&["trade", "sid", "opid"]),
+        ir_builder::params(&["trade", "sid", "opid", "eff"]),
         vec![
             ir_builder::assert_(
                 "TradeSettled",
@@ -438,6 +769,7 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
                     ir_builder::dec("40"),
                     ir_builder::var("sid"),
                     ir_builder::var("opid"),
+                    ir_builder::var("eff"),
                 ],
             ),
             ir_builder::assert_(
@@ -447,13 +779,14 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
                     ir_builder::dec("30"),
                     ir_builder::var("sid"),
                     ir_builder::var("opid"),
+                    ir_builder::var("eff"),
                 ],
             ),
         ],
     );
     let outcome = propose_with_test_actor(
         &bad,
-        vec![subj("t1"), subj("s1"), subj("op1")],
+        vec![subj("t1"), subj("s1"), subj("op1"), date("2026-01-20")],
         &confirmed,
         &invariants(),
     )
@@ -471,17 +804,13 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
 
 #[test]
 fn correction_after_settlement_leaves_the_settlement_standing() {
-    // The heart of the example. Settle under official price op1, then
-    // correct the official price to op2. The settlement made under op1
-    // remains a true record of what was settled that day; only future
-    // settlements would see op2.
+    // Settle under official price op1, then correct the official price to
+    // op2. The settlement made under op1 remains a true record of what was
+    // settled that day; only future settlements would see op2. (The price
+    // axis; its terms-axis counterpart is
+    // settlement_under_prior_terms_remains_standing_after_amendment.)
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let settled = must_accept(
-        &trade_lifecycle::settle_trade(),
-        vec![subj("t1"), dec(100), subj("s1"), subj("op1")],
-        confirmed,
-        &invariants(),
-    );
+    let settled = settle(confirmed, 100, "s1", "op1", "2026-01-20");
     let post = must_accept_as(
         &trade_lifecycle::correct_official_price(),
         vec![subj("t1"), subj("op1"), subj("op2"), dec(49)],
@@ -494,7 +823,13 @@ fn correction_after_settlement_leaves_the_settlement_standing() {
     assert!(has_claim(
         &post,
         "TradeSettled",
-        &[subj("t1"), dec(100), subj("s1"), subj("op1")],
+        &[
+            subj("t1"),
+            dec(100),
+            subj("s1"),
+            subj("op1"),
+            date("2026-01-20"),
+        ],
     ));
     // The in-force official price has moved on.
     assert!(!has_claim(
@@ -507,5 +842,9 @@ fn correction_after_settlement_leaves_the_settlement_standing() {
         "CurrentOfficialPrice",
         &[subj("t1"), subj("op2")],
     ));
-    assert!(has_claim(&post, "Supersedes", &[subj("op2"), subj("op1")]));
+    assert!(has_claim(
+        &post,
+        "OfficialPriceSupersedes",
+        &[subj("op2"), subj("op1")],
+    ));
 }
