@@ -255,11 +255,11 @@ pub enum ValueExpr {
     /// Binary decimal arithmetic: `left <op> right`, both operands
     /// evaluating to `EvalValue::Decimal`. The operator is the [`ArithOp`]
     /// field rather than a variant per operator - the value-sort analogue
-    /// of [`Prop::Compare`] carrying a [`CompareOp`]. `Div` (and a future
-    /// `Mod`) surface [`crate::EvalError::DivisionByZero`] on a zero
-    /// divisor; the rest are total. Admission gates express ratio rules in
-    /// the multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact;
-    /// `Div` is reserved for read-side projections.
+    /// of [`Prop::Compare`] carrying a [`CompareOp`]. `Div` and `Mod`
+    /// surface [`crate::EvalError::DivisionByZero`] on a zero divisor; the
+    /// rest are total. Admission gates express ratio rules in the
+    /// multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact; `Div`
+    /// is reserved for read-side projections.
     Arith {
         op: ArithOp,
         left: Box<ValueExpr>,
@@ -304,8 +304,8 @@ pub enum CompareOp {
 
 /// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];
 /// the value-sort analogue of [`CompareOp`], replacing what would be a flat
-/// variant per operator. A new operator (e.g. `Mod`) is one row here, not a
-/// fresh `ValueExpr` variant rippled across every match.
+/// variant per operator. A new operator is one row here, not a fresh
+/// `ValueExpr` variant rippled across every match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithOp {
     Add,
@@ -314,17 +314,21 @@ pub enum ArithOp {
     Div,
     Min,
     Max,
+    /// Decimal remainder (`%`). Like `Div`, a zero divisor surfaces
+    /// [`crate::EvalError::DivisionByZero`]. Expresses parity and cyclic
+    /// rules - `(file + rank) % 2` for a chess square's colour.
+    Mod,
 }
 
 impl ArithOp {
-    /// Infix operators (`+` `-` `*` `/`) render `left <op> right` and
+    /// Infix operators (`+` `-` `*` `/` `%`) render `left <op> right` and
     /// parenthesise inside another arithmetic operand; the function-form
     /// operators (`min` / `max`) render `op(left, right)` and are
     /// self-delimiting, needing no parens.
     pub fn is_infix(self) -> bool {
         matches!(
             self,
-            ArithOp::Add | ArithOp::Sub | ArithOp::Mul | ArithOp::Div
+            ArithOp::Add | ArithOp::Sub | ArithOp::Mul | ArithOp::Div | ArithOp::Mod
         )
     }
 }

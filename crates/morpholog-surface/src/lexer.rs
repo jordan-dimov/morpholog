@@ -225,6 +225,8 @@ pub enum Token {
     Star,
     /// `/` (Div).
     Slash,
+    /// `%` (Mod).
+    Percent,
 }
 
 impl fmt::Display for Token {
@@ -284,6 +286,7 @@ impl fmt::Display for Token {
             Token::Minus => write!(f, "`-`"),
             Token::Star => write!(f, "`*`"),
             Token::Slash => write!(f, "`/`"),
+            Token::Percent => write!(f, "`%`"),
         }
     }
 }
@@ -420,6 +423,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         just('-').to(Token::Minus),
         just('*').to(Token::Star),
         just('/').to(Token::Slash),
+        just('%').to(Token::Percent),
         just('|').to(Token::Pipe),
     ));
 

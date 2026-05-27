@@ -230,6 +230,28 @@ fn mul_and_div_share_one_precedence_level() {
 }
 
 #[test]
+fn parses_modulo() {
+    let got = parse_value_expr("a % b").unwrap();
+    assert_eq!(got, arith(ArithOp::Mod, var_value("a"), var_value("b")));
+}
+
+#[test]
+fn modulo_shares_multiplicative_precedence() {
+    // `a + b % c` parses as `Add(a, Mod(b, c))` - `%` binds with `*`/`/`,
+    // tighter than `+`. The parity shape `(file + rank) % 2` relies on
+    // the explicit parens, since `+` is the looser operator.
+    let got = parse_value_expr("a + b % c").unwrap();
+    assert_eq!(
+        got,
+        arith(
+            ArithOp::Add,
+            var_value("a"),
+            arith(ArithOp::Mod, var_value("b"), var_value("c")),
+        )
+    );
+}
+
+#[test]
 fn parses_min() {
     let got = parse_value_expr("min(a, b)").unwrap();
     assert_eq!(got, arith(ArithOp::Min, var_value("a"), var_value("b")));

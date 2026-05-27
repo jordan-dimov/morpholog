@@ -55,10 +55,11 @@ pub enum EvalError {
     /// evaluation context, not AST position, so future contexts that
     /// carry both states share the primitive without IR change.
     PreStateUnavailable,
-    /// An `ArithOp::Div` evaluated with a zero divisor. A rule that
-    /// divides by zero cannot be evaluated, so it surfaces here rather
-    /// than producing a value; the proposal is rejected (or the derived
-    /// read errors). Gates avoid this by cross-multiplying with `Mul`.
+    /// An `ArithOp::Div` or `ArithOp::Mod` evaluated with a zero divisor.
+    /// A rule that divides (or takes a remainder) by zero cannot be
+    /// evaluated, so it surfaces here rather than producing a value; the
+    /// proposal is rejected (or the derived read errors). Gates avoid this
+    /// by cross-multiplying with `Mul`.
     DivisionByZero,
 }
 
@@ -492,6 +493,12 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                             }
                             a / b
                         }
+                        ArithOp::Mod => {
+                            if b == Decimal::ZERO {
+                                return Err(EvalError::DivisionByZero);
+                            }
+                            a % b
+                        }
                         ArithOp::Min => a.min(b),
                         ArithOp::Max => a.max(b),
                     };
@@ -810,7 +817,7 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir_builder::{dec, div, max, min, mul, subj, term};
+    use crate::ir_builder::{dec, div, max, min, modulo, mul, subj, term};
     use crate::state::State;
 
     // Evaluate a literal-only value expression against empty state/bindings.
@@ -842,6 +849,31 @@ mod tests {
         assert!(matches!(
             eval_lit(&div(term(dec("10")), term(dec("0")))),
             Err(EvalError::DivisionByZero)
+        ));
+    }
+
+    #[test]
+    fn modulo_takes_the_decimal_remainder() {
+        // 7 % 2 = 1 - the parity case the chess example relies on.
+        assert_eq!(
+            eval_lit(&modulo(term(dec("7")), term(dec("2")))).unwrap(),
+            eval_lit(&term(dec("1"))).unwrap(),
+        );
+    }
+
+    #[test]
+    fn modulo_by_zero_surfaces_division_by_zero() {
+        assert!(matches!(
+            eval_lit(&modulo(term(dec("10")), term(dec("0")))),
+            Err(EvalError::DivisionByZero)
+        ));
+    }
+
+    #[test]
+    fn modulo_rejects_non_decimal_operands() {
+        assert!(matches!(
+            eval_lit(&modulo(term(subj("x")), term(dec("2")))),
+            Err(EvalError::TypeMismatch(_))
         ));
     }
 

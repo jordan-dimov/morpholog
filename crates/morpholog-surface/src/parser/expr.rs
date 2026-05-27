@@ -646,13 +646,15 @@ where
             bare_ident,
         ));
 
-        // factor ::= primary (("*" | "/") primary)*  (left-assoc)
+        // factor ::= primary (("*" | "/" | "%") primary)*  (left-assoc)
         //
         // The multiplicative layer binds tighter than `+`/`-`, so
-        // `a + b * c` parses as `Add(a, Mul(b, c))`.
+        // `a + b * c` parses as `Add(a, Mul(b, c))` and `a + b % c` as
+        // `Add(a, Mod(b, c))`.
         let mul_op = choice((
             just(Token::Star).to(ArithOp::Mul),
             just(Token::Slash).to(ArithOp::Div),
+            just(Token::Percent).to(ArithOp::Mod),
         ));
         let factor =
             primary
