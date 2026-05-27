@@ -57,7 +57,8 @@ program trade_lifecycle
 -- the trader's estimate, recorded but carrying no settlement standing.
 -- `MayConfirm` is a desk's authority to confirm prices for a commodity,
 -- granted by `grant_confirm_authority`. `TradeConfirmed` records the
--- confirmation event against the counterparty. `OfficialPrice` is an
+-- confirmation event against the counterparty, stamping in the actor who
+-- confirmed it. `OfficialPrice` is an
 -- official price figure; `CurrentOfficialPrice` is the retractable
 -- pointer naming which official figure is in force for the trade right
 -- now - the one moving part, which a price correction moves.
@@ -67,7 +68,7 @@ program trade_lifecycle
 predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject, quantity: Decimal, delivery_period: Subject)
 predicate CapturedPrice(trade: Subject, price: Decimal)
 predicate MayConfirm(principal: Subject, commodity: Subject)
-predicate TradeConfirmed(trade: Subject, counterparty: Subject, confirmation_id: Subject)
+predicate TradeConfirmed(trade: Subject, counterparty: Subject, confirmation_id: Subject, confirmed_by: Subject)
 predicate OfficialPrice(trade: Subject, price: Decimal, official_price_id: Subject)
 predicate CurrentOfficialPrice(trade: Subject, official_price_id: Subject)
 predicate Supersedes(new_official_price_id: Subject, prior_official_price_id: Subject)
@@ -140,7 +141,7 @@ invariant at_most_one_capture_per_trade:
 -- has - so this invariant is what guarantees the property for all
 -- admitted state, by any path.
 invariant settled_trade_was_confirmed:
-    TradeSettled(trade, _, _, _) implies TradeConfirmed(trade, _, _)
+    TradeSettled(trade, _, _, _) implies TradeConfirmed(trade, _, _, _)
 
 
 -- The only ways state may change. A transformation proposes a set of
@@ -179,9 +180,9 @@ transformation grant_confirm_authority(principal, commodity):
 -- for settlement.
 transformation confirm_trade(trade, counterparty, confirmation_id, official_price_id, confirmed_price):
     require TradeCaptured(trade, commodity, _, _, _) and MayConfirm(actor, commodity)
-    require not TradeConfirmed(trade, _, _)
+    require not TradeConfirmed(trade, _, _, _)
     require not CurrentOfficialPrice(trade, _)
-    admit TradeConfirmed(trade, counterparty, confirmation_id)
+    admit TradeConfirmed(trade, counterparty, confirmation_id, actor)
     admit OfficialPrice(trade, confirmed_price, official_price_id)
     admit CurrentOfficialPrice(trade, official_price_id)
     emit TradeConfirmedAdmitted(trade, confirmation_id, official_price_id)

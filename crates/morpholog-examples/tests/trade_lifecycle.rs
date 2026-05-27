@@ -164,7 +164,7 @@ fn authorised_confirm_sets_the_official_price_in_force() {
     assert!(has_claim(
         &post,
         "TradeConfirmed",
-        &[subj("t1"), subj("cp1"), subj("conf1")],
+        &[subj("t1"), subj("cp1"), subj("conf1"), subj("mo")],
     ));
     assert!(has_claim(
         &post,

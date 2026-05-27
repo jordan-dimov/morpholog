@@ -43,7 +43,9 @@ An auditor later can ask, and the model answers by construction:
   official price is now 49.
 - *What is the official price now?* `op2` - the in-force pointer.
 - *Who confirmed it, and under what authority?* The confirmation event
-  carries the actor; the `MayConfirm(_, power)` authority current that day.
+  records the actor who confirmed it (its `confirmed_by`); the
+  `MayConfirm(_, power)` authority that satisfied the gate when the
+  confirmation was admitted.
 - *Could a trade be settled for more than was captured?* No - the runtime
   would not have admitted it.
 
@@ -78,7 +80,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | `TradeCaptured(trade, commodity, direction, quantity, delivery_period)` | The trade's terms, as the trader booked them. Fixed once captured. |
 | `CapturedPrice(trade, price)` | The trader's price estimate. Recorded, but never settleable on its own. |
 | `MayConfirm(principal, commodity)` | A desk's authority to confirm prices for a commodity. Granted by `grant_confirm_authority`. |
-| `TradeConfirmed(trade, counterparty, confirmation_id)` | The confirmation event against the counterparty. Happens once. |
+| `TradeConfirmed(trade, counterparty, confirmation_id, confirmed_by)` | The confirmation event against the counterparty, stamping in the actor who confirmed it. Happens once. |
 | `OfficialPrice(trade, price, official_price_id)` | An official price figure. Append-only; a correction admits a new one alongside the old. |
 | `CurrentOfficialPrice(trade, official_price_id)` | The retractable pointer naming which official figure is in force - the settlement figure. The one moving part. |
 | `Supersedes(new_official_price_id, prior_official_price_id)` | Correction lineage: which official figure replaced which. |
