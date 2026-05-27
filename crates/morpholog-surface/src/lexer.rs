@@ -154,6 +154,10 @@ pub enum Token {
     KwForall,
     /// `sum` aggregator keyword.
     KwSum,
+    /// `min` aggregator keyword (binary decimal minimum: `min(a, b)`).
+    KwMin,
+    /// `max` aggregator keyword (binary decimal maximum: `max(a, b)`).
+    KwMax,
     /// `value` claim-lookup keyword.
     KwValue,
     /// `default` keyword (only meaningful after `value Pred(args)`
@@ -255,6 +259,8 @@ impl fmt::Display for Token {
             Token::KwExists => write!(f, "`exists`"),
             Token::KwForall => write!(f, "`forall`"),
             Token::KwSum => write!(f, "`sum`"),
+            Token::KwMin => write!(f, "`min`"),
+            Token::KwMax => write!(f, "`max`"),
             Token::KwValue => write!(f, "`value`"),
             Token::KwDefault => write!(f, "`default`"),
             Token::KwIn => write!(f, "`in`"),
@@ -342,6 +348,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "exists" => Token::KwExists,
         "forall" => Token::KwForall,
         "sum" => Token::KwSum,
+        "min" => Token::KwMin,
+        "max" => Token::KwMax,
         "value" => Token::KwValue,
         "default" => Token::KwDefault,
         "in" => Token::KwIn,
