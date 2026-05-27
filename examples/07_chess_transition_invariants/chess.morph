@@ -1,8 +1,8 @@
 -- Chess, used here purely as a teaching example. Every other example in
 -- this repo is a real business domain; this one is deliberately a game,
--- because chess makes two ideas easy to see.
+-- because chess makes a few ideas easy to see.
 --
--- The first idea: some rules are about what a board position is allowed
+-- One idea: some rules are about what a board position is allowed
 -- to look like, while others are about how the board is allowed to
 -- *change* from one move to the next. "At most one king per colour" is
 -- the first kind - you can check it by looking at a single snapshot of
@@ -17,7 +17,7 @@
 -- the unwrapped `MoveCount(n)` is the value after. A rule that mentions
 -- both can constrain how one becomes the other.
 --
--- The second idea: a square has a colour, and that colour is stored
+-- Another idea: a square has a colour, and that colour is stored
 -- nowhere - it is *computed* from where the square sits. We name squares
 -- by two numbers, the file (column, 1 to 8) and the rank (row, 1 to 8),
 -- so the square a chess player calls c1 is file 3, rank 1. A square is
@@ -25,8 +25,9 @@
 -- "colour" means on a chessboard. We write the test as `(file + rank) %
 -- 2`, where `%` is the remainder after division: an even sum leaves
 -- remainder 0 (call it dark), an odd sum leaves remainder 1 (light).
--- From that one piece of arithmetic comes a famous fact we can enforce -
--- the two bishops of a colour always stand on opposite-coloured squares.
+-- From that one piece of arithmetic comes a well-known property we can
+-- enforce - the two bishops of a colour always stand on
+-- opposite-coloured squares.
 --
 -- The terms used below. An `invariant` is a rule that must hold for all
 -- admitted state - the runtime refuses to commit any change that would
@@ -59,7 +60,7 @@ predicate CurrentTurn(color: Subject)
 -- is announced by the squares it ran between.
 intent GameStarted()
 intent PieceMoved(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, dst_rank: Decimal)
-intent PieceCaptured(dst_file: Decimal, dst_rank: Decimal, captured_type: Subject)
+intent PieceCaptured(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, dst_rank: Decimal, captured_type: Subject)
 
 -- Rules about a single board position. Each one can be judged by
 -- looking at one snapshot; none needs to know what the board looked
@@ -86,13 +87,14 @@ invariant exactly_one_black_king:
 -- The two bishops of a colour stand on opposite-coloured squares. A
 -- square's colour is `(file + rank) % 2` - 0 for dark, 1 for light - so
 -- whenever two *different* squares each hold a bishop of the same colour
--- `c`, their colours must differ. This is the famous chessboard fact: a
--- light-squared bishop and a dark-squared bishop. One snapshot settles
--- it. Because a real bishop never changes its square colour, the pair
--- stays opposite for the whole game, and a move that would land both
--- bishops of a colour on one colour is turned away. (Note `c` is bound
--- by the first bishop and reused in the second, so the two are the same
--- colour; the `not (...)` excludes comparing a bishop with itself.)
+-- `c`, their colours must differ. This is the well-known chessboard
+-- property: a light-squared bishop and a dark-squared bishop. One
+-- snapshot settles it. Because a real bishop never changes its square
+-- colour, the pair stays opposite for the whole game, and a move that
+-- would land both bishops of a colour on one colour is turned away.
+-- (Note `c` is bound by the first bishop and reused in the second, so
+-- the two are the same colour; the `not (...)` excludes comparing a
+-- bishop with itself.)
 invariant bishops_on_opposite_square_colors:
   (PieceAt(f_a, r_a, #bishop, c) and PieceAt(f_b, r_b, #bishop, c) and not (f_a = f_b and r_a = r_b))
   implies ((f_a + r_a) % 2 != (f_b + r_b) % 2)
@@ -234,4 +236,4 @@ transformation capturing_move(src_f, src_r, dst_f, dst_r, new_turn):
   admit CurrentTurn(new_turn)
   admit MoveCount(next_m)
   admit PieceCount(next_p)
-  emit PieceCaptured(dst_f, dst_r, captured_type)
+  emit PieceCaptured(src_f, src_r, dst_f, dst_r, captured_type)

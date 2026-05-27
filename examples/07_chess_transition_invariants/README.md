@@ -1,6 +1,6 @@
 # Chess transition invariants
 
-A small chess world that demonstrates three Morpholog ideas: rules that constrain not just *what state is allowed* but *how state is allowed to change*; *counting* - a rule that fixes how many things of a kind may exist; and a *computed property* - a square's colour, which is stored nowhere and worked out from where the square sits, using the remainder operator `%`.
+A small chess world that demonstrates several Morpholog ideas: rules that constrain not just *what state is allowed* but *how state is allowed to change*; *counting* - a rule that fixes how many things of a kind may exist; and a *computed property* - a square's colour, which is stored nowhere and worked out from where the square sits, using the remainder operator `%`.
 
 The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+ and observes that some chess rules are properties of a single board position ("at most one king per colour"), while others are properties of a move ("the move counter goes up by exactly one"). Morpholog already supported the first kind. This example shows the second kind, made possible by a wrapper called `pre(...)` that lets a rule refer to the board *before* the move alongside the board *after*.
 
@@ -64,7 +64,7 @@ Rules that hold over any single board position - none of these needs `pre(...)`:
 | `board_with_pieces_has_a_counter` | A board with any pieces on it must carry a `PieceCount`. |
 | `at_most_eight_pawns_per_color` | A colour has at most eight pawns. |
 
-Most of these are *counting* rules, and they bring out a second language idea (the first being `pre(...)`). `sum(1 | PieceAt(_, #king, #white))` adds `1` for every white-king claim on the board - that is, it counts them. Pinning that count to `1` says "exactly one white king", which is strictly stronger than the "at most one" rule it replaces: it also forbids the count falling to zero, so **a king can never be captured**. `piece_count_matches_board` uses the same trick to tie the hand-maintained counter to reality - admit a stray piece without updating `PieceCount` and the count no longer matches, so the move is refused. A `sum` whose target is the literal `1` rather than a variable is how Morpholog counts.
+Most of these are *counting* rules, and they bring out another language idea alongside `pre(...)`. `sum(1 | PieceAt(_, _, #king, #white))` adds `1` for every white-king claim on the board - that is, it counts them. Pinning that count to `1` says "exactly one white king", which is strictly stronger than the "at most one" rule it replaces: it also forbids the count falling to zero, so **a king can never be captured**. `piece_count_matches_board` uses the same trick to tie the hand-maintained counter to reality - admit a stray piece without updating `PieceCount` and the count no longer matches, so the move is refused. A `sum` whose target is the literal `1` rather than a variable is how Morpholog counts.
 
 The last two go together. `piece_count_matches_board` only checks a counter that is *present*; on its own it would shrug at a buggy move that dropped the counter entirely. `board_with_pieces_has_a_counter` requires the counter to exist whenever pieces do. Together they say "the counter exists and is correct" - the same presence-plus-consistency pairing the [insurance example](../05_insurance_claim_settlement/) uses for policy headroom.
 
@@ -82,9 +82,9 @@ None of these can be expressed as a property of a single board. "The counter wen
 
 ### A rule about square colour
 
-The third idea is a property that is *computed*, not stored. On a chessboard every square has a colour, but nothing records it - the colour follows from where the square is. A square is dark when `file + rank` is even and light when it is odd. Morpholog writes that test with the remainder operator: `(file + rank) % 2` is `0` for dark squares and `1` for light ones.
+A further idea is a property that is *computed*, not stored. On a chessboard every square has a colour, but nothing records it - the colour follows from where the square is. A square is dark when `file + rank` is even and light when it is odd. Morpholog writes that test with the remainder operator: `(file + rank) % 2` is `0` for dark squares and `1` for light ones.
 
-That single piece of arithmetic lets the example state a famous fact as an invariant:
+That single piece of arithmetic lets the example state a well-known property as an invariant:
 
 | Invariant | What it says |
 | --- | --- |
@@ -115,5 +115,7 @@ If you ever need to distinguish "this is the very first time" from "this is a no
 ## What this example does not try to do
 
 This is not a chess engine and was never intended to be one. It does not enforce legal moves - a bishop moving sideways is admitted, as long as the basic structural and transition rules hold. It does not detect check, checkmate, stalemate, or any other game-ending condition. It does not model castling, en passant, promotion, or the touch-move rule. It does not handle multiple games at once.
+
+Nor does it enforce board bounds or integer coordinates: file and rank are decimals, and the fixtures use 1 to 8 by convention, but nothing here stops a piece from landing on file 99 or file 3.5. Keeping a piece on a real square would be another ordinary invariant (`PieceAt(f, r, _, _) implies (1 <= f and f <= 8 and 1 <= r and r <= 8)`), left out because this example is about transition invariants and computed square colour, not exhaustive board legality.
 
 What it does try to do is show, in the smallest space possible, what becomes expressible when invariants can refer to both a before and an after, and when a rule can compute a property like square colour rather than store it. The before-and-after mechanism is the same one the insurance example uses to enforce that every payment consumes exactly its amount of policy capacity. The chess setting is just easier to picture.
