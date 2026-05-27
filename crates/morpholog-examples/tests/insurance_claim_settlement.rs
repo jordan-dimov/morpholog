@@ -914,3 +914,107 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
         }
     }
 }
+
+// ============================================================
+// Per-claim coverage layer (min / max)
+// ============================================================
+//
+// When coverage terms are set, a settlement may not exceed the eligible
+// payout - min(per_claim_limit, max(0, loss - deductible)). These tests
+// exercise the cap (min), the deductible floor (max(0, ...)), and the
+// net-of-deductible amount in between.
+
+fn set_terms(state: State, policy_id: &str, deductible: i64, per_claim_limit: i64) -> State {
+    must_accept(
+        &insurance_claim_settlement::set_coverage_terms(),
+        vec![subj(policy_id), dec(deductible), dec(per_claim_limit)],
+        state,
+        &invariants(),
+    )
+}
+
+#[test]
+fn settlement_capped_at_per_claim_limit() {
+    // deductible 1_000, per-claim limit 50_000, loss 70_000:
+    // eligible = min(50_000, max(0, 70_000 - 1_000)) = 50_000 (the min cap).
+    let mut s = issue(State::default(), "p1", 1_000_000);
+    s = grant(s, "alex", 1_000_000);
+    s = set_terms(s, "p1", 1_000, 50_000);
+    s = report(s, "c1", "p1", 70_000);
+
+    let over = propose_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("c1"), subj("s_over"), dec(50_001)],
+        "alex",
+        &s,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(over, Outcome::Rejected { .. }));
+
+    let ok = must_accept_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("c1"), subj("s_ok"), dec(50_000)],
+        "alex",
+        s,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &ok,
+        "SettlementAuthorised",
+        &[subj("c1"), subj("s_ok"), dec(50_000), subj("alex")]
+    ));
+}
+
+#[test]
+fn loss_below_deductible_yields_no_payout() {
+    // loss 500, deductible 1_000: eligible = min(50_000, max(0, -500)) = 0
+    // (the max(0, ...) floor). Any positive settlement is rejected.
+    let mut s = issue(State::default(), "p1", 1_000_000);
+    s = grant(s, "alex", 1_000_000);
+    s = set_terms(s, "p1", 1_000, 50_000);
+    s = report(s, "c1", "p1", 500);
+
+    let outcome = propose_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("c1"), subj("s1"), dec(1)],
+        "alex",
+        &s,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Rejected { .. }));
+}
+
+#[test]
+fn settlement_pays_loss_net_of_deductible() {
+    // loss 30_000, deductible 1_000, limit 50_000:
+    // eligible = min(50_000, max(0, 29_000)) = 29_000. 29_000 admits, 29_001 not.
+    let mut s = issue(State::default(), "p1", 1_000_000);
+    s = grant(s, "alex", 1_000_000);
+    s = set_terms(s, "p1", 1_000, 50_000);
+    s = report(s, "c1", "p1", 30_000);
+
+    let over = propose_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("c1"), subj("s_over"), dec(29_001)],
+        "alex",
+        &s,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(over, Outcome::Rejected { .. }));
+
+    let ok = must_accept_as(
+        &insurance_claim_settlement::authorise_settlement(),
+        vec![subj("c1"), subj("s_ok"), dec(29_000)],
+        "alex",
+        s,
+        &invariants(),
+    );
+    assert!(has_claim(
+        &ok,
+        "SettlementAuthorised",
+        &[subj("c1"), subj("s_ok"), dec(29_000), subj("alex")]
+    ));
+}

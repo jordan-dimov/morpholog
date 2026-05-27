@@ -71,6 +71,10 @@ pub fn grant_settlement_authority() -> Transformation {
     crate::transformation(&PROGRAM, "grant_settlement_authority")
 }
 
+pub fn set_coverage_terms() -> Transformation {
+    crate::transformation(&PROGRAM, "set_coverage_terms")
+}
+
 pub fn authorise_settlement() -> Transformation {
     crate::transformation(&PROGRAM, "authorise_settlement")
 }
