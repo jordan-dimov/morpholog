@@ -236,6 +236,11 @@ pub fn div(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     arith(ArithOp::Div, lhs, rhs)
 }
 
+// `modulo`, not `mod`: the latter is a Rust keyword.
+pub fn modulo(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
+    arith(ArithOp::Mod, lhs, rhs)
+}
+
 pub fn min(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     arith(ArithOp::Min, lhs, rhs)
 }

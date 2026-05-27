@@ -52,6 +52,7 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
         ArithOp::Sub => "-",
         ArithOp::Mul => "*",
         ArithOp::Div => "/",
+        ArithOp::Mod => "%",
         ArithOp::Min => "min",
         ArithOp::Max => "max",
     }
@@ -610,6 +611,11 @@ mod tests {
         );
         let printed = format_value_inline(&collar);
         assert_eq!(printed, "min(a * b, max(0, c / d))");
+
+        // Mod renders infix `%` and parenthesises inside another operand,
+        // like the other infix arithmetic: the chess parity shape.
+        let parity = modulo(add(term(var("f")), term(var("r"))), term(dec("2")));
+        assert_eq!(format_value_inline(&parity), "(f + r) % 2");
     }
 
     #[test]
