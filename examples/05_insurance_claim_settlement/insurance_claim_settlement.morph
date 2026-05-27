@@ -149,6 +149,14 @@ invariant settlement_within_eligible_payout:
 invariant at_most_one_coverage_terms_per_policy:
     CoverageTerms(p, ded_a, lim_a) and CoverageTerms(p, ded_b, lim_b) implies (ded_a = ded_b and lim_a = lim_b)
 
+-- Coverage terms must make business sense: a deductible is non-negative
+-- (zero means no deductible), and a per-claim limit is strictly positive
+-- (a zero or negative limit would make the eligible-payout rule
+-- nonsensical - no claim could ever pay out).
+invariant coverage_terms_within_range:
+    CoverageTerms(p, deductible, per_claim_limit)
+    implies (0 <= deductible and 0 < per_claim_limit)
+
 
 
 -- The only ways state may change. A transformation proposes a set of

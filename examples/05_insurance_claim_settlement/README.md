@@ -56,6 +56,7 @@ See [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) for t
 | `headroom_consumed_by_payment` | A *transition* invariant: the only one in this example that compares the state before a transaction to the state after. It says that the change in `PolicyHeadroom` for a policy must equal the total of newly-admitted `SettlementPaid` amounts for that policy. If a payment was admitted, the headroom must have gone down by exactly that amount. See "How payments consume headroom" below for the full story. |
 | `settlement_within_eligible_payout` | When coverage terms are set, a settlement may not exceed the *eligible payout* - `min(per_claim_limit, max(0, loss - deductible))`: the loss above the deductible (`max(0, ...)` floors it at zero), capped at the per-claim limit (`min`). Vacuous for policies with no coverage terms, so it composes with, and sits inside, the aggregate cap. |
 | `at_most_one_coverage_terms_per_policy` | A policy has at most one set of coverage terms. |
+| `coverage_terms_within_range` | Coverage terms make business sense: the deductible is non-negative and the per-claim limit strictly positive. |
 
 The absence of an invariant tying `SettlementAuthority` to historical `SettlementAuthorised` is deliberate. Future revocation of authority must not invalidate the historical record - same pattern as the verified-revenue and approval-controls examples. Authority is checked at admission; the record stands.
 

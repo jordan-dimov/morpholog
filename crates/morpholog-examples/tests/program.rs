@@ -90,7 +90,7 @@ fn double_entry_ledger_program_has_expected_shape() {
 fn insurance_claim_settlement_program_has_expected_shape() {
     let p = insurance_claim_settlement::program();
     assert_eq!(p.name, "insurance_claim_settlement");
-    assert_eq!(p.invariants.len(), 9);
+    assert_eq!(p.invariants.len(), 10);
     assert_eq!(p.transformations.len(), 5);
 
     assert!(p.transformation("issue_policy").is_some());
@@ -114,6 +114,7 @@ fn insurance_claim_settlement_program_has_expected_shape() {
         p.invariant("at_most_one_coverage_terms_per_policy")
             .is_some()
     );
+    assert!(p.invariant("coverage_terms_within_range").is_some());
 }
 
 #[test]

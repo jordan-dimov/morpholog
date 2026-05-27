@@ -1018,3 +1018,29 @@ fn settlement_pays_loss_net_of_deductible() {
         &[subj("c1"), subj("s_ok"), dec(29_000), subj("alex")]
     ));
 }
+
+#[test]
+fn nonsensical_coverage_terms_are_rejected() {
+    // coverage_terms_within_range refuses a negative deductible or a
+    // non-positive per-claim limit, so the layer cannot be set up on
+    // terms that would make the eligible-payout rule meaningless.
+    let s = issue(State::default(), "p1", 1_000_000);
+
+    let negative_deductible = propose_with_test_actor(
+        &insurance_claim_settlement::set_coverage_terms(),
+        vec![subj("p1"), dec(-1), dec(50_000)],
+        &s,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(negative_deductible, Outcome::Rejected { .. }));
+
+    let zero_limit = propose_with_test_actor(
+        &insurance_claim_settlement::set_coverage_terms(),
+        vec![subj("p1"), dec(1_000), dec(0)],
+        &s,
+        &invariants(),
+    )
+    .unwrap();
+    assert!(matches!(zero_limit, Outcome::Rejected { .. }));
+}
