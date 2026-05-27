@@ -194,8 +194,11 @@ fn apply_cmp<T: PartialOrd>(op: CompareOp, a: T, b: T) -> bool {
 
 /// `a xor b` is defined as exactly-one: `(a or b) and not (a and b)`.
 /// Lowering to that combination keeps XOR's binding semantics identical
-/// to the hand-written form - it is a spelling, not new evaluation.
-fn lower_xor(left: &Prop, right: &Prop) -> Prop {
+/// to the hand-written form - it is a spelling, not new evaluation. The
+/// single definition of what xor expands to: `find_matches` evaluates it,
+/// and the validator measures *this* shape's depth (not the one binary
+/// node) so a deep xor cannot pass the depth guard yet overflow eval.
+pub(crate) fn lower_xor(left: &Prop, right: &Prop) -> Prop {
     Prop::And(vec![
         Prop::Or(vec![left.clone(), right.clone()]),
         Prop::Not(Box::new(Prop::And(vec![left.clone(), right.clone()]))),

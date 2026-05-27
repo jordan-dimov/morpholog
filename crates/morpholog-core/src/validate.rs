@@ -339,9 +339,14 @@ fn prop_exceeds_depth(prop: &Prop, budget: usize) -> bool {
         Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
             prop_exceeds_depth(inner, budget)
         }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+        Prop::Implies { left, right } => {
             prop_exceeds_depth(left, budget) || prop_exceeds_depth(right, budget)
         }
+        // Xor is evaluated by lowering to `(a or b) and not (a and b)`,
+        // which nests deeper than the one binary node. Measure that
+        // lowered shape - the same definition eval uses - so a deep xor
+        // chain cannot pass the depth guard and then overflow eval.
+        Prop::Xor(left, right) => prop_exceeds_depth(&crate::eval::lower_xor(left, right), budget),
         Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
             value_exceeds_depth(left, budget) || value_exceeds_depth(right, budget)
         }
