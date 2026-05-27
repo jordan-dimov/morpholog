@@ -81,7 +81,7 @@ ValueExpr                        -- a value expression: computes exactly one val
                                     Evaluated by eval_value.
   Term                           -- a leaf (Var, Wildcard, Literal, Actor)
   Arith { op: ArithOp, left, right }  -- decimal arithmetic; op is one of
-                                    Add | Sub | Mul | Div (infix + - * /) or
+                                    Add | Sub | Mul | Div | Mod (infix + - * / %) or
                                     Min | Max (floor / cap, min(a,b) / max(a,b))
   Sum { value, body: Prop }      -- sum a value over a proposition's matches
   ValueOf { predicate, args, default }  -- unique-lookup value extraction

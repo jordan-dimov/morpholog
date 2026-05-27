@@ -1,14 +1,18 @@
 //! Integration tests for the chess transition invariants example
 //! (`examples/07_chess_transition_invariants/`).
 //!
-//! The example's reason to exist is to force `Prop::Pre` into the
+//! The example's first reason to exist is to force `Prop::Pre` into the
 //! kernel. These tests pin the load-bearing claim: a transition
-//! invariant catches a bug that a state invariant cannot.
+//! invariant catches a bug that a state invariant cannot. It is also the
+//! forcing home for `ArithOp::Mod`: squares are `(file, rank)`
+//! coordinates and a square's colour is `(file + rank) % 2`, which the
+//! `bishops_on_opposite_square_colors` invariant uses.
 //!
 //! Layers covered: IR-shape sanity, full-chain `propose()` over the
-//! initialisation and movement transformations, and a hand-built
-//! broken transformation that violates `move_count_strictly_
-//! increases` to prove the transition invariants actually gate.
+//! initialisation and movement transformations, the parity invariant
+//! (a bishop changing square colour is rejected, keeping it is allowed),
+//! and a hand-built broken transformation that violates `move_count_
+//! strictly_increases` to prove the transition invariants actually gate.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -40,6 +44,7 @@ fn program_has_expected_invariant_set() {
             "at_most_one_piece_per_square",
             "exactly_one_white_king",
             "exactly_one_black_king",
+            "bishops_on_opposite_square_colors",
             "piece_count_matches_board",
             "board_with_pieces_has_a_counter",
             "at_most_eight_pawns_per_color",
@@ -58,14 +63,14 @@ fn program_has_expected_invariant_set() {
 fn capturing_a_king_is_rejected() {
     use common::claim_instance;
 
-    // A minimal mid-game position: a white rook on a1 poised to take
-    // the black king on a8, both kings present, the counter consistent
-    // with the four pieces on the board.
+    // A minimal mid-game position: a white rook on a1 (file 1, rank 1)
+    // poised to take the black king on a8 (file 1, rank 8), both kings
+    // present, the counter consistent with the four pieces on the board.
     let pre = State::from_claims(vec![
-        claim_instance("PieceAt", &[subj("a1"), subj("rook"), subj("white")]),
-        claim_instance("PieceAt", &[subj("e1"), subj("king"), subj("white")]),
-        claim_instance("PieceAt", &[subj("a8"), subj("king"), subj("black")]),
-        claim_instance("PieceAt", &[subj("h8"), subj("rook"), subj("black")]),
+        claim_instance("PieceAt", &[dec(1), dec(1), subj("rook"), subj("white")]),
+        claim_instance("PieceAt", &[dec(5), dec(1), subj("king"), subj("white")]),
+        claim_instance("PieceAt", &[dec(1), dec(8), subj("king"), subj("black")]),
+        claim_instance("PieceAt", &[dec(8), dec(8), subj("rook"), subj("black")]),
         claim_instance("CurrentTurn", &[subj("white")]),
         claim_instance("MoveCount", &[dec(10)]),
         claim_instance("PieceCount", &[dec(4)]),
@@ -75,7 +80,7 @@ fn capturing_a_king_is_rejected() {
     let capturing = program.transformation("capturing_move").expect("exists");
     let outcome = propose_with_test_actor(
         capturing,
-        vec![subj("a1"), subj("a8"), subj("black")],
+        vec![dec(1), dec(1), dec(1), dec(8), subj("black")],
         &pre,
         &program.invariants,
     )
@@ -113,12 +118,13 @@ fn piece_count_drift_is_rejected() {
     // correctly, so the census invariant is the one that must fire.
     let drifting_move = ir_builder::transformation(
         "drifting_move",
-        ir_builder::params(&["src", "dst", "new_turn"]),
+        ir_builder::params(&["src_f", "src_r", "dst_f", "dst_r", "new_turn"]),
         vec![
             ir_builder::bind_one(ir_builder::claim(
                 "PieceAt",
                 vec![
-                    ir_builder::var("src"),
+                    ir_builder::var("src_f"),
+                    ir_builder::var("src_r"),
                     ir_builder::var("pt"),
                     ir_builder::var("pc"),
                 ],
@@ -141,11 +147,12 @@ fn piece_count_drift_is_rejected() {
             ),
             ir_builder::retract("CurrentTurn", vec![ir_builder::var("turn")]),
             ir_builder::retract("MoveCount", vec![ir_builder::var("m")]),
-            // Conspicuously missing: retract of the piece at `src`.
+            // Conspicuously missing: retract of the piece at the source square.
             ir_builder::assert_(
                 "PieceAt",
                 vec![
-                    ir_builder::var("dst"),
+                    ir_builder::var("dst_f"),
+                    ir_builder::var("dst_r"),
                     ir_builder::var("pt"),
                     ir_builder::var("pc"),
                 ],
@@ -159,11 +166,11 @@ fn piece_count_drift_is_rejected() {
         .transformation("drifting_move")
         .expect("just pushed");
 
-    // Knight b1 -> c3 (c3 is empty in the opening); the knight ends up
-    // on both squares.
+    // Knight b1 -> c3 (file 2 rank 1 -> file 3 rank 3; c3 is empty in the
+    // opening); the knight ends up on both squares.
     let outcome = propose_with_test_actor(
         drifting,
-        vec![subj("b1"), subj("c3"), subj("black")],
+        vec![dec(2), dec(1), dec(3), dec(3), subj("black")],
         &state,
         &program.invariants,
     )
@@ -279,7 +286,7 @@ fn quiet_move_after_opening_succeeds() {
     let next = run_named(
         &program,
         "quiet_move",
-        vec![subj("e2"), subj("e4"), subj("black")],
+        vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
         state,
     );
 
@@ -298,20 +305,81 @@ fn quiet_move_after_opening_succeeds() {
             .any(|c| { c.predicate.as_str() == "CurrentTurn" && c.args == vec![subj("black")] }),
         "CurrentTurn must be black after white moves"
     );
-    // The pawn relocated.
+    // The pawn relocated from e2 (file 5, rank 2) to e4 (file 5, rank 4).
     assert!(
         next.claims().iter().any(|c| {
             c.predicate.as_str() == "PieceAt"
-                && c.args == vec![subj("e4"), subj("pawn"), subj("white")]
+                && c.args == vec![dec(5), dec(4), subj("pawn"), subj("white")]
         }),
         "pawn must be at e4 after the move"
     );
     assert!(
         !next.claims().iter().any(|c| {
             c.predicate.as_str() == "PieceAt"
-                && c.args == vec![subj("e2"), subj("pawn"), subj("white")]
+                && c.args == vec![dec(5), dec(2), subj("pawn"), subj("white")]
         }),
         "pawn must no longer be at e2"
+    );
+}
+
+// ============================================================
+// Square colour: the `(file + rank) % 2` parity invariant.
+// ============================================================
+
+/// A bishop that changes square colour is rejected once it would put
+/// both bishops of a colour on the same colour. White's dark-squared
+/// bishop starts on c1 (file 3, rank 1; `(3+1) % 2 = 0`, dark). Sliding
+/// it to d3 (file 4, rank 3; `(4+3) % 2 = 1`, light) would join white's
+/// other bishop on f1 (file 6, rank 1; `(6+1) % 2 = 1`, light) - two
+/// light-squared white bishops - and `bishops_on_opposite_square_colors`
+/// turns the move away. This is the parity arithmetic doing the work.
+#[test]
+fn bishop_changing_square_color_is_rejected() {
+    let program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+
+    let bishop = program.transformation("quiet_move").expect("exists");
+    let outcome = propose_with_test_actor(
+        bishop,
+        vec![dec(3), dec(1), dec(4), dec(3), subj("black")],
+        &state,
+        &program.invariants,
+    )
+    .expect("kernel must not error");
+
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.contains("bishops_on_opposite_square_colors"),
+            "expected the parity invariant to reject the colour change, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => {
+            panic!("a bishop landing on its partner's square colour must be rejected")
+        }
+    }
+}
+
+/// The same bishop sliding to another square of its *own* colour is
+/// allowed. c1 (dark, parity 0) to e3 (file 5, rank 3; `(5+3) % 2 = 0`,
+/// dark) keeps the two white bishops on opposite colours, so the parity
+/// invariant is satisfied and the move commits.
+#[test]
+fn bishop_keeping_square_color_is_allowed() {
+    let program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+
+    let next = run_named(
+        &program,
+        "quiet_move",
+        vec![dec(3), dec(1), dec(5), dec(3), subj("black")],
+        state,
+    );
+
+    assert!(
+        next.claims().iter().any(|c| {
+            c.predicate.as_str() == "PieceAt"
+                && c.args == vec![dec(5), dec(3), subj("bishop"), subj("white")]
+        }),
+        "bishop must be at e3 after a same-colour move"
     );
 }
 
@@ -345,12 +413,13 @@ fn transition_invariant_catches_missing_move_count_bump() {
     // candidate state. The transition invariant must catch this.
     let buggy_move = ir_builder::transformation(
         "buggy_quiet_move",
-        ir_builder::params(&["src", "dst", "new_turn"]),
+        ir_builder::params(&["src_f", "src_r", "dst_f", "dst_r", "new_turn"]),
         vec![
             ir_builder::bind_one(ir_builder::claim(
                 "PieceAt",
                 vec![
-                    ir_builder::var("src"),
+                    ir_builder::var("src_f"),
+                    ir_builder::var("src_r"),
                     ir_builder::var("piece_type"),
                     ir_builder::var("piece_color"),
                 ],
@@ -370,7 +439,8 @@ fn transition_invariant_catches_missing_move_count_bump() {
             ir_builder::retract(
                 "PieceAt",
                 vec![
-                    ir_builder::var("src"),
+                    ir_builder::var("src_f"),
+                    ir_builder::var("src_r"),
                     ir_builder::var("piece_type"),
                     ir_builder::var("piece_color"),
                 ],
@@ -379,7 +449,8 @@ fn transition_invariant_catches_missing_move_count_bump() {
             ir_builder::assert_(
                 "PieceAt",
                 vec![
-                    ir_builder::var("dst"),
+                    ir_builder::var("dst_f"),
+                    ir_builder::var("dst_r"),
                     ir_builder::var("piece_type"),
                     ir_builder::var("piece_color"),
                 ],
@@ -388,7 +459,12 @@ fn transition_invariant_catches_missing_move_count_bump() {
             // Conspicuously missing: the MoveCount retract + assert.
             ir_builder::emit(
                 "PieceMoved",
-                vec![ir_builder::var("src"), ir_builder::var("dst")],
+                vec![
+                    ir_builder::var("src_f"),
+                    ir_builder::var("src_r"),
+                    ir_builder::var("dst_f"),
+                    ir_builder::var("dst_r"),
+                ],
             ),
         ],
     );
@@ -399,7 +475,7 @@ fn transition_invariant_catches_missing_move_count_bump() {
         .expect("just pushed");
     let outcome = propose_with_test_actor(
         buggy,
-        vec![subj("e2"), subj("e4"), subj("black")],
+        vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
         &state,
         &program.invariants,
     )

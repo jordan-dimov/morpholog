@@ -1,21 +1,32 @@
 -- Chess, used here purely as a teaching example. Every other example in
 -- this repo is a real business domain; this one is deliberately a game,
--- because chess makes one idea easy to see.
+-- because chess makes two ideas easy to see.
 --
--- That idea: some rules are about what a board position is allowed to
--- look like, while others are about how the board is allowed to *change*
--- from one move to the next. "At most one king per colour" is the first
--- kind - you can check it by looking at a single snapshot of the board.
--- But "every move advances the move counter by exactly one", "the turn
--- always flips to the other player", and "a move captures at most one
--- piece" are the second kind. You cannot check them by looking at one
--- position alone; you have to compare the board before the move with the
--- board after it. That is what makes them interesting.
+-- The first idea: some rules are about what a board position is allowed
+-- to look like, while others are about how the board is allowed to
+-- *change* from one move to the next. "At most one king per colour" is
+-- the first kind - you can check it by looking at a single snapshot of
+-- the board. But "every move advances the move counter by exactly one",
+-- "the turn always flips to the other player", and "a move captures at
+-- most one piece" are the second kind. You cannot check them by looking
+-- at one position alone; you have to compare the board before the move
+-- with the board after it. That is what makes them interesting.
 --
 -- Morpholog expresses the second kind with `pre(...)`. Read
 -- `pre(MoveCount(m))` as "the move count as it was before this move";
 -- the unwrapped `MoveCount(n)` is the value after. A rule that mentions
 -- both can constrain how one becomes the other.
+--
+-- The second idea: a square has a colour, and that colour is stored
+-- nowhere - it is *computed* from where the square sits. We name squares
+-- by two numbers, the file (column, 1 to 8) and the rank (row, 1 to 8),
+-- so the square a chess player calls c1 is file 3, rank 1. A square is
+-- dark when file + rank is even and light when it is odd - that is all
+-- "colour" means on a chessboard. We write the test as `(file + rank) %
+-- 2`, where `%` is the remainder after division: an even sum leaves
+-- remainder 0 (call it dark), an odd sum leaves remainder 1 (light).
+-- From that one piece of arithmetic comes a famous fact we can enforce -
+-- the two bishops of a colour always stand on opposite-coloured squares.
 --
 -- The terms used below. An `invariant` is a rule that must hold for all
 -- admitted state - the runtime refuses to commit any change that would
@@ -24,49 +35,67 @@
 -- to admit, never bare "facts": the board is just a set of claims that
 -- such-and-such piece sits on such-and-such square.
 --
--- This is not a chess engine. It does not enforce legal moves (a bishop
--- may slide sideways here), and it knows nothing of check, castling, or
--- promotion. It models only enough to show before-and-after rules.
--- Inspired by Murat Demirbas's Chess invariants post:
+-- This is not a chess engine. Beyond the rules written here it does not
+-- enforce legal moves (a rook may leap, a bishop may slide sideways),
+-- and it knows nothing of check, castling, or promotion. It models only
+-- enough to show before-and-after rules and square colour. Inspired by
+-- Murat Demirbas's Chess invariants post:
 -- https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html
 
 program chess_transition_invariants
 
 -- The vocabulary. The board is just a pile of "this piece is on this
--- square" claims, plus three counters that track the game as a whole:
--- how many moves have been played, how many pieces remain on the board,
--- and whose turn it is.
-predicate PieceAt(square: Subject, piece_type: Subject, color: Subject)
+-- square" claims, where a square is its file and rank (each 1 to 8),
+-- plus three counters that track the game as a whole: how many moves
+-- have been played, how many pieces remain on the board, and whose turn
+-- it is.
+predicate PieceAt(file: Decimal, rank: Decimal, piece_type: Subject, color: Subject)
 predicate MoveCount(n: Decimal)
 predicate PieceCount(n: Decimal)
 predicate CurrentTurn(color: Subject)
 
 -- Intents are messages announced to the outside world after a move
--- commits: the game started, a piece moved, a piece was captured.
+-- commits: the game started, a piece moved, a piece was captured. A move
+-- is announced by the squares it ran between.
 intent GameStarted()
-intent PieceMoved(src: Subject, dst: Subject)
-intent PieceCaptured(src: Subject, dst: Subject, captured_type: Subject)
+intent PieceMoved(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, dst_rank: Decimal)
+intent PieceCaptured(dst_file: Decimal, dst_rank: Decimal, captured_type: Subject)
 
 -- Rules about a single board position. Each one can be judged by
 -- looking at one snapshot; none needs to know what the board looked
 -- like a move ago.
 
 -- A square holds at most one piece. If two claims put a piece on the
--- same square, they must be describing the very same piece.
+-- same square - the same file and rank - they must be describing the
+-- very same piece.
 invariant at_most_one_piece_per_square:
-  (PieceAt(sq, t_a, c_a) and PieceAt(sq, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
+  (PieceAt(f, r, t_a, c_a) and PieceAt(f, r, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
 
--- Exactly one king of each colour - always. `sum(1 | PieceAt(_, #king,
--- #white))` counts how many white-king claims are on the board (it adds
--- 1 for every match), and we insist that count is 1. This is stronger
--- than "at most one king": it also forbids the count dropping to zero,
--- so a king can never be captured. We state it once per colour, since
--- chess has exactly two.
+-- Exactly one king of each colour - always. `sum(1 | PieceAt(_, _,
+-- #king, #white))` counts how many white-king claims are on the board
+-- (it adds 1 for every match), and we insist that count is 1. This is
+-- stronger than "at most one king": it also forbids the count dropping
+-- to zero, so a king can never be captured. We state it once per colour,
+-- since chess has exactly two.
 invariant exactly_one_white_king:
-  sum(1 | PieceAt(_, #king, #white)) = 1
+  sum(1 | PieceAt(_, _, #king, #white)) = 1
 
 invariant exactly_one_black_king:
-  sum(1 | PieceAt(_, #king, #black)) = 1
+  sum(1 | PieceAt(_, _, #king, #black)) = 1
+
+-- The two bishops of a colour stand on opposite-coloured squares. A
+-- square's colour is `(file + rank) % 2` - 0 for dark, 1 for light - so
+-- whenever two *different* squares each hold a bishop of the same colour
+-- `c`, their colours must differ. This is the famous chessboard fact: a
+-- light-squared bishop and a dark-squared bishop. One snapshot settles
+-- it. Because a real bishop never changes its square colour, the pair
+-- stays opposite for the whole game, and a move that would land both
+-- bishops of a colour on one colour is turned away. (Note `c` is bound
+-- by the first bishop and reused in the second, so the two are the same
+-- colour; the `not (...)` excludes comparing a bishop with itself.)
+invariant bishops_on_opposite_square_colors:
+  (PieceAt(f_a, r_a, #bishop, c) and PieceAt(f_b, r_b, #bishop, c) and not (f_a = f_b and r_a = r_b))
+  implies ((f_a + r_a) % 2 != (f_b + r_b) % 2)
 
 -- The piece counter must agree with the board it summarises: the number
 -- stored in PieceCount must equal the actual number of pieces, counted
@@ -74,7 +103,7 @@ invariant exactly_one_black_king:
 -- ever drifting from reality - admit a stray piece without bumping the
 -- counter and this rule turns the whole move away.
 invariant piece_count_matches_board:
-  PieceCount(n) implies (n = sum(1 | PieceAt(_, _, _)))
+  PieceCount(n) implies (n = sum(1 | PieceAt(_, _, _, _)))
 
 -- The rule above only bites when a PieceCount claim exists - on its own
 -- it would be silently happy if a buggy move dropped the counter
@@ -82,7 +111,7 @@ invariant piece_count_matches_board:
 -- counter. The two together say "the counter exists and is correct";
 -- neither says that alone.
 invariant board_with_pieces_has_a_counter:
-  PieceAt(_, _, _) implies (exists n: PieceCount(n))
+  PieceAt(_, _, _, _) implies (exists n: PieceCount(n))
 
 -- At most eight pawns per colour. Here `c` is bound by the left side to
 -- whichever colour has a pawn, and the count on the right is scoped to
@@ -90,7 +119,7 @@ invariant board_with_pieces_has_a_counter:
 -- the bound is never really threatened - it is here to show counting
 -- inside a comparison.)
 invariant at_most_eight_pawns_per_color:
-  PieceAt(_, #pawn, c) implies (sum(1 | PieceAt(_, #pawn, c)) <= 8)
+  PieceAt(_, _, #pawn, c) implies (sum(1 | PieceAt(_, _, #pawn, c)) <= 8)
 
 -- Rules about how the board changes from one move to the next. These
 -- compare the board after the move (the plain reading) with the board
@@ -118,40 +147,42 @@ invariant single_capture_per_move:
 -- `admit` adds a claim, `retract` removes one, `require` gates the move.
 
 -- Set up the opening position: all 32 pieces on their starting squares,
--- the move counter at zero, the piece count at 32, white to play.
+-- the move counter at zero, the piece count at 32, white to play. Files
+-- a to h are 1 to 8; the white army sits on ranks 1 and 2, the black
+-- army on ranks 7 and 8.
 transformation start_game():
-  admit PieceAt(#a1, #rook, #white)
-  admit PieceAt(#b1, #knight, #white)
-  admit PieceAt(#c1, #bishop, #white)
-  admit PieceAt(#d1, #queen, #white)
-  admit PieceAt(#e1, #king, #white)
-  admit PieceAt(#f1, #bishop, #white)
-  admit PieceAt(#g1, #knight, #white)
-  admit PieceAt(#h1, #rook, #white)
-  admit PieceAt(#a2, #pawn, #white)
-  admit PieceAt(#b2, #pawn, #white)
-  admit PieceAt(#c2, #pawn, #white)
-  admit PieceAt(#d2, #pawn, #white)
-  admit PieceAt(#e2, #pawn, #white)
-  admit PieceAt(#f2, #pawn, #white)
-  admit PieceAt(#g2, #pawn, #white)
-  admit PieceAt(#h2, #pawn, #white)
-  admit PieceAt(#a7, #pawn, #black)
-  admit PieceAt(#b7, #pawn, #black)
-  admit PieceAt(#c7, #pawn, #black)
-  admit PieceAt(#d7, #pawn, #black)
-  admit PieceAt(#e7, #pawn, #black)
-  admit PieceAt(#f7, #pawn, #black)
-  admit PieceAt(#g7, #pawn, #black)
-  admit PieceAt(#h7, #pawn, #black)
-  admit PieceAt(#a8, #rook, #black)
-  admit PieceAt(#b8, #knight, #black)
-  admit PieceAt(#c8, #bishop, #black)
-  admit PieceAt(#d8, #queen, #black)
-  admit PieceAt(#e8, #king, #black)
-  admit PieceAt(#f8, #bishop, #black)
-  admit PieceAt(#g8, #knight, #black)
-  admit PieceAt(#h8, #rook, #black)
+  admit PieceAt(1, 1, #rook, #white)
+  admit PieceAt(2, 1, #knight, #white)
+  admit PieceAt(3, 1, #bishop, #white)
+  admit PieceAt(4, 1, #queen, #white)
+  admit PieceAt(5, 1, #king, #white)
+  admit PieceAt(6, 1, #bishop, #white)
+  admit PieceAt(7, 1, #knight, #white)
+  admit PieceAt(8, 1, #rook, #white)
+  admit PieceAt(1, 2, #pawn, #white)
+  admit PieceAt(2, 2, #pawn, #white)
+  admit PieceAt(3, 2, #pawn, #white)
+  admit PieceAt(4, 2, #pawn, #white)
+  admit PieceAt(5, 2, #pawn, #white)
+  admit PieceAt(6, 2, #pawn, #white)
+  admit PieceAt(7, 2, #pawn, #white)
+  admit PieceAt(8, 2, #pawn, #white)
+  admit PieceAt(1, 7, #pawn, #black)
+  admit PieceAt(2, 7, #pawn, #black)
+  admit PieceAt(3, 7, #pawn, #black)
+  admit PieceAt(4, 7, #pawn, #black)
+  admit PieceAt(5, 7, #pawn, #black)
+  admit PieceAt(6, 7, #pawn, #black)
+  admit PieceAt(7, 7, #pawn, #black)
+  admit PieceAt(8, 7, #pawn, #black)
+  admit PieceAt(1, 8, #rook, #black)
+  admit PieceAt(2, 8, #knight, #black)
+  admit PieceAt(3, 8, #bishop, #black)
+  admit PieceAt(4, 8, #queen, #black)
+  admit PieceAt(5, 8, #king, #black)
+  admit PieceAt(6, 8, #bishop, #black)
+  admit PieceAt(7, 8, #knight, #black)
+  admit PieceAt(8, 8, #rook, #black)
   admit MoveCount(0)
   admit PieceCount(32)
   admit CurrentTurn(#white)
@@ -163,29 +194,29 @@ transformation start_game():
 -- player whose turn it is, the next turn must be the other player, and
 -- the destination must be empty. The move counter steps up by one; the
 -- turn flips; the piece count is untouched.
-transformation quiet_move(src, dst, new_turn):
-  bind PieceAt(src, piece_type, piece_color)
+transformation quiet_move(src_f, src_r, dst_f, dst_r, new_turn):
+  bind PieceAt(src_f, src_r, piece_type, piece_color)
   bind CurrentTurn(current_turn)
   bind MoveCount(m)
   require piece_color = current_turn
   require new_turn != current_turn
-  require not (exists anything: PieceAt(dst, any_type, any_color))
+  require not (exists occupant: PieceAt(dst_f, dst_r, occ_type, occ_color))
   let next_m = m + 1
-  retract PieceAt(src, piece_type, piece_color)
+  retract PieceAt(src_f, src_r, piece_type, piece_color)
   retract CurrentTurn(current_turn)
   retract MoveCount(m)
-  admit PieceAt(dst, piece_type, piece_color)
+  admit PieceAt(dst_f, dst_r, piece_type, piece_color)
   admit CurrentTurn(new_turn)
   admit MoveCount(next_m)
-  emit PieceMoved(src, dst)
+  emit PieceMoved(src_f, src_r, dst_f, dst_r)
 
 -- A move that captures. Like a quiet move, but the destination holds an
 -- enemy piece, which is removed from the board. The gates additionally
 -- check that the captured piece really belongs to the opponent. The
 -- piece count drops by exactly one.
-transformation capturing_move(src, dst, new_turn):
-  bind PieceAt(src, piece_type, piece_color)
-  bind PieceAt(dst, captured_type, captured_color)
+transformation capturing_move(src_f, src_r, dst_f, dst_r, new_turn):
+  bind PieceAt(src_f, src_r, piece_type, piece_color)
+  bind PieceAt(dst_f, dst_r, captured_type, captured_color)
   bind CurrentTurn(current_turn)
   bind MoveCount(m)
   bind PieceCount(p)
@@ -194,13 +225,13 @@ transformation capturing_move(src, dst, new_turn):
   require captured_color != current_turn
   let next_m = m + 1
   let next_p = p - 1
-  retract PieceAt(src, piece_type, piece_color)
-  retract PieceAt(dst, captured_type, captured_color)
+  retract PieceAt(src_f, src_r, piece_type, piece_color)
+  retract PieceAt(dst_f, dst_r, captured_type, captured_color)
   retract CurrentTurn(current_turn)
   retract MoveCount(m)
   retract PieceCount(p)
-  admit PieceAt(dst, piece_type, piece_color)
+  admit PieceAt(dst_f, dst_r, piece_type, piece_color)
   admit CurrentTurn(new_turn)
   admit MoveCount(next_m)
   admit PieceCount(next_p)
-  emit PieceCaptured(src, dst, captured_type)
+  emit PieceCaptured(dst_f, dst_r, captured_type)

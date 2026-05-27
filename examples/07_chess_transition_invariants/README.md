@@ -1,6 +1,6 @@
 # Chess transition invariants
 
-A small chess world that demonstrates two Morpholog ideas: rules that constrain not just *what state is allowed* but *how state is allowed to change*, and *counting* - a rule that fixes how many things of a kind may exist.
+A small chess world that demonstrates three Morpholog ideas: rules that constrain not just *what state is allowed* but *how state is allowed to change*; *counting* - a rule that fixes how many things of a kind may exist; and a *computed property* - a square's colour, which is stored nowhere and worked out from where the square sits, using the remainder operator `%`.
 
 The inspiration is Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+ and observes that some chess rules are properties of a single board position ("at most one king per colour"), while others are properties of a move ("the move counter goes up by exactly one"). Morpholog already supported the first kind. This example shows the second kind, made possible by a wrapper called `pre(...)` that lets a rule refer to the board *before* the move alongside the board *after*.
 
@@ -30,12 +30,12 @@ You cannot express these as conditions on one state. The information needed to c
 
 A deliberately small slice of chess:
 
-- A board, represented as a set of `PieceAt(square, piece_type, color)` claims.
+- A board, represented as a set of `PieceAt(file, rank, piece_type, color)` claims. A square is named by two numbers: its file (column, 1 to 8) and its rank (row, 1 to 8), so the square players call c1 is file 3, rank 1.
 - Counters that track game-level claims: `MoveCount` (how many moves have been played), `PieceCount` (how many pieces are on the board), and `CurrentTurn` (whose move it is).
 - An initial-setup transformation that places the standard opening pieces.
 - A quiet move (no capture) and a capturing move.
 
-The example does not model castling, en passant, promotion, check, checkmate, stalemate, the threefold-repetition rule, or any piece-specific movement rules. It is not a chess engine; it does not stop you from moving a bishop sideways. Its purpose is to demonstrate transition invariants, and that purpose is served by the simpler subset.
+The example does not model castling, en passant, promotion, check, checkmate, stalemate, the threefold-repetition rule, or any piece-specific movement rules. It is not a chess engine; it does not stop you from moving a rook diagonally. Its purpose is to demonstrate transition invariants and the square-colour rule, and that purpose is served by the simpler subset.
 
 ## The program
 
@@ -45,12 +45,12 @@ The full surface form is in [`chess.morph`](chess.morph). The IR companion is in
 
 | Predicate | What it represents |
 | --- | --- |
-| `PieceAt(square, piece_type, color)` | A specific piece sits on a specific square. A move retracts the claim at the source square and admits a new one at the destination. |
+| `PieceAt(file, rank, piece_type, color)` | A specific piece sits on a specific square, named by file and rank (each a number 1 to 8). A move retracts the claim at the source square and admits a new one at the destination. |
 | `MoveCount(n)` | How many moves have been played so far. Retracted and re-admitted each move. |
 | `PieceCount(n)` | Total pieces currently on the board. Retracted and re-admitted when a capture happens. |
 | `CurrentTurn(color)` | Whose turn it is. Retracted and re-admitted each move. |
 
-Constants used as subjects: `#white`, `#black`; the six piece types (`#pawn`, `#knight`, `#bishop`, `#rook`, `#queen`, `#king`); the 64 squares (`#a1` through `#h8`). Morpholog does not treat these specially - they are just opaque identifiers like any other subject in any other example.
+Constants used as subjects: `#white`, `#black`; the six piece types (`#pawn`, `#knight`, `#bishop`, `#rook`, `#queen`, `#king`). File and rank are decimals, not subjects, precisely so a square's colour can be computed from them. Morpholog does not treat any of these specially - they are just values like any other in any other example.
 
 ### Rules about state
 
@@ -80,13 +80,25 @@ Rules that require comparing the board before a move with the board after:
 
 None of these can be expressed as a property of a single board. "The counter went up by one" requires knowing both counter values.
 
+### A rule about square colour
+
+The third idea is a property that is *computed*, not stored. On a chessboard every square has a colour, but nothing records it - the colour follows from where the square is. A square is dark when `file + rank` is even and light when it is odd. Morpholog writes that test with the remainder operator: `(file + rank) % 2` is `0` for dark squares and `1` for light ones.
+
+That single piece of arithmetic lets the example state a famous fact as an invariant:
+
+| Invariant | What it says |
+| --- | --- |
+| `bishops_on_opposite_square_colors` | The two bishops of a colour always stand on opposite-coloured squares. Whenever two *different* squares each hold a bishop of the same colour, `(f_a + r_a) % 2` must differ from `(f_b + r_b) % 2`. |
+
+This is a single-snapshot rule - it looks only at the current board - but it has a transition-like consequence. Because a real bishop never changes its square colour, the pair stays one-light-one-dark for the whole game; and since the model does not otherwise stop a bishop from sliding onto the wrong colour, this invariant is what turns such a move away. Move white's dark-squared bishop onto a light square while its light-squared partner is still on the board and the runtime refuses the move: it would put two white bishops on light squares. Slide it to another dark square and the move commits.
+
 ### The transformations
 
 | Transformation | What it does |
 | --- | --- |
 | `start_game()` | Sets up the opening position: 32 pieces in their starting squares, `MoveCount(0)`, `PieceCount(32)`, white to move. |
-| `quiet_move(src, dst, new_turn)` | Moves a piece from `src` to `dst`. `dst` must be empty. The move counter goes up, the turn flips, the piece count is unchanged. |
-| `capturing_move(src, dst, new_turn)` | Same as a quiet move, but `dst` holds an enemy piece, which is retracted. The piece count goes down by one. |
+| `quiet_move(src_f, src_r, dst_f, dst_r, new_turn)` | Moves a piece from the source square `(src_f, src_r)` to the destination `(dst_f, dst_r)`. The destination must be empty. The move counter goes up, the turn flips, the piece count is unchanged. |
+| `capturing_move(src_f, src_r, dst_f, dst_r, new_turn)` | Same as a quiet move, but the destination holds an enemy piece, which is retracted. The piece count goes down by one. |
 
 The transformations enforce their own preconditions through `require` clauses: the moving piece must belong to the player whose turn it is, and the supplied `new_turn` must differ from the current turn. These are admission gates: they reject illegal moves up front, with a clear "this would violate chess turn order" message rather than a generic invariant failure.
 
@@ -104,4 +116,4 @@ If you ever need to distinguish "this is the very first time" from "this is a no
 
 This is not a chess engine and was never intended to be one. It does not enforce legal moves - a bishop moving sideways is admitted, as long as the basic structural and transition rules hold. It does not detect check, checkmate, stalemate, or any other game-ending condition. It does not model castling, en passant, promotion, or the touch-move rule. It does not handle multiple games at once.
 
-What it does try to do is show, in the smallest space possible, what becomes expressible when invariants can refer to both a before and an after. The mechanism is the same one used by the insurance example to enforce that every payment consumes exactly its amount of policy capacity. The chess setting is just easier to picture.
+What it does try to do is show, in the smallest space possible, what becomes expressible when invariants can refer to both a before and an after, and when a rule can compute a property like square colour rather than store it. The before-and-after mechanism is the same one the insurance example uses to enforce that every payment consumes exactly its amount of policy capacity. The chess setting is just easier to picture.
