@@ -266,8 +266,8 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
 
 /// The resolved kind for one transformation parameter, projected from
 /// the union of every position the parameter is observed in across
-/// the transformation body. Four states because they each map to
-/// genuinely different embedder behaviour:
+/// the transformation body. The variants each map to genuinely
+/// different embedder behaviour:
 ///
 /// - `Concrete(Decimal)` is a single decimal input field.
 /// - `Polymorphic` is "the embedder must accept input but cannot

@@ -1,6 +1,6 @@
 //! JSON Schema emission for a transformation's argument contract.
 //!
-//! The first encoding of the analysis-layer truth ([`ParamKind`] from
+//! Renders the analysis-layer truth ([`ParamKind`] from
 //! [`crate::analysis`]) into a form an external embedder can lean on:
 //! a JSON Schema (Draft 2020-12) describing exactly which named
 //! arguments a transformation expects and what kind each one must
@@ -10,12 +10,12 @@
 //! exports the inferred input contract (the [`ParamKind`] result);
 //! this module renders one encoding of it. A future embedder may
 //! want a different rendering (OpenAPI components, a Python
-//! dataclass, a TypeScript interface, an HTML form) - each is a
-//! separate adapter built from the same analysis result, never a
+//! dataclass, a TypeScript interface, an HTML form) - each would be
+//! a separate adapter built from the same analysis result, never a
 //! second source of truth. JSON Schema sits in `morpholog-core`
-//! today because there is one adapter and it is small; a
-//! `morpholog-schema` crate becomes the right home if a second
-//! encoding ever lands and they need to share helpers.
+//! today because it is small and self-contained; extraction into a
+//! `morpholog-schema` crate becomes the right home when additional
+//! encodings need shared helpers.
 //!
 //! The mapping leans toward stable, embedder-friendly encodings over
 //! exhaustively re-stating the kernel's contract:

@@ -26,7 +26,7 @@ pub mod actor_repr;
 pub mod format;
 pub mod ir_builder;
 
-mod analysis;
+pub mod analysis;
 mod check;
 mod derive;
 mod eval;
@@ -34,7 +34,7 @@ mod explain;
 mod guarantees;
 mod ir;
 mod propose;
-mod schema;
+pub mod schema;
 mod state;
 mod validate;
 
