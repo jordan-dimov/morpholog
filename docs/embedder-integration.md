@@ -23,7 +23,7 @@ This document is the public contract. What it pins is what an embedder can rely 
   / generates forms        the JSON envelope
 ```
 
-The embedder asks `morpholog schema <file> <transformation>` for the JSON Schema of the transformation's argument object. It sends that shape to `morpholog run --args-named` to commit (or to `morpholog explain --args-named --json` to dry-run and diagnose). It parses the JSON envelope on stdout. None of that requires Rust. The `.morph` source is the single source of truth; everything else is derivable from it.
+The embedder asks `morpholog schema <file> <transformation>` for the JSON Schema of the transformation's argument object. For the transformations whose parameters all resolve to unambiguous scalar kinds (`Subject`, `Decimal`, `Date`, `Bool`), it sends that shape to `morpholog run --args-named` to commit (or to `morpholog explain --args-named --json` to dry-run and diagnose). For the corner cases the named codec cannot decode unambiguously - `Polymorphic`, `Unconstrained`, `Ambiguous`, and `Collection` parameters - it falls back to `--args` with the tagged `EvalValue` codec. The named codec's refusals are documented below alongside each pointer to `--args`. The embedder parses the JSON envelope on stdout. None of that requires Rust. The `.morph` source is the single source of truth; everything else is derivable from it.
 
 ## The argument codecs
 
@@ -44,9 +44,15 @@ morpholog run trade_lifecycle.morph capture_trade \
     }'
 ```
 
-Strict by design. Missing required keys, unknown keys, wrong JSON types, and `null` values are all rejected before any database work. Each error names the parameter, the expected kind, the actual shape, and ends with a pointer at the schema subcommand so the embedder can inspect the accepted shape without leaving the terminal.
+Accepts the subset of transformations whose every parameter resolves to one of `Subject`, `Decimal`, `Date`, or `Bool`. Where the schema cannot give an unambiguous scalar kind, the codec refuses with an error pointing at `--args`. Per-kind behaviour:
 
-Refuses what it cannot decode unambiguously. `Polymorphic`, `Unconstrained`, `Ambiguous`, and `Collection` parameters all error with a pointer at `--args` as the fallback. The schema gives the kind or it does not; the codec does not guess from JSON shape (strings that look like UUIDs are not implicitly Subject).
+- **`Subject`** - JSON string validated as a UUID. The schema's `format: "uuid"` is enforced at the CLI boundary, not just at the schema layer, so the embedder cannot validate against a contract the CLI then ignores.
+- **`Decimal`** - JSON string validated against `^-?(0|[1-9]\d*)(\.\d+)?$` (the same pattern the schema emits). Leading `+`, leading zeros, trailing dot, scientific notation: rejected. The CLI matches the schema exactly.
+- **`Date`** - JSON string parsed as an ISO-8601 civil date (`YYYY-MM-DD`).
+- **`Bool`** - JSON boolean.
+- **`Polymorphic`** / **`Unconstrained`** / **`Ambiguous`** / **`Collection`** - refused. The schema either does not give a single unambiguous kind (the first three) or gives a shape the named codec cannot decode without per-item information that v0 does not track (the fourth). Use `--args` with the tagged `EvalValue` codec for these parameters.
+
+Strict beyond the kind check. Missing required keys, unknown keys, wrong JSON types (`true` where a Decimal is expected, etc.), and `null` values are all rejected before any database work. Each error names the parameter, the expected kind, the actual shape, and ends with a pointer at the schema subcommand so the embedder can inspect the accepted shape without leaving the terminal.
 
 ### `--args` (implementer-facing)
 

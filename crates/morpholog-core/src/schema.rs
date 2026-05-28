@@ -147,9 +147,12 @@ fn concrete_kind_description(kind: PredicateArgKind) -> Option<&'static str> {
             Some("arbitrary-precision decimal carried as a string for exactness")
         }
         PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
-        PredicateArgKind::Collection => {
-            Some("collection; item kind not tracked at the kernel level in v0")
-        }
+        PredicateArgKind::Collection => Some(
+            "collection; item kind not tracked at the kernel level in v0. \
+             A Collection parameter cannot be sent via `--args-named` (the \
+             named codec cannot decode bare arrays without per-item kind \
+             information); use `--args` with the tagged EvalValue codec.",
+        ),
         PredicateArgKind::Bool | PredicateArgKind::Any => None,
     }
 }
