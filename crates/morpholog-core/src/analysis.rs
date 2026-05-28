@@ -7,9 +7,14 @@
 //! future `Prop`, `ValueExpr`, or `Stmt` variant cannot silently fall
 //! through and cause the read path to load an incomplete claim set.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use crate::ir::{DerivedClaim, PredicateName, Program, Prop, Stmt, ValueExpr};
+use crate::check::InferredKind;
+use crate::ir::{
+    ArgDecl, DerivedClaim, OrderedDomain, PredicateArgKind, PredicateName, Program, Prop, Stmt,
+    Term, TransformationName, ValueExpr, Var,
+};
+use crate::validate::ValidationError;
 
 /// Return the set of predicate names a proposition references anywhere
 /// in its tree. Used by the PostgreSQL adapter's read path to load only
@@ -252,5 +257,344 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
         | Stmt::LetNewSubject { .. }
         | Stmt::Retract { .. }
         | Stmt::Emit(_) => false,
+    }
+}
+
+// ============================================================
+// Per-transformation argument-kind analysis: the embedder-facing
+// input contract.
+// ============================================================
+
+/// The resolved kind for one transformation parameter, projected from
+/// the union of every position the parameter is observed in across
+/// the transformation body. Three states because they map to
+/// genuinely different embedder behaviour: a `Concrete(Decimal)`
+/// param is a decimal input field, `Polymorphic` is "the embedder
+/// must accept input but cannot narrow the kind," and
+/// `Unconstrained` is "the parameter is never used - likely a
+/// modelling smell." Collapsing the latter two to one state loses a
+/// useful distinction; collapsing to `Option<PredicateArgKind>`
+/// loses both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    /// A specific declared kind (Subject, Decimal, Date, Bool, Collection).
+    /// The embedder can derive a typed input field directly.
+    Concrete(PredicateArgKind),
+    /// The parameter flows only through positions declared as
+    /// `PredicateArgKind::Any` - the declaration-time kind escape
+    /// hatch. The kernel cannot narrow the kind; the embedder
+    /// should accept input but flag the lack of constraint.
+    Polymorphic,
+    /// The parameter is never observed at any kind-bearing
+    /// position in the transformation body. Either dead code or a
+    /// modelling smell; the embedder should surface it.
+    Unconstrained,
+}
+
+/// Errors that prevent per-transformation argument-kind analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisError {
+    /// The programme does not validate. Param-kind analysis is
+    /// undefined over an invalid programme - it would observe
+    /// kinds the runtime would itself refuse - so the validation
+    /// errors are bubbled up rather than guessed past.
+    ProgramInvalid(Vec<ValidationError>),
+    /// No transformation declared with that name.
+    UnknownTransformation { name: TransformationName },
+}
+
+impl std::fmt::Display for AnalysisError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnalysisError::ProgramInvalid(errors) => {
+                write!(
+                    f,
+                    "programme does not validate ({} error(s))",
+                    errors.len()
+                )
+            }
+            AnalysisError::UnknownTransformation { name } => {
+                write!(f, "unknown transformation `{name}`")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AnalysisError {}
+
+/// Compute the embedder-facing input contract for one transformation:
+/// the resolved [`ParamKind`] for every parameter, in declaration
+/// order.
+///
+/// The walker is a *sibling* of the static checker's
+/// `check_program`, not the same walker. The checker walks
+/// `Require` (and `Or` branches, `Sum` / `For` bodies) in a cloned
+/// scope, which is the correct semantics for the runtime
+/// binding-flow doctrine - match bindings inside a gate do not
+/// export to later statements. But that semantics is wrong for an
+/// **external input contract**: a parameter used only inside
+/// `require` is still externally supplied, and its slot still
+/// observes a concrete kind. So this walker accumulates kind
+/// observations across the union of every visited position
+/// (`Require` included), in a flat environment that is never cloned
+/// at scope boundaries.
+///
+/// All variable observations are tracked, not only parameter
+/// observations - this is what lets cross-refinement reach
+/// parameters via intermediate `let` / bind / quantifier variables
+/// (a `Prop::Eq(param, bound_decimal_var)` correctly observes the
+/// parameter as Decimal). Parameters are projected out at the end.
+///
+/// Returns observations in `transformation.parameters` declaration
+/// order, never in hash-iteration order: form generation, request
+/// models, and CLI payload examples downstream depend on stable
+/// human-facing order.
+///
+/// Refuses to analyse an invalid programme - kind observations
+/// inside an invalid programme are observations the runtime would
+/// itself refuse, so guessing past validation errors would mislead
+/// the embedder. The caller can either call [`Program::validate`]
+/// up front or let this accessor surface the errors.
+pub fn transformation_param_kinds(
+    program: &Program,
+    name: &TransformationName,
+) -> Result<Vec<(Var, ParamKind)>, AnalysisError> {
+    if let Err(errors) = program.validate() {
+        return Err(AnalysisError::ProgramInvalid(errors));
+    }
+
+    let transformation = program
+        .transformation(name.as_str())
+        .ok_or_else(|| AnalysisError::UnknownTransformation { name: name.clone() })?;
+
+    let mut collector = ParamCollector::new(program);
+    for stmt in &transformation.body {
+        collector.walk_stmt(stmt);
+    }
+
+    Ok(transformation
+        .parameters
+        .iter()
+        .map(|param| {
+            let kind = collector
+                .observations
+                .get(param)
+                .copied()
+                .unwrap_or(InferredKind::UnknownOrAny);
+            (param.clone(), resolve(kind))
+        })
+        .collect())
+}
+
+fn resolve(kind: InferredKind) -> ParamKind {
+    match kind {
+        InferredKind::UnknownOrAny => ParamKind::Unconstrained,
+        InferredKind::Known(PredicateArgKind::Any) => ParamKind::Polymorphic,
+        InferredKind::Known(specific) => ParamKind::Concrete(specific),
+    }
+}
+
+/// Walker state for [`transformation_param_kinds`]. Tracks observations
+/// for every variable encountered, not only parameters - the projection
+/// to parameters happens at the end. Observations are accumulated in a
+/// single flat environment; no scope cloning at `Require` / `Or` / `Sum`
+/// / `For` boundaries, which is the entire point of running this
+/// alongside the checker rather than reusing it.
+///
+/// The walker is deliberately minimal: it visits every position where
+/// a variable can appear in a kind-bearing slot, observes it there,
+/// and recurses. It does NOT cross-refine `Eq` / `Neq` operands
+/// (pinning a bare variable to a literal's kind on the other side) -
+/// real models flow parameters through claim / intent arg positions;
+/// cross-refinement is reserved for the first example that genuinely
+/// needs it. `Eq(param, literal)` as a parameter's *sole* kind
+/// observation surfaces as `Unconstrained`, which is the right
+/// signal: the embedder either receives a clean rewrite via a claim
+/// arg, or learns the model is leaning on a hidden assumption.
+struct ParamCollector<'a> {
+    predicates: HashMap<&'a str, &'a [ArgDecl]>,
+    intents: HashMap<&'a str, &'a [ArgDecl]>,
+    observations: HashMap<Var, InferredKind>,
+}
+
+impl<'a> ParamCollector<'a> {
+    fn new(program: &'a Program) -> Self {
+        let predicates = program
+            .predicates
+            .iter()
+            .map(|d| (d.name.as_str(), d.args.as_slice()))
+            .collect();
+        let intents = program
+            .intents
+            .iter()
+            .map(|d| (d.name.as_str(), d.args.as_slice()))
+            .collect();
+        Self {
+            predicates,
+            intents,
+            observations: HashMap::new(),
+        }
+    }
+
+    /// Observe `name` at `kind`. Refines via [`InferredKind::refine`];
+    /// on a refinement conflict (which can arise from cross-scope
+    /// observations the checker's clones hide), the prior observation
+    /// is kept and the new one dropped. Best-effort first-wins under
+    /// model bugs - the programme already validated, so any such
+    /// conflict reflects observations the runtime itself would never
+    /// satisfy together; reporting it as a hard error would block the
+    /// embedder on a non-issue. A future analysis pass can promote
+    /// these to diagnostics if a real model surfaces them.
+    fn observe(&mut self, name: &Var, kind: PredicateArgKind) {
+        let prev = self
+            .observations
+            .get(name)
+            .copied()
+            .unwrap_or(InferredKind::UnknownOrAny);
+        if let Ok(refined) = prev.refine(InferredKind::Known(kind)) {
+            self.observations.insert(name.clone(), refined);
+        }
+    }
+
+    /// Walk a statement. Exhaustive over `Stmt` for the same honesty
+    /// reason as the predicate-set walkers: a future variant that
+    /// can carry a variable observation must declare itself here.
+    fn walk_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Require(prop) | Stmt::BindOne(prop) => self.walk_prop(prop),
+            Stmt::Let { value, .. } => self.walk_value(value, None),
+            Stmt::LetNewSubject { .. } => {}
+            Stmt::Assert(claim) => self.observe_claim_args(claim.predicate.as_str(), &claim.args),
+            Stmt::Retract { predicate, args } => {
+                self.observe_claim_args(predicate.as_str(), args);
+            }
+            Stmt::For {
+                collection, body, ..
+            } => {
+                self.walk_value(collection, Some(PredicateArgKind::Collection));
+                for inner in body {
+                    self.walk_stmt(inner);
+                }
+            }
+            Stmt::Emit(intent) => self.observe_intent_args(intent.name.as_str(), &intent.args),
+        }
+    }
+
+    /// Walk a proposition. Exhaustive over `Prop`.
+    fn walk_prop(&mut self, prop: &Prop) {
+        match prop {
+            Prop::Claim { predicate, args } => {
+                self.observe_claim_args(predicate.as_str(), args);
+            }
+            Prop::And(items) | Prop::Or(items) => {
+                for item in items {
+                    self.walk_prop(item);
+                }
+            }
+            Prop::Xor(left, right) | Prop::Implies { left, right } => {
+                self.walk_prop(left);
+                self.walk_prop(right);
+            }
+            Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
+                self.walk_prop(inner);
+            }
+            Prop::Forall { source, body, .. } => {
+                self.walk_prop(source);
+                self.walk_prop(body);
+            }
+            Prop::Compare {
+                domain,
+                left,
+                right,
+                ..
+            } => {
+                let kind = match domain {
+                    OrderedDomain::Decimal => PredicateArgKind::Decimal,
+                    OrderedDomain::Date => PredicateArgKind::Date,
+                };
+                self.walk_value(left, Some(kind));
+                self.walk_value(right, Some(kind));
+            }
+            Prop::Eq(left, right) | Prop::Neq(left, right) => {
+                // No cross-refinement (see the struct-level comment):
+                // observe only the kinds that sub-positions force, not
+                // the kind one operand would push onto the other.
+                self.walk_value(left, None);
+                self.walk_value(right, None);
+            }
+            Prop::In(_element, collection) => {
+                // The element is introduced as a binder (the
+                // checker binds it without pinning a kind, since v0
+                // does not track collection item kinds); only the
+                // collection contributes a kind observation.
+                if let Term::Var(name) = collection {
+                    self.observe(name, PredicateArgKind::Collection);
+                }
+            }
+        }
+    }
+
+    /// Walk a value expression. `expected` carries the kind the
+    /// surrounding position requires the expression to be (Decimal
+    /// from `Arith`, Collection from `For`, the domain kind from
+    /// `Compare`, etc.). A bare-variable operand pins to `expected`;
+    /// anything else recurses, and the sub-positions force kinds
+    /// from their own walkers.
+    fn walk_value(&mut self, expr: &ValueExpr, expected: Option<PredicateArgKind>) {
+        match expr {
+            ValueExpr::Term(Term::Var(name)) => {
+                if let Some(kind) = expected {
+                    self.observe(name, kind);
+                }
+            }
+            ValueExpr::Term(_) => {}
+            ValueExpr::Arith { left, right, .. } => {
+                self.walk_value(left, Some(PredicateArgKind::Decimal));
+                self.walk_value(right, Some(PredicateArgKind::Decimal));
+            }
+            ValueExpr::Sum { value, body } => {
+                if let Term::Var(name) = value {
+                    self.observe(name, PredicateArgKind::Decimal);
+                }
+                self.walk_prop(body);
+            }
+            ValueExpr::ValueOf {
+                predicate,
+                args,
+                default,
+            } => {
+                self.observe_claim_args(predicate.as_str(), args);
+                if let Some(d) = default {
+                    self.walk_value(d, expected);
+                }
+            }
+        }
+    }
+
+    /// Observe variable arguments in a claim reference against the
+    /// declared predicate arg kinds. An undeclared predicate
+    /// contributes nothing (the checker already flagged it).
+    fn observe_claim_args(&mut self, predicate: &str, args: &[Term]) {
+        let Some(decl_args) = self.predicates.get(predicate) else {
+            return;
+        };
+        for (arg, decl_arg) in args.iter().zip(decl_args.iter()) {
+            if let Term::Var(name) = arg {
+                self.observe(name, decl_arg.kind);
+            }
+        }
+    }
+
+    /// As [`Self::observe_claim_args`] but against the intent
+    /// vocabulary.
+    fn observe_intent_args(&mut self, intent: &str, args: &[Term]) {
+        let Some(decl_args) = self.intents.get(intent) else {
+            return;
+        };
+        for (arg, decl_arg) in args.iter().zip(decl_args.iter()) {
+            if let Term::Var(name) = arg {
+                self.observe(name, decl_arg.kind);
+            }
+        }
     }
 }

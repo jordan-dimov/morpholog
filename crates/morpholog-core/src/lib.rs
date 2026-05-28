@@ -38,8 +38,9 @@ mod state;
 mod validate;
 
 pub use analysis::{
-    predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_prop,
-    predicates_referenced_by_stmt, predicates_referenced_by_value, transformations_asserting,
+    AnalysisError, ParamKind, predicates_read_by_stmt, predicates_referenced_by_derived,
+    predicates_referenced_by_prop, predicates_referenced_by_stmt, predicates_referenced_by_value,
+    transformation_param_kinds, transformations_asserting,
 };
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::{EvalError, RenderedClaim};
