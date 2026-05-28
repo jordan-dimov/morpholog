@@ -19,13 +19,15 @@
 //!
 //! The mapping leans toward stable, embedder-friendly encodings over
 //! exhaustively re-stating the kernel's contract:
-//! - Subjects are opaque strings; the schema marks them
-//!   `format: "uuid"` because the runtime convention is UUIDv7
-//!   (subjects minted by `Stmt::LetNewSubject` are UUIDv7, and the
-//!   PG adapter stores them as `uuid` columns), but the IR itself
-//!   treats `Subject` as an opaque string newtype and does not
-//!   check version, so the description names the convention rather
-//!   than promising it.
+//! - Subjects render as `{"type": "string"}` with NO `format`.
+//!   Morpholog's `Subject` is the only primitive noun and carries
+//!   both minted entity identifiers and domain symbols (commodity
+//!   codes, period names, direction enums, account codes); the IR
+//!   treats `Subject` as an opaque string newtype and the schema
+//!   mirrors that. Subjects minted by `Stmt::LetNewSubject` are
+//!   UUIDv7 by runtime convention, but externally supplied Subjects
+//!   need not be; the description names the convention without
+//!   pinning it as a JSON-Schema constraint.
 //! - Decimals carry as strings (not JSON numbers) because the kernel
 //!   stores them as exact source strings; the pattern is strict
 //!   enough to reject `00.12`, leading-`+`, and other ambiguous

@@ -27,18 +27,19 @@ use serde_json::Value;
 #[test]
 fn every_transformation_param_resolves_to_concrete() {
     let program = trade_lifecycle::program();
+    // Validate once outside the loop; `ValidatedProgram` is `Copy`,
+    // and re-validating per iteration would walk every invariant,
+    // transformation, and derived claim on every pass for no gain.
+    let validated = program.validated().expect("trade_lifecycle validates");
     let mut failures: Vec<String> = Vec::new();
     for transformation in &program.transformations {
-        let kinds = transformation_param_kinds(
-            &program.validated().expect("trade_lifecycle validates"),
-            &transformation.name,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "param-kind analysis failed for `{}`: {e}",
-                transformation.name
-            )
-        });
+        let kinds =
+            transformation_param_kinds(&validated, &transformation.name).unwrap_or_else(|e| {
+                panic!(
+                    "param-kind analysis failed for `{}`: {e}",
+                    transformation.name
+                )
+            });
         assert_eq!(
             kinds.len(),
             transformation.parameters.len(),
