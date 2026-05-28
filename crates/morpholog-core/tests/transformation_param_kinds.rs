@@ -245,6 +245,121 @@ fn param_observed_in_different_kinds_across_or_branches_is_ambiguous() {
     }
 }
 
+/// **The regression test for the let-alias bug** (Copilot's
+/// comment). `let amt = amount; admit Payment(amt)` - the
+/// externally-supplied parameter is `amount`, but the
+/// kind-bearing observation lands on `amt`. Without alias
+/// tracking the param would resolve to `Unconstrained` and the
+/// embedder would learn nothing about a parameter the model is
+/// actually using.
+#[test]
+fn param_aliased_through_let_inherits_the_aliased_observation() {
+    let prog = program("alias_test")
+        .predicates(vec![predicate("payment").decimal("p").build()])
+        .transformations(vec![transformation(
+            "process",
+            params(&["amount"]),
+            vec![
+                let_("amt", term(var("amount"))),
+                assert_("payment", vec![var("amt")]),
+            ],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(&prog, &TransformationName::from("process")).unwrap();
+    assert_eq!(
+        kinds,
+        vec![(
+            Var::from("amount"),
+            ParamKind::Concrete(PredicateArgKind::Decimal),
+        )],
+    );
+}
+
+/// Alias propagation can ALSO create ambiguity (ChatGPT's
+/// nuance): if `x` and `y` are aliased and one is observed at
+/// Decimal while the other is observed at Subject, the
+/// equivalence-class projection naturally unions the two
+/// observations and the parameter falls out as `Ambiguous`. The
+/// alias chain does not hide branch-level disagreement.
+#[test]
+fn param_aliased_to_disagreeing_observations_is_ambiguous() {
+    let prog = program("alias_ambiguous_test")
+        .predicates(vec![
+            predicate("by_decimal").decimal("d").build(),
+            predicate("by_subject").subject("s").build(),
+        ])
+        .transformations(vec![transformation(
+            "diverge",
+            params(&["x"]),
+            vec![
+                let_("y", term(var("x"))),
+                require(or(vec![
+                    claim("by_decimal", vec![var("x")]),
+                    claim("by_subject", vec![var("y")]),
+                ])),
+            ],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(&prog, &TransformationName::from("diverge")).unwrap();
+    match &kinds[0].1 {
+        ParamKind::Ambiguous(observed) => {
+            assert_eq!(
+                observed,
+                &vec![PredicateArgKind::Subject, PredicateArgKind::Decimal],
+            );
+        }
+        other => panic!("expected Ambiguous, got {other:?}"),
+    }
+}
+
+/// Alias expansion must not affect declaration-order projection:
+/// the returned vec carries parameters in `transformation.parameters`
+/// order, never alias-iteration order or HashMap-iteration order.
+/// ChatGPT explicitly requested this test - without it, a refactor
+/// could quietly start returning alias names or scrambled order
+/// without breaking other tests.
+#[test]
+fn aliased_params_preserve_declaration_order() {
+    let prog = program("alias_order_test")
+        .predicates(vec![
+            predicate("triple")
+                .subject("a")
+                .decimal("b")
+                .date("c")
+                .build(),
+        ])
+        .transformations(vec![transformation(
+            "act",
+            params(&["zebra", "apple", "mango"]),
+            vec![
+                let_("z", term(var("zebra"))),
+                let_("a", term(var("apple"))),
+                let_("m", term(var("mango"))),
+                assert_("triple", vec![var("z"), var("a"), var("m")]),
+            ],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(&prog, &TransformationName::from("act")).unwrap();
+    let names: Vec<&str> = kinds.iter().map(|(v, _)| v.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["zebra", "apple", "mango"],
+        "declaration order must survive alias expansion",
+    );
+    let kind_only: Vec<&ParamKind> = kinds.iter().map(|(_, k)| k).collect();
+    assert_eq!(
+        kind_only,
+        vec![
+            &ParamKind::Concrete(PredicateArgKind::Subject),
+            &ParamKind::Concrete(PredicateArgKind::Decimal),
+            &ParamKind::Concrete(PredicateArgKind::Date),
+        ],
+    );
+}
+
 /// An invalid programme surfaces its validation errors rather than
 /// being analysed best-effort. The accessor refuses to guess past
 /// problems the kernel itself would refuse to run.

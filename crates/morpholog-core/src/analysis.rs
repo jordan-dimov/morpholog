@@ -395,14 +395,77 @@ pub fn transformation_param_kinds(
         collector.walk_stmt(stmt);
     }
 
+    let alias_classes = build_alias_classes(&collector.aliases);
+
     Ok(transformation
         .parameters
         .iter()
         .map(|param| {
-            let observed = collector.observations.get(param).cloned().unwrap_or_default();
+            // Union observations across the parameter's equivalence
+            // class. If the parameter has no aliases, the class is
+            // just `{param}` and this is equivalent to a direct
+            // lookup. Order of the union doesn't matter - the
+            // resulting BTreeSet is the same set either way.
+            let mut observed: BTreeSet<PredicateArgKind> = BTreeSet::new();
+            let class = alias_classes
+                .iter()
+                .find(|c| c.contains(param))
+                .cloned()
+                .unwrap_or_else(|| {
+                    let mut s = BTreeSet::new();
+                    s.insert(param.clone());
+                    s
+                });
+            for member in &class {
+                if let Some(kinds) = collector.observations.get(member) {
+                    observed.extend(kinds.iter().copied());
+                }
+            }
             (param.clone(), project(observed))
         })
         .collect())
+}
+
+/// Build equivalence classes from a list of bidirectional alias
+/// pairs. Two variables end up in the same class iff they are
+/// connected by a chain of `let x = y` aliases in the transformation
+/// body. The result is a vector of disjoint sets; a variable not
+/// appearing in any pair simply has no entry.
+///
+/// Brute-force linear scan; the number of aliases per transformation
+/// is small (typically zero or a handful), so a real union-find
+/// structure would be overkill.
+fn build_alias_classes(pairs: &[(Var, Var)]) -> Vec<BTreeSet<Var>> {
+    let mut classes: Vec<BTreeSet<Var>> = Vec::new();
+    for (a, b) in pairs {
+        let idx_a = classes.iter().position(|c| c.contains(a));
+        let idx_b = classes.iter().position(|c| c.contains(b));
+        match (idx_a, idx_b) {
+            (Some(i), Some(j)) if i != j => {
+                // Merge the smaller-index class into the larger so
+                // `remove` doesn't shift the kept class's index.
+                let (keep, drop) = if i < j { (i, j) } else { (j, i) };
+                let to_merge = classes.remove(drop);
+                classes[keep].extend(to_merge);
+            }
+            (Some(_), Some(_)) => {
+                // Already in the same class; nothing to do.
+            }
+            (Some(i), None) => {
+                classes[i].insert(b.clone());
+            }
+            (None, Some(j)) => {
+                classes[j].insert(a.clone());
+            }
+            (None, None) => {
+                let mut new_class = BTreeSet::new();
+                new_class.insert(a.clone());
+                new_class.insert(b.clone());
+                classes.push(new_class);
+            }
+        }
+    }
+    classes
 }
 
 /// Project a parameter's accumulated observation set into the public
@@ -455,6 +518,18 @@ struct ParamCollector<'a> {
     predicates: HashMap<&'a str, &'a [ArgDecl]>,
     intents: HashMap<&'a str, &'a [ArgDecl]>,
     observations: HashMap<Var, BTreeSet<PredicateArgKind>>,
+    /// Bidirectional alias pairs collected from `let name = other_var`.
+    /// The projection layer unions observations across the
+    /// equivalence classes these pairs induce, so a parameter
+    /// receives the observations of every name it aliases (and vice
+    /// versa). Deliberately narrow: only `Let { value:
+    /// Term(Var(alias)) }` registers a pair - we do NOT try to
+    /// infer aliases through `Eq` / `Neq` (that is a different
+    /// semantic commitment, deferred). Without this, a transformation
+    /// like `let amt = amount; admit Payment(amt)` would observe
+    /// `amt` at Decimal but leave the externally-supplied `amount`
+    /// as `Unconstrained`.
+    aliases: Vec<(Var, Var)>,
 }
 
 impl<'a> ParamCollector<'a> {
@@ -473,6 +548,7 @@ impl<'a> ParamCollector<'a> {
             predicates,
             intents,
             observations: HashMap::new(),
+            aliases: Vec::new(),
         }
     }
 
@@ -494,7 +570,16 @@ impl<'a> ParamCollector<'a> {
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Require(prop) | Stmt::BindOne(prop) => self.walk_prop(prop),
-            Stmt::Let { value, .. } => self.walk_value(value, None),
+            Stmt::Let { name, value } => {
+                // Record bare-variable aliases. `let x = some_var`
+                // means `x` and `some_var` denote the same value;
+                // any kind observation of either should reach the
+                // other at projection time.
+                if let ValueExpr::Term(Term::Var(alias)) = value {
+                    self.aliases.push((name.clone(), alias.clone()));
+                }
+                self.walk_value(value, None);
+            }
             Stmt::LetNewSubject { .. } => {}
             Stmt::Assert(claim) => self.observe_claim_args(claim.predicate.as_str(), &claim.args),
             Stmt::Retract { predicate, args } => {

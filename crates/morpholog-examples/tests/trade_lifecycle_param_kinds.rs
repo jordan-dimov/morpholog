@@ -1,20 +1,19 @@
 //! The integration test for the embedder kernel surface, run against
 //! the trade_lifecycle worked example - the model that will be the
-//! first external embedder target. Pins two claims:
+//! first external embedder target. It pins:
 //!
-//! 1. Every parameter of every transformation in trade_lifecycle
-//!    resolves to a concrete kind. This is the "total inference"
-//!    promise the memory records: the embedder needs no IR change
-//!    to derive typed JSON-Schema input contracts because the model
-//!    already supplies the kinds via claim positions.
-//!
-//! 2. The JSON Schema produced for the load-bearing transformations
-//!    (`capture_trade`, `amend_trade_terms`, `settle_trade`) carries
-//!    every parameter in declaration order with the expected
-//!    JSON-Schema `type` per param. The exact property fragments are
-//!    pinned by the schema unit tests in morpholog-core; this test
-//!    verifies they compose into the right end-to-end shape for the
-//!    real model.
+//! - The "total inference" promise: every parameter of every
+//!   transformation in trade_lifecycle resolves to a concrete kind,
+//!   so the embedder needs no IR change to derive typed JSON-Schema
+//!   input contracts (the model already supplies the kinds via
+//!   claim positions).
+//! - End-to-end JSON Schema composition on the load-bearing
+//!   transformations (`capture_trade`, `amend_trade_terms`,
+//!   `settle_trade`): each schema carries every parameter in
+//!   declaration order with the expected JSON-Schema `type`. The
+//!   exact property fragments are pinned by the schema unit tests
+//!   in morpholog-core; this test verifies they compose into the
+//!   right end-to-end shape on the real model.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

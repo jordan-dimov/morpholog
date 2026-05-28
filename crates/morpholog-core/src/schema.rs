@@ -21,8 +21,11 @@
 //! exhaustively re-stating the kernel's contract:
 //! - Subjects are opaque strings; the schema marks them
 //!   `format: "uuid"` because the runtime convention is UUIDv7
-//!   (per `CLAUDE.md`), but the kernel itself does not check
-//!   version, so the description names the convention.
+//!   (subjects minted by `Stmt::LetNewSubject` are UUIDv7, and the
+//!   PG adapter stores them as `uuid` columns), but the IR itself
+//!   treats `Subject` as an opaque string newtype and does not
+//!   check version, so the description names the convention rather
+//!   than promising it.
 //! - Decimals carry as strings (not JSON numbers) because the kernel
 //!   stores them as exact source strings; the pattern is strict
 //!   enough to reject `00.12`, leading-`+`, and other ambiguous
@@ -81,11 +84,10 @@ fn property_schema(kind: &ParamKind) -> Value {
     match kind {
         ParamKind::Concrete(k) => {
             let mut value = bare_kind_shape(*k);
-            if let Some(desc) = concrete_kind_description(*k) {
-                value
-                    .as_object_mut()
-                    .expect("bare_kind_shape returns a JSON object")
-                    .insert("description".into(), Value::String(desc.into()));
+            if let Some(obj) = value.as_object_mut()
+                && let Some(desc) = concrete_kind_description(*k)
+            {
+                obj.insert("description".into(), Value::String(desc.into()));
             }
             value
         }
