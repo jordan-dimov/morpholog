@@ -370,17 +370,19 @@ async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
 /// transformation as the tagged-form test above, but with the
 /// embedder-facing codec: bare values keyed by parameter name. The
 /// CLI consults `transformation_param_kinds` to coerce each value
-/// against its declared kind.
+/// against its declared kind. All Subject values are UUIDs because
+/// the schema commits to `format: "uuid"` and the codec enforces
+/// it.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_commits_with_the_friendly_codec() {
     reset_db().await;
     let path = write_temp_ledger_morph();
     let args_named = r#"{
-        "entry_id":"named_001",
-        "posting_date":"2026-04-15",
-        "period":"q1_2026",
-        "debit_account":"account_cash",
-        "credit_account":"account_revenue",
+        "entry_id":"018f0000-0000-7000-8000-000000000001",
+        "posting_date":"018f0000-0000-7000-8000-000000000002",
+        "period":"018f0000-0000-7000-8000-000000000003",
+        "debit_account":"018f0000-0000-7000-8000-000000000004",
+        "credit_account":"018f0000-0000-7000-8000-000000000005",
         "amount":"250"
     }"#;
     let (status, stdout, stderr) = run_cli(&[
@@ -409,11 +411,11 @@ async fn run_args_named_missing_required_errors_with_schema_hint() {
     reset_db().await;
     let path = write_temp_ledger_morph();
     let args_named = r#"{
-        "entry_id":"missing_one",
-        "posting_date":"2026-04-15",
-        "period":"q1_2026",
-        "debit_account":"account_cash",
-        "credit_account":"account_revenue"
+        "entry_id":"018f0000-0000-7000-8000-000000000011",
+        "posting_date":"018f0000-0000-7000-8000-000000000012",
+        "period":"018f0000-0000-7000-8000-000000000013",
+        "debit_account":"018f0000-0000-7000-8000-000000000014",
+        "credit_account":"018f0000-0000-7000-8000-000000000015"
     }"#;
     let (status, _stdout, stderr) = run_cli(&[
         "run",
@@ -444,11 +446,11 @@ async fn run_args_named_unknown_key_errors_with_expected_names() {
     reset_db().await;
     let path = write_temp_ledger_morph();
     let args_named = r#"{
-        "entry_id":"typo",
-        "posting_date":"2026-04-15",
-        "period":"q1_2026",
-        "debit_account":"account_cash",
-        "credit_account":"account_revenue",
+        "entry_id":"018f0000-0000-7000-8000-000000000021",
+        "posting_date":"018f0000-0000-7000-8000-000000000022",
+        "period":"018f0000-0000-7000-8000-000000000023",
+        "debit_account":"018f0000-0000-7000-8000-000000000024",
+        "credit_account":"018f0000-0000-7000-8000-000000000025",
         "amount":"100",
         "amaount":"100"
     }"#;
@@ -472,6 +474,40 @@ async fn run_args_named_unknown_key_errors_with_expected_names() {
     );
 }
 
+/// Subject values that fail UUID parsing are rejected. The schema
+/// commits to `format: "uuid"`; the codec enforces the same
+/// commitment so the contract the embedder validates against
+/// matches what the CLI actually accepts. The kernel `Subject`
+/// stays opaque; only the embedder-facing layer adds the
+/// convention check.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_subject_must_be_a_uuid() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"not-a-uuid",
+        "posting_date":"018f0000-0000-7000-8000-000000000032",
+        "period":"018f0000-0000-7000-8000-000000000033",
+        "debit_account":"018f0000-0000-7000-8000-000000000034",
+        "credit_account":"018f0000-0000-7000-8000-000000000035",
+        "amount":"100"
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "non-UUID Subject must be rejected");
+    assert!(
+        stderr.contains("`entry_id` is Subject") && stderr.contains("not a valid UUID"),
+        "stderr should name the parameter and call out the UUID failure; got: {stderr}"
+    );
+}
+
 /// Decimal strings that fail the schema's pattern must also fail
 /// the `--args-named` codec, or the embedder validates request
 /// bodies against a stricter contract than the CLI actually
@@ -485,11 +521,11 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
     for bad in ["+1", "00.12", "1.", ".5"] {
         let args_named = format!(
             r#"{{
-                "entry_id":"sb_{bad}",
-                "posting_date":"2026-04-15",
-                "period":"q1_2026",
-                "debit_account":"account_cash",
-                "credit_account":"account_revenue",
+                "entry_id":"018f0000-0000-7000-8000-000000000041",
+                "posting_date":"018f0000-0000-7000-8000-000000000042",
+                "period":"018f0000-0000-7000-8000-000000000043",
+                "debit_account":"018f0000-0000-7000-8000-000000000044",
+                "credit_account":"018f0000-0000-7000-8000-000000000045",
                 "amount":"{bad}"
             }}"#
         );
@@ -521,11 +557,11 @@ async fn run_args_named_wrong_type_errors_with_kind_label() {
     reset_db().await;
     let path = write_temp_ledger_morph();
     let args_named = r#"{
-        "entry_id":"wrong_type",
-        "posting_date":"2026-04-15",
-        "period":"q1_2026",
-        "debit_account":"account_cash",
-        "credit_account":"account_revenue",
+        "entry_id":"018f0000-0000-7000-8000-000000000051",
+        "posting_date":"018f0000-0000-7000-8000-000000000052",
+        "period":"018f0000-0000-7000-8000-000000000053",
+        "debit_account":"018f0000-0000-7000-8000-000000000054",
+        "credit_account":"018f0000-0000-7000-8000-000000000055",
         "amount": true
     }"#;
     let (status, _stdout, stderr) = run_cli(&[

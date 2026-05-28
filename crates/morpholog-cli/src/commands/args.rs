@@ -33,6 +33,7 @@ use rust_decimal::Decimal;
 use serde_json::Value;
 use std::path::Path;
 use std::str::FromStr;
+use uuid::Uuid;
 
 /// The two flag-distinguished inputs `run` and `explain` accept.
 /// Constructed by the caller after Clap has enforced one-of-two;
@@ -159,15 +160,26 @@ fn decode_value(
 }
 
 fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    raw.as_str()
-        .map(|s| EvalValue::Subject(Subject::from(s)))
-        .ok_or_else(|| {
-            anyhow!(
-                "parameter `{param}` is Subject but received {}; expected a UUID string. \
-                 {schema_hint}",
-                describe_value(raw),
-            )
-        })
+    let s = raw.as_str().ok_or_else(|| {
+        anyhow!(
+            "parameter `{param}` is Subject but received {}; expected a UUID string. \
+             {schema_hint}",
+            describe_value(raw),
+        )
+    })?;
+    // The schema commits to `format: "uuid"`. The kernel keeps
+    // `Subject` opaque (any string), but the embedder-facing
+    // codec validates the convention the schema declares - so the
+    // contract the embedder validates against matches what the
+    // CLI actually accepts. Mismatches are caught at the CLI
+    // boundary, not silently admitted as garbage subject ids.
+    Uuid::parse_str(s).map_err(|e| {
+        anyhow!(
+            "parameter `{param}` is Subject but `{s}` is not a valid UUID: {e}. \
+             {schema_hint}"
+        )
+    })?;
+    Ok(EvalValue::Subject(Subject::from(s)))
 }
 
 fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
