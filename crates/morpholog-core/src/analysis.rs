@@ -598,11 +598,48 @@ impl<'a> ParamCollector<'a> {
                 self.observe_claim_args(predicate.as_str(), args);
             }
             Stmt::For {
-                collection, body, ..
+                binding,
+                collection,
+                body,
             } => {
                 self.walk_value(collection, Some(PredicateArgKind::Collection));
+                // `For` is the one Stmt the static checker walks
+                // under a *cloned* scope (`check.rs` notes "the
+                // loop binding and any body-introduced names do
+                // not leak across iterations or beyond the loop").
+                // Mirror that: the loop binding shadows any outer
+                // name of the same name for the body's duration,
+                // so observations inside the body attributed to
+                // the binding name must NOT propagate to outer
+                // aliases of that name (a parameter with the same
+                // name being the live failure mode). Save the
+                // binding's outer observations and class,
+                // invalidate, walk the body, then restore - so
+                // observations of OTHER outer variables made
+                // inside the body still survive (they are
+                // legitimately about the outer scope), but the
+                // binding's body-time state is discarded.
+                let saved_obs = self.observations.get(binding).cloned();
+                let saved_class = self.current_class.get(binding).cloned();
+                self.invalidate(binding);
+                self.observations.remove(binding);
+
                 for inner in body {
                     self.walk_stmt(inner);
+                }
+
+                // Discard the body's effects on the binding's state.
+                self.invalidate(binding);
+                self.observations.remove(binding);
+
+                // Restore outer state.
+                if let Some(obs) = saved_obs {
+                    self.observations.insert(binding.clone(), obs);
+                }
+                if let Some(class) = saved_class {
+                    for member in &class {
+                        self.current_class.insert(member.clone(), class.clone());
+                    }
                 }
             }
             Stmt::Emit(intent) => self.observe_intent_args(intent.name.as_str(), &intent.args),

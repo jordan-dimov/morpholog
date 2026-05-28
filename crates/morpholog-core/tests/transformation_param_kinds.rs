@@ -398,6 +398,57 @@ fn param_alias_broken_by_let_rebinding_does_not_inherit_later_observations() {
     );
 }
 
+/// **The regression test for the `For`-binding shadowing bug**
+/// (ChatGPT's third-review finding). `For` is the one statement
+/// the runtime walks under scoped iteration semantics (and the
+/// static checker walks under a cloned scope) - the loop binding
+/// shadows any outer name of the same name for the body's
+/// duration. So in
+///
+///     transformation t(x, items):
+///         for x in items:
+///             assert decimal_slot(x)
+///
+/// the `assert decimal_slot(x)` inside the body is observing the
+/// LOOP binding x, not the external parameter x. The external
+/// parameter must remain `Unconstrained`. An earlier flat
+/// implementation (no scope handling for For) would falsely
+/// report the external x as `Concrete(Decimal)` - the same class
+/// of bug as the `let`-rebinding case, but for `for`.
+#[test]
+fn for_binding_reusing_param_name_does_not_type_the_external_param() {
+    let prog = program("for_shadow_test")
+        .predicates(vec![
+            predicate("items").collection("items").build(),
+            predicate("decimal_slot").decimal("d").build(),
+        ])
+        .transformations(vec![transformation(
+            "loop_it",
+            params(&["x", "items"]),
+            vec![for_(
+                "x",
+                term(var("items")),
+                vec![assert_("decimal_slot", vec![var("x")])],
+            )],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(&prog, &TransformationName::from("loop_it")).unwrap();
+    assert_eq!(
+        kinds,
+        vec![
+            (Var::from("x"), ParamKind::Unconstrained),
+            (
+                Var::from("items"),
+                ParamKind::Concrete(PredicateArgKind::Collection),
+            ),
+        ],
+        "the For-loop binding `x` shadows the external parameter `x`; \
+         observations inside the loop body must not propagate to the \
+         external parameter",
+    );
+}
+
 /// An invalid programme surfaces its validation errors rather than
 /// being analysed best-effort. The accessor refuses to guess past
 /// problems the kernel itself would refuse to run.
