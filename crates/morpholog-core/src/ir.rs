@@ -641,7 +641,7 @@ pub struct IntentDecl {
 /// hold any admitted value), or for declarations that are not yet
 /// ready to commit to a kind. Use it sparingly; the value of the
 /// declaration metadata is highest when kinds are specific.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PredicateArgKind {
     Subject,
     Decimal,

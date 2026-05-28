@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::check::InferredKind;
 use crate::ir::{
     ArgDecl, DerivedClaim, OrderedDomain, PredicateArgKind, PredicateName, Program, Prop, Stmt,
     Term, TransformationName, ValueExpr, Var,
@@ -267,15 +266,32 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
 
 /// The resolved kind for one transformation parameter, projected from
 /// the union of every position the parameter is observed in across
-/// the transformation body. Three states because they map to
-/// genuinely different embedder behaviour: a `Concrete(Decimal)`
-/// param is a decimal input field, `Polymorphic` is "the embedder
-/// must accept input but cannot narrow the kind," and
-/// `Unconstrained` is "the parameter is never used - likely a
-/// modelling smell." Collapsing the latter two to one state loses a
-/// useful distinction; collapsing to `Option<PredicateArgKind>`
-/// loses both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the transformation body. Four states because they each map to
+/// genuinely different embedder behaviour:
+///
+/// - `Concrete(Decimal)` is a single decimal input field.
+/// - `Polymorphic` is "the embedder must accept input but cannot
+///   narrow the kind" (the parameter flowed only through `Any` slots,
+///   the declaration-time escape hatch).
+/// - `Unconstrained` is "the parameter is never used" - likely dead
+///   or a modelling smell.
+/// - `Ambiguous` is "the parameter is observed at different concrete
+///   kinds across separately-satisfiable code paths" - the static
+///   checker walks `Or` branches (and `Require` / `Sum` / `For`
+///   bodies) in cloned scopes whose refinements do not export, so a
+///   programme can validate even when the same parameter has
+///   different concrete kinds in different branches. The Or-of-
+///   different-kinds shape is legitimate (the runtime picks the
+///   branch that matches the actual input), so refusing to emit a
+///   schema would be too strict; reporting one concrete kind would
+///   be a lie. The vec lists the distinct kinds observed in
+///   deterministic order (the `PredicateArgKind` declaration order).
+///
+/// Collapsing `Polymorphic` / `Unconstrained` to one state loses a
+/// useful distinction (the embedder presents them differently);
+/// collapsing `Ambiguous` to `Polymorphic` or to a silent
+/// first-observation-wins reports a contract that does not hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParamKind {
     /// A specific declared kind (Subject, Decimal, Date, Bool, Collection).
     /// The embedder can derive a typed input field directly.
@@ -289,6 +305,13 @@ pub enum ParamKind {
     /// position in the transformation body. Either dead code or a
     /// modelling smell; the embedder should surface it.
     Unconstrained,
+    /// The parameter is observed at two or more distinct concrete
+    /// kinds across cloned scopes the checker does not refine across
+    /// (typically `Or` branches). The vec carries every observed
+    /// kind, in declaration order, deduplicated. The embedder can
+    /// render this as a disjunctive contract (JSON Schema `anyOf`,
+    /// for instance) or surface it as a modelling diagnostic.
+    Ambiguous(Vec<PredicateArgKind>),
 }
 
 /// Errors that prevent per-transformation argument-kind analysis.
@@ -336,10 +359,14 @@ impl std::error::Error for AnalysisError {}
 /// at scope boundaries.
 ///
 /// All variable observations are tracked, not only parameter
-/// observations - this is what lets cross-refinement reach
-/// parameters via intermediate `let` / bind / quantifier variables
-/// (a `Prop::Eq(param, bound_decimal_var)` correctly observes the
-/// parameter as Decimal). Parameters are projected out at the end.
+/// observations - this lets a parameter pick up its kind from
+/// intermediate variables that are themselves observed in
+/// kind-bearing positions later in the body. (`Eq` / `Neq`
+/// cross-refinement, where a literal on one side would pin a bare
+/// variable on the other, is deliberately omitted - the simpler
+/// walker is honest about what it does; a worked example that
+/// genuinely needs the inference becomes the witness for adding
+/// it.)
 ///
 /// Returns observations in `transformation.parameters` declaration
 /// order, never in hash-iteration order: form generation, request
@@ -372,21 +399,30 @@ pub fn transformation_param_kinds(
         .parameters
         .iter()
         .map(|param| {
-            let kind = collector
-                .observations
-                .get(param)
-                .copied()
-                .unwrap_or(InferredKind::UnknownOrAny);
-            (param.clone(), resolve(kind))
+            let observed = collector.observations.get(param).cloned().unwrap_or_default();
+            (param.clone(), project(observed))
         })
         .collect())
 }
 
-fn resolve(kind: InferredKind) -> ParamKind {
-    match kind {
-        InferredKind::UnknownOrAny => ParamKind::Unconstrained,
-        InferredKind::Known(PredicateArgKind::Any) => ParamKind::Polymorphic,
-        InferredKind::Known(specific) => ParamKind::Concrete(specific),
+/// Project a parameter's accumulated observation set into the public
+/// [`ParamKind`]. `Any` is the declaration-time escape hatch; a
+/// parameter observed only through `Any` slots is `Polymorphic`, not
+/// `Concrete(Any)`. Conflicting concrete observations become
+/// `Ambiguous` rather than silently collapsing to either side.
+/// `BTreeSet` iteration yields the deterministic `PredicateArgKind`
+/// declaration order, which the public `Ambiguous` payload guarantees.
+fn project(observations: BTreeSet<PredicateArgKind>) -> ParamKind {
+    let has_any = observations.contains(&PredicateArgKind::Any);
+    let concrete: Vec<PredicateArgKind> = observations
+        .into_iter()
+        .filter(|k| *k != PredicateArgKind::Any)
+        .collect();
+    match (concrete.len(), has_any) {
+        (0, false) => ParamKind::Unconstrained,
+        (0, true) => ParamKind::Polymorphic,
+        (1, _) => ParamKind::Concrete(concrete[0]),
+        _ => ParamKind::Ambiguous(concrete),
     }
 }
 
@@ -396,6 +432,14 @@ fn resolve(kind: InferredKind) -> ParamKind {
 /// single flat environment; no scope cloning at `Require` / `Or` / `Sum`
 /// / `For` boundaries, which is the entire point of running this
 /// alongside the checker rather than reusing it.
+///
+/// Each variable carries a *set* of observed kinds, not a single
+/// refined kind. A conflict between two concrete observations across
+/// different cloned scopes the checker hides (an `Or` branch picking
+/// Decimal vs another picking Subject, say) is preserved as a
+/// set with both kinds, then projected to [`ParamKind::Ambiguous`].
+/// Silently dropping the second observation would produce a JSON
+/// Schema that rejects valid inputs of the other branch's kind.
 ///
 /// The walker is deliberately minimal: it visits every position where
 /// a variable can appear in a kind-bearing slot, observes it there,
@@ -410,7 +454,7 @@ fn resolve(kind: InferredKind) -> ParamKind {
 struct ParamCollector<'a> {
     predicates: HashMap<&'a str, &'a [ArgDecl]>,
     intents: HashMap<&'a str, &'a [ArgDecl]>,
-    observations: HashMap<Var, InferredKind>,
+    observations: HashMap<Var, BTreeSet<PredicateArgKind>>,
 }
 
 impl<'a> ParamCollector<'a> {
@@ -432,24 +476,16 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// Observe `name` at `kind`. Refines via [`InferredKind::refine`];
-    /// on a refinement conflict (which can arise from cross-scope
-    /// observations the checker's clones hide), the prior observation
-    /// is kept and the new one dropped. Best-effort first-wins under
-    /// model bugs - the programme already validated, so any such
-    /// conflict reflects observations the runtime itself would never
-    /// satisfy together; reporting it as a hard error would block the
-    /// embedder on a non-issue. A future analysis pass can promote
-    /// these to diagnostics if a real model surfaces them.
+    /// Observe `name` at `kind`. Inserts the kind into the variable's
+    /// observation set; a later observation at a different kind
+    /// accumulates rather than overwrites, so the projection layer
+    /// can map multi-kind sets to [`ParamKind::Ambiguous`] instead of
+    /// silently committing to one.
     fn observe(&mut self, name: &Var, kind: PredicateArgKind) {
-        let prev = self
-            .observations
-            .get(name)
-            .copied()
-            .unwrap_or(InferredKind::UnknownOrAny);
-        if let Ok(refined) = prev.refine(InferredKind::Known(kind)) {
-            self.observations.insert(name.clone(), refined);
-        }
+        self.observations
+            .entry(name.clone())
+            .or_default()
+            .insert(kind);
     }
 
     /// Walk a statement. Exhaustive over `Stmt` for the same honesty

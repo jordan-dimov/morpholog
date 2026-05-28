@@ -192,6 +192,59 @@ fn unknown_transformation_returns_error() {
     }
 }
 
+/// **The regression test for silent-conflict-dropping** (the
+/// blocking issue from ChatGPT's review and Copilot's comment on
+/// `observe`). The static checker walks `Or` branches in cloned
+/// scopes whose refinements do not export, so a programme can
+/// validate even when the same parameter is observed at one
+/// concrete kind in one branch and a different concrete kind in
+/// another. An earlier implementation refined into one
+/// `InferredKind` per variable and silently dropped the second
+/// observation on conflict, which produced a `Concrete(_)` result
+/// that lied about the contract. The fix accumulates a *set* of
+/// observed kinds per variable and projects multi-kind sets to
+/// `Ambiguous`. The disjunctive shape is legitimate at runtime
+/// (the runtime picks the `Or` branch that matches the actual
+/// input), so the embedder needs the disjunctive contract, not a
+/// false narrowing or a hard error.
+#[test]
+fn param_observed_in_different_kinds_across_or_branches_is_ambiguous() {
+    let prog = program("ambiguous_test")
+        .predicates(vec![
+            predicate("by_decimal").decimal("d").build(),
+            predicate("by_subject").subject("s").build(),
+        ])
+        .transformations(vec![transformation(
+            "either_shape",
+            params(&["x"]),
+            vec![require(or(vec![
+                claim("by_decimal", vec![var("x")]),
+                claim("by_subject", vec![var("x")]),
+            ]))],
+        )])
+        .build();
+
+    let kinds =
+        transformation_param_kinds(&prog, &TransformationName::from("either_shape")).unwrap();
+
+    let (param, kind) = &kinds[0];
+    assert_eq!(param, &Var::from("x"));
+    match kind {
+        ParamKind::Ambiguous(observed) => {
+            assert_eq!(
+                observed,
+                &vec![PredicateArgKind::Subject, PredicateArgKind::Decimal],
+                "Ambiguous must carry the distinct observed kinds in PredicateArgKind \
+                 declaration order (Subject, Decimal, Date, Bool, Collection, Any)",
+            );
+        }
+        other => panic!(
+            "expected Ambiguous([Subject, Decimal]) for an Or-of-different-kind-slots; \
+             got {other:?}. This is the silent-conflict-dropping bug.",
+        ),
+    }
+}
+
 /// An invalid programme surfaces its validation errors rather than
 /// being analysed best-effort. The accessor refuses to guess past
 /// problems the kernel itself would refuse to run.

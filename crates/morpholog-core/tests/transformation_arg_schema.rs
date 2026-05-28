@@ -194,6 +194,67 @@ fn top_level_shape_carries_required_in_declaration_order() {
     assert_eq!(required, vec!["zebra", "apple", "mango"]);
 }
 
+/// A parameter projected as `Ambiguous` renders as `anyOf` over the
+/// per-kind bare fragments (type / format / pattern only), with the
+/// branch-local-observation signal carried by a property-level
+/// `description`. The per-kind descriptions are deliberately
+/// stripped from the alternatives - the embedder should not see
+/// "opaque Morpholog subject identifier" as one of several options
+/// when the parameter is not specifically a subject; the description
+/// belongs at the property level, naming the ambiguity itself.
+#[test]
+fn ambiguous_renders_as_any_of_alternatives() {
+    let prog = program("ambiguous_test")
+        .predicates(vec![
+            predicate("by_decimal").decimal("d").build(),
+            predicate("by_subject").subject("s").build(),
+        ])
+        .transformations(vec![transformation(
+            "either_shape",
+            params(&["x"]),
+            vec![require(or(vec![
+                claim("by_decimal", vec![var("x")]),
+                claim("by_subject", vec![var("x")]),
+            ]))],
+        )])
+        .build();
+
+    let schema =
+        transformation_arg_schema(&prog, &TransformationName::from("either_shape")).unwrap();
+    let property = &schema["properties"]["x"];
+    let alternatives = property["anyOf"].as_array().expect("anyOf present");
+    let alt_types: Vec<&str> = alternatives
+        .iter()
+        .map(|a| a["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        alt_types,
+        vec!["string", "string"],
+        "Subject and Decimal both render as JSON-Schema string",
+    );
+    assert!(
+        alternatives[0].get("format").is_some(),
+        "Subject carries format",
+    );
+    assert!(
+        alternatives[1].get("pattern").is_some(),
+        "Decimal carries pattern",
+    );
+    for (i, alt) in alternatives.iter().enumerate() {
+        assert!(
+            alt.get("description").is_none(),
+            "alternative {i} should not carry a per-kind description; \
+             the property-level description names the ambiguity",
+        );
+    }
+    assert!(
+        property["description"]
+            .as_str()
+            .unwrap()
+            .contains("ambiguous"),
+    );
+}
+
 /// Unknown transformation bubbles through unchanged from the
 /// analysis layer.
 #[test]
