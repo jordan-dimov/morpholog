@@ -134,25 +134,26 @@ fn decode_value(
             "parameter `{param}` is Collection; --args-named cannot decode bare arrays \
              without per-item kind information (deferred until a worked example forces \
              collection item-kind tracking). Use --args with the tagged EvalValue codec \
-             to send a collection."
+             to send a collection. {schema_hint}"
         ),
         ParamKind::Concrete(PredicateArgKind::Any) | ParamKind::Polymorphic => bail!(
-            "parameter `{param}` is Polymorphic; --args-named cannot infer an EvalValue kind. \
-             Use --args with the tagged EvalValue codec, or constrain the parameter in \
-             the model so its kind is observed."
+            "parameter `{param}` is polymorphic (the schema cannot narrow its kind); \
+             --args-named cannot infer an EvalValue kind. Use --args with the tagged \
+             EvalValue codec, or constrain the parameter in the model so its kind is \
+             observed. {schema_hint}"
         ),
         ParamKind::Unconstrained => bail!(
             "parameter `{param}` is Unconstrained (never observed in a kind-bearing position). \
              --args-named cannot infer an EvalValue kind. Use --args with the tagged \
              EvalValue codec, or use the parameter in the transformation body so its \
-             kind is observed."
+             kind is observed. {schema_hint}"
         ),
         ParamKind::Ambiguous(observed) => {
             let names: Vec<&'static str> = observed.iter().map(kind_label).collect();
             bail!(
                 "parameter `{param}` is Ambiguous ({}); --args-named cannot choose a branch \
                  safely. Use --args with the tagged EvalValue codec, or refactor the model \
-                 to expose distinct transformations or parameters.",
+                 to expose distinct transformations or parameters. {schema_hint}",
                 names.join(", "),
             )
         }
@@ -205,7 +206,7 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
     let d = Decimal::from_str(s).map_err(|e| {
         anyhow!(
             "parameter `{param}` is Decimal but `{s}` failed to parse: {e}. \
-             Expected a numeric string."
+             Expected a numeric string. {schema_hint}"
         )
     })?;
     Ok(EvalValue::Decimal(d))
@@ -256,7 +257,7 @@ fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<Ev
     let d = s.parse::<Date>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Date but `{s}` failed to parse: {e}. \
-             Expected YYYY-MM-DD."
+             Expected YYYY-MM-DD. {schema_hint}"
         )
     })?;
     Ok(EvalValue::Date(d))
