@@ -1,7 +1,7 @@
 //! Integration tests for the verified-revenue example
 //! (`examples/02_verified_revenue/`).
 //!
-//! Two complementary patterns woven through one programme:
+//! Complementary patterns woven through one programme:
 //!
 //! - **Currentness with restatement.** Verifier admits a figure;
 //!   later corrects it. Singleton `CurrentVerification` pointer

@@ -1,7 +1,7 @@
 //! Integration tests for the bilateral settlement netting example
 //! (`examples/01_settlement_netting/`).
 //!
-//! Covers three layers: IR-shape tests (the example's invariants and
+//! Covers IR-shape tests (the example's invariants and
 //! transformation look like what we expect), evaluator tests (the
 //! `net_amount_equals_lines` invariant holds when arithmetic checks
 //! out and fails when it doesn't), and full-chain `propose()` tests

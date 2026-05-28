@@ -1,12 +1,11 @@
 //! Test-support [`Deliverer`] implementations.
 //!
-//! Three constant-outcome deliverers covering the
-//! [`DeliveryOutcome`] enum's three variants. Integration tests in
-//! this crate, in `morpholog-outbox`, and in future
-//! concrete-deliverer crates (e.g. an HTTP deliverer) use them as
-//! drop-in stubs whenever a test wants to exercise the processor or
-//! worker pipeline without tying behaviour to a specific external
-//! target.
+//! Constant-outcome deliverers, one per [`DeliveryOutcome`] variant.
+//! Integration tests in this crate, in `morpholog-outbox`, and in
+//! future concrete-deliverer crates (e.g. an HTTP deliverer) use
+//! them as drop-in stubs whenever a test wants to exercise the
+//! processor or worker pipeline without tying behaviour to a
+//! specific external target.
 //!
 //! These types are always compiled (no feature flag) so integration
 //! tests can use them without configuring a feature. Production code

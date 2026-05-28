@@ -6,11 +6,11 @@
 //! official-price correction as restatement, settlement gated on the
 //! in-force official price, and the effective-quantity cap (cumulative
 //! settled, by effective date, against the terms in force on that date).
-//! Two tests carry the weight: a backdated amendment lifts the cap so a
-//! previously-rejected slice becomes admissible, and a settlement made
-//! under the prior terms stays standing after a later amendment - the
-//! trade-lifecycle form of the `02_verified_revenue` lesson, now on the
-//! effective-time axis.
+//! The headline tests carry the weight: a backdated amendment lifts
+//! the cap so a previously-rejected slice becomes admissible, and a
+//! settlement made under the prior terms stays standing after a later
+//! amendment - the trade-lifecycle form of the `02_verified_revenue`
+//! lesson, now on the effective-time axis.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

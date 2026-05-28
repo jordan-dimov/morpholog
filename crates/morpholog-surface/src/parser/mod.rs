@@ -50,7 +50,7 @@
 //! constraints follow directly from the IR shape under the
 //! `docs/scope-and-ambition.md` surface doctrine.
 //!
-//! Two disambiguation rules govern the bounded forms:
+//! Disambiguation rules govern the bounded forms:
 //!
 //! - The `in` keyword is structural inside `forall <ident> in
 //!   <source>:` (consumed by the forall production before

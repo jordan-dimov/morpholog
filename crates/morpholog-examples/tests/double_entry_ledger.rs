@@ -74,7 +74,7 @@ fn split_entry_balances_and_commits() {
     );
 
     assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
-    // Three lines: 100 debit cash, 70 credit revenue, 30 credit deferred.
+    // Lines: 100 debit cash, 70 credit revenue, 30 credit deferred.
     assert!(has_claim(
         &state,
         "JournalLine",
@@ -101,7 +101,7 @@ fn split_entry_balances_and_commits() {
 fn unbalanced_entry_rejected_by_invariant() {
     // Debit 100; credit 70 + 25 = 95. Mismatch of 5. The require
     // checks pass (period is open, etc.), the transformation stages
-    // the journal entry + three lines, and the candidate state
+    // the journal entry and its lines, and the candidate state
     // violates `balanced_posted_entry`. Atomic rollback: no claim
     // is admitted.
     let outcome = common::propose_with_test_actor(

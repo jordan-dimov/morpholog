@@ -11,7 +11,7 @@ Exploratory. The numbers this binary prints are not regression assertions and ar
 | Scenario | Setup | Hot path | What it stresses |
 |---|---|---|---|
 | `write` | N synthetic journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | scoped `load_state` + invariant evaluation over the candidate state + commit |
-| `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived` with each phase timed separately | the three layers of the read path, so the dominant cost is visible directly |
+| `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived` with each phase timed separately | each layer of the read path, so the dominant cost is visible directly |
 | `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N (number of rows) and `--at <fraction>` (how far through the log the target sits) |
 
 The `write` and `read` fixture distributes journal lines across `K` distinct accounts (default `K = 2`, configurable via `--accounts`). Entry `i` debits `account_{i mod K}` and credits `account_{(i+1) mod K}` for the same amount, so every entry is self-balancing and the `balanced_posted_entry` invariant holds. The trial-balance derived claim produces one row per distinct account that received at least one line; assertions on the read scenario check the loose bound `0 < rows <= K`.
