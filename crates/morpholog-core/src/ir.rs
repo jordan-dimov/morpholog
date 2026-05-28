@@ -632,16 +632,16 @@ pub struct IntentDecl {
 /// Deliberately a separate type from [`Value`] and [`crate::EvalValue`] - this
 /// names a *declaration-time* expectation about an argument position,
 /// not a runtime value or an IR literal. Conflating them in a single
-/// enum was considered and rejected (CLAUDE.md: the
-/// `Value`/`EvalValue` duality is already a delicate distinction; a
-/// declaration-kind annotation should not be tangled into it).
+/// enum was considered and rejected: the `Value` / `EvalValue` duality
+/// is already a delicate distinction (IR-literal vs runtime-value), and
+/// a declaration-kind annotation should not be tangled into it.
 ///
 /// `Any` is the kind escape hatch for argument positions whose kind
 /// is genuinely polymorphic (e.g. a future audit-row payload that may
 /// hold any admitted value), or for declarations that are not yet
 /// ready to commit to a kind. Use it sparingly; the value of the
 /// declaration metadata is highest when kinds are specific.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PredicateArgKind {
     Subject,
     Decimal,

@@ -3,7 +3,7 @@
 //! deliverer participate in the lease protocol without writing a
 //! `Deliverer` trait impl.
 //!
-//! Three subcommands, each calling directly into the existing
+//! Each subcommand calls directly into the existing
 //! [`morpholog_postgres`] helpers that the in-process worker already
 //! uses internally:
 //!

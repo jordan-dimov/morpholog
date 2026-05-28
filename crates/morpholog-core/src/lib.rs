@@ -26,7 +26,7 @@ pub mod actor_repr;
 pub mod format;
 pub mod ir_builder;
 
-mod analysis;
+pub mod analysis;
 mod check;
 mod derive;
 mod eval;
@@ -34,12 +34,14 @@ mod explain;
 mod guarantees;
 mod ir;
 mod propose;
+pub mod schema;
 mod state;
 mod validate;
 
 pub use analysis::{
-    predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_prop,
-    predicates_referenced_by_stmt, predicates_referenced_by_value, transformations_asserting,
+    AnalysisError, ParamKind, predicates_read_by_stmt, predicates_referenced_by_derived,
+    predicates_referenced_by_prop, predicates_referenced_by_stmt, predicates_referenced_by_value,
+    transformation_param_kinds, transformations_asserting,
 };
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::{EvalError, RenderedClaim};
@@ -57,6 +59,7 @@ pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
     Transition, propose, propose_with_trace,
 };
+pub use schema::transformation_arg_schema;
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
 pub use validate::{ValidationContext, ValidationError, VocabularyKind};
 

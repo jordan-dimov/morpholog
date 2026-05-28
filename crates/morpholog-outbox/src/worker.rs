@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use morpholog_postgres::{
-    CompensationSpec, Deliverer, PgError, PgPool, ProcessOutcome, earliest_pending_retry,
-};
+use morpholog_postgres::{CompensationSpec, Deliverer, PgError, PgPool, earliest_pending_retry};
 use tokio::sync::watch;
 
 use crate::clock::Clock;
@@ -140,7 +138,7 @@ where
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let outcomes = process_available_outbox_rows(
+            process_available_outbox_rows(
                 &self.pool,
                 &self.worker_id,
                 &self.intent_type,
@@ -152,7 +150,7 @@ where
 
             let factor = self.rng.jitter_factor(self.jitter_low, self.jitter_high);
             let base_dur = self.base_interval.mul_f64(factor);
-            let sleep_dur = self.smart_sleep_duration(&outcomes, base_dur).await?;
+            let sleep_dur = self.smart_sleep_duration(base_dur).await?;
             tokio::select! {
                 _ = self.clock.sleep_for(sleep_dur) => {}
                 changed = shutdown.changed() => {
@@ -198,15 +196,7 @@ where
     /// The base interval remains the ceiling: even if the next
     /// retry is hours away, we still wake up after `base_dur` to
     /// catch newly-enqueued immediately-due rows.
-    ///
-    /// `outcomes` is currently unused but kept in the signature
-    /// for future extensions (e.g., backoff-on-burst when a pass
-    /// produces many `Failed` outcomes).
-    async fn smart_sleep_duration(
-        &self,
-        _outcomes: &[ProcessOutcome],
-        base_dur: Duration,
-    ) -> Result<Duration, PgError> {
+    async fn smart_sleep_duration(&self, base_dur: Duration) -> Result<Duration, PgError> {
         let Some(next) = earliest_pending_retry(&self.pool, &self.intent_type).await? else {
             return Ok(base_dur);
         };

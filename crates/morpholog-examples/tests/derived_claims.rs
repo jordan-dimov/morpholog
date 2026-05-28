@@ -7,9 +7,9 @@
 //! Tests:
 //!
 //! - `trial_balance_over_simple_ledger_enumerates_one_row_per_account`:
-//!   the load-bearing case. Post three journal entries against the
-//!   ledger, evaluate `double_entry_ledger::trial_balance_row()`, and
-//!   assert one TrialBalanceRow per distinct account with the
+//!   the load-bearing case. Post a handful of journal entries against
+//!   the ledger, evaluate `double_entry_ledger::trial_balance_row()`,
+//!   and assert one TrialBalanceRow per distinct account with the
 //!   expected debit-minus-credit balance.
 //!
 //! - `trial_balance_returns_deterministic_order`: pin that
