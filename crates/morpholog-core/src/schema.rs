@@ -19,13 +19,15 @@
 //!
 //! The mapping leans toward stable, embedder-friendly encodings over
 //! exhaustively re-stating the kernel's contract:
-//! - Subjects are opaque strings; the schema marks them
-//!   `format: "uuid"` because the runtime convention is UUIDv7
-//!   (subjects minted by `Stmt::LetNewSubject` are UUIDv7, and the
-//!   PG adapter stores them as `uuid` columns), but the IR itself
-//!   treats `Subject` as an opaque string newtype and does not
-//!   check version, so the description names the convention rather
-//!   than promising it.
+//! - Subjects render as `{"type": "string"}` with NO `format`.
+//!   Morpholog's `Subject` is the only primitive noun and carries
+//!   both minted entity identifiers and domain symbols (commodity
+//!   codes, period names, direction enums, account codes); the IR
+//!   treats `Subject` as an opaque string newtype and the schema
+//!   mirrors that. Subjects minted by `Stmt::LetNewSubject` are
+//!   UUIDv7 by runtime convention, but externally supplied Subjects
+//!   need not be; the description names the convention without
+//!   pinning it as a JSON-Schema constraint.
 //! - Decimals carry as strings (not JSON numbers) because the kernel
 //!   stores them as exact source strings; the pattern is strict
 //!   enough to reject `00.12`, leading-`+`, and other ambiguous
@@ -40,7 +42,8 @@
 use serde_json::{Value, json};
 
 use crate::analysis::{AnalysisError, ParamKind, transformation_param_kinds};
-use crate::ir::{PredicateArgKind, Program, TransformationName};
+use crate::ir::{PredicateArgKind, TransformationName};
+use crate::validate::ValidatedProgram;
 
 /// Emit a JSON Schema (Draft 2020-12) for the named transformation's
 /// argument object. Parameters appear in declaration order under
@@ -48,9 +51,12 @@ use crate::ir::{PredicateArgKind, Program, TransformationName};
 /// `false` so the embedder's caller cannot smuggle in extra fields.
 ///
 /// Pure adapter over [`transformation_param_kinds`]: every error
-/// from the analysis layer bubbles through unchanged.
+/// from the analysis layer bubbles through unchanged. Takes a
+/// [`ValidatedProgram`] so the validation precondition is enforced
+/// at the type level (and so the schema layer does not re-validate
+/// after the caller already has).
 pub fn transformation_arg_schema(
-    program: &Program,
+    program: &ValidatedProgram<'_>,
     name: &TransformationName,
 ) -> Result<Value, AnalysisError> {
     let kinds = transformation_param_kinds(program, name)?;
@@ -117,7 +123,15 @@ fn property_schema(kind: &ParamKind) -> Value {
 /// (which deliberately omit per-alternative descriptions).
 fn bare_kind_shape(kind: PredicateArgKind) -> Value {
     match kind {
-        PredicateArgKind::Subject => json!({"type": "string", "format": "uuid"}),
+        // `Subject` deliberately carries NO `format: "uuid"`.
+        // Morpholog's `Subject` is the only primitive noun and
+        // represents both minted entity identifiers (UUIDv7 by
+        // runtime convention) and domain symbols (commodity codes,
+        // direction enums, period names, etc.). The IR does not
+        // pin a format; the schema mirrors that. An embedder that
+        // wants UUID validation for a specific parameter layers
+        // its own constraint on top in its pre-flight schema.
+        PredicateArgKind::Subject => json!({"type": "string"}),
         PredicateArgKind::Decimal => {
             json!({"type": "string", "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$"})
         }
@@ -136,16 +150,23 @@ fn bare_kind_shape(kind: PredicateArgKind) -> Value {
 /// enough (booleans).
 fn concrete_kind_description(kind: PredicateArgKind) -> Option<&'static str> {
     match kind {
-        PredicateArgKind::Subject => {
-            Some("opaque Morpholog subject identifier (UUIDv7 by runtime convention)")
-        }
+        PredicateArgKind::Subject => Some(
+            "opaque Morpholog subject identifier or domain symbol. \
+             Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by \
+             runtime convention; externally supplied Subjects (commodity \
+             codes, period names, direction enums, etc.) are opaque \
+             strings. The schema describes the shape, not a format constraint.",
+        ),
         PredicateArgKind::Decimal => {
             Some("arbitrary-precision decimal carried as a string for exactness")
         }
         PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
-        PredicateArgKind::Collection => {
-            Some("collection; item kind not tracked at the kernel level in v0")
-        }
+        PredicateArgKind::Collection => Some(
+            "collection; item kind not tracked at the kernel level in v0. \
+             A Collection parameter cannot be sent via `--args-named` (the \
+             named codec cannot decode bare arrays without per-item kind \
+             information); use `--args` with the tagged EvalValue codec.",
+        ),
         PredicateArgKind::Bool | PredicateArgKind::Any => None,
     }
 }

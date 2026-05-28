@@ -27,10 +27,14 @@ use serde_json::Value;
 #[test]
 fn every_transformation_param_resolves_to_concrete() {
     let program = trade_lifecycle::program();
+    // Validate once outside the loop; `ValidatedProgram` is `Copy`,
+    // and re-validating per iteration would walk every invariant,
+    // transformation, and derived claim on every pass for no gain.
+    let validated = program.validated().expect("trade_lifecycle validates");
     let mut failures: Vec<String> = Vec::new();
     for transformation in &program.transformations {
         let kinds =
-            transformation_param_kinds(&program, &transformation.name).unwrap_or_else(|e| {
+            transformation_param_kinds(&validated, &transformation.name).unwrap_or_else(|e| {
                 panic!(
                     "param-kind analysis failed for `{}`: {e}",
                     transformation.name
@@ -72,8 +76,11 @@ fn every_transformation_param_resolves_to_concrete() {
 #[test]
 fn capture_trade_schema_pins_typed_inputs() {
     let program = trade_lifecycle::program();
-    let schema =
-        transformation_arg_schema(&program, &TransformationName::from("capture_trade")).unwrap();
+    let schema = transformation_arg_schema(
+        &program.validated().expect("trade_lifecycle validates"),
+        &TransformationName::from("capture_trade"),
+    )
+    .unwrap();
     assert_param_types(
         &schema,
         &[
@@ -97,9 +104,11 @@ fn capture_trade_schema_pins_typed_inputs() {
 #[test]
 fn amend_trade_terms_schema_pins_typed_inputs() {
     let program = trade_lifecycle::program();
-    let schema =
-        transformation_arg_schema(&program, &TransformationName::from("amend_trade_terms"))
-            .unwrap();
+    let schema = transformation_arg_schema(
+        &program.validated().expect("trade_lifecycle validates"),
+        &TransformationName::from("amend_trade_terms"),
+    )
+    .unwrap();
     assert_param_types(
         &schema,
         &[
@@ -122,8 +131,11 @@ fn amend_trade_terms_schema_pins_typed_inputs() {
 #[test]
 fn settle_trade_schema_pins_typed_inputs() {
     let program = trade_lifecycle::program();
-    let schema =
-        transformation_arg_schema(&program, &TransformationName::from("settle_trade")).unwrap();
+    let schema = transformation_arg_schema(
+        &program.validated().expect("trade_lifecycle validates"),
+        &TransformationName::from("settle_trade"),
+    )
+    .unwrap();
     assert_param_types(
         &schema,
         &[

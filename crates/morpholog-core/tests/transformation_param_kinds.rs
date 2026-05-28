@@ -37,7 +37,11 @@ fn param_used_only_inside_require_resolves_to_concrete() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("approve")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("approve"),
+    )
+    .unwrap();
 
     assert_eq!(
         kinds,
@@ -78,7 +82,11 @@ fn returned_order_matches_declaration_order() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("act")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("act"),
+    )
+    .unwrap();
     let names: Vec<&str> = kinds.iter().map(|(v, _)| v.as_str()).collect();
     assert_eq!(names, vec!["zebra", "apple", "mango"]);
 }
@@ -97,7 +105,11 @@ fn param_observed_only_at_any_slot_is_polymorphic() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("log")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("log"),
+    )
+    .unwrap();
     assert_eq!(kinds, vec![(Var::from("payload"), ParamKind::Polymorphic)]);
 }
 
@@ -109,7 +121,11 @@ fn param_never_observed_is_unconstrained() {
         .transformations(vec![transformation("noop", params(&["unused"]), vec![])])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("noop")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("noop"),
+    )
+    .unwrap();
     assert_eq!(kinds, vec![(Var::from("unused"), ParamKind::Unconstrained)],);
 }
 
@@ -163,9 +179,11 @@ fn every_concrete_kind_round_trips() {
         ("with_collection", "c", PredicateArgKind::Collection),
     ];
     for (transformation_name, param, expected) in cases {
-        let kinds =
-            transformation_param_kinds(&prog, &TransformationName::from(transformation_name))
-                .unwrap();
+        let kinds = transformation_param_kinds(
+            &prog.validated().expect("test programme validates"),
+            &TransformationName::from(transformation_name),
+        )
+        .unwrap();
         assert_eq!(
             kinds,
             vec![(Var::from(param), ParamKind::Concrete(expected))],
@@ -182,14 +200,13 @@ fn unknown_transformation_returns_error() {
         .transformations(vec![transformation("declared", params(&[]), vec![])])
         .build();
 
-    let err = transformation_param_kinds(&prog, &TransformationName::from("ghost"))
-        .expect_err("expected UnknownTransformation");
-    match err {
-        AnalysisError::UnknownTransformation { name } => {
-            assert_eq!(name.as_str(), "ghost");
-        }
-        other => panic!("expected UnknownTransformation, got {other:?}"),
-    }
+    let err = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("ghost"),
+    )
+    .expect_err("expected UnknownTransformation");
+    let AnalysisError::UnknownTransformation { name } = err;
+    assert_eq!(name.as_str(), "ghost");
 }
 
 /// **The regression test for silent-conflict-dropping** (the
@@ -224,8 +241,11 @@ fn param_observed_in_different_kinds_across_or_branches_is_ambiguous() {
         )])
         .build();
 
-    let kinds =
-        transformation_param_kinds(&prog, &TransformationName::from("either_shape")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("either_shape"),
+    )
+    .unwrap();
 
     let (param, kind) = &kinds[0];
     assert_eq!(param, &Var::from("x"));
@@ -266,7 +286,11 @@ fn param_aliased_through_let_inherits_the_aliased_observation() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("process")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("process"),
+    )
+    .unwrap();
     assert_eq!(
         kinds,
         vec![(
@@ -302,7 +326,11 @@ fn param_aliased_to_disagreeing_observations_is_ambiguous() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("diverge")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("diverge"),
+    )
+    .unwrap();
     match &kinds[0].1 {
         ParamKind::Ambiguous(observed) => {
             assert_eq!(
@@ -342,7 +370,11 @@ fn aliased_params_preserve_declaration_order() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("act")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("act"),
+    )
+    .unwrap();
     let names: Vec<&str> = kinds.iter().map(|(v, _)| v.as_str()).collect();
     assert_eq!(
         names,
@@ -388,7 +420,11 @@ fn param_alias_broken_by_let_rebinding_does_not_inherit_later_observations() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("rebind")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("rebind"),
+    )
+    .unwrap();
     assert_eq!(
         kinds,
         vec![(Var::from("x"), ParamKind::Unconstrained)],
@@ -433,7 +469,11 @@ fn for_binding_reusing_param_name_does_not_type_the_external_param() {
         )])
         .build();
 
-    let kinds = transformation_param_kinds(&prog, &TransformationName::from("loop_it")).unwrap();
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("loop_it"),
+    )
+    .unwrap();
     assert_eq!(
         kinds,
         vec![
@@ -449,11 +489,13 @@ fn for_binding_reusing_param_name_does_not_type_the_external_param() {
     );
 }
 
-/// An invalid programme surfaces its validation errors rather than
-/// being analysed best-effort. The accessor refuses to guess past
-/// problems the kernel itself would refuse to run.
+/// An invalid programme surfaces its validation errors at the
+/// `Program::validated` gate, before the analysis surface is even
+/// reachable. The type system enforces this: `transformation_param_kinds`
+/// takes a `ValidatedProgram`, which is only constructible via
+/// `validated()`, so an invalid programme cannot even be analysed.
 #[test]
-fn invalid_program_bubbles_validation_errors() {
+fn invalid_program_surfaces_at_the_validated_gate() {
     let prog = program("invalid_test")
         .transformations(vec![transformation(
             "broken",
@@ -462,15 +504,11 @@ fn invalid_program_bubbles_validation_errors() {
         )])
         .build();
 
-    let err = transformation_param_kinds(&prog, &TransformationName::from("broken"))
-        .expect_err("expected ProgramInvalid");
-    match err {
-        AnalysisError::ProgramInvalid(errors) => {
-            assert!(
-                !errors.is_empty(),
-                "ProgramInvalid should carry at least one validation error",
-            );
-        }
-        other => panic!("expected ProgramInvalid, got {other:?}"),
-    }
+    let errors = prog
+        .validated()
+        .expect_err("an invalid programme must not yield a ValidatedProgram");
+    assert!(
+        !errors.is_empty(),
+        "validation should report at least one error for an undeclared predicate",
+    );
 }

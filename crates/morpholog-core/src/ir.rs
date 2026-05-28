@@ -578,6 +578,19 @@ impl Program {
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
         validate_program(self)
     }
+
+    /// Validate and return a proof-of-validity handle. Same checks
+    /// as [`Self::validate`], but the success case carries a
+    /// [`crate::ValidatedProgram`] the analysis surface
+    /// ([`crate::transformation_param_kinds`],
+    /// [`crate::transformation_arg_schema`]) consumes - so callers
+    /// that need both validation and analysis only pay the
+    /// validation cost once, and the analysis API can drop its
+    /// defensive re-validation. The error shape is unchanged.
+    pub fn validated(&self) -> Result<crate::ValidatedProgram<'_>, Vec<ValidationError>> {
+        self.validate()
+            .map(|()| crate::ValidatedProgram::from_validated(self))
+    }
 }
 
 /// A predicate declaration: the name of a predicate and the named-and-

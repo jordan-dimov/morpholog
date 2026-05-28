@@ -366,6 +366,270 @@ async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
     assert_eq!(receipt["status"], "committed");
 }
 
+/// `run --args-named` happy path against the temp ledger. Same
+/// transformation as the tagged-form test above, but with the
+/// embedder-facing codec: bare values keyed by parameter name. The
+/// CLI consults `transformation_param_kinds` to coerce each value
+/// against its declared kind. All Subject values are UUIDs because
+/// the schema commits to `format: "uuid"` and the codec enforces
+/// it.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_commits_with_the_friendly_codec() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"018f0000-0000-7000-8000-000000000001",
+        "posting_date":"018f0000-0000-7000-8000-000000000002",
+        "period":"018f0000-0000-7000-8000-000000000003",
+        "debit_account":"018f0000-0000-7000-8000-000000000004",
+        "credit_account":"018f0000-0000-7000-8000-000000000005",
+        "amount":"250"
+    }"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(
+        status.success(),
+        "--args-named happy path should commit; stderr: {stderr}; stdout: {stdout}"
+    );
+    let receipt: Value = serde_json::from_str(&stdout).expect("receipt is JSON");
+    assert_eq!(receipt["status"], "committed");
+}
+
+/// Missing a declared parameter in the `--args-named` object is a
+/// hard error before any database work. The error names the missing
+/// parameter and points at `morpholog schema` for the accepted
+/// shape.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_missing_required_errors_with_schema_hint() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"018f0000-0000-7000-8000-000000000011",
+        "posting_date":"018f0000-0000-7000-8000-000000000012",
+        "period":"018f0000-0000-7000-8000-000000000013",
+        "debit_account":"018f0000-0000-7000-8000-000000000014",
+        "credit_account":"018f0000-0000-7000-8000-000000000015"
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "missing required parameter must error");
+    assert!(
+        stderr.contains("missing required parameter `amount`"),
+        "stderr should name the missing parameter; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("morpholog schema"),
+        "error should point at the schema subcommand; got: {stderr}"
+    );
+}
+
+/// An unknown key in `--args-named` is a hard error. The error lists
+/// the parameters that ARE accepted, so a typo surfaces clearly
+/// rather than as "missing required" (which would point at the
+/// wrong target).
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_unknown_key_errors_with_expected_names() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"018f0000-0000-7000-8000-000000000021",
+        "posting_date":"018f0000-0000-7000-8000-000000000022",
+        "period":"018f0000-0000-7000-8000-000000000023",
+        "debit_account":"018f0000-0000-7000-8000-000000000024",
+        "credit_account":"018f0000-0000-7000-8000-000000000025",
+        "amount":"100",
+        "amaount":"100"
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "unknown key must error");
+    assert!(
+        stderr.contains("unknown parameter(s) `amaount`"),
+        "stderr should name the unknown key; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("amount") && stderr.contains("entry_id"),
+        "stderr should list the expected parameter names; got: {stderr}"
+    );
+}
+
+/// `explain --args-named --json` parses the embedder-facing codec
+/// the same way `run` does and produces an `Explanation` envelope.
+/// Both verbs share the decode path through `commands::args` and
+/// the in-crate Clap tests pin the surface, but a binary-level
+/// smoke test catches the wiring (explain's pre-state load + the
+/// in-memory explain call) under the named codec, not just the
+/// tagged one.
+#[tokio::test(flavor = "current_thread")]
+async fn explain_args_named_returns_explanation_envelope() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"018f0000-0000-7000-8000-000000000061",
+        "posting_date":"018f0000-0000-7000-8000-000000000062",
+        "period":"018f0000-0000-7000-8000-000000000063",
+        "debit_account":"018f0000-0000-7000-8000-000000000064",
+        "credit_account":"018f0000-0000-7000-8000-000000000065",
+        "amount":"100"
+    }"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "explain",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+        "--json",
+    ]);
+    // Explain is read-only and always exits zero on a parsed-and-
+    // validated programme; the verdict (admissible or rejected)
+    // lives inside the JSON envelope.
+    assert!(
+        status.success(),
+        "explain should always exit zero on a valid programme; stderr: {stderr}"
+    );
+    let explanation: Value =
+        serde_json::from_str(&stdout).expect("explain --json stdout must be JSON");
+    assert!(
+        explanation.get("verdict").is_some(),
+        "Explanation envelope must carry a `verdict` field; got: {stdout}"
+    );
+}
+
+/// `Subject` is Morpholog's only primitive noun: it carries both
+/// minted entity identifiers (UUIDv7 by runtime convention) and
+/// domain symbols (commodity codes, period names, account
+/// codes, direction enums). The `--args-named` codec accepts
+/// any string for Subject parameters, mirroring the kernel's
+/// opaque-subject model. This test pins that natural-symbol
+/// Subjects work end-to-end - exactly the shape the embedder
+/// integration doc's `commodity:"oil"` / `direction:"buy"`
+/// examples rely on, and the shape that an earlier UUID-only
+/// validation broke.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_accepts_symbolic_subject_values() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"entry_42",
+        "posting_date":"2026-04-15",
+        "period":"q1_2026",
+        "debit_account":"account_cash",
+        "credit_account":"account_revenue",
+        "amount":"100"
+    }"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(
+        status.success(),
+        "symbolic Subject values must work in --args-named; \
+         stderr: {stderr}; stdout: {stdout}"
+    );
+    let receipt: Value = serde_json::from_str(&stdout).expect("receipt is JSON");
+    assert_eq!(receipt["status"], "committed");
+}
+
+/// Decimal strings that fail the schema's pattern must also fail
+/// the `--args-named` codec, or the embedder validates request
+/// bodies against a stricter contract than the CLI actually
+/// enforces. The schema pattern is `^-?(0|[1-9]\d*)(\.\d+)?$`;
+/// `Decimal::from_str` alone is more lenient. This test pins the
+/// alignment.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_decimal_outside_schema_pattern_errors() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    for bad in ["+1", "00.12", "1.", ".5"] {
+        let args_named = format!(
+            r#"{{
+                "entry_id":"018f0000-0000-7000-8000-000000000041",
+                "posting_date":"018f0000-0000-7000-8000-000000000042",
+                "period":"018f0000-0000-7000-8000-000000000043",
+                "debit_account":"018f0000-0000-7000-8000-000000000044",
+                "credit_account":"018f0000-0000-7000-8000-000000000045",
+                "amount":"{bad}"
+            }}"#
+        );
+        let (status, _stdout, stderr) = run_cli(&[
+            "run",
+            path.to_str().unwrap(),
+            "post_simple_entry",
+            "--actor",
+            "alex",
+            "--args-named",
+            &args_named,
+        ]);
+        assert!(
+            !status.success(),
+            "decimal `{bad}` is outside the schema pattern and must be rejected"
+        );
+        assert!(
+            stderr.contains("does not match the schema pattern"),
+            "stderr should name the schema-pattern mismatch for `{bad}`; got: {stderr}"
+        );
+    }
+}
+
+/// Wrong JSON type errors with the expected kind label so the
+/// embedder can see WHICH parameter went wrong and WHAT kind it
+/// should be.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_wrong_type_errors_with_kind_label() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"018f0000-0000-7000-8000-000000000051",
+        "posting_date":"018f0000-0000-7000-8000-000000000052",
+        "period":"018f0000-0000-7000-8000-000000000053",
+        "debit_account":"018f0000-0000-7000-8000-000000000054",
+        "credit_account":"018f0000-0000-7000-8000-000000000055",
+        "amount": true
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "wrong JSON type must error");
+    assert!(
+        stderr.contains("`amount` is Decimal but received boolean"),
+        "stderr should name the parameter, the expected kind, and the actual JSON type; got: {stderr}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn run_errors_with_available_list_on_unknown_transformation() {
     reset_db().await;

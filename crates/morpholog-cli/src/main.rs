@@ -93,6 +93,18 @@ enum Command {
         #[command(subcommand)]
         what: OutboxCmd,
     },
+
+    /// Emit a JSON Schema describing the named transformation's
+    /// argument object. Thin wrapper over the library's
+    /// `transformation_arg_schema`: parse, validate, project param
+    /// kinds, render. The schema is the public contract a non-Rust
+    /// embedder uses to validate request bodies, generate input
+    /// forms, or derive typed client models without touching Rust.
+    /// Output is a JSON Schema (Draft 2020-12); exits zero on
+    /// success, non-zero on parse / validation failure or unknown
+    /// transformation. No `--json` flag because the output IS
+    /// JSON.
+    Schema(SchemaArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -352,9 +364,28 @@ pub(crate) struct SourceFileArgs {
     pub(crate) file: PathBuf,
 }
 
+/// Arguments for `schema`. A `.morph` source file plus the name of
+/// the transformation whose argument contract to emit. No database
+/// connection - schema generation is a pure static read over the
+/// parsed and validated programme.
+#[derive(clap::Args, Debug)]
+pub(crate) struct SchemaArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    /// Transformation name whose argument contract to emit.
+    pub(crate) transformation: String,
+}
+
 /// Arguments for the `run` subcommand: a `.morph` source file plus the
-/// transformation, JSON args, actor, connection string, and optional
-/// trace flag.
+/// transformation, JSON args (in one of two codecs), actor, connection
+/// string, and optional trace flag.
+///
+/// `--args` and `--args-named` are mutually exclusive at the Clap level
+/// and exactly one of the two is required. The first is the
+/// implementer-facing tagged-EvalValue codec; the second is the
+/// embedder-facing bare-by-name codec that mirrors the JSON Schema
+/// `morpholog schema` emits.
 #[derive(clap::Args, Debug)]
 pub(crate) struct RunArgs {
     /// Path to a `.morph` source file containing the programme.
@@ -364,12 +395,27 @@ pub(crate) struct RunArgs {
     pub(crate) transformation: String,
 
     /// JSON array of arguments matching the transformation's parameter
-    /// list. Each element is an `EvalValue` in the codec's tagged form:
+    /// list. Each element is an `EvalValue` in the tagged form:
     /// `{"type":"subject","value":"..."}`, `{"type":"decimal",
     /// "value":"100"}`, `{"type":"bool","value":true}`, or
-    /// `{"type":"collection","value":[...]}`.
-    #[arg(long)]
-    pub(crate) args: String,
+    /// `{"type":"collection","value":[...]}`. The implementer-facing
+    /// codec; carries Polymorphic / Ambiguous / Collection inputs the
+    /// schema cannot describe unambiguously.
+    #[arg(
+        long,
+        conflicts_with = "args_named",
+        required_unless_present = "args_named"
+    )]
+    pub(crate) args: Option<String>,
+
+    /// JSON object keyed by parameter name with bare values matching
+    /// the JSON Schema emitted by `morpholog schema`. The embedder-
+    /// facing codec; strict (missing required, unknown keys, wrong
+    /// types, and `null` all error). Refuses Polymorphic, Ambiguous,
+    /// Unconstrained, and Collection parameters; use `--args` for
+    /// those.
+    #[arg(long, conflicts_with = "args", required_unless_present = "args")]
+    pub(crate) args_named: Option<String>,
 
     /// Subject identifying the actor under whose authority this
     /// transition is proposed. Wrapped as an `EvalValue::Subject` and
@@ -391,6 +437,11 @@ pub(crate) struct RunArgs {
 /// shape as [`RunArgs`] - it builds the identical `Transition` - but with
 /// `--json` in place of `--trace`: explain's whole output already is the
 /// interpreted trace, so prose-or-JSON is the only output choice.
+///
+/// `--args` and `--args-named` are mutually exclusive at the Clap level
+/// and exactly one is required. Same semantics as `run`: the first is
+/// the implementer-facing tagged codec, the second is the embedder-
+/// facing bare-by-name codec.
 #[derive(clap::Args, Debug)]
 pub(crate) struct ExplainArgs {
     /// Path to a `.morph` source file containing the programme.
@@ -400,10 +451,21 @@ pub(crate) struct ExplainArgs {
     pub(crate) transformation: String,
 
     /// JSON array of arguments matching the transformation's parameter
-    /// list, in the same tagged codec as `run --args` - e.g.
+    /// list, in the tagged-EvalValue codec - e.g.
     /// `[{"type":"subject","value":"c1"},{"type":"decimal","value":"100"}]`.
-    #[arg(long)]
-    pub(crate) args: String,
+    /// See `run --args` for the full codec description.
+    #[arg(
+        long,
+        conflicts_with = "args_named",
+        required_unless_present = "args_named"
+    )]
+    pub(crate) args: Option<String>,
+
+    /// JSON object keyed by parameter name with bare values matching
+    /// the JSON Schema emitted by `morpholog schema`. The embedder-
+    /// facing codec; same strict semantics as `run --args-named`.
+    #[arg(long, conflicts_with = "args", required_unless_present = "args")]
+    pub(crate) args_named: Option<String>,
 
     /// Subject identifying the actor under whose authority the explained
     /// transition is proposed. Wrapped as an `EvalValue::Subject`.
@@ -433,6 +495,7 @@ async fn main() -> anyhow::Result<()> {
             OutboxCmd::Complete(args) => commands::outbox::complete(args).await,
             OutboxCmd::Release(args) => commands::outbox::release(args).await,
         },
+        Command::Schema(args) => commands::schema::run(args),
     }
 }
 
@@ -665,9 +728,56 @@ mod tests {
             std::path::PathBuf::from("examples/03_double_entry_ledger/ledger.morph")
         );
         assert_eq!(args.transformation, "post_simple_entry");
-        assert_eq!(args.args, "[]");
+        assert_eq!(args.args.as_deref(), Some("[]"));
+        assert!(args.args_named.is_none());
         assert_eq!(args.actor, "jordan");
         assert_eq!(args.database_url, "postgres:///morpholog_dev");
+    }
+
+    /// `run --args-named '{...}'` parses with `args_named: Some(...)`
+    /// and `args: None`. Confirms the new flag plumbs through.
+    #[test]
+    fn run_with_args_named_parses_into_the_named_slot() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "run",
+            "examples/03_double_entry_ledger/ledger.morph",
+            "post_simple_entry",
+            "--args-named",
+            r#"{"trade":"a"}"#,
+            "--actor",
+            "jordan",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Run(args) = cli.command else {
+            panic!("expected Run, got {:?}", cli.command);
+        };
+        assert!(args.args.is_none(), "--args should not be set");
+        assert_eq!(args.args_named.as_deref(), Some(r#"{"trade":"a"}"#));
+    }
+
+    /// Passing BOTH `--args` and `--args-named` must be rejected at
+    /// Clap-parse time so the run path never sees an ambiguous
+    /// request shape.
+    #[test]
+    fn run_with_both_args_codecs_errors() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "run",
+            "examples/03_double_entry_ledger/ledger.morph",
+            "post_simple_entry",
+            "--args",
+            "[]",
+            "--args-named",
+            "{}",
+            "--actor",
+            "jordan",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ])
+        .expect_err("both --args and --args-named should error");
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -942,10 +1052,57 @@ mod tests {
         };
         assert_eq!(args.file.as_os_str(), "model.morph");
         assert_eq!(args.transformation, "issue_credit");
-        assert_eq!(args.args, "[]");
+        assert_eq!(args.args.as_deref(), Some("[]"));
+        assert!(args.args_named.is_none());
         assert_eq!(args.actor, "jordan");
         assert_eq!(args.database_url, "postgres:///morpholog_dev");
         assert!(!args.json, "expected --json to default to false");
+    }
+
+    /// `explain --args-named` parses with `args_named: Some(...)` and
+    /// `args: None`. Mirrors `run_with_args_named_parses_into_the_named_slot`
+    /// to confirm explain plumbs the new flag identically.
+    #[test]
+    fn explain_with_args_named_parses_into_the_named_slot() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "explain",
+            "model.morph",
+            "issue_credit",
+            "--args-named",
+            r#"{"x":"y"}"#,
+            "--actor",
+            "jordan",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Explain(args) = cli.command else {
+            panic!("expected Explain, got {:?}", cli.command);
+        };
+        assert!(args.args.is_none(), "--args should not be set");
+        assert_eq!(args.args_named.as_deref(), Some(r#"{"x":"y"}"#));
+    }
+
+    /// Mutual exclusion at parse time for explain too: passing both
+    /// `--args` and `--args-named` is a hard error.
+    #[test]
+    fn explain_with_both_args_codecs_errors() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "explain",
+            "model.morph",
+            "issue_credit",
+            "--args",
+            "[]",
+            "--args-named",
+            "{}",
+            "--actor",
+            "jordan",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ])
+        .expect_err("both --args and --args-named should error");
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -982,6 +1139,38 @@ mod tests {
             "postgres:///morpholog_dev",
         ])
         .expect_err("missing --actor should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    /// `morpholog schema <file> <transformation>` parses into the
+    /// expected positional args. The schema subcommand takes no flags
+    /// (no `--json`, no `--database-url`), so the test pins that the
+    /// minimal positional surface is what the embedder will type.
+    #[test]
+    fn schema_with_file_and_transformation_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "schema",
+            "examples/10_trade_lifecycle/trade_lifecycle.morph",
+            "capture_trade",
+        ]);
+        let Command::Schema(args) = cli.command else {
+            panic!("expected Command::Schema, got {:?}", cli.command);
+        };
+        assert_eq!(args.transformation, "capture_trade");
+        assert_eq!(
+            args.file.to_string_lossy(),
+            "examples/10_trade_lifecycle/trade_lifecycle.morph"
+        );
+    }
+
+    /// Missing the transformation name should error at clap-parse
+    /// time. The embedder gets a clear message before any file IO
+    /// happens.
+    #[test]
+    fn schema_missing_transformation_errors() {
+        let err = Cli::try_parse_from(["morpholog", "schema", "file.morph"])
+            .expect_err("missing transformation name should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 }

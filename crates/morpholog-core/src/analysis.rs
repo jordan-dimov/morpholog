@@ -13,7 +13,7 @@ use crate::ir::{
     ArgDecl, DerivedClaim, OrderedDomain, PredicateArgKind, PredicateName, Program, Prop, Stmt,
     Term, TransformationName, ValueExpr, Var,
 };
-use crate::validate::ValidationError;
+use crate::validate::ValidatedProgram;
 
 /// Return the set of predicate names a proposition references anywhere
 /// in its tree. Used by the PostgreSQL adapter's read path to load only
@@ -315,13 +315,11 @@ pub enum ParamKind {
 }
 
 /// Errors that prevent per-transformation argument-kind analysis.
+/// Programme-level validation errors do not appear here: the API
+/// takes a [`ValidatedProgram`], so the type system rules out the
+/// invalid-programme case before this function runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisError {
-    /// The programme does not validate. Param-kind analysis is
-    /// undefined over an invalid programme - it would observe
-    /// kinds the runtime would itself refuse - so the validation
-    /// errors are bubbled up rather than guessed past.
-    ProgramInvalid(Vec<ValidationError>),
     /// No transformation declared with that name.
     UnknownTransformation { name: TransformationName },
 }
@@ -329,9 +327,6 @@ pub enum AnalysisError {
 impl std::fmt::Display for AnalysisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AnalysisError::ProgramInvalid(errors) => {
-                write!(f, "programme does not validate ({} error(s))", errors.len())
-            }
             AnalysisError::UnknownTransformation { name } => {
                 write!(f, "unknown transformation `{name}`")
             }
@@ -373,24 +368,22 @@ impl std::error::Error for AnalysisError {}
 /// models, and CLI payload examples downstream depend on stable
 /// human-facing order.
 ///
-/// Refuses to analyse an invalid programme - kind observations
-/// inside an invalid programme are observations the runtime would
-/// itself refuse, so guessing past validation errors would mislead
-/// the embedder. The caller can either call [`Program::validate`]
-/// up front or let this accessor surface the errors.
+/// Takes a [`ValidatedProgram`] rather than a `&Program` so the
+/// precondition (programme is validated) is enforced at the type
+/// level. The accessor no longer needs to defensively re-validate
+/// internally - callers that have already validated (every CLI
+/// path, every worked-example test) only pay the validation cost
+/// once.
 pub fn transformation_param_kinds(
-    program: &Program,
+    program: &ValidatedProgram<'_>,
     name: &TransformationName,
 ) -> Result<Vec<(Var, ParamKind)>, AnalysisError> {
-    if let Err(errors) = program.validate() {
-        return Err(AnalysisError::ProgramInvalid(errors));
-    }
-
-    let transformation = program
+    let inner = program.as_program();
+    let transformation = inner
         .transformation(name.as_str())
         .ok_or_else(|| AnalysisError::UnknownTransformation { name: name.clone() })?;
 
-    let mut collector = ParamCollector::new(program);
+    let mut collector = ParamCollector::new(inner);
     for stmt in &transformation.body {
         collector.walk_stmt(stmt);
     }
