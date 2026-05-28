@@ -94,9 +94,11 @@ fn schema_unknown_transformation_errors_to_stderr_and_exits_nonzero() {
 
 #[test]
 fn schema_parse_error_renders_diagnostic_and_exits_nonzero() {
-    // Lexer-level garbage: an unterminated reference. Triggers the
-    // same `parse_or_exit` path every other subcommand uses, so we
-    // confirm the schema subcommand wires it in.
+    // Parser-level rejection: `Money` is not a declared
+    // `PredicateArgKind`, so the parser refuses the predicate
+    // declaration. Triggers the same `parse_or_exit` path every
+    // other subcommand uses, so we confirm the schema subcommand
+    // wires it in.
     let path = write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");
     let out = Command::new(bin())
         .args(["schema", path.to_str().unwrap(), "anything"])

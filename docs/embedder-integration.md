@@ -95,6 +95,8 @@ Shape:
 
 Per-kind property fragments are documented in `morpholog-core::schema`'s rustdoc; the same fragments are reused as `anyOf` alternatives for `Ambiguous` parameters.
 
+A note on `Subject` and `format: "uuid"`: the IR treats `Subject` as an opaque string newtype (the kernel does not enforce a specific subject-id convention). The schema declares `format: "uuid"` because the runtime convention is UUIDv7 (subjects minted by `Stmt::LetNewSubject` are UUIDv7, and the PG adapter stores them as `uuid` columns). The `--args-named` codec enforces the UUID convention at the CLI boundary so the embedder's pre-flight validation aligns with what the CLI actually accepts. Embedders that drive Morpholog through the tagged `--args` codec can send non-UUID Subject strings, since the kernel does not check the format.
+
 Exits zero on success; non-zero on parse, validation, or unknown-transformation. The schema output stream is empty on any error path.
 
 ### `morpholog run`
