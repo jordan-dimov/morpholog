@@ -121,7 +121,15 @@ fn property_schema(kind: &ParamKind) -> Value {
 /// (which deliberately omit per-alternative descriptions).
 fn bare_kind_shape(kind: PredicateArgKind) -> Value {
     match kind {
-        PredicateArgKind::Subject => json!({"type": "string", "format": "uuid"}),
+        // `Subject` deliberately carries NO `format: "uuid"`.
+        // Morpholog's `Subject` is the only primitive noun and
+        // represents both minted entity identifiers (UUIDv7 by
+        // runtime convention) and domain symbols (commodity codes,
+        // direction enums, period names, etc.). The IR does not
+        // pin a format; the schema mirrors that. An embedder that
+        // wants UUID validation for a specific parameter layers
+        // its own constraint on top in its pre-flight schema.
+        PredicateArgKind::Subject => json!({"type": "string"}),
         PredicateArgKind::Decimal => {
             json!({"type": "string", "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$"})
         }
@@ -140,9 +148,13 @@ fn bare_kind_shape(kind: PredicateArgKind) -> Value {
 /// enough (booleans).
 fn concrete_kind_description(kind: PredicateArgKind) -> Option<&'static str> {
     match kind {
-        PredicateArgKind::Subject => {
-            Some("opaque Morpholog subject identifier (UUIDv7 by runtime convention)")
-        }
+        PredicateArgKind::Subject => Some(
+            "opaque Morpholog subject identifier or domain symbol. \
+             Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by \
+             runtime convention; externally supplied Subjects (commodity \
+             codes, period names, direction enums, etc.) are opaque \
+             strings. The schema describes the shape, not a format constraint.",
+        ),
         PredicateArgKind::Decimal => {
             Some("arbitrary-precision decimal carried as a string for exactness")
         }

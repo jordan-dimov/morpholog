@@ -46,7 +46,7 @@ morpholog run trade_lifecycle.morph capture_trade \
 
 Accepts the subset of transformations whose every parameter resolves to one of `Subject`, `Decimal`, `Date`, or `Bool`. Where the schema cannot give an unambiguous scalar kind, the codec refuses with an error pointing at `--args`. Per-kind behaviour:
 
-- **`Subject`** - JSON string validated as a UUID. The schema's `format: "uuid"` is enforced at the CLI boundary, not just at the schema layer, so the embedder cannot validate against a contract the CLI then ignores.
+- **`Subject`** - any JSON string. `Subject` is Morpholog's only primitive noun and carries both minted entity identifiers and domain symbols (commodity codes, period names, account codes, direction enums); the codec mirrors the kernel's opaque-subject model and does not enforce a format. Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by runtime convention; externally supplied Subjects can be anything. Embedders that want UUID validation for a specific parameter layer their own constraint on top in their pre-flight schema.
 - **`Decimal`** - JSON string validated against `^-?(0|[1-9]\d*)(\.\d+)?$` (the same pattern the schema emits). Leading `+`, leading zeros, trailing dot, scientific notation: rejected. The CLI matches the schema exactly.
 - **`Date`** - JSON string parsed as an ISO-8601 civil date (`YYYY-MM-DD`).
 - **`Bool`** - JSON boolean.
@@ -95,7 +95,7 @@ Shape:
 
 Per-kind property fragments are documented in `morpholog-core::schema`'s rustdoc; the same fragments are reused as `anyOf` alternatives for `Ambiguous` parameters.
 
-A note on `Subject` and `format: "uuid"`: the IR treats `Subject` as an opaque string newtype (the kernel does not enforce a specific subject-id convention). The schema declares `format: "uuid"` because the runtime convention is UUIDv7 (subjects minted by `Stmt::LetNewSubject` are UUIDv7, and the PG adapter stores them as `uuid` columns). The `--args-named` codec enforces the UUID convention at the CLI boundary so the embedder's pre-flight validation aligns with what the CLI actually accepts. Embedders that drive Morpholog through the tagged `--args` codec can send non-UUID Subject strings, since the kernel does not check the format.
+A note on `Subject`: the schema describes `Subject` as `{"type": "string"}` with no `format`, mirroring the kernel's opaque-subject model. `Subject` is Morpholog's only primitive noun and naturally carries both minted entity identifiers and domain symbols - account codes, period names, commodity codes, direction enums. Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by runtime convention; externally supplied Subjects are opaque strings whose format the kernel does not check. An embedder that wants UUID validation for a specific parameter layers its own constraint on top in its pre-flight schema; the contract Morpholog exposes is the opaque-string shape.
 
 Exits zero on success; non-zero on parse, validation, or unknown-transformation. The schema output stream is empty on any error path.
 

@@ -518,25 +518,29 @@ async fn explain_args_named_returns_explanation_envelope() {
     );
 }
 
-/// Subject values that fail UUID parsing are rejected. The schema
-/// commits to `format: "uuid"`; the codec enforces the same
-/// commitment so the contract the embedder validates against
-/// matches what the CLI actually accepts. The kernel `Subject`
-/// stays opaque; only the embedder-facing layer adds the
-/// convention check.
+/// `Subject` is Morpholog's only primitive noun: it carries both
+/// minted entity identifiers (UUIDv7 by runtime convention) and
+/// domain symbols (commodity codes, period names, account
+/// codes, direction enums). The `--args-named` codec accepts
+/// any string for Subject parameters, mirroring the kernel's
+/// opaque-subject model. This test pins that natural-symbol
+/// Subjects work end-to-end - exactly the shape the embedder
+/// integration doc's `commodity:"oil"` / `direction:"buy"`
+/// examples rely on, and the shape that an earlier UUID-only
+/// validation broke.
 #[tokio::test(flavor = "current_thread")]
-async fn run_args_named_subject_must_be_a_uuid() {
+async fn run_args_named_accepts_symbolic_subject_values() {
     reset_db().await;
     let path = write_temp_ledger_morph();
     let args_named = r#"{
-        "entry_id":"not-a-uuid",
-        "posting_date":"018f0000-0000-7000-8000-000000000032",
-        "period":"018f0000-0000-7000-8000-000000000033",
-        "debit_account":"018f0000-0000-7000-8000-000000000034",
-        "credit_account":"018f0000-0000-7000-8000-000000000035",
+        "entry_id":"entry_42",
+        "posting_date":"2026-04-15",
+        "period":"q1_2026",
+        "debit_account":"account_cash",
+        "credit_account":"account_revenue",
         "amount":"100"
     }"#;
-    let (status, _stdout, stderr) = run_cli(&[
+    let (status, stdout, stderr) = run_cli(&[
         "run",
         path.to_str().unwrap(),
         "post_simple_entry",
@@ -545,11 +549,13 @@ async fn run_args_named_subject_must_be_a_uuid() {
         "--args-named",
         args_named,
     ]);
-    assert!(!status.success(), "non-UUID Subject must be rejected");
     assert!(
-        stderr.contains("`entry_id` is Subject") && stderr.contains("not a valid UUID"),
-        "stderr should name the parameter and call out the UUID failure; got: {stderr}"
+        status.success(),
+        "symbolic Subject values must work in --args-named; \
+         stderr: {stderr}; stdout: {stdout}"
     );
+    let receipt: Value = serde_json::from_str(&stdout).expect("receipt is JSON");
+    assert_eq!(receipt["status"], "committed");
 }
 
 /// Decimal strings that fail the schema's pattern must also fail

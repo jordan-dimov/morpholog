@@ -10,11 +10,16 @@ use morpholog_core::ir_builder::*;
 use morpholog_core::{AnalysisError, TransformationName, transformation_arg_schema};
 use serde_json::json;
 
-/// Concrete subject parameter renders as an opaque-uuid string. The
-/// description names the runtime convention (UUIDv7) without
-/// promising the kernel itself enforces the version.
+/// Concrete subject parameter renders as an opaque string with NO
+/// `format: "uuid"`. Subject is Morpholog's only primitive noun
+/// and naturally carries both minted entity identifiers (UUIDv7
+/// by runtime convention) and domain symbols (commodity codes,
+/// period names, direction enums). The schema describes the
+/// shape; the convention lives in the description, not as a
+/// validation rule. Embedders that want UUID enforcement for a
+/// specific parameter layer their own constraint on top.
 #[test]
-fn concrete_subject_renders_as_uuid_string() {
+fn concrete_subject_renders_as_opaque_string() {
     let prog = program("subject_test")
         .predicates(vec![predicate("touched").subject("subj").build()])
         .transformations(vec![transformation(
@@ -31,8 +36,18 @@ fn concrete_subject_renders_as_uuid_string() {
     .unwrap();
     let property = &schema["properties"]["subj"];
     assert_eq!(property["type"], json!("string"));
-    assert_eq!(property["format"], json!("uuid"));
-    assert!(property["description"].as_str().unwrap().contains("UUIDv7"));
+    assert!(
+        property.get("format").is_none(),
+        "Subject must NOT carry format: uuid - the schema would over-constrain \
+         symbolic subjects like commodity codes, period names, direction enums; \
+         the convention belongs in the description, not as a JSON Schema rule",
+    );
+    let description = property["description"].as_str().unwrap();
+    assert!(
+        description.contains("opaque") && description.contains("UUIDv7"),
+        "description must name BOTH the opaque-string contract AND the UUIDv7 \
+         convention for minted subjects; got: {description}",
+    );
 }
 
 /// Concrete decimal parameter renders as a string with a strict
@@ -268,12 +283,16 @@ fn ambiguous_renders_as_any_of_alternatives() {
         "Subject and Decimal both render as JSON-Schema string",
     );
     assert!(
-        alternatives[0].get("format").is_some(),
-        "Subject carries format",
+        alternatives[1].get("pattern").is_some(),
+        "Decimal carries the pattern - the embedder still gets the strict \
+         decimal shape on this anyOf branch",
     );
     assert!(
-        alternatives[1].get("pattern").is_some(),
-        "Decimal carries pattern",
+        alternatives[0].get("format").is_none() && alternatives[0].get("pattern").is_none(),
+        "Subject carries only `type: string` - it is opaque, no format \
+         constraint (the Subject contract covers domain symbols as well as \
+         minted UUIDv7 identifiers); got: {:?}",
+        alternatives[0],
     );
     for (i, alt) in alternatives.iter().enumerate() {
         assert!(
