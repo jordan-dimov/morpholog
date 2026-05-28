@@ -395,77 +395,22 @@ pub fn transformation_param_kinds(
         collector.walk_stmt(stmt);
     }
 
-    let alias_classes = build_alias_classes(&collector.aliases);
-
+    // Observations were already propagated eagerly through the
+    // current equivalence class at each observation site, so each
+    // parameter's accumulated set is a direct lookup. No post-hoc
+    // class-building needed.
     Ok(transformation
         .parameters
         .iter()
         .map(|param| {
-            // Union observations across the parameter's equivalence
-            // class. If the parameter has no aliases, the class is
-            // just `{param}` and this is equivalent to a direct
-            // lookup. Order of the union doesn't matter - the
-            // resulting BTreeSet is the same set either way.
-            let mut observed: BTreeSet<PredicateArgKind> = BTreeSet::new();
-            let class = alias_classes
-                .iter()
-                .find(|c| c.contains(param))
+            let observed = collector
+                .observations
+                .get(param)
                 .cloned()
-                .unwrap_or_else(|| {
-                    let mut s = BTreeSet::new();
-                    s.insert(param.clone());
-                    s
-                });
-            for member in &class {
-                if let Some(kinds) = collector.observations.get(member) {
-                    observed.extend(kinds.iter().copied());
-                }
-            }
+                .unwrap_or_default();
             (param.clone(), project(observed))
         })
         .collect())
-}
-
-/// Build equivalence classes from a list of bidirectional alias
-/// pairs. Two variables end up in the same class iff they are
-/// connected by a chain of `let x = y` aliases in the transformation
-/// body. The result is a vector of disjoint sets; a variable not
-/// appearing in any pair simply has no entry.
-///
-/// Brute-force linear scan; the number of aliases per transformation
-/// is small (typically zero or a handful), so a real union-find
-/// structure would be overkill.
-fn build_alias_classes(pairs: &[(Var, Var)]) -> Vec<BTreeSet<Var>> {
-    let mut classes: Vec<BTreeSet<Var>> = Vec::new();
-    for (a, b) in pairs {
-        let idx_a = classes.iter().position(|c| c.contains(a));
-        let idx_b = classes.iter().position(|c| c.contains(b));
-        match (idx_a, idx_b) {
-            (Some(i), Some(j)) if i != j => {
-                // Merge the smaller-index class into the larger so
-                // `remove` doesn't shift the kept class's index.
-                let (keep, drop) = if i < j { (i, j) } else { (j, i) };
-                let to_merge = classes.remove(drop);
-                classes[keep].extend(to_merge);
-            }
-            (Some(_), Some(_)) => {
-                // Already in the same class; nothing to do.
-            }
-            (Some(i), None) => {
-                classes[i].insert(b.clone());
-            }
-            (None, Some(j)) => {
-                classes[j].insert(a.clone());
-            }
-            (None, None) => {
-                let mut new_class = BTreeSet::new();
-                new_class.insert(a.clone());
-                new_class.insert(b.clone());
-                classes.push(new_class);
-            }
-        }
-    }
-    classes
 }
 
 /// Project a parameter's accumulated observation set into the public
@@ -518,18 +463,22 @@ struct ParamCollector<'a> {
     predicates: HashMap<&'a str, &'a [ArgDecl]>,
     intents: HashMap<&'a str, &'a [ArgDecl]>,
     observations: HashMap<Var, BTreeSet<PredicateArgKind>>,
-    /// Bidirectional alias pairs collected from `let name = other_var`.
-    /// The projection layer unions observations across the
-    /// equivalence classes these pairs induce, so a parameter
-    /// receives the observations of every name it aliases (and vice
-    /// versa). Deliberately narrow: only `Let { value:
-    /// Term(Var(alias)) }` registers a pair - we do NOT try to
-    /// infer aliases through `Eq` / `Neq` (that is a different
-    /// semantic commitment, deferred). Without this, a transformation
-    /// like `let amt = amount; admit Payment(amt)` would observe
-    /// `amt` at Decimal but leave the externally-supplied `amount`
-    /// as `Unconstrained`.
-    aliases: Vec<(Var, Var)>,
+    /// Flow-sensitive equivalence-class membership per currently-live
+    /// variable. Maintained as the walker advances: a `Let` or
+    /// `LetNewSubject` rebinding `name` removes `name` from its
+    /// existing class first (the old logical variable is gone), then
+    /// optionally adds the new alias. Observations propagate eagerly
+    /// through the current class at the moment of observation; an
+    /// observation made *after* a rebind never reaches names the
+    /// rebound variable used to alias. Deliberately narrow: only
+    /// `Let { value: Term(Var(alias)) }` registers an alias - we do
+    /// NOT try to infer aliases through `Eq` / `Neq` (that is a
+    /// different semantic commitment, deferred).
+    ///
+    /// A variable absent from this map has the implicit singleton
+    /// class `{var}`; storing all singletons would just waste
+    /// memory. Stored classes always have at least two members.
+    current_class: HashMap<Var, BTreeSet<Var>>,
 }
 
 impl<'a> ParamCollector<'a> {
@@ -548,20 +497,75 @@ impl<'a> ParamCollector<'a> {
             predicates,
             intents,
             observations: HashMap::new(),
-            aliases: Vec::new(),
+            current_class: HashMap::new(),
         }
     }
 
-    /// Observe `name` at `kind`. Inserts the kind into the variable's
-    /// observation set; a later observation at a different kind
-    /// accumulates rather than overwrites, so the projection layer
-    /// can map multi-kind sets to [`ParamKind::Ambiguous`] instead of
-    /// silently committing to one.
+    /// Observe `name` at `kind`. Inserts the kind into the
+    /// observation set of every currently-aliased member of `name`'s
+    /// equivalence class - so a parameter's observation reaches its
+    /// aliased local binding (and vice versa) at the moment of
+    /// observation, not via a post-hoc projection. Multi-kind sets
+    /// accumulate per variable and project to [`ParamKind::Ambiguous`]
+    /// at the end rather than silently committing to one kind.
     fn observe(&mut self, name: &Var, kind: PredicateArgKind) {
-        self.observations
-            .entry(name.clone())
-            .or_default()
-            .insert(kind);
+        // Collect the class members up front so we don't hold a borrow
+        // of `current_class` across the mutable borrows of
+        // `observations`. The implicit singleton case avoids storing
+        // a class for every variable.
+        let members: Vec<Var> = match self.current_class.get(name) {
+            Some(class) => class.iter().cloned().collect(),
+            None => vec![name.clone()],
+        };
+        for member in members {
+            self.observations.entry(member).or_default().insert(kind);
+        }
+    }
+
+    /// Remove `name` from any current equivalence class it
+    /// participates in. The other members stay aliased to each
+    /// other; `name` becomes a fresh singleton. Called when a
+    /// `Let` or `LetNewSubject` rebinds `name` - the old logical
+    /// variable's aliases must not silently capture observations
+    /// of the new binding.
+    fn invalidate(&mut self, name: &Var) {
+        let Some(mut class) = self.current_class.remove(name) else {
+            return;
+        };
+        class.remove(name);
+        match class.len() {
+            0 | 1 => {
+                // Singleton class is the implicit default - drop the
+                // entry for any remaining lone member.
+                if let Some(only) = class.into_iter().next() {
+                    self.current_class.remove(&only);
+                }
+            }
+            _ => {
+                for member in &class {
+                    self.current_class.insert(member.clone(), class.clone());
+                }
+            }
+        }
+    }
+
+    /// Merge `name` and `alias` (and their current classes) into a
+    /// single equivalence class. Called when `Let { name, value:
+    /// Term(Var(alias)) }` is encountered, *after* `invalidate(name)`
+    /// has cleared any prior alias relations for `name`.
+    fn add_alias(&mut self, name: &Var, alias: &Var) {
+        let mut merged: BTreeSet<Var> = BTreeSet::new();
+        merged.insert(name.clone());
+        merged.insert(alias.clone());
+        if let Some(c) = self.current_class.get(name) {
+            merged.extend(c.iter().cloned());
+        }
+        if let Some(c) = self.current_class.get(alias) {
+            merged.extend(c.iter().cloned());
+        }
+        for member in &merged {
+            self.current_class.insert(member.clone(), merged.clone());
+        }
     }
 
     /// Walk a statement. Exhaustive over `Stmt` for the same honesty
@@ -571,16 +575,24 @@ impl<'a> ParamCollector<'a> {
         match stmt {
             Stmt::Require(prop) | Stmt::BindOne(prop) => self.walk_prop(prop),
             Stmt::Let { name, value } => {
-                // Record bare-variable aliases. `let x = some_var`
-                // means `x` and `some_var` denote the same value;
-                // any kind observation of either should reach the
-                // other at projection time.
+                // Flow-sensitive: clear any prior alias relations
+                // for `name` first, since the rebinding creates a
+                // fresh logical variable. Then optionally register
+                // the new alias.
+                self.invalidate(name);
                 if let ValueExpr::Term(Term::Var(alias)) = value {
-                    self.aliases.push((name.clone(), alias.clone()));
+                    self.add_alias(name, alias);
                 }
                 self.walk_value(value, None);
             }
-            Stmt::LetNewSubject { .. } => {}
+            Stmt::LetNewSubject { name } => {
+                // A fresh subject identifier. Same flow-sensitive
+                // rebinding rule as `Let`: drop any prior alias for
+                // `name`, then observe at Subject (the checker pins
+                // `name`'s kind here too).
+                self.invalidate(name);
+                self.observe(name, PredicateArgKind::Subject);
+            }
             Stmt::Assert(claim) => self.observe_claim_args(claim.predicate.as_str(), &claim.args),
             Stmt::Retract { predicate, args } => {
                 self.observe_claim_args(predicate.as_str(), args);

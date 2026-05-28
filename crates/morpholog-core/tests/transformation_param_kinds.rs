@@ -360,6 +360,44 @@ fn aliased_params_preserve_declaration_order() {
     );
 }
 
+/// **The regression test for the let-rebinding bug** (Copilot's
+/// second-review finding). A transformation like
+///
+///     let y = x        -- alias (y, x)
+///     let y = literal  -- rebind: alias broken, y is now a fresh value
+///     admit DecimalSlot(y)
+///
+/// must NOT propagate the later Decimal observation back to the
+/// parameter `x` - the rebinding broke the alias. An earlier
+/// lazy-class implementation kept the `(y, x)` pair around forever
+/// and unioned observations at projection time; this test fails
+/// against that implementation and passes against the flow-sensitive
+/// (eager) one.
+#[test]
+fn param_alias_broken_by_let_rebinding_does_not_inherit_later_observations() {
+    let prog = program("rebinding_test")
+        .predicates(vec![predicate("decimal_slot").decimal("d").build()])
+        .transformations(vec![transformation(
+            "rebind",
+            params(&["x"]),
+            vec![
+                let_("y", term(var("x"))),
+                let_("y", term(dec("1"))),
+                assert_("decimal_slot", vec![var("y")]),
+            ],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(&prog, &TransformationName::from("rebind")).unwrap();
+    assert_eq!(
+        kinds,
+        vec![(Var::from("x"), ParamKind::Unconstrained)],
+        "after `let y = literal` rebinds y, the later DecimalSlot(y) \
+         observation must not propagate back to `x`. The rebinding \
+         broke the alias.",
+    );
+}
+
 /// An invalid programme surfaces its validation errors rather than
 /// being analysed best-effort. The accessor refuses to guess past
 /// problems the kernel itself would refuse to run.
