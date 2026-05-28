@@ -178,6 +178,18 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
             describe_value(raw),
         )
     })?;
+    // The schema commits to `^-?(0|[1-9]\d*)(\.\d+)?$`; the codec
+    // must match or the embedder validates against a stricter
+    // contract than the CLI actually enforces. `Decimal::from_str`
+    // alone is too lenient (accepts leading `+`, leading zeros,
+    // trailing dot). Validate the shape first, then parse.
+    if !is_schema_decimal(s) {
+        bail!(
+            "parameter `{param}` is Decimal but `{s}` does not match the schema pattern \
+             ^-?(0|[1-9]\\d*)(\\.\\d+)?$ (no leading `+`, no leading zeros except \"0\", \
+             no trailing dot, no empty string). {schema_hint}"
+        );
+    }
     let d = Decimal::from_str(s).map_err(|e| {
         anyhow!(
             "parameter `{param}` is Decimal but `{s}` failed to parse: {e}. \
@@ -185,6 +197,40 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
         )
     })?;
     Ok(EvalValue::Decimal(d))
+}
+
+/// Decimal shape check matching the JSON Schema pattern emitted
+/// by `morpholog-core::schema`. Kept as a hand-rolled scan rather
+/// than pulling `regex` in just for this; the grammar is small,
+/// monomorphic, and unlikely to change (a worked example forcing
+/// scientific notation or different number conventions would be
+/// the natural moment to revisit).
+fn is_schema_decimal(s: &str) -> bool {
+    let body = s.strip_prefix('-').unwrap_or(s);
+    let (int_part, frac_part) = match body.split_once('.') {
+        Some((int, frac)) => (int, Some(frac)),
+        None => (body, None),
+    };
+
+    // Integer part: "0" or a non-zero digit followed by digits.
+    let int_ok = if int_part == "0" {
+        true
+    } else {
+        let mut chars = int_part.chars();
+        match chars.next() {
+            Some(c) if ('1'..='9').contains(&c) => chars.all(|c| c.is_ascii_digit()),
+            _ => false,
+        }
+    };
+
+    // Fractional part: present iff `.` was present, then at least
+    // one digit and all digits.
+    let frac_ok = match frac_part {
+        None => true,
+        Some(f) => !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()),
+    };
+
+    int_ok && frac_ok
 }
 
 fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
@@ -242,4 +288,35 @@ fn schema_hint(file: &Path, transformation: &TransformationName) -> String {
         file.display(),
         transformation,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_schema_decimal;
+
+    #[test]
+    fn accepts_canonical_decimal_forms() {
+        for s in ["0", "1", "100", "100.50", "-1", "-100.50", "0.5", "-0.5"] {
+            assert!(is_schema_decimal(s), "{s} should be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_forms_the_schema_pattern_excludes() {
+        for s in [
+            "",      // empty
+            "+1",    // leading plus
+            "00.12", // leading zero
+            "01",    // leading zero on integer
+            "1.",    // trailing dot
+            ".5",    // no leading integer
+            "1.2.3", // multiple dots
+            "abc",   // non-numeric
+            "1e10",  // scientific (deliberately out of scope in v0)
+            "-",     // bare minus
+            "-.5",   // minus before missing integer
+        ] {
+            assert!(!is_schema_decimal(s), "{s} should be rejected");
+        }
+    }
 }

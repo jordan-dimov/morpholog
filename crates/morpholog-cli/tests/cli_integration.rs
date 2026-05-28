@@ -472,6 +472,47 @@ async fn run_args_named_unknown_key_errors_with_expected_names() {
     );
 }
 
+/// Decimal strings that fail the schema's pattern must also fail
+/// the `--args-named` codec, or the embedder validates request
+/// bodies against a stricter contract than the CLI actually
+/// enforces. The schema pattern is `^-?(0|[1-9]\d*)(\.\d+)?$`;
+/// `Decimal::from_str` alone is more lenient. This test pins the
+/// alignment.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_decimal_outside_schema_pattern_errors() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    for bad in ["+1", "00.12", "1.", ".5"] {
+        let args_named = format!(
+            r#"{{
+                "entry_id":"sb_{bad}",
+                "posting_date":"2026-04-15",
+                "period":"q1_2026",
+                "debit_account":"account_cash",
+                "credit_account":"account_revenue",
+                "amount":"{bad}"
+            }}"#
+        );
+        let (status, _stdout, stderr) = run_cli(&[
+            "run",
+            path.to_str().unwrap(),
+            "post_simple_entry",
+            "--actor",
+            "alex",
+            "--args-named",
+            &args_named,
+        ]);
+        assert!(
+            !status.success(),
+            "decimal `{bad}` is outside the schema pattern and must be rejected"
+        );
+        assert!(
+            stderr.contains("does not match the schema pattern"),
+            "stderr should name the schema-pattern mismatch for `{bad}`; got: {stderr}"
+        );
+    }
+}
+
 /// Wrong JSON type errors with the expected kind label so the
 /// embedder can see WHICH parameter went wrong and WHAT kind it
 /// should be.
