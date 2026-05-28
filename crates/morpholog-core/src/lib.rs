@@ -34,6 +34,7 @@ mod explain;
 mod guarantees;
 mod ir;
 mod propose;
+mod schema;
 mod state;
 mod validate;
 
@@ -58,6 +59,7 @@ pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
     Transition, propose, propose_with_trace,
 };
+pub use schema::transformation_arg_schema;
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
 pub use validate::{ValidationContext, ValidationError, VocabularyKind};
 

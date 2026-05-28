@@ -37,8 +37,7 @@ fn param_used_only_inside_require_resolves_to_concrete() {
         )])
         .build();
 
-    let kinds =
-        transformation_param_kinds(&prog, &TransformationName::from("approve")).unwrap();
+    let kinds = transformation_param_kinds(&prog, &TransformationName::from("approve")).unwrap();
 
     assert_eq!(
         kinds,
@@ -107,18 +106,11 @@ fn param_observed_only_at_any_slot_is_polymorphic() {
 #[test]
 fn param_never_observed_is_unconstrained() {
     let prog = program("dead_param_test")
-        .transformations(vec![transformation(
-            "noop",
-            params(&["unused"]),
-            vec![],
-        )])
+        .transformations(vec![transformation("noop", params(&["unused"]), vec![])])
         .build();
 
     let kinds = transformation_param_kinds(&prog, &TransformationName::from("noop")).unwrap();
-    assert_eq!(
-        kinds,
-        vec![(Var::from("unused"), ParamKind::Unconstrained)],
-    );
+    assert_eq!(kinds, vec![(Var::from("unused"), ParamKind::Unconstrained)],);
 }
 
 /// Each declared concrete kind (Subject / Decimal / Date / Bool /
