@@ -93,6 +93,18 @@ enum Command {
         #[command(subcommand)]
         what: OutboxCmd,
     },
+
+    /// Emit a JSON Schema describing the named transformation's
+    /// argument object. Thin wrapper over the library's
+    /// `transformation_arg_schema`: parse, validate, project param
+    /// kinds, render. The schema is the public contract a non-Rust
+    /// embedder uses to validate request bodies, generate input
+    /// forms, or derive typed client models without touching Rust.
+    /// Output is a JSON Schema (Draft 2020-12); exits zero on
+    /// success, non-zero on parse / validation failure or unknown
+    /// transformation. No `--json` flag because the output IS
+    /// JSON.
+    Schema(SchemaArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -352,6 +364,19 @@ pub(crate) struct SourceFileArgs {
     pub(crate) file: PathBuf,
 }
 
+/// Arguments for `schema`. A `.morph` source file plus the name of
+/// the transformation whose argument contract to emit. No database
+/// connection - schema generation is a pure static read over the
+/// parsed and validated programme.
+#[derive(clap::Args, Debug)]
+pub(crate) struct SchemaArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    /// Transformation name whose argument contract to emit.
+    pub(crate) transformation: String,
+}
+
 /// Arguments for the `run` subcommand: a `.morph` source file plus the
 /// transformation, JSON args, actor, connection string, and optional
 /// trace flag.
@@ -433,6 +458,7 @@ async fn main() -> anyhow::Result<()> {
             OutboxCmd::Complete(args) => commands::outbox::complete(args).await,
             OutboxCmd::Release(args) => commands::outbox::release(args).await,
         },
+        Command::Schema(args) => commands::schema::run(args),
     }
 }
 
@@ -982,6 +1008,38 @@ mod tests {
             "postgres:///morpholog_dev",
         ])
         .expect_err("missing --actor should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    /// `morpholog schema <file> <transformation>` parses into the
+    /// expected positional args. The schema subcommand takes no flags
+    /// (no `--json`, no `--database-url`), so the test pins that the
+    /// minimal positional surface is what the embedder will type.
+    #[test]
+    fn schema_with_file_and_transformation_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "schema",
+            "examples/10_trade_lifecycle/trade_lifecycle.morph",
+            "capture_trade",
+        ]);
+        let Command::Schema(args) = cli.command else {
+            panic!("expected Command::Schema, got {:?}", cli.command);
+        };
+        assert_eq!(args.transformation, "capture_trade");
+        assert_eq!(
+            args.file.to_string_lossy(),
+            "examples/10_trade_lifecycle/trade_lifecycle.morph"
+        );
+    }
+
+    /// Missing the transformation name should error at clap-parse
+    /// time. The embedder gets a clear message before any file IO
+    /// happens.
+    #[test]
+    fn schema_missing_transformation_errors() {
+        let err = Cli::try_parse_from(["morpholog", "schema", "file.morph"])
+            .expect_err("missing transformation name should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 }
