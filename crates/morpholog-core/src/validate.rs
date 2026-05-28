@@ -15,6 +15,48 @@
 use crate::ir::{PredicateArgKind, Program, Prop, Stmt, ValueExpr};
 use std::collections::HashMap;
 
+/// Proof-of-validity handle: a reference to a [`Program`] that has
+/// been run through [`Program::validate`] and survived. Constructed
+/// via [`Program::validated`] (which fails if validation reports
+/// errors); the only way to obtain one is to go through that gate.
+///
+/// Why a separate type instead of a documented contract
+/// ([`Program::validate`] alone): the analysis surface
+/// ([`crate::transformation_param_kinds`],
+/// [`crate::transformation_arg_schema`]) is only meaningful over a
+/// validated programme, since the kind inference these accessors
+/// depend on observes kinds the runtime would itself refuse to
+/// admit if validation has not passed. Taking `&ValidatedProgram`
+/// rather than `&Program` makes the precondition load-bearing at
+/// the type level: a caller cannot accidentally analyse an
+/// unvalidated programme, and the analysis layer no longer needs to
+/// defensively re-validate. The defensive re-validation also meant
+/// every CLI invocation paid the validation cost twice; the
+/// newtype removes that.
+///
+/// `Copy` because it wraps a single reference - passing it around
+/// has the same cost as passing `&Program`.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidatedProgram<'a>(&'a Program);
+
+impl<'a> ValidatedProgram<'a> {
+    /// Borrow the underlying programme. Used by callers that want
+    /// to read non-analysis fields (predicate declarations,
+    /// invariants, transformation bodies) without re-deriving the
+    /// validation guarantee.
+    pub fn as_program(&self) -> &'a Program {
+        self.0
+    }
+
+    /// Used internally by [`Program::validated`] to assemble the
+    /// handle after successful validation. Pub(crate) because the
+    /// only path callers should reach this through is the
+    /// `validated()` gate.
+    pub(crate) fn from_validated(program: &'a Program) -> Self {
+        Self(program)
+    }
+}
+
 /// Which declared vocabulary a validation error refers to. Predicates
 /// and intents share four diagnostic shapes (undeclared reference,
 /// arity mismatch, duplicate declaration, arg-kind mismatch); the

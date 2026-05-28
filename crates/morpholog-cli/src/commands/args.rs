@@ -26,8 +26,8 @@
 use anyhow::{Context, anyhow, bail};
 use jiff::civil::Date;
 use morpholog_core::{
-    EvalValue, ParamKind, PredicateArgKind, Program, Subject, Transformation, TransformationName,
-    transformation_param_kinds,
+    EvalValue, ParamKind, PredicateArgKind, Subject, Transformation, TransformationName,
+    ValidatedProgram, transformation_param_kinds,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -47,9 +47,11 @@ pub(crate) enum CliArgs<'a> {
 /// `transformation` are used by the named path to project parameter
 /// kinds via [`transformation_param_kinds`]; the tagged path
 /// ignores them. `file` is included so error messages can point at
-/// the right `morpholog schema` invocation.
+/// the right `morpholog schema` invocation. Takes a
+/// [`ValidatedProgram`] so the named path does not re-validate after
+/// the caller already has.
 pub(crate) fn decode_args(
-    program: &Program,
+    program: &ValidatedProgram<'_>,
     transformation: &Transformation,
     file: &Path,
     input: CliArgs<'_>,
@@ -70,7 +72,7 @@ fn decode_tagged(json: &str) -> anyhow::Result<Vec<EvalValue>> {
 }
 
 fn decode_named(
-    program: &Program,
+    program: &ValidatedProgram<'_>,
     transformation: &Transformation,
     file: &Path,
     json: &str,

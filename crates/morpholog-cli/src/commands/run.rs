@@ -25,8 +25,9 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
 
     // 2. Validate. Same error shape as `check`; exits non-zero on
     //    validation failure so a malformed programme never reaches
-    //    the proposal path.
-    validate_or_exit(&program);
+    //    the proposal path. The returned `ValidatedProgram` handle
+    //    threads through to the codec so it does not re-validate.
+    let validated = validate_or_exit(&program);
 
     // 3. Resolve the transformation.
     let transformation = program
@@ -56,7 +57,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
         (None, Some(named)) => CliArgs::Named(named.as_str()),
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
-    let eval_args = decode_args(&program, transformation, &args.file, codec_input)?;
+    let eval_args = decode_args(&validated, transformation, &args.file, codec_input)?;
 
     // 5. Connect and propose. Same retry caveat as `propose`:
     //    `PgError::SerializationFailure` is the caller's to retry.

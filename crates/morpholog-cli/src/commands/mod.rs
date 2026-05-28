@@ -12,7 +12,7 @@
 //! the bottom of this file.
 
 use anyhow::Context;
-use morpholog_core::Program;
+use morpholog_core::{Program, ValidatedProgram};
 use morpholog_postgres::PgPool;
 use morpholog_surface::parse_program;
 use serde::Serialize;
@@ -51,17 +51,28 @@ pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<(Program, String, Str
 }
 
 /// Validate a parsed programme; on failure, print each diagnostic to
-/// stderr and exit 1. The gate every subcommand that acts on a `.morph`
-/// file's *semantics* applies after parsing - `run` and `explain` before
-/// touching the database, `inspect derived`/`guarantees` before reading
-/// or rendering - so an arbitrary file is held to the same vocabulary
-/// contract the kernel would otherwise enforce only at proposal time.
-pub(crate) fn validate_or_exit(program: &Program) {
-    if let Err(errors) = program.validate() {
-        for err in &errors {
-            eprintln!("error: {err}");
+/// stderr and exit 1; on success, return a [`ValidatedProgram`]
+/// handle the analysis surface ([`morpholog_core::transformation_param_kinds`],
+/// [`morpholog_core::transformation_arg_schema`]) consumes. Threading
+/// the handle through means the CLI pays the validation cost once,
+/// instead of once here and once again inside the analysis layer's
+/// previous defensive re-validation.
+///
+/// The gate every subcommand that acts on a `.morph` file's
+/// *semantics* applies after parsing - `run` and `explain` before
+/// touching the database, `inspect derived`/`guarantees` before
+/// reading or rendering, `schema` before computing the JSON Schema -
+/// so an arbitrary file is held to the same vocabulary contract the
+/// kernel would otherwise enforce only at proposal time.
+pub(crate) fn validate_or_exit(program: &Program) -> ValidatedProgram<'_> {
+    match program.validated() {
+        Ok(validated) => validated,
+        Err(errors) => {
+            for err in &errors {
+                eprintln!("error: {err}");
+            }
+            std::process::exit(1);
         }
-        std::process::exit(1);
     }
 }
 

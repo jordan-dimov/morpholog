@@ -24,9 +24,10 @@ use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same parse + validate front-end as `run`: a malformed programme
-    // never reaches the explanation path.
+    // never reaches the explanation path. The returned
+    // `ValidatedProgram` handle threads through to the codec.
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
-    validate_or_exit(&program);
+    let validated = validate_or_exit(&program);
 
     let transformation = program
         .transformation(&args.transformation)
@@ -52,7 +53,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         (None, Some(named)) => CliArgs::Named(named.as_str()),
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
-    let eval_args = decode_args(&program, transformation, &args.file, codec_input)?;
+    let eval_args = decode_args(&validated, transformation, &args.file, codec_input)?;
 
     let pool = connect(&args.database_url).await?;
     let state = load_scoped_state(&pool, transformation, &program.invariants)

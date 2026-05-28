@@ -61,7 +61,7 @@ pub use propose::{
 };
 pub use schema::transformation_arg_schema;
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
-pub use validate::{ValidationContext, ValidationError, VocabularyKind};
+pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 
 #[cfg(test)]
 mod tests {

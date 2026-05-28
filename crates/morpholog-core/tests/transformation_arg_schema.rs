@@ -24,7 +24,11 @@ fn concrete_subject_renders_as_uuid_string() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("act")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("act"),
+    )
+    .unwrap();
     let property = &schema["properties"]["subj"];
     assert_eq!(property["type"], json!("string"));
     assert_eq!(property["format"], json!("uuid"));
@@ -49,7 +53,11 @@ fn concrete_decimal_renders_as_string_with_pinned_pattern() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("record")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("record"),
+    )
+    .unwrap();
     let property = &schema["properties"]["score"];
     assert_eq!(property["type"], json!("string"));
     assert_eq!(
@@ -71,7 +79,11 @@ fn concrete_date_renders_as_iso_date_string() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("log")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("log"),
+    )
+    .unwrap();
     let property = &schema["properties"]["on"];
     assert_eq!(property["type"], json!("string"));
     assert_eq!(property["format"], json!("date"));
@@ -89,7 +101,11 @@ fn concrete_bool_renders_as_boolean() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("set")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("set"),
+    )
+    .unwrap();
     assert_eq!(schema["properties"]["flag"]["type"], json!("boolean"));
 }
 
@@ -106,7 +122,11 @@ fn concrete_collection_renders_as_array() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("pack")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("pack"),
+    )
+    .unwrap();
     assert_eq!(schema["properties"]["items"]["type"], json!("array"));
 }
 
@@ -123,7 +143,11 @@ fn polymorphic_renders_as_typeless_with_polymorphic_description() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("log")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("log"),
+    )
+    .unwrap();
     let property = &schema["properties"]["payload"];
     assert!(property.get("type").is_none(), "should omit type");
     assert!(
@@ -142,7 +166,11 @@ fn unconstrained_renders_as_typeless_with_unconstrained_description() {
         .transformations(vec![transformation("noop", params(&["unused"]), vec![])])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("noop")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("noop"),
+    )
+    .unwrap();
     let property = &schema["properties"]["unused"];
     assert!(property.get("type").is_none(), "should omit type");
     assert!(
@@ -177,7 +205,11 @@ fn top_level_shape_carries_required_in_declaration_order() {
         )])
         .build();
 
-    let schema = transformation_arg_schema(&prog, &TransformationName::from("act")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("act"),
+    )
+    .unwrap();
     assert_eq!(
         schema["$schema"],
         json!("https://json-schema.org/draft/2020-12/schema")
@@ -219,8 +251,11 @@ fn ambiguous_renders_as_any_of_alternatives() {
         )])
         .build();
 
-    let schema =
-        transformation_arg_schema(&prog, &TransformationName::from("either_shape")).unwrap();
+    let schema = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("either_shape"),
+    )
+    .unwrap();
     let property = &schema["properties"]["x"];
     let alternatives = property["anyOf"].as_array().expect("anyOf present");
     let alt_types: Vec<&str> = alternatives
@@ -263,16 +298,23 @@ fn unknown_transformation_bubbles_through() {
         .transformations(vec![transformation("declared", params(&[]), vec![])])
         .build();
 
-    let err = transformation_arg_schema(&prog, &TransformationName::from("ghost"))
-        .expect_err("expected UnknownTransformation");
+    let err = transformation_arg_schema(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("ghost"),
+    )
+    .expect_err("expected UnknownTransformation");
     assert!(
         matches!(err, AnalysisError::UnknownTransformation { name } if name.as_str() == "ghost"),
     );
 }
 
-/// Invalid programme bubbles through unchanged.
+/// Invalid programme surfaces at the `Program::validated` gate,
+/// before the schema layer is reachable. The schema function takes
+/// a `ValidatedProgram`, which an invalid programme cannot
+/// construct, so the validation precondition is enforced at the
+/// type level instead of repeated at every accessor boundary.
 #[test]
-fn invalid_program_bubbles_through() {
+fn invalid_program_surfaces_at_the_validated_gate() {
     let prog = program("bubble_invalid")
         .transformations(vec![transformation(
             "broken",
@@ -281,7 +323,8 @@ fn invalid_program_bubbles_through() {
         )])
         .build();
 
-    let err = transformation_arg_schema(&prog, &TransformationName::from("broken"))
-        .expect_err("expected ProgramInvalid");
-    assert!(matches!(err, AnalysisError::ProgramInvalid(_)));
+    let errors = prog
+        .validated()
+        .expect_err("an invalid programme must not yield a ValidatedProgram");
+    assert!(!errors.is_empty());
 }

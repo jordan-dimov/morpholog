@@ -26,24 +26,13 @@ use morpholog_core::{AnalysisError, TransformationName, transformation_arg_schem
 
 pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
-    validate_or_exit(&program);
+    let validated = validate_or_exit(&program);
 
     let transformation = TransformationName::from(args.transformation.as_str());
-    match transformation_arg_schema(&program, &transformation) {
+    match transformation_arg_schema(&validated, &transformation) {
         Ok(schema) => print_json(&schema),
         Err(AnalysisError::UnknownTransformation { name }) => {
             eprintln!("error: unknown transformation `{name}`");
-            std::process::exit(1);
-        }
-        Err(AnalysisError::ProgramInvalid(errors)) => {
-            // Defensive: validate_or_exit already returned for an
-            // invalid programme, so this arm is unreachable today.
-            // Surfacing the errors instead of panicking keeps the
-            // CLI honest if a future refactor changes the
-            // analysis-vs-validation contract.
-            for err in &errors {
-                eprintln!("error: {err}");
-            }
             std::process::exit(1);
         }
     }

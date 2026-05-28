@@ -40,7 +40,8 @@
 use serde_json::{Value, json};
 
 use crate::analysis::{AnalysisError, ParamKind, transformation_param_kinds};
-use crate::ir::{PredicateArgKind, Program, TransformationName};
+use crate::ir::{PredicateArgKind, TransformationName};
+use crate::validate::ValidatedProgram;
 
 /// Emit a JSON Schema (Draft 2020-12) for the named transformation's
 /// argument object. Parameters appear in declaration order under
@@ -48,9 +49,12 @@ use crate::ir::{PredicateArgKind, Program, TransformationName};
 /// `false` so the embedder's caller cannot smuggle in extra fields.
 ///
 /// Pure adapter over [`transformation_param_kinds`]: every error
-/// from the analysis layer bubbles through unchanged.
+/// from the analysis layer bubbles through unchanged. Takes a
+/// [`ValidatedProgram`] so the validation precondition is enforced
+/// at the type level (and so the schema layer does not re-validate
+/// after the caller already has).
 pub fn transformation_arg_schema(
-    program: &Program,
+    program: &ValidatedProgram<'_>,
     name: &TransformationName,
 ) -> Result<Value, AnalysisError> {
     let kinds = transformation_param_kinds(program, name)?;
