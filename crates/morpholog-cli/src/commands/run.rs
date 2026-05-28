@@ -9,12 +9,13 @@
 //! path, without forking the CLI or compiling Rust.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{EvalValue, Subject, Transition};
+use morpholog_core::{Subject, Transition};
 use morpholog_postgres::{
     PgProposalOutcome, PgTracedOutcome, propose_against_pg, propose_against_pg_with_trace,
 };
 
 use crate::RunArgs;
+use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
@@ -45,13 +46,17 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
             )
         })?;
 
-    // 4. Parse --args as `Vec<EvalValue>`. Same codec as `propose`.
-    let eval_args: Vec<EvalValue> = serde_json::from_str(&args.args).context(
-        "failed to parse --args as a JSON array of EvalValues \
-         (each element must be a tagged object such as \
-         `{\"type\":\"subject\",\"value\":\"...\"}` or \
-         `{\"type\":\"decimal\",\"value\":\"100\"}`)",
-    )?;
+    // 4. Decode --args or --args-named into `Vec<EvalValue>`. Clap
+    //    has already enforced exactly-one-of via `conflicts_with` +
+    //    `required_unless_present`, so `unwrap_either` would be
+    //    safe; the explicit match keeps the intent clear and gives
+    //    the codec a typed handle.
+    let codec_input = match (&args.args, &args.args_named) {
+        (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),
+        (None, Some(named)) => CliArgs::Named(named.as_str()),
+        _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
+    };
+    let eval_args = decode_args(&program, transformation, &args.file, codec_input)?;
 
     // 5. Connect and propose. Same retry caveat as `propose`:
     //    `PgError::SerializationFailure` is the caller's to retry.

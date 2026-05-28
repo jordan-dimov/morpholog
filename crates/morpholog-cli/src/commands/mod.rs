@@ -18,6 +18,7 @@ use morpholog_surface::parse_program;
 use serde::Serialize;
 use std::path::Path;
 
+pub(crate) mod args;
 pub(crate) mod check;
 pub(crate) mod explain;
 pub(crate) mod inspect;

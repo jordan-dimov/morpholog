@@ -366,6 +366,143 @@ async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
     assert_eq!(receipt["status"], "committed");
 }
 
+/// `run --args-named` happy path against the temp ledger. Same
+/// transformation as the tagged-form test above, but with the
+/// embedder-facing codec: bare values keyed by parameter name. The
+/// CLI consults `transformation_param_kinds` to coerce each value
+/// against its declared kind.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_commits_with_the_friendly_codec() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"named_001",
+        "posting_date":"2026-04-15",
+        "period":"q1_2026",
+        "debit_account":"account_cash",
+        "credit_account":"account_revenue",
+        "amount":"250"
+    }"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(
+        status.success(),
+        "--args-named happy path should commit; stderr: {stderr}; stdout: {stdout}"
+    );
+    let receipt: Value = serde_json::from_str(&stdout).expect("receipt is JSON");
+    assert_eq!(receipt["status"], "committed");
+}
+
+/// Missing a declared parameter in the `--args-named` object is a
+/// hard error before any database work. The error names the missing
+/// parameter and points at `morpholog schema` for the accepted
+/// shape.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_missing_required_errors_with_schema_hint() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"missing_one",
+        "posting_date":"2026-04-15",
+        "period":"q1_2026",
+        "debit_account":"account_cash",
+        "credit_account":"account_revenue"
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "missing required parameter must error");
+    assert!(
+        stderr.contains("missing required parameter `amount`"),
+        "stderr should name the missing parameter; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("morpholog schema"),
+        "error should point at the schema subcommand; got: {stderr}"
+    );
+}
+
+/// An unknown key in `--args-named` is a hard error. The error lists
+/// the parameters that ARE accepted, so a typo surfaces clearly
+/// rather than as "missing required" (which would point at the
+/// wrong target).
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_unknown_key_errors_with_expected_names() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"typo",
+        "posting_date":"2026-04-15",
+        "period":"q1_2026",
+        "debit_account":"account_cash",
+        "credit_account":"account_revenue",
+        "amount":"100",
+        "amaount":"100"
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "unknown key must error");
+    assert!(
+        stderr.contains("unknown parameter(s) `amaount`"),
+        "stderr should name the unknown key; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("amount") && stderr.contains("entry_id"),
+        "stderr should list the expected parameter names; got: {stderr}"
+    );
+}
+
+/// Wrong JSON type errors with the expected kind label so the
+/// embedder can see WHICH parameter went wrong and WHAT kind it
+/// should be.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_named_wrong_type_errors_with_kind_label() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"wrong_type",
+        "posting_date":"2026-04-15",
+        "period":"q1_2026",
+        "debit_account":"account_cash",
+        "credit_account":"account_revenue",
+        "amount": true
+    }"#;
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "wrong JSON type must error");
+    assert!(
+        stderr.contains("`amount` is Decimal but received boolean"),
+        "stderr should name the parameter, the expected kind, and the actual JSON type; got: {stderr}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn run_errors_with_available_list_on_unknown_transformation() {
     reset_db().await;

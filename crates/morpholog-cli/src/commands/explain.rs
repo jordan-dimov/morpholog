@@ -15,10 +15,11 @@
 //! that wants the gate uses `run`.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{EvalValue, Subject, Transition, explain};
+use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
+use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
@@ -44,12 +45,14 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
             )
         })?;
 
-    let eval_args: Vec<EvalValue> = serde_json::from_str(&args.args).context(
-        "failed to parse --args as a JSON array of EvalValues \
-         (each element must be a tagged object such as \
-         `{\"type\":\"subject\",\"value\":\"...\"}` or \
-         `{\"type\":\"decimal\",\"value\":\"100\"}`)",
-    )?;
+    // Decode --args or --args-named via the same shared codec `run`
+    // uses, so the two paths cannot drift on what is a valid input.
+    let codec_input = match (&args.args, &args.args_named) {
+        (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),
+        (None, Some(named)) => CliArgs::Named(named.as_str()),
+        _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
+    };
+    let eval_args = decode_args(&program, transformation, &args.file, codec_input)?;
 
     let pool = connect(&args.database_url).await?;
     let state = load_scoped_state(&pool, transformation, &program.invariants)
