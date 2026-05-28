@@ -474,6 +474,50 @@ async fn run_args_named_unknown_key_errors_with_expected_names() {
     );
 }
 
+/// `explain --args-named --json` parses the embedder-facing codec
+/// the same way `run` does and produces an `Explanation` envelope.
+/// Both verbs share the decode path through `commands::args` and
+/// the in-crate Clap tests pin the surface, but a binary-level
+/// smoke test catches the wiring (explain's pre-state load + the
+/// in-memory explain call) under the named codec, not just the
+/// tagged one.
+#[tokio::test(flavor = "current_thread")]
+async fn explain_args_named_returns_explanation_envelope() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let args_named = r#"{
+        "entry_id":"018f0000-0000-7000-8000-000000000061",
+        "posting_date":"018f0000-0000-7000-8000-000000000062",
+        "period":"018f0000-0000-7000-8000-000000000063",
+        "debit_account":"018f0000-0000-7000-8000-000000000064",
+        "credit_account":"018f0000-0000-7000-8000-000000000065",
+        "amount":"100"
+    }"#;
+    let (status, stdout, stderr) = run_cli(&[
+        "explain",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+        "--json",
+    ]);
+    // Explain is read-only and always exits zero on a parsed-and-
+    // validated programme; the verdict (admissible or rejected)
+    // lives inside the JSON envelope.
+    assert!(
+        status.success(),
+        "explain should always exit zero on a valid programme; stderr: {stderr}"
+    );
+    let explanation: Value =
+        serde_json::from_str(&stdout).expect("explain --json stdout must be JSON");
+    assert!(
+        explanation.get("verdict").is_some(),
+        "Explanation envelope must carry a `verdict` field; got: {stdout}"
+    );
+}
+
 /// Subject values that fail UUID parsing are rejected. The schema
 /// commits to `format: "uuid"`; the codec enforces the same
 /// commitment so the contract the embedder validates against
