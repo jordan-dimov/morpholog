@@ -1174,4 +1174,18 @@ mod tests {
         let state = price_state(&[("t1", 100)]);
         assert!(matched_for(&state, vec![subj("absent"), wildcard()]).is_empty());
     }
+
+    #[test]
+    fn matching_claims_unbound_actor_errors() {
+        // `select_candidates`' up-front actor check applies on the
+        // retract path too: a `Term::Actor` arg with no actor in scope
+        // is an error, not a silent no-match.
+        let state = price_state(&[("t1", 100)]);
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(&state, None, &bindings, None);
+        assert_eq!(
+            matching_claims(&"Price".into(), &[Term::Actor, wildcard()], &ctx),
+            Err(EvalError::UnboundActor),
+        );
+    }
 }
