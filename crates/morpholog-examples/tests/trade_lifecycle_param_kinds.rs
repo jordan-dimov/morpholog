@@ -18,8 +18,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{
-    ParamKind, PredicateArgKind, TransformationName, transformation_arg_schema,
-    transformation_param_kinds,
+    IntentName, ParamKind, PredicateArgKind, TransformationName, intent_arg_schema,
+    transformation_arg_schema, transformation_param_kinds,
 };
 use morpholog_examples::trade_lifecycle;
 use serde_json::Value;
@@ -179,4 +179,39 @@ fn expected_json_type(kind: PredicateArgKind) -> Value {
         PredicateArgKind::Collection => Value::String("array".into()),
         PredicateArgKind::Any => Value::Null,
     }
+}
+
+/// The intent-payload dual of the transformation-arg schema tests: a
+/// deliverer decodes `TradeSettlementRequested` by name from this
+/// contract instead of by hand-coded position. Declaration order
+/// (`settlement_id`, `trade`, `settled_qty`) is the positional order the
+/// emitted payload arrives in, so `required[]` order is load-bearing.
+#[test]
+fn trade_settlement_requested_intent_schema_pins_payload() {
+    let program = trade_lifecycle::program();
+    let schema = intent_arg_schema(
+        &program.validated().expect("trade_lifecycle validates"),
+        &IntentName::from("TradeSettlementRequested"),
+    )
+    .expect("TradeSettlementRequested is a declared intent");
+    assert_param_types(
+        &schema,
+        &[
+            ("settlement_id", PredicateArgKind::Subject),
+            ("trade", PredicateArgKind::Subject),
+            ("settled_qty", PredicateArgKind::Decimal),
+        ],
+    );
+}
+
+#[test]
+fn unknown_intent_schema_is_none() {
+    let program = trade_lifecycle::program();
+    assert!(
+        intent_arg_schema(
+            &program.validated().expect("trade_lifecycle validates"),
+            &IntentName::from("NoSuchIntent"),
+        )
+        .is_none(),
+    );
 }

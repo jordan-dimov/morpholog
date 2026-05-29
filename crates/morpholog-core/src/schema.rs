@@ -42,7 +42,7 @@
 use serde_json::{Value, json};
 
 use crate::analysis::{AnalysisError, ParamKind, transformation_param_kinds};
-use crate::ir::{PredicateArgKind, TransformationName};
+use crate::ir::{IntentName, PredicateArgKind, TransformationName};
 use crate::validate::ValidatedProgram;
 
 /// Emit a JSON Schema (Draft 2020-12) for the named transformation's
@@ -78,6 +78,40 @@ pub fn transformation_arg_schema(
     }))
 }
 
+/// Emit a JSON Schema (Draft 2020-12) for the named intent's payload
+/// object. The embedder-facing dual of [`transformation_arg_schema`]:
+/// where that describes what a transformation *accepts*, this describes
+/// what an emitted intent *carries*, so a deliverer reading an outbox
+/// payload can decode it by name instead of by hand-coded position.
+///
+/// Intent arguments are *declared* with explicit kinds (unlike
+/// transformation parameters, whose kinds are inferred), so this is a
+/// direct render with no analysis - hence a plain `Option` (the intent
+/// is declared or it is not) rather than the analysis-layer `Result`.
+pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> Option<Value> {
+    let decl = program
+        .as_program()
+        .intents
+        .iter()
+        .find(|d| &d.name == name)?;
+
+    let mut properties = serde_json::Map::with_capacity(decl.args.len());
+    let mut required = Vec::with_capacity(decl.args.len());
+    for arg in &decl.args {
+        properties.insert(arg.name.clone(), concrete_property(arg.kind));
+        required.push(Value::String(arg.name.clone()));
+    }
+
+    Some(json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": name.as_str(),
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties,
+    }))
+}
+
 /// Map one parameter's [`ParamKind`] to its JSON Schema property
 /// fragment. Centralised so the per-kind encoding is one switch the
 /// reader can audit at a glance. `Ambiguous` renders as `anyOf` over
@@ -88,15 +122,7 @@ pub fn transformation_arg_schema(
 /// belongs at the property level, naming the ambiguity.
 fn property_schema(kind: &ParamKind) -> Value {
     match kind {
-        ParamKind::Concrete(k) => {
-            let mut value = bare_kind_shape(*k);
-            if let Some(obj) = value.as_object_mut()
-                && let Some(desc) = concrete_kind_description(*k)
-            {
-                obj.insert("description".into(), Value::String(desc.into()));
-            }
-            value
-        }
+        ParamKind::Concrete(k) => concrete_property(*k),
         // `Polymorphic` is the projection of "observed only at `Any`
         // slots"; the analysis layer never emits `Concrete(Any)`, but
         // the type permits it, so render it the same way.
@@ -114,6 +140,20 @@ fn property_schema(kind: &ParamKind) -> Value {
             })
         }
     }
+}
+
+/// The `Concrete`-kind property: the bare type/format/pattern shape
+/// plus the per-kind description. Shared by [`property_schema`]'s
+/// `Concrete` arm and by [`intent_arg_schema`], whose declared
+/// arguments are always concrete kinds.
+fn concrete_property(kind: PredicateArgKind) -> Value {
+    let mut value = bare_kind_shape(kind);
+    if let Some(obj) = value.as_object_mut()
+        && let Some(desc) = concrete_kind_description(kind)
+    {
+        obj.insert("description".into(), Value::String(desc.into()));
+    }
+    value
 }
 
 /// The bare JSON-Schema type/format/pattern shape for a concrete

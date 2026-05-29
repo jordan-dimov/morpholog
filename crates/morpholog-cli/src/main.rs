@@ -364,17 +364,24 @@ pub(crate) struct SourceFileArgs {
     pub(crate) file: PathBuf,
 }
 
-/// Arguments for `schema`. A `.morph` source file plus the name of
-/// the transformation whose argument contract to emit. No database
-/// connection - schema generation is a pure static read over the
-/// parsed and validated programme.
+/// Arguments for `schema`. A `.morph` source file plus exactly one of:
+/// a transformation name (its argument contract) or `--intent <Type>`
+/// (an emitted intent's payload contract, for a deliverer decoding an
+/// outbox row by name). No database connection - schema generation is a
+/// pure static read over the parsed and validated programme.
 #[derive(clap::Args, Debug)]
 pub(crate) struct SchemaArgs {
     /// Path to a `.morph` source file.
     pub(crate) file: PathBuf,
 
     /// Transformation name whose argument contract to emit.
-    pub(crate) transformation: String,
+    #[arg(required_unless_present = "intent", conflicts_with = "intent")]
+    pub(crate) transformation: Option<String>,
+
+    /// Intent type name whose payload contract to emit, instead of a
+    /// transformation's arguments.
+    #[arg(long, required_unless_present = "transformation")]
+    pub(crate) intent: Option<String>,
 }
 
 /// Arguments for the `run` subcommand: a `.morph` source file plus the
@@ -1157,16 +1164,43 @@ mod tests {
         let Command::Schema(args) = cli.command else {
             panic!("expected Command::Schema, got {:?}", cli.command);
         };
-        assert_eq!(args.transformation, "capture_trade");
+        assert_eq!(args.transformation.as_deref(), Some("capture_trade"));
+        assert!(args.intent.is_none());
         assert_eq!(
             args.file.to_string_lossy(),
             "examples/10_trade_lifecycle/trade_lifecycle.morph"
         );
     }
 
-    /// Missing the transformation name should error at clap-parse
-    /// time. The embedder gets a clear message before any file IO
-    /// happens.
+    /// `--intent <Type>` parses as the payload-schema alternative to a
+    /// positional transformation name.
+    #[test]
+    fn schema_with_intent_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "schema",
+            "file.morph",
+            "--intent",
+            "TradeSettlementRequested",
+        ]);
+        let Command::Schema(args) = cli.command else {
+            panic!("expected Command::Schema, got {:?}", cli.command);
+        };
+        assert_eq!(args.intent.as_deref(), Some("TradeSettlementRequested"));
+        assert!(args.transformation.is_none());
+    }
+
+    /// Supplying both a transformation and `--intent` is a conflict.
+    #[test]
+    fn schema_transformation_and_intent_conflict() {
+        let err =
+            Cli::try_parse_from(["morpholog", "schema", "file.morph", "cap", "--intent", "X"])
+                .expect_err("transformation + --intent should conflict");
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    /// Neither a transformation nor `--intent` should error at
+    /// clap-parse time, before any file IO happens.
     #[test]
     fn schema_missing_transformation_errors() {
         let err = Cli::try_parse_from(["morpholog", "schema", "file.morph"])

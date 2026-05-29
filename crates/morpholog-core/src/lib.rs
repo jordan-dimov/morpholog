@@ -59,7 +59,7 @@ pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
     Transition, propose, propose_with_trace,
 };
-pub use schema::transformation_arg_schema;
+pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 
