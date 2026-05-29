@@ -77,6 +77,8 @@ Both codecs decode through one shared function so the `run` and `explain` paths 
 
 Output is a JSON Schema (Draft 2020-12) for the transformation's argument object. No `--json` flag - the output is JSON by definition. The schema is what the embedder validates request bodies against, generates form fields from, or derives typed client models off.
 
+`morpholog schema <file> --intent <IntentType>` emits the same shape for an emitted intent's **payload** instead of a transformation's arguments - the contract a deliverer uses to decode an outbox row (or a `run` outcome's `emitted_intents`) by name rather than by hand-coded position. Intent arguments are declared with explicit kinds, so the payload schema is a direct projection of the declaration; `required[]` carries the payload's positional order. Exactly one of a transformation name or `--intent <Type>` is supplied. Unknown intent exits non-zero with the empty-stdout / `error:` on stderr contract.
+
 Shape:
 
 ```json
@@ -150,14 +152,14 @@ Read-only. Exit code is always zero on a parsed-and-validated programme, whether
 What this document promises:
 
 - The argument codecs (`--args`, `--args-named`).
-- The `morpholog schema` output shape.
+- The `morpholog schema` output shape, for both transformation arguments and (`--intent`) intent payloads.
 - The `morpholog run` outcome shape, traced and untraced.
 - The `morpholog explain --json` Explanation shape.
 - Exit-code semantics for `run` and `explain`.
 
 What is deliberately left open, pending the worked example that forces the shape:
 
-- **Intent payload schemas.** Each declared intent has an argument vocabulary; the schema subcommand could in principle emit them too. Reserved for the embedder that consumes intent payloads.
+- **A targeted read of current governed state.** The `examples/etrm_embedder/` worked embedder surfaced this: to build a transition's arguments from state it did not itself mint (the in-force official-price id after a correction, a remaining settleable quantity), an embedder needs to read current claims back. Today the only reads are `inspect derived` (whole derived-claim relations) and `explain` (one verdict); there is no targeted "claims of predicate P matching these args" query. Forced by the example, deferred to its own PR - the query shape (predicate + argument filter, output envelope) needs its own design.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
 - **The `morpholog inspect` output shapes.** Varied across the inspect subcommands; their own contract document, when one is forced.
 - **Result schema generation (a `morpholog schema --result` mode).** The outcome envelope is uniform across transformations, so a documented spec covers it. Auto-generation waits for a real consumer that needs to discriminate dynamically.
