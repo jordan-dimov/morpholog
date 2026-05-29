@@ -217,6 +217,15 @@ struct ContendArgs {
     #[arg(long, default_value_t = 0)]
     prepopulate: usize,
 
+    /// Number of distinct periods to spread posts across; worker `w`
+    /// posts into period `w mod periods`. `1` (default) is the original
+    /// single hot aggregate. Raising it tests whether value-level
+    /// partitioning (a different period per worker) relieves the SSI
+    /// contention that one shared aggregate produces - the measured
+    /// answer is in the bench README.
+    #[arg(long, default_value_t = 1)]
+    periods: usize,
+
     /// Per-operation cap on SERIALIZABLE (40001) retries before the
     /// operation is recorded as failed. A real caller retries; this
     /// bounds a pathological live-lock so the bench terminates.
@@ -525,6 +534,9 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
     if args.ops_per_worker == 0 {
         return Err(anyhow!("--ops-per-worker must be at least 1"));
     }
+    if args.periods == 0 {
+        return Err(anyhow!("--periods must be at least 1"));
+    }
 
     // Pool sized to the worker count: each in-flight propose holds one
     // connection for the life of its SERIALIZABLE transaction, so a
@@ -536,8 +548,8 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         .await
         .context("connect to PostgreSQL")?;
     println!(
-        "scenario=contend workers={} ops_per_worker={} prepopulate={} max_retries={}",
-        args.workers, args.ops_per_worker, args.prepopulate, args.max_retries
+        "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} max_retries={}",
+        args.workers, args.ops_per_worker, args.prepopulate, args.periods, args.max_retries
     );
 
     let t = Instant::now();
@@ -546,15 +558,16 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     // Fan out: every worker shares the pool and posts uniquely-keyed
-    // entries into the one `p_contend` period concurrently.
+    // entries concurrently, into period `w mod periods`.
     let t = Instant::now();
     let mut handles = Vec::with_capacity(args.workers);
     for w in 0..args.workers {
         let pool = pool.clone();
         let ops = args.ops_per_worker;
         let max_retries = args.max_retries;
+        let periods = args.periods;
         handles.push(tokio::spawn(async move {
-            contend_worker(pool, w, ops, max_retries).await
+            contend_worker(pool, w, ops, max_retries, periods).await
         }));
     }
 
@@ -626,22 +639,26 @@ struct Tally {
 }
 
 /// One worker's slice of the contended workload: `ops` sequential
-/// proposals, each posting a uniquely-keyed entry into the shared
-/// `p_contend` period so workers collide on the journal-line read
-/// footprint. Each proposal carries the SERIALIZABLE retry loop a real
-/// embedder owns - the kernel and adapter never retry. A 40001 backs
-/// off briefly and retries up to `max_retries`, after which the
-/// operation is recorded as failed so a pathological live-lock cannot
-/// hang the bench. Any other error is drift, not contention, and
+/// proposals, each posting a uniquely-keyed entry into period
+/// `worker_id mod periods`. With `periods == 1` all workers collide on
+/// the one period; raising it spreads the writes across periods. Either
+/// way they share the journal-line *predicate* footprint, which is what
+/// `load_state` reads. Each proposal carries the SERIALIZABLE retry
+/// loop a real embedder owns - the kernel and adapter never retry. A
+/// 40001 backs off briefly and retries up to `max_retries`, after which
+/// the operation is recorded as failed so a pathological live-lock
+/// cannot hang the bench. Any other error is drift, not contention, and
 /// propagates as `Err`.
 async fn contend_worker(
     pool: PgPool,
     worker_id: usize,
     ops: usize,
     max_retries: usize,
+    periods: usize,
 ) -> Result<Tally> {
     let transformation = double_entry_ledger::post_simple_entry();
     let invariants = double_entry_ledger::all_invariants();
+    let period = format!("p_contend_{}", worker_id % periods);
     let mut tally = Tally::default();
 
     for op in 0..ops {
@@ -650,7 +667,7 @@ async fn contend_worker(
             args: vec![
                 subj(&format!("entry_w{worker_id}_op{op}")),
                 subj("d_2026_05_17"),
-                subj("p_contend"),
+                subj(&period),
                 subj("account_cash"),
                 subj("account_revenue"),
                 dec(42),
@@ -1026,6 +1043,7 @@ mod smoke {
             workers: 2,
             ops_per_worker: 2,
             prepopulate: 2,
+            periods: 2,
             max_retries: 20,
             database_url: url,
             reset: true,
