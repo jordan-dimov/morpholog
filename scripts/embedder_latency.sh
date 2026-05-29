@@ -25,6 +25,11 @@ set -euo pipefail
 N="${1:-50}"
 : "${DATABASE_URL:?set DATABASE_URL to a disposable database; the run path commits}"
 
+if ! [[ "$N" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: iteration count N must be a positive integer (got '$N')" >&2
+    exit 1
+fi
+
 FILE="examples/03_double_entry_ledger/ledger.morph"
 
 echo "building morpholog CLI (release)..."
@@ -42,11 +47,12 @@ for _ in $(seq 1 "$N"); do
     "$BIN" check "$FILE" >/dev/null
 done
 end=$(date +%s%N)
-check_ms=$(( (end - start) / 1000000 / N ))
+check_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
 
 # Full governed transition: spawn + parse + validate + connect + propose
 # + commit + encode. A unique entry_id per call keeps each emitted intent
-# distinct, so no two collide on the outbox idempotency key.
+# distinct, so no two collide on the outbox idempotency key. The ledger
+# starts empty and grows over the run.
 start=$(date +%s%N)
 for i in $(seq 1 "$N"); do
     "$BIN" run "$FILE" post_simple_entry \
@@ -54,10 +60,10 @@ for i in $(seq 1 "$N"); do
         --actor bench >/dev/null
 done
 end=$(date +%s%N)
-run_ms=$(( (end - start) / 1000000 / N ))
+run_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
 
 echo
 echo "embedder latency (N=${N}, local PostgreSQL, --release):"
-printf '  morpholog check (spawn + parse + validate)           : %4d ms/call\n' "$check_ms"
-printf '  morpholog run   (+ connect + propose + commit + JSON) : %4d ms/call\n' "$run_ms"
-printf '  per-call DB + propose tax (run - check)              : %4d ms/call\n' "$(( run_ms - check_ms ))"
+printf '  morpholog check (spawn + parse + validate)           : %7.2f ms/call\n' "$check_ms"
+printf '  morpholog run   (+ connect + propose + commit + JSON) : %7.2f ms/call\n' "$run_ms"
+awk "BEGIN { printf \"  per-call DB + propose tax (run - check)              : %7.2f ms/call\\n\", $run_ms - $check_ms }"
