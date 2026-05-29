@@ -22,7 +22,7 @@ use std::str::FromStr;
 use crate::ir::{
     ArithOp, CompareOp, OrderedDomain, PredicateName, Prop, Subject, Term, Value, ValueExpr,
 };
-use crate::state::{Bindings, EvalValue, State};
+use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
 /// expression or transformation was structurally ill-formed and cannot
@@ -395,6 +395,48 @@ pub(crate) fn find_claim_matches(
                 }
                 if let Some(b) = unify_args(args, &claim.args, base, actor) {
                     out.push(b);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The admitted claims of `predicate` whose args unify with `args`
+/// under `ctx`, cloned. Shares the same ground-argument narrowing as
+/// [`find_claim_matches`] via [`select_candidates`], but returns the
+/// matched claims themselves rather than the bindings they would
+/// extend - what the retract path needs to record what it removed.
+pub(crate) fn matching_claims(
+    predicate: &PredicateName,
+    args: &[Term],
+    ctx: &EvalContext<'_>,
+) -> Result<Vec<ClaimInstance>, EvalError> {
+    let EvalContext {
+        state,
+        bindings: base,
+        actor,
+        ..
+    } = *ctx;
+    let mut out = vec![];
+    match select_candidates(predicate, args, ctx)? {
+        Candidates::None => {}
+        Candidates::Indexed(bucket) => {
+            for &i in bucket {
+                let claim = state.claim_at(i);
+                if claim.args.len() == args.len()
+                    && unify_args(args, &claim.args, base, actor).is_some()
+                {
+                    out.push(claim.clone());
+                }
+            }
+        }
+        Candidates::All => {
+            for claim in state.claims_for_name(predicate) {
+                if claim.args.len() == args.len()
+                    && unify_args(args, &claim.args, base, actor).is_some()
+                {
+                    out.push(claim.clone());
                 }
             }
         }
@@ -1094,5 +1136,42 @@ mod tests {
         let state = price_state(&[("t1", 100)]);
         let e = value_of("Triple", vec![subj("absent"), Term::Actor, wildcard()]);
         assert_eq!(eval_in(&e, &state, None), Err(EvalError::UnboundActor));
+    }
+
+    // matching_claims: the retract path's claim lookup. Same indexed
+    // narrowing as find_claim_matches, returning the matched claims.
+
+    fn matched_for(state: &State, args: Vec<Term>) -> Vec<ClaimInstance> {
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(state, None, &bindings, None);
+        matching_claims(&"Price".into(), &args, &ctx).expect("matching_claims")
+    }
+
+    #[test]
+    fn matching_claims_narrows_by_ground_arg() {
+        // Ground arg 0 selects only that subject's claims (the Indexed
+        // branch); the wildcard at arg 1 does not constrain.
+        let state = price_state(&[("t1", 100), ("t1", 150), ("t2", 200)]);
+        let matched = matched_for(&state, vec![subj("t1"), wildcard()]);
+        assert_eq!(matched.len(), 2);
+        assert!(
+            matched
+                .iter()
+                .all(|c| c.args[0] == EvalValue::Subject(Subject::from("t1")))
+        );
+    }
+
+    #[test]
+    fn matching_claims_full_scan_all_wildcards() {
+        // No ground arg: the All branch returns every claim of the
+        // predicate.
+        let state = price_state(&[("t1", 100), ("t2", 200)]);
+        assert_eq!(matched_for(&state, vec![wildcard(), wildcard()]).len(), 2);
+    }
+
+    #[test]
+    fn matching_claims_no_match_is_empty() {
+        let state = price_state(&[("t1", 100)]);
+        assert!(matched_for(&state, vec![subj("absent"), wildcard()]).is_empty());
     }
 }
