@@ -15,7 +15,7 @@ A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated 
 | `write` | N journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | scoped `load_state` + invariant evaluation over the candidate state + commit |
 | `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived`, each phase timed separately | each layer of the read path, so the dominant cost is visible directly |
 | `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N, `--at <fraction>` (how far through the log the target sits), and `--retract-fraction K` |
-| `contend` | optional `--prepopulate N`, then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P` | throughput and the SERIALIZABLE 40001 retry rate under concurrency, and whether value-level partitioning relieves it |
+| `contend` | optional `--prepopulate N`, then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P`, optionally `--disjoint` | throughput and the SERIALIZABLE 40001 retry rate under concurrency; whether value-level vs predicate-level partitioning relieves it |
 
 The `write` and `read` fixture distributes journal lines across `K` distinct accounts (default `K = 2`, via `--accounts`). Entry `i` debits `account_{i mod K}` and credits `account_{(i+1) mod K}` for the same amount, so every entry is self-balancing and the `balanced_posted_entry` invariant holds. The trial-balance derived claim produces one row per distinct account that received a line; the read scenario checks the loose bound `0 < rows <= K`. Larger `K` stresses `enumerate_derived`'s grouping (the BTreeSet ordering the K key tuples) and the per-account `Sum` lookups (each narrowed by the argument-position index on `JournalLine[1] = account`). The write path is largely independent of `K`.
 
@@ -23,7 +23,7 @@ The `write` and `read` fixture distributes journal lines across `K` distinct acc
 
 The `as-of` fixture fabricates audit rows directly via SQL (one `INSERT ... SELECT ... FROM generate_series`), bypassing `propose_against_pg`: the bench measures replay cost, not write cost, and going through the kernel per row would make fixture build dominate. Each row carries a 3-claim payload (1 JournalEntry + 2 JournalLines) and a strictly-monotone `committed_at` so replay order is deterministic. `--retract-fraction K` (0-50) makes every `stride`-th transition retract the immediately-prior entry's payload instead of asserting a fresh one; the stride is at least 2 so a retract always targets a still-live assert. The purely-additive default is best-case for replay, so this axis is what would expose any non-linearity in the `ReplaySet` retract path.
 
-The `contend` fixture posts uniquely-keyed entries concurrently, with worker `w` posting into period `w mod P` (`--periods P`, default 1 = one shared period). Whatever the period, workers share the journal-line *predicate* footprint that `load_state` reads. Each proposal carries the retry loop a real embedder owns - the kernel and adapter never retry a 40001 - backing off and retrying up to `--max-retries` before an operation is recorded as failed. The pool is sized to the worker count so connections never serialise the workers ahead of SSI.
+The `contend` fixture posts uniquely-keyed entries concurrently. In the default ledger workload, worker `w` posts into period `w mod P` (`--periods P`, default 1 = one shared period) but always shares the journal-line *predicate* footprint that `load_state` reads, so `--periods` partitions by value. With `--disjoint`, the workload becomes a synthetic one whose whole footprint is a single predicate `Bench_{w mod P}` (built via `ir_builder`, since the ledger's predicates are fixed), so `--periods` partitions by predicate and `--periods >= workers` makes the workers genuinely disjoint. Each proposal carries the retry loop a real embedder owns - the kernel and adapter never retry a 40001 - backing off and retrying up to `--max-retries` before an operation is recorded as failed. The pool is sized to the worker count so connections never serialise the workers ahead of SSI.
 
 ## Running
 
@@ -43,6 +43,13 @@ DATABASE_URL=postgres:///morpholog_bench \
 
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- contend --workers 16 --ops-per-worker 20 --prepopulate 2000 --periods 16 --reset
+
+# predicate-disjoint workload (value-partition vs predicate-partition contrast):
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- contend --workers 16 --ops-per-worker 20 --disjoint --periods 16 --reset
+
+# end-to-end CLI latency a subprocess embedder pays (not in-process):
+DATABASE_URL=postgres:///morpholog_bench ./scripts/embedder_latency.sh 50
 ```
 
 `--release` matters; debug builds add an order of magnitude that obscures the algorithmic signal.
@@ -97,7 +104,34 @@ The obvious next question - does sharding the writes across periods relieve it? 
 | 4 | ~10.3 | ~16 commits/s |
 | 16 | ~10.0 | ~17 commits/s |
 
-Flat. Value-level partitioning (period - and by the same logic account or book) does **not** reduce the contention, because `load_state` reads the whole predicate (`WHERE predicate_name = ANY(...)`), not a value sub-range, so every post's read set still overlaps every other post's writes on the `JournalLine` predicate. The architecture's real partition lever is *disjoint predicate footprints*: transitions touching different predicates are scoped apart by predicate-scoped loading and do not contend. Sharding a shared aggregate by a value inside its claims is not enough; the footprints have to differ by predicate. This sweep also supplies the measured 40001 rate the roadmap requires before any substrate change (e.g. TimescaleDB) can be reasoned about.
+Flat. **Value-level partitioning inside one shared predicate does not reduce contention** - period here, and by the same logic account or book when those are values in the same predicate - because `load_state` reads the whole predicate (`WHERE predicate_name = ANY(...)`), not a value sub-range, so every post's read set still overlaps every other post's writes on `JournalLine`.
+
+The positive half: **predicate-disjoint partitioning does.** `--disjoint` switches to a synthetic workload whose entire footprint is one predicate, `Bench_{w mod periods}`, so `--periods` now partitions by *predicate*. Same 16 workers:
+
+| periods (distinct predicates) | retry_rate | throughput |
+|--:|--:|--:|
+| 1 (all share `Bench_0`) | ~5.95 | ~680 commits/s |
+| 2 | ~3.45 | ~1 400 commits/s |
+| 4 | ~2.83 | ~2 000 commits/s |
+| 8 | ~2.38 | ~2 590 commits/s |
+| 16 (disjoint) | ~2.45 | ~2 720 commits/s |
+
+(The synthetic workload is far lighter than the ledger, so compare *within* this table, not against the one above.) Spreading the workers across distinct predicates roughly quartered the wall-clock and more than halved the retry rate - the opposite of the value-partition sweep, which moved nothing. That is the law:
+
+> The unit of concurrency is the read footprint the runtime loads, not the business value. Value-disjoint writes inside one predicate do not scale; predicate-disjoint footprints do.
+
+The residual ~2.4 retries/commit at full disjointness is not logical overlap - it is PostgreSQL SSI's *page-level* `SIRead` lock granularity: the short, adjacent `Bench_*` keys cluster on the same index page, so logically-disjoint predicates still false-share. Driving it to zero needs the predicates physically separated (more rows, spread keys, partitioned storage) - the same reason a partitioned substrate would matter at scale. This pair of sweeps also supplies the measured 40001 rate the roadmap requires before any substrate change (e.g. TimescaleDB) can be reasoned about.
+
+### Embedder / CLI latency (`scripts/embedder_latency.sh`)
+
+Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog run ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, empty ledger, local PostgreSQL):
+
+| invocation | per-call |
+|---|--:|
+| `morpholog check` (spawn + parse + validate) | ~3 ms |
+| `morpholog run` (+ connect + propose + commit + encode) | ~9 ms |
+
+So the fixed per-call tax a subprocess embedder pays is **single-digit milliseconds** - ~3 ms of spawn/parse/validate plus ~6 ms of connect/propose/commit against a small ledger. That sustains roughly 100 governed transitions/second single-threaded, which is comfortable for lifecycle events (capture, confirm, settle, approve) and admin/audit flows. The propose component grows with in-scope state exactly as the `write` scenario measures; the spawn/parse/validate floor does not. A long-lived worker (load + validate once, keep a pool warm, speak HTTP/socket) is the answer only if a high-frequency path needs it - and per the doctrine those paths should not run through the governed core anyway.
 
 ### Deferred
 
@@ -107,4 +141,4 @@ Flat. Value-level partitioning (period - and by the same logic account or book) 
 
 ### History
 
-The write path was once structurally quadratic (~31 s per propose at N=10 000); the predicate-and-argument-position indexed `State` brought it down ~200x. The as-of `reconstruct_inner` had its own asserts-only quadratic, fixed by the `ReplaySet` (Vec + HashMap + live bits) that turned replay linear. The PRs: the bench's introduction; indexed `State`; the `--accounts K` axis + read-path phase split; predicate-scoped read loading; the `as-of` scenario and its replay quadratic; the `ReplaySet` fix; the scenario set that added the retraction axis, concurrency, and the smoke test (plus the `as-of` fabricator's overdue `actor` column); and the `--periods` partition axis that measured value-level partitioning as no help against SSI contention.
+The write path was once structurally quadratic (~31 s per propose at N=10 000); the predicate-and-argument-position indexed `State` brought it down ~200x. The as-of `reconstruct_inner` had its own asserts-only quadratic, fixed by the `ReplaySet` (Vec + HashMap + live bits) that turned replay linear. The PRs: the bench's introduction; indexed `State`; the `--accounts K` axis + read-path phase split; predicate-scoped read loading; the `as-of` scenario and its replay quadratic; the `ReplaySet` fix; the scenario set that added the retraction axis, concurrency, and the smoke test (plus the `as-of` fabricator's overdue `actor` column); the `--periods` partition axis that measured value-level partitioning as no help against SSI contention; and the `--disjoint` predicate-partition mode plus the `scripts/embedder_latency.sh` CLI harness, which proved the positive half of the law (predicate-disjoint footprints scale) and put a single-digit-millisecond number on the subprocess embedder's per-call tax.
