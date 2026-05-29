@@ -121,6 +121,13 @@ jobs:
       - name: test (outbox, serial)
         run: cargo test -p morpholog-outbox --all-targets --locked -- --test-threads=1
 
+      # Scale-pressure bench: the N=1 compatibility smoke test only.
+      # It runs every scenario once against the schema, so drift in the
+      # bench's hand-written SQL fails here instead of the next manual
+      # scale run. Truncates the schema, hence serial.
+      - name: test (bench smoke, serial)
+        run: cargo test -p morpholog-bench --all-targets --locked -- --test-threads=1
+
   coverage:
     name: coverage (llvm-cov)
     runs-on: ubuntu-latest

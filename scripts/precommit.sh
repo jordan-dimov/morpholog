@@ -72,6 +72,7 @@ else
         -p morpholog-cli \
         -p morpholog-postgres \
         -p morpholog-outbox \
+        -p morpholog-bench \
         --all-targets --locked -- --test-threads=1
 fi
 

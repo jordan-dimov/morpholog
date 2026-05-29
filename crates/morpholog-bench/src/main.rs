@@ -1,7 +1,7 @@
 //! Morpholog scale-pressure benchmark.
 //!
 //! Synthetic benchmark for understanding how the runtime behaves as
-//! state grows. Three scenarios:
+//! state grows and as proposals contend. The scenarios:
 //!
 //! - `write` populates the claims table with N pre-existing journal
 //!   entries via direct SQL, then times one `propose_against_pg`
@@ -14,8 +14,15 @@
 //! - `as-of` fabricates N audit transitions directly via SQL
 //!   (bypassing the kernel) and times one `reconstruct_state_at`
 //!   plus one `list_derived_at` against a target transition.
-//!   Measures audit-log replay cost as a function of N and the
-//!   `--at <fraction>` axis.
+//!   Measures audit-log replay cost as a function of N, the
+//!   `--at <fraction>` axis, and `--retract-fraction K` (what share
+//!   of the log retracts prior claims instead of asserting fresh
+//!   ones - the purely-additive default is best-case for replay).
+//! - `contend` runs W concurrent workers issuing `propose_against_pg`
+//!   into one shared period, each with the SERIALIZABLE 40001 retry
+//!   loop a real embedder owns. Measures throughput and the
+//!   serialization-conflict retry rate as `--workers` grows - the
+//!   axis the single-propose scenarios cannot see.
 //!
 //! The `write` / `read` fixture distributes lines across `K`
 //! accounts via modular arithmetic; the `as-of` fixture is uniform
@@ -39,11 +46,12 @@ use morpholog_core::{
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    PgPool, PgProposalOutcome, list_claims_for_predicates, list_derived_at, propose_against_pg,
-    reconstruct_state_at,
+    PgError, PgPool, PgProposalOutcome, list_claims_for_predicates, list_derived_at,
+    propose_against_pg, reconstruct_state_at,
 };
 use rust_decimal::Decimal;
-use std::time::Instant;
+use sqlx::postgres::PgPoolOptions;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -66,9 +74,19 @@ enum Command {
     /// Fabricate N audit transitions, then time one
     /// `reconstruct_state_at` and one `list_derived_at` against a
     /// target transition. Measures audit-log replay cost as a
-    /// function of N (number of transitions to walk through) and
-    /// `--at <fraction>` (how far through the log the target sits).
+    /// function of N (number of transitions to walk through),
+    /// `--at <fraction>` (how far through the log the target sits),
+    /// and `--retract-fraction K` (what share of the log retracts
+    /// prior claims rather than asserting fresh ones).
     AsOf(AsOfArgs),
+
+    /// Run W workers issuing concurrent `propose_against_pg` calls
+    /// against a deliberately-contended fixture (all posting into one
+    /// shared period), each with the SERIALIZABLE 40001 retry loop a
+    /// real embedder must carry. Measures throughput and the
+    /// serialization-conflict retry rate under concurrency - the axis
+    /// the single-propose scenarios cannot see.
+    Contend(ContendArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -149,6 +167,62 @@ struct AsOfArgs {
     #[arg(long, default_value_t = 1.0)]
     at: f64,
 
+    /// Percentage (0-50) of the N transitions that retract an earlier
+    /// transition's claims rather than asserting a fresh entry. `0`
+    /// (default) is the original asserts-only log. The fixture
+    /// interleaves retracts at a fixed stride so each retract targets
+    /// a still-live prior entry; the actual retract-transition count
+    /// is echoed at run time. The purely-additive default is
+    /// best-case for replay, so this axis is what exposes any
+    /// non-linearity in the `ReplaySet` retract path. Capped at 50
+    /// because above that a retract would have to target a transition
+    /// that itself only retracts.
+    #[arg(long, default_value_t = 0)]
+    retract_fraction: usize,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    /// The target database is truncated before each run.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge that this binary will TRUNCATE the
+    /// entire morpholog schema before running. Same contract as the
+    /// other scenarios.
+    #[arg(long)]
+    reset: bool,
+}
+
+/// Arguments for the `contend` scenario. Concurrency is the axis the
+/// single-propose scenarios cannot exercise: how the SERIALIZABLE
+/// substrate behaves when many transitions race for the same claims.
+#[derive(clap::Args, Debug)]
+struct ContendArgs {
+    /// Number of concurrent workers, each on its own pooled
+    /// connection. The pool is sized to `workers + 2`. Real
+    /// contention pressure rises with this number.
+    #[arg(long, default_value_t = 8)]
+    workers: usize,
+
+    /// Number of `propose_against_pg` operations each worker attempts.
+    /// Total committed entries (absent retry exhaustion) is
+    /// `workers * ops_per_worker`.
+    #[arg(long, default_value_t = 50)]
+    ops_per_worker: usize,
+
+    /// Number of pre-existing journal entries to populate before the
+    /// concurrent phase, so `load_state` has non-trivial work on each
+    /// proposal. `0` (default) measures contention against an almost-
+    /// empty table. Distributed across two accounts, same fixture
+    /// shape as the `write`/`read` scenarios.
+    #[arg(long, default_value_t = 0)]
+    prepopulate: usize,
+
+    /// Per-operation cap on SERIALIZABLE (40001) retries before the
+    /// operation is recorded as failed. A real caller retries; this
+    /// bounds a pathological live-lock so the bench terminates.
+    #[arg(long, default_value_t = 100)]
+    max_retries: usize,
+
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
     #[arg(long, env = "DATABASE_URL")]
@@ -208,6 +282,7 @@ async fn main() -> Result<()> {
         Command::Write(args) => run_write(args).await,
         Command::Read(args) => run_read(args).await,
         Command::AsOf(args) => run_as_of(args).await,
+        Command::Contend(args) => run_contend(args).await,
     }
 }
 
@@ -366,15 +441,40 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
             args.at
         ));
     }
+    if args.retract_fraction > 50 {
+        return Err(anyhow!(
+            "--retract-fraction must be between 0 and 50 (got {}); above 50% a \
+             retract would have to target a transition that itself only retracts",
+            args.retract_fraction
+        ));
+    }
+
+    // Interleave a retract every `stride` transitions. Floored at 2 so
+    // the retract at position `i` always targets the live entry
+    // asserted at `i - 1` (a stride of 1 would make every transition a
+    // retract, with nothing to remove). `0` disables retracts.
+    let retract_stride: i64 = if args.retract_fraction == 0 {
+        0
+    } else {
+        ((100.0 / args.retract_fraction as f64).round() as i64).max(2)
+    };
+    let retract_count = if retract_stride == 0 {
+        0
+    } else {
+        args.n as i64 / retract_stride
+    };
 
     let pool = PgPool::connect(&args.database_url)
         .await
         .context("connect to PostgreSQL")?;
-    println!("scenario=as-of n={} at={}", args.n, args.at);
+    println!(
+        "scenario=as-of n={} at={} retract_fraction={} (retracts={})",
+        args.n, args.at, args.retract_fraction, retract_count
+    );
 
     let t = Instant::now();
     reset_db(&pool).await?;
-    fabricate_audit_rows(&pool, args.n).await?;
+    fabricate_audit_rows(&pool, args.n, retract_stride).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     // Pick the target transition by causal offset. `at = 1.0` lands
@@ -417,6 +517,160 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
     Ok(())
 }
 
+async fn run_contend(args: ContendArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    if args.workers == 0 {
+        return Err(anyhow!("--workers must be at least 1"));
+    }
+    if args.ops_per_worker == 0 {
+        return Err(anyhow!("--ops-per-worker must be at least 1"));
+    }
+
+    // Pool sized to the worker count: each in-flight propose holds one
+    // connection for the life of its SERIALIZABLE transaction, so a
+    // smaller pool would serialise the workers at the connection layer
+    // and hide the very contention this scenario means to measure.
+    let pool = PgPoolOptions::new()
+        .max_connections(args.workers as u32 + 2)
+        .connect(&args.database_url)
+        .await
+        .context("connect to PostgreSQL")?;
+    println!(
+        "scenario=contend workers={} ops_per_worker={} prepopulate={} max_retries={}",
+        args.workers, args.ops_per_worker, args.prepopulate, args.max_retries
+    );
+
+    let t = Instant::now();
+    reset_db(&pool).await?;
+    insert_n_entries(&pool, args.prepopulate, 2).await?;
+    println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
+
+    // Fan out: every worker shares the pool and posts uniquely-keyed
+    // entries into the one `p_contend` period concurrently.
+    let t = Instant::now();
+    let mut handles = Vec::with_capacity(args.workers);
+    for w in 0..args.workers {
+        let pool = pool.clone();
+        let ops = args.ops_per_worker;
+        let max_retries = args.max_retries;
+        handles.push(tokio::spawn(async move {
+            contend_worker(pool, w, ops, max_retries).await
+        }));
+    }
+
+    let mut total = Tally::default();
+    for h in handles {
+        let tally = h.await.context("join contend worker")?;
+        total.committed += tally.committed;
+        total.rejected += tally.rejected;
+        total.retries += tally.retries;
+        total.failed += tally.failed;
+    }
+    let elapsed = t.elapsed();
+
+    let total_ops = (args.workers * args.ops_per_worker) as u64;
+    let secs = elapsed.as_secs_f64();
+    let throughput = if secs > 0.0 {
+        total.committed as f64 / secs
+    } else {
+        0.0
+    };
+    let retry_rate = if total.committed > 0 {
+        total.retries as f64 / total.committed as f64
+    } else {
+        0.0
+    };
+    println!("  concurrent:     {:>8} ms", elapsed.as_millis());
+    println!("  total_ops:      {total_ops}");
+    println!("  committed:      {}", total.committed);
+    println!("  rejected:       {}", total.rejected);
+    println!("  retries(40001): {}", total.retries);
+    println!("  failed:         {}", total.failed);
+    println!("  throughput:     {throughput:>8.1} commits/s");
+    println!("  retry_rate:     {retry_rate:>8.3} retries/commit");
+
+    // Every op terminates as exactly one of committed / rejected /
+    // failed; a drift here means a worker leaked an outcome.
+    let accounted = total.committed + total.rejected + total.failed;
+    if accounted != total_ops {
+        return Err(anyhow!(
+            "accounting mismatch: committed+rejected+failed ({accounted}) != total_ops ({total_ops})"
+        ));
+    }
+    Ok(())
+}
+
+/// Per-worker (and summed) outcome counts for the `contend` scenario.
+/// `retries` counts 40001 occurrences, not operations - one operation
+/// can contribute several retries before it commits.
+#[derive(Default)]
+struct Tally {
+    committed: u64,
+    rejected: u64,
+    retries: u64,
+    failed: u64,
+}
+
+/// One worker's slice of the contended workload: `ops` sequential
+/// proposals, each posting a uniquely-keyed entry into the shared
+/// `p_contend` period so workers collide on the journal-line read
+/// footprint. Each proposal carries the SERIALIZABLE retry loop a real
+/// embedder owns - the kernel and adapter never retry. A 40001 backs
+/// off briefly and retries up to `max_retries`, after which the
+/// operation is recorded as failed so a pathological live-lock cannot
+/// hang the bench.
+async fn contend_worker(pool: PgPool, worker_id: usize, ops: usize, max_retries: usize) -> Tally {
+    let transformation = double_entry_ledger::post_simple_entry();
+    let invariants = double_entry_ledger::all_invariants();
+    let mut tally = Tally::default();
+
+    for op in 0..ops {
+        let transition = Transition {
+            transformation_name: transformation.name.clone(),
+            args: vec![
+                subj(&format!("entry_w{worker_id}_op{op}")),
+                subj("d_2026_05_17"),
+                subj("p_contend"),
+                subj("account_cash"),
+                subj("account_revenue"),
+                dec(42),
+            ],
+            actor: Subject::from("bench"),
+        };
+
+        let mut attempt: u64 = 0;
+        loop {
+            match propose_against_pg(&pool, &transformation, &transition, &invariants).await {
+                Ok(PgProposalOutcome::Committed { .. }) => {
+                    tally.committed += 1;
+                    break;
+                }
+                Ok(PgProposalOutcome::Rejected { .. }) => {
+                    tally.rejected += 1;
+                    break;
+                }
+                Err(PgError::SerializationFailure) => {
+                    tally.retries += 1;
+                    attempt += 1;
+                    if attempt as usize > max_retries {
+                        tally.failed += 1;
+                        break;
+                    }
+                    // Linear backoff (no jitter, dependency-free) to
+                    // damp live-lock; a production caller would jitter.
+                    tokio::time::sleep(Duration::from_micros(100 * attempt)).await;
+                }
+                Err(e) => {
+                    eprintln!("worker {worker_id} op {op}: unexpected error: {e}");
+                    tally.failed += 1;
+                    break;
+                }
+            }
+        }
+    }
+    tally
+}
+
 /// Fabricate `n` audit rows via direct SQL. Each row carries a
 /// 3-claim assertion payload (one JournalEntry + two JournalLines
 /// against the fixed `account_cash` / `account_revenue` pair),
@@ -441,21 +695,23 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
 /// fabricated rows do use a strictly monotone `committed_at = now()
 /// + i microseconds` to keep replay order deterministic.
 ///
-/// **`retracted_claims` is always `[]`.** This bench measures replay
-/// in the asserts-only regime. A future scenario could exercise the
-/// retraction branch by interleaving fabricated transitions that
-/// retract earlier claims, but the integration test
-/// `reconstruct_state_at_applies_cross_transition_retractions`
-/// already pins that branch's correctness; bench coverage of
-/// retraction cost is a future enhancement if forced.
-async fn fabricate_audit_rows(pool: &PgPool, n: usize) -> Result<()> {
+/// **Retracts.** With `retract_stride > 0`, every `stride`-th
+/// transition retracts the payload asserted by the immediately prior
+/// transition (`target = i - 1`) instead of asserting a fresh entry.
+/// Because the stride is at least 2, `i - 1` is always an assert and
+/// is still live when the retract replays, so the asserts-only
+/// invariant (every retracted claim was asserted earlier in causal
+/// order) holds. `stride = 0` reproduces the original asserts-only
+/// log. The payload is built once from `target` and routed to either
+/// `asserted_claims` or `retracted_claims` by `is_retract`.
+async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> Result<()> {
     let n_i: i64 = n
         .try_into()
         .map_err(|_| anyhow!("n={n} too large for i64"))?;
 
     sqlx::query(
         "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments,
+            transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
             committed_at
@@ -464,42 +720,56 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize) -> Result<()> {
             gen_random_uuid(),
             'bench_as_of_post',
             '[]'::jsonb,
+            '{\"type\":\"subject\",\"value\":\"bench\"}'::jsonb,
             1,
             '[]'::jsonb,
-            jsonb_build_array(
-                jsonb_build_object(
-                    'predicate', 'JournalEntry',
-                    'args', jsonb_build_array(
-                        jsonb_build_object('type','subject','value','bench_entry_' || i),
-                        jsonb_build_object('type','subject','value','d_2026'),
-                        jsonb_build_object('type','subject','value','p_bench')
-                    )
-                ),
-                jsonb_build_object(
-                    'predicate', 'JournalLine',
-                    'args', jsonb_build_array(
-                        jsonb_build_object('type','subject','value','bench_entry_' || i),
-                        jsonb_build_object('type','subject','value','account_cash'),
-                        jsonb_build_object('type','decimal','value','100'),
-                        jsonb_build_object('type','decimal','value','0')
-                    )
-                ),
-                jsonb_build_object(
-                    'predicate', 'JournalLine',
-                    'args', jsonb_build_array(
-                        jsonb_build_object('type','subject','value','bench_entry_' || i),
-                        jsonb_build_object('type','subject','value','account_revenue'),
-                        jsonb_build_object('type','decimal','value','0'),
-                        jsonb_build_object('type','decimal','value','100')
-                    )
-                )
-            ),
-            '[]'::jsonb,
+            CASE WHEN is_retract THEN '[]'::jsonb ELSE payload END,
+            CASE WHEN is_retract THEN payload ELSE '[]'::jsonb END,
             '[]'::jsonb,
             now() + (i * interval '1 microsecond')
-        FROM generate_series(1, $1) AS i",
+        FROM (
+            SELECT
+                i,
+                is_retract,
+                jsonb_build_array(
+                    jsonb_build_object(
+                        'predicate', 'JournalEntry',
+                        'args', jsonb_build_array(
+                            jsonb_build_object('type','subject','value','bench_entry_' || target),
+                            jsonb_build_object('type','subject','value','d_2026'),
+                            jsonb_build_object('type','subject','value','p_bench')
+                        )
+                    ),
+                    jsonb_build_object(
+                        'predicate', 'JournalLine',
+                        'args', jsonb_build_array(
+                            jsonb_build_object('type','subject','value','bench_entry_' || target),
+                            jsonb_build_object('type','subject','value','account_cash'),
+                            jsonb_build_object('type','decimal','value','100'),
+                            jsonb_build_object('type','decimal','value','0')
+                        )
+                    ),
+                    jsonb_build_object(
+                        'predicate', 'JournalLine',
+                        'args', jsonb_build_array(
+                            jsonb_build_object('type','subject','value','bench_entry_' || target),
+                            jsonb_build_object('type','subject','value','account_revenue'),
+                            jsonb_build_object('type','decimal','value','0'),
+                            jsonb_build_object('type','decimal','value','100')
+                        )
+                    )
+                ) AS payload
+            FROM (
+                SELECT
+                    i,
+                    ($2 > 0 AND i % $2 = 0) AS is_retract,
+                    CASE WHEN ($2 > 0 AND i % $2 = 0) THEN i - 1 ELSE i END AS target
+                FROM generate_series(1, $1) AS i
+            ) base
+        ) rows",
     )
     .bind(n_i)
+    .bind(retract_stride)
     .execute(pool)
     .await
     .context("fabricate audit rows")?;
@@ -656,5 +926,88 @@ fn outcome_summary(outcome: &PgProposalOutcome) -> String {
             emitted_intents.len()
         ),
         PgProposalOutcome::Rejected { reason } => format!("Rejected: {reason}"),
+    }
+}
+
+#[cfg(test)]
+mod smoke {
+    //! Minimal-size compatibility smoke test: runs every scenario once
+    //! against the configured database, asserting only that each
+    //! completes - never a timing. It exists to catch schema or API
+    //! drift in the bench's hand-written SQL (the kind that silently
+    //! broke the as-of fixture when `morpholog.audit` gained its NOT
+    //! NULL `actor` column) on the next PG-backed test run, rather
+    //! than the next time someone runs the scale bench by hand.
+    //!
+    //! Gated on `DATABASE_URL`: skips (passes) when unset, so the pure
+    //! workspace stays green without a database. A single test runs
+    //! the scenarios sequentially because each truncates the schema -
+    //! it must not race other PG-backed tests, which is why the PG
+    //! suites run under `--test-threads=1`.
+    use super::*;
+
+    fn db_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty())
+    }
+
+    #[tokio::test]
+    async fn scenarios_smoke() {
+        let Some(url) = db_url() else {
+            eprintln!("DATABASE_URL unset; skipping bench smoke test");
+            return;
+        };
+
+        run_write(ScenarioArgs {
+            n: 1,
+            accounts: 2,
+            noise_claims: 1,
+            database_url: url.clone(),
+            reset: true,
+        })
+        .await
+        .expect("write scenario smoke");
+
+        run_read(ScenarioArgs {
+            n: 1,
+            accounts: 2,
+            noise_claims: 1,
+            database_url: url.clone(),
+            reset: true,
+        })
+        .await
+        .expect("read scenario smoke");
+
+        run_as_of(AsOfArgs {
+            n: 4,
+            at: 1.0,
+            retract_fraction: 0,
+            database_url: url.clone(),
+            reset: true,
+        })
+        .await
+        .expect("as-of scenario smoke (asserts only)");
+
+        // Retract-heavy: exercises the `actor` column and the retract
+        // branch of the fabricator and the ReplaySet replay path.
+        run_as_of(AsOfArgs {
+            n: 10,
+            at: 1.0,
+            retract_fraction: 50,
+            database_url: url.clone(),
+            reset: true,
+        })
+        .await
+        .expect("as-of scenario smoke (retract-heavy)");
+
+        run_contend(ContendArgs {
+            workers: 2,
+            ops_per_worker: 2,
+            prepopulate: 2,
+            max_retries: 20,
+            database_url: url,
+            reset: true,
+        })
+        .await
+        .expect("contend scenario smoke");
     }
 }
