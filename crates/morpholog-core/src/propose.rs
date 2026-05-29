@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::derive::eval_invariant;
 use crate::eval::{
     EvalContext, EvalError, RenderedClaim, eval_value, find_failing_subexpr, find_matches,
-    resolve_term, unify_args, unsatisfied_positive_claims,
+    matching_claims, resolve_term, unsatisfied_positive_claims,
 };
 use crate::format;
 use crate::ir::{
@@ -529,35 +529,18 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            // Branch on trace.is_on(): the non-trace path streams clones
-            // directly into `retracted`; the trace path builds an
-            // intermediate Vec so the entry can carry the actual
-            // retracted claims, not a count.
+            // The matched claims are the same set the trace entry needs,
+            // so compute them once (indexed by ground args, shared with
+            // the read path) and only the trace push is conditional.
+            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let matched = matching_claims(predicate, args, &ctx)?;
             if trace.is_on() {
-                let mut retracted_here: Vec<ClaimInstance> = vec![];
-                for claim in pre_state.claims_for_name(predicate) {
-                    if claim.args.len() != args.len() {
-                        continue;
-                    }
-                    if unify_args(args, &claim.args, bindings, actor).is_some() {
-                        retracted_here.push(claim.clone());
-                    }
-                }
                 trace.push(TraceEntry::Retract {
                     predicate: predicate.clone(),
-                    retracted: retracted_here.clone(),
+                    retracted: matched.clone(),
                 });
-                retracted.extend(retracted_here);
-            } else {
-                for claim in pre_state.claims_for_name(predicate) {
-                    if claim.args.len() != args.len() {
-                        continue;
-                    }
-                    if unify_args(args, &claim.args, bindings, actor).is_some() {
-                        retracted.push(claim.clone());
-                    }
-                }
             }
+            retracted.extend(matched);
             Ok(StmtOutcome::Continue)
         }
         Stmt::For {
