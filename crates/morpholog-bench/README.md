@@ -120,11 +120,11 @@ The positive half: **predicate-disjoint partitioning does.** `--disjoint` switch
 
 > The unit of concurrency is the read footprint the runtime loads, not the business value. Value-disjoint writes inside one predicate do not scale; predicate-disjoint footprints do.
 
-The residual ~2.4 retries/commit at full disjointness is not logical overlap - it is PostgreSQL SSI's *page-level* `SIRead` lock granularity: the short, adjacent `Bench_*` keys cluster on the same index page, so logically-disjoint predicates still false-share. Driving it to zero needs the predicates physically separated (more rows, spread keys, partitioned storage) - the same reason a partitioned substrate would matter at scale. This pair of sweeps also supplies the measured 40001 rate the roadmap requires before any substrate change (e.g. TimescaleDB) can be reasoned about.
+The residual ~2.4 retries/commit at full disjointness is *consistent with* PostgreSQL SSI predicate-lock granularity rather than logical Morpholog overlap: the short, adjacent `Bench_*` keys likely share index pages, so logically-disjoint predicates still false-share. Confirming the mechanism - and driving the residual toward zero - would need a follow-up physical-layout control (spread predicate names, larger seeded key ranges, or partitioned storage), which is also the reason a partitioned substrate would matter at scale. This pair of sweeps also supplies the measured 40001 rate the roadmap requires before any substrate change (e.g. TimescaleDB) can be reasoned about.
 
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 
-Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog run ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, empty ledger, local PostgreSQL):
+Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog run ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, starting from an empty ledger - state grows over the run - local PostgreSQL):
 
 | invocation | per-call |
 |---|--:|
