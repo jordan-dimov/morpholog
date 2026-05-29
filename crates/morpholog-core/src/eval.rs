@@ -890,8 +890,10 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir_builder::{dec, div, max, min, modulo, mul, subj, term};
-    use crate::state::State;
+    use crate::ir_builder::{
+        dec, div, max, min, modulo, mul, subj, term, value_of, value_of_with_default, wildcard,
+    };
+    use crate::state::{ClaimInstance, State};
 
     // Evaluate a literal-only value expression against empty state/bindings.
     fn eval_lit(e: &ValueExpr) -> Result<EvalValue, EvalError> {
@@ -980,5 +982,117 @@ mod tests {
             eval_lit(&min(term(subj("x")), term(dec("2")))),
             Err(EvalError::TypeMismatch(_))
         ));
+    }
+
+    // ValueOf: pins the single-indexed-pass behaviour that the
+    // `select_candidates` extraction shares with `find_claim_matches`.
+    // The double-entry example the bench uses has no ValueOf, so these
+    // are where the changed path's semantics are nailed down.
+
+    /// `Price(trade, amount)` claims for the given (trade, amount) rows.
+    fn price_state(rows: &[(&str, i64)]) -> State {
+        State::from_claims(
+            rows.iter()
+                .map(|(t, amt)| ClaimInstance {
+                    predicate: "Price".into(),
+                    args: vec![
+                        EvalValue::Subject(Subject::from(*t)),
+                        EvalValue::Decimal(Decimal::new(*amt, 0)),
+                    ],
+                })
+                .collect(),
+        )
+    }
+
+    fn eval_in(
+        e: &ValueExpr,
+        state: &State,
+        actor: Option<&Subject>,
+    ) -> Result<EvalValue, EvalError> {
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(state, None, &bindings, actor);
+        eval_value(e, &ctx)
+    }
+
+    #[test]
+    fn value_of_single_match_returns_wildcard_value() {
+        // Grounded arg 0 (`t1`) narrows via the argument-position index
+        // (the `Indexed` candidate branch); the wildcard at arg 1 is the
+        // value read back.
+        let state = price_state(&[("t1", 100), ("t2", 200)]);
+        assert_eq!(
+            eval_in(
+                &value_of("Price", vec![subj("t1"), wildcard()]),
+                &state,
+                None
+            ),
+            Ok(EvalValue::Decimal(Decimal::new(100, 0))),
+        );
+    }
+
+    #[test]
+    fn value_of_full_scan_branch_single_match() {
+        // No grounded arg, so `select_candidates` takes the `All` branch
+        // (full predicate scan). A single claim resolves uniquely.
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Singleton".into(),
+            args: vec![EvalValue::Decimal(Decimal::new(7, 0))],
+        }]);
+        assert_eq!(
+            eval_in(&value_of("Singleton", vec![wildcard()]), &state, None),
+            Ok(EvalValue::Decimal(Decimal::new(7, 0))),
+        );
+    }
+
+    #[test]
+    fn value_of_zero_matches_uses_default() {
+        let state = price_state(&[("t1", 100)]);
+        assert_eq!(
+            eval_in(
+                &value_of_with_default("Price", vec![subj("absent"), wildcard()], term(dec("42")),),
+                &state,
+                None,
+            ),
+            Ok(EvalValue::Decimal(Decimal::new(42, 0))),
+        );
+    }
+
+    #[test]
+    fn value_of_zero_matches_without_default_errors() {
+        let state = price_state(&[("t1", 100)]);
+        assert_eq!(
+            eval_in(
+                &value_of("Price", vec![subj("absent"), wildcard()]),
+                &state,
+                None
+            ),
+            Err(EvalError::ValueOfZeroMatches("Price".to_string())),
+        );
+    }
+
+    #[test]
+    fn value_of_multiple_matches_errors() {
+        // Two Price claims share arg 0 `t1`, so the wildcard at arg 1
+        // matches both - the functional-lookup contract is violated.
+        let state = price_state(&[("t1", 100), ("t1", 200)]);
+        assert_eq!(
+            eval_in(
+                &value_of("Price", vec![subj("t1"), wildcard()]),
+                &state,
+                None
+            ),
+            Err(EvalError::ValueOfMultipleMatches("Price".to_string())),
+        );
+    }
+
+    #[test]
+    fn value_of_unbound_actor_errors_position_independently() {
+        // A selective ground arg before `actor` would short-circuit to
+        // "no matches" first; the up-front actor check in
+        // `select_candidates` must still surface `UnboundActor` when no
+        // actor is in scope.
+        let state = price_state(&[("t1", 100)]);
+        let e = value_of("Triple", vec![subj("absent"), Term::Actor, wildcard()]);
+        assert_eq!(eval_in(&e, &state, None), Err(EvalError::UnboundActor));
     }
 }
