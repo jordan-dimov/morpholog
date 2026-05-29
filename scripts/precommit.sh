@@ -7,7 +7,10 @@
 #
 # Optional env:
 #   DATABASE_URL  if set, runs the PG-backed test suites; otherwise
-#                 skips them with a note. Typical local value:
+#                 skips them with a note. These suites (and the bench
+#                 smoke test) TRUNCATE the morpholog schema on entry, so
+#                 point this at a DISPOSABLE database - never one holding
+#                 data you want to keep. Typical local value:
 #                   export DATABASE_URL=postgres:///morpholog_dev
 #
 # Usage:
@@ -61,10 +64,10 @@ cargo test \
     -p morpholog-test-support \
     --all-targets --locked
 
-step 'async / PG-backed test suites (morpholog-cli / postgres / outbox)'
+step 'async / PG-backed test suites (morpholog-cli / postgres / outbox / bench smoke)'
 if [ -z "${DATABASE_URL:-}" ]; then
     echo '  DATABASE_URL not set; skipping.'
-    echo '  To run these tests locally:'
+    echo '  These suites TRUNCATE the schema; point at a disposable DB:'
     echo '    export DATABASE_URL=postgres:///morpholog_dev'
     echo '    ./scripts/precommit.sh'
 else
@@ -72,6 +75,7 @@ else
         -p morpholog-cli \
         -p morpholog-postgres \
         -p morpholog-outbox \
+        -p morpholog-bench \
         --all-targets --locked -- --test-threads=1
 fi
 

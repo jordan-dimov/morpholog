@@ -289,35 +289,52 @@ pub(crate) fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
         .map_err(|e| EvalError::TypeMismatch(format!("invalid civil date `{s}`: {e}")))
 }
 
-pub(crate) fn find_claim_matches(
+/// The claims worth checking when matching `predicate(args)` against
+/// state, after narrowing by the most selective ground argument.
+/// Computed once and reused by both [`find_claim_matches`] (which
+/// collects the satisfying bindings) and the `ValueOf` value-lookup
+/// (which keeps the matched claim), so the ground-argument narrowing
+/// lives in exactly one place.
+enum Candidates<'a> {
+    /// A ground argument named a `(predicate, position, value)` bucket
+    /// that does not exist, so no admitted claim can match.
+    None,
+    /// The narrowed bucket of `State::claims()` indices to check.
+    Indexed(&'a [usize]),
+    /// No ground argument to narrow on; every claim of this predicate
+    /// is a candidate.
+    All,
+}
+
+/// Narrow `predicate(args)` to its candidate claims by the most
+/// selective ground argument (a literal, a variable already bound in
+/// `base`, or `actor`). For `JournalLine(entry, _, d, _)` inside
+/// `forall entry: ...`, the bound `entry` narrows the scan to that
+/// entry's lines - O(lines_per_entry) instead of O(all lines). A
+/// missing bucket short-circuits to [`Candidates::None`]; no ground
+/// argument falls back to [`Candidates::All`].
+///
+/// Raises `UnboundActor` position-independently if any `Term::Actor`
+/// appears with no actor in scope: without the up-front check a
+/// selective earlier arg could short-circuit before the loop reached
+/// `Term::Actor`, letting a body that references it silently produce
+/// no matches instead of erroring.
+fn select_candidates<'a>(
     predicate: &PredicateName,
     args: &[Term],
-    ctx: &EvalContext<'_>,
-) -> Result<Vec<Bindings>, EvalError> {
+    ctx: &EvalContext<'a>,
+) -> Result<Candidates<'a>, EvalError> {
     let EvalContext {
         state,
         bindings: base,
         actor,
         ..
     } = *ctx;
-    let mut out = vec![];
 
-    // Position-independent actor check: any `Term::Actor` requires an
-    // actor in scope. Without it, a selective ground arg appearing
-    // earlier could short-circuit to `Ok(empty)` before the loop
-    // reaches `Term::Actor`, letting an invariant that references
-    // `Term::Actor` silently produce no matches instead of erroring.
     if actor.is_none() && args.iter().any(|t| matches!(t, Term::Actor)) {
         return Err(EvalError::UnboundActor);
     }
 
-    // Pick the most selective ground argument (literal, or var already
-    // bound in `base`) and scan its (predicate, position, value) bucket
-    // rather than the whole predicate. For `JournalLine(entry, _, d, _)`
-    // inside `forall entry: ...`, the bound `entry` narrows the scan to
-    // that entry's lines - O(lines_per_entry) instead of O(all lines).
-    // A missing bucket short-circuits to empty; no ground arg falls
-    // back to `state.claims_for(predicate)`.
     let mut best: Option<&[usize]> = None;
     for (pos, term) in args.iter().enumerate() {
         let ground = match term {
@@ -335,7 +352,7 @@ pub(crate) fn find_claim_matches(
             continue;
         };
         match state.claim_indices_for_arg(predicate, pos, &value) {
-            None => return Ok(out),
+            None => return Ok(Candidates::None),
             Some(bucket) => match best {
                 Some(prev) if prev.len() <= bucket.len() => {}
                 _ => best = Some(bucket),
@@ -343,23 +360,42 @@ pub(crate) fn find_claim_matches(
         }
     }
 
-    if let Some(bucket) = best {
-        for &i in bucket {
-            let claim = state.claim_at(i);
-            if claim.args.len() != args.len() {
-                continue;
-            }
-            if let Some(b) = unify_args(args, &claim.args, base, actor) {
-                out.push(b);
+    Ok(best.map_or(Candidates::All, Candidates::Indexed))
+}
+
+pub(crate) fn find_claim_matches(
+    predicate: &PredicateName,
+    args: &[Term],
+    ctx: &EvalContext<'_>,
+) -> Result<Vec<Bindings>, EvalError> {
+    let EvalContext {
+        state,
+        bindings: base,
+        actor,
+        ..
+    } = *ctx;
+    let mut out = vec![];
+    match select_candidates(predicate, args, ctx)? {
+        Candidates::None => {}
+        Candidates::Indexed(bucket) => {
+            for &i in bucket {
+                let claim = state.claim_at(i);
+                if claim.args.len() != args.len() {
+                    continue;
+                }
+                if let Some(b) = unify_args(args, &claim.args, base, actor) {
+                    out.push(b);
+                }
             }
         }
-    } else {
-        for claim in state.claims_for_name(predicate) {
-            if claim.args.len() != args.len() {
-                continue;
-            }
-            if let Some(b) = unify_args(args, &claim.args, base, actor) {
-                out.push(b);
+        Candidates::All => {
+            for claim in state.claims_for_name(predicate) {
+                if claim.args.len() != args.len() {
+                    continue;
+                }
+                if let Some(b) = unify_args(args, &claim.args, base, actor) {
+                    out.push(b);
+                }
             }
         }
     }
@@ -539,30 +575,52 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             args,
             default,
         } => {
-            let matches = find_claim_matches(predicate, args, ctx)?;
-            match matches.len() {
-                1 => {
-                    let pos = args
-                        .iter()
-                        .position(|t| matches!(t, Term::Wildcard))
-                        .ok_or_else(|| {
-                            EvalError::TypeMismatch("ValueOf requires a wildcard arg".into())
-                        })?;
-                    let claim = ctx
-                        .state
-                        .claims_for_name(predicate)
-                        .find(|f| {
-                            f.args.len() == args.len()
-                                && unify_args(args, &f.args, ctx.bindings, ctx.actor).is_some()
-                        })
-                        .ok_or_else(|| EvalError::ValueOfZeroMatches(predicate.to_string()))?;
-                    Ok(claim.args[pos].clone())
+            // The wildcard position is the value to extract. A single
+            // indexed pass over the narrowed candidates finds the
+            // matching claim and reads that position - the same match
+            // semantics as `find_claim_matches`, but keeping the claim
+            // instead of re-locating it with a second, unindexed scan.
+            let pos = args
+                .iter()
+                .position(|t| matches!(t, Term::Wildcard))
+                .ok_or_else(|| EvalError::TypeMismatch("ValueOf requires a wildcard arg".into()))?;
+
+            let mut matched: Option<&EvalValue> = None;
+            let mut multiple = false;
+            match select_candidates(predicate, args, ctx)? {
+                Candidates::None => {}
+                Candidates::Indexed(bucket) => {
+                    for &i in bucket {
+                        let claim = ctx.state.claim_at(i);
+                        if claim.args.len() == args.len()
+                            && unify_args(args, &claim.args, ctx.bindings, ctx.actor).is_some()
+                        {
+                            multiple |= matched.is_some();
+                            matched = Some(&claim.args[pos]);
+                        }
+                    }
                 }
-                0 => match default {
+                Candidates::All => {
+                    for claim in ctx.state.claims_for_name(predicate) {
+                        if claim.args.len() == args.len()
+                            && unify_args(args, &claim.args, ctx.bindings, ctx.actor).is_some()
+                        {
+                            multiple |= matched.is_some();
+                            matched = Some(&claim.args[pos]);
+                        }
+                    }
+                }
+            }
+
+            if multiple {
+                return Err(EvalError::ValueOfMultipleMatches(predicate.to_string()));
+            }
+            match matched {
+                Some(value) => Ok(value.clone()),
+                None => match default {
                     Some(d) => eval_value(d, ctx),
                     None => Err(EvalError::ValueOfZeroMatches(predicate.to_string())),
                 },
-                _ => Err(EvalError::ValueOfMultipleMatches(predicate.to_string())),
             }
         }
     }
@@ -832,8 +890,10 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir_builder::{dec, div, max, min, modulo, mul, subj, term};
-    use crate::state::State;
+    use crate::ir_builder::{
+        dec, div, max, min, modulo, mul, subj, term, value_of, value_of_with_default, wildcard,
+    };
+    use crate::state::{ClaimInstance, State};
 
     // Evaluate a literal-only value expression against empty state/bindings.
     fn eval_lit(e: &ValueExpr) -> Result<EvalValue, EvalError> {
@@ -922,5 +982,117 @@ mod tests {
             eval_lit(&min(term(subj("x")), term(dec("2")))),
             Err(EvalError::TypeMismatch(_))
         ));
+    }
+
+    // ValueOf: pins the single-indexed-pass behaviour that the
+    // `select_candidates` extraction shares with `find_claim_matches`.
+    // The double-entry example the bench uses has no ValueOf, so these
+    // are where the changed path's semantics are nailed down.
+
+    /// `Price(trade, amount)` claims for the given (trade, amount) rows.
+    fn price_state(rows: &[(&str, i64)]) -> State {
+        State::from_claims(
+            rows.iter()
+                .map(|(t, amt)| ClaimInstance {
+                    predicate: "Price".into(),
+                    args: vec![
+                        EvalValue::Subject(Subject::from(*t)),
+                        EvalValue::Decimal(Decimal::new(*amt, 0)),
+                    ],
+                })
+                .collect(),
+        )
+    }
+
+    fn eval_in(
+        e: &ValueExpr,
+        state: &State,
+        actor: Option<&Subject>,
+    ) -> Result<EvalValue, EvalError> {
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(state, None, &bindings, actor);
+        eval_value(e, &ctx)
+    }
+
+    #[test]
+    fn value_of_single_match_returns_wildcard_value() {
+        // Grounded arg 0 (`t1`) narrows via the argument-position index
+        // (the `Indexed` candidate branch); the wildcard at arg 1 is the
+        // value read back.
+        let state = price_state(&[("t1", 100), ("t2", 200)]);
+        assert_eq!(
+            eval_in(
+                &value_of("Price", vec![subj("t1"), wildcard()]),
+                &state,
+                None
+            ),
+            Ok(EvalValue::Decimal(Decimal::new(100, 0))),
+        );
+    }
+
+    #[test]
+    fn value_of_full_scan_branch_single_match() {
+        // No grounded arg, so `select_candidates` takes the `All` branch
+        // (full predicate scan). A single claim resolves uniquely.
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Singleton".into(),
+            args: vec![EvalValue::Decimal(Decimal::new(7, 0))],
+        }]);
+        assert_eq!(
+            eval_in(&value_of("Singleton", vec![wildcard()]), &state, None),
+            Ok(EvalValue::Decimal(Decimal::new(7, 0))),
+        );
+    }
+
+    #[test]
+    fn value_of_zero_matches_uses_default() {
+        let state = price_state(&[("t1", 100)]);
+        assert_eq!(
+            eval_in(
+                &value_of_with_default("Price", vec![subj("absent"), wildcard()], term(dec("42")),),
+                &state,
+                None,
+            ),
+            Ok(EvalValue::Decimal(Decimal::new(42, 0))),
+        );
+    }
+
+    #[test]
+    fn value_of_zero_matches_without_default_errors() {
+        let state = price_state(&[("t1", 100)]);
+        assert_eq!(
+            eval_in(
+                &value_of("Price", vec![subj("absent"), wildcard()]),
+                &state,
+                None
+            ),
+            Err(EvalError::ValueOfZeroMatches("Price".to_string())),
+        );
+    }
+
+    #[test]
+    fn value_of_multiple_matches_errors() {
+        // Two Price claims share arg 0 `t1`, so the wildcard at arg 1
+        // matches both - the functional-lookup contract is violated.
+        let state = price_state(&[("t1", 100), ("t1", 200)]);
+        assert_eq!(
+            eval_in(
+                &value_of("Price", vec![subj("t1"), wildcard()]),
+                &state,
+                None
+            ),
+            Err(EvalError::ValueOfMultipleMatches("Price".to_string())),
+        );
+    }
+
+    #[test]
+    fn value_of_unbound_actor_errors_position_independently() {
+        // A selective ground arg before `actor` would short-circuit to
+        // "no matches" first; the up-front actor check in
+        // `select_candidates` must still surface `UnboundActor` when no
+        // actor is in scope.
+        let state = price_state(&[("t1", 100)]);
+        let e = value_of("Triple", vec![subj("absent"), Term::Actor, wildcard()]);
+        assert_eq!(eval_in(&e, &state, None), Err(EvalError::UnboundActor));
     }
 }
