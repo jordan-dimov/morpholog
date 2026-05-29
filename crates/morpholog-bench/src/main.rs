@@ -560,7 +560,9 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
 
     let mut total = Tally::default();
     for h in handles {
-        let tally = h.await.context("join contend worker")?;
+        // First `?`: the task panicked / was cancelled. Second `?`: the
+        // worker hit an unexpected (non-40001) adapter error.
+        let tally = h.await.context("join contend worker")??;
         total.committed += tally.committed;
         total.rejected += tally.rejected;
         total.retries += tally.retries;
@@ -597,6 +599,18 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
             "accounting mismatch: committed+rejected+failed ({accounted}) != total_ops ({total_ops})"
         ));
     }
+    // A contention bench that commits nothing is degenerate: either the
+    // scenario is broken (every op rejected) or it is mis-parameterised
+    // (every op exhausted its retries). Either way it is not a usable
+    // measurement, and it is the signal the smoke test relies on.
+    if total.committed == 0 {
+        return Err(anyhow!(
+            "contend committed nothing (rejected={} failed={} of {total_ops}); \
+             scenario is broken or mis-parameterised",
+            total.rejected,
+            total.failed
+        ));
+    }
     Ok(())
 }
 
@@ -618,8 +632,14 @@ struct Tally {
 /// embedder owns - the kernel and adapter never retry. A 40001 backs
 /// off briefly and retries up to `max_retries`, after which the
 /// operation is recorded as failed so a pathological live-lock cannot
-/// hang the bench.
-async fn contend_worker(pool: PgPool, worker_id: usize, ops: usize, max_retries: usize) -> Tally {
+/// hang the bench. Any other error is drift, not contention, and
+/// propagates as `Err`.
+async fn contend_worker(
+    pool: PgPool,
+    worker_id: usize,
+    ops: usize,
+    max_retries: usize,
+) -> Result<Tally> {
     let transformation = double_entry_ledger::post_simple_entry();
     let invariants = double_entry_ledger::all_invariants();
     let mut tally = Tally::default();
@@ -661,14 +681,17 @@ async fn contend_worker(pool: PgPool, worker_id: usize, ops: usize, max_retries:
                     tokio::time::sleep(Duration::from_micros(100 * attempt)).await;
                 }
                 Err(e) => {
-                    eprintln!("worker {worker_id} op {op}: unexpected error: {e}");
-                    tally.failed += 1;
-                    break;
+                    // Not a 40001 - this is schema / connection / API
+                    // drift, not contention. Propagate so a real run and
+                    // the smoke test fail loudly, instead of silently
+                    // banking it as an expected `failed` outcome.
+                    return Err(anyhow::Error::new(e)
+                        .context(format!("contend worker {worker_id} op {op}")));
                 }
             }
         }
     }
-    tally
+    Ok(tally)
 }
 
 /// Fabricate `n` audit rows via direct SQL. Each row carries a
