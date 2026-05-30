@@ -77,7 +77,9 @@ Both codecs decode through one shared function so the `run` and `explain` paths 
 
 Output is a JSON Schema (Draft 2020-12) for the transformation's argument object. No `--json` flag - the output is JSON by definition. The schema is what the embedder validates request bodies against, generates form fields from, or derives typed client models off.
 
-`morpholog schema <file> --intent <IntentType>` emits the same shape for an emitted intent's **payload** instead of a transformation's arguments - the contract a deliverer uses to decode an outbox row (or a `run` outcome's `emitted_intents`) by name rather than by hand-coded position. Intent arguments are declared with explicit kinds, so the payload schema is a direct projection of the declaration; `required[]` carries the payload's positional order. Exactly one of a transformation name or `--intent <Type>` is supplied. Unknown intent exits non-zero with the empty-stdout / `error:` on stderr contract.
+`morpholog schema <file> --intent <IntentType>` emits the same shape for an emitted intent's **payload** instead of a transformation's arguments - the contract a deliverer uses to decode an outbox row (or a `run` outcome's `emitted_intents`) by name rather than by hand-coded position. Intent arguments are declared with explicit kinds, so the payload schema is a direct projection of the declaration. Exactly one of a transformation name or `--intent <Type>` is supplied. Unknown intent exits non-zero with the empty-stdout / `error:` on stderr contract.
+
+**Positional order: `x-morpholog-arg-order`.** Both the transformation-argument and intent-payload schemas carry an `x-morpholog-arg-order` extension: a JSON array of the parameter / field names in declaration order. This is the contract for anything positional - decoding a tagged intent payload array, or building the tagged `--args` codec. `required` happens to list the same names, but it is the JSON Schema validation keyword (semantically a set), so a consumer that needs the order reads `x-morpholog-arg-order`, never the incidental array order of `required`.
 
 Shape:
 

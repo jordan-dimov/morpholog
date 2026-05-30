@@ -90,13 +90,13 @@ fn schema_intent_emits_json_schema_for_known_intent() {
     let schema: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
     assert_eq!(schema["title"], "TradeSettlementRequested");
     assert_eq!(schema["type"], "object");
-    // `required[]` is the positional order a deliverer decodes the
-    // emitted payload by - the load-bearing contract for the embedder.
-    let required = schema["required"].as_array().expect("required is array");
+    // `x-morpholog-arg-order` is the positional contract a deliverer
+    // decodes the emitted payload by - not the incidental order of the
+    // `required` set keyword.
     assert_eq!(
-        required,
-        &["settlement_id", "trade", "settled_qty"],
-        "intent payload field order must match the declaration",
+        schema["x-morpholog-arg-order"],
+        serde_json::json!(["settlement_id", "trade", "settled_qty"]),
+        "intent payload positional order must match the declaration",
     );
     assert_eq!(schema["properties"]["settled_qty"]["type"], "string");
 }

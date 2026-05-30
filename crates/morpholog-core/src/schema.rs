@@ -67,6 +67,7 @@ pub fn transformation_arg_schema(
         properties.insert(param.as_str().to_string(), property_schema(kind));
         required.push(Value::String(param.as_str().to_string()));
     }
+    let arg_order = required.clone();
 
     Ok(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -74,6 +75,11 @@ pub fn transformation_arg_schema(
         "type": "object",
         "additionalProperties": false,
         "required": required,
+        // The positional contract. `required` is a JSON Schema validation
+        // keyword (semantically a set); a consumer that needs the order -
+        // to build the tagged-array `--args` codec - must read this
+        // extension, not the incidental array order of `required`.
+        "x-morpholog-arg-order": arg_order,
         "properties": properties,
     }))
 }
@@ -104,6 +110,7 @@ pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> O
         );
         required.push(Value::String(arg.name.clone()));
     }
+    let arg_order = required.clone();
 
     Some(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -111,6 +118,10 @@ pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> O
         "type": "object",
         "additionalProperties": false,
         "required": required,
+        // The load-bearing contract for decoding a tagged payload array:
+        // the positional order of the emitted intent's args. `required`
+        // mirrors the names but is a set keyword, not ordering metadata.
+        "x-morpholog-arg-order": arg_order,
         "properties": properties,
     }))
 }
