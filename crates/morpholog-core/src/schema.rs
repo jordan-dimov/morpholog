@@ -42,7 +42,7 @@
 use serde_json::{Value, json};
 
 use crate::analysis::{AnalysisError, ParamKind, transformation_param_kinds};
-use crate::ir::{PredicateArgKind, TransformationName};
+use crate::ir::{IntentName, PredicateArgKind, TransformationName};
 use crate::validate::ValidatedProgram;
 
 /// Emit a JSON Schema (Draft 2020-12) for the named transformation's
@@ -67,6 +67,7 @@ pub fn transformation_arg_schema(
         properties.insert(param.as_str().to_string(), property_schema(kind));
         required.push(Value::String(param.as_str().to_string()));
     }
+    let arg_order = required.clone();
 
     Ok(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -74,6 +75,53 @@ pub fn transformation_arg_schema(
         "type": "object",
         "additionalProperties": false,
         "required": required,
+        // The positional contract. `required` is a JSON Schema validation
+        // keyword (semantically a set); a consumer that needs the order -
+        // to build the tagged-array `--args` codec - must read this
+        // extension, not the incidental array order of `required`.
+        "x-morpholog-arg-order": arg_order,
+        "properties": properties,
+    }))
+}
+
+/// Emit a JSON Schema (Draft 2020-12) for the named intent's payload
+/// object. The embedder-facing dual of [`transformation_arg_schema`]:
+/// where that describes what a transformation *accepts*, this describes
+/// what an emitted intent *carries*, so a deliverer reading an outbox
+/// payload can decode it by name instead of by hand-coded position.
+///
+/// Intent arguments are *declared* with explicit kinds (unlike
+/// transformation parameters, whose kinds are inferred), so this is a
+/// direct render with no analysis - hence a plain `Option` (the intent
+/// is declared or it is not) rather than the analysis-layer `Result`.
+pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> Option<Value> {
+    let decl = program
+        .as_program()
+        .intents
+        .iter()
+        .find(|d| &d.name == name)?;
+
+    let mut properties = serde_json::Map::with_capacity(decl.args.len());
+    let mut required = Vec::with_capacity(decl.args.len());
+    for arg in &decl.args {
+        properties.insert(
+            arg.name.clone(),
+            concrete_property(arg.kind, SchemaContext::IntentPayload),
+        );
+        required.push(Value::String(arg.name.clone()));
+    }
+    let arg_order = required.clone();
+
+    Some(json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": name.as_str(),
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        // The load-bearing contract for decoding a tagged payload array:
+        // the positional order of the emitted intent's args. `required`
+        // mirrors the names but is a set keyword, not ordering metadata.
+        "x-morpholog-arg-order": arg_order,
         "properties": properties,
     }))
 }
@@ -88,15 +136,7 @@ pub fn transformation_arg_schema(
 /// belongs at the property level, naming the ambiguity.
 fn property_schema(kind: &ParamKind) -> Value {
     match kind {
-        ParamKind::Concrete(k) => {
-            let mut value = bare_kind_shape(*k);
-            if let Some(obj) = value.as_object_mut()
-                && let Some(desc) = concrete_kind_description(*k)
-            {
-                obj.insert("description".into(), Value::String(desc.into()));
-            }
-            value
-        }
+        ParamKind::Concrete(k) => concrete_property(*k, SchemaContext::TransformationArg),
         // `Polymorphic` is the projection of "observed only at `Any`
         // slots"; the analysis layer never emits `Concrete(Any)`, but
         // the type permits it, so render it the same way.
@@ -114,6 +154,31 @@ fn property_schema(kind: &ParamKind) -> Value {
             })
         }
     }
+}
+
+/// Whether a property is rendered for a transformation's *input*
+/// arguments or an emitted intent's *payload*. Only the `Collection`
+/// description differs: the input rendering points the caller at the
+/// `--args` codec for *sending* a collection, which is meaningless for a
+/// read-only payload field the embedder only ever decodes.
+#[derive(Clone, Copy)]
+enum SchemaContext {
+    TransformationArg,
+    IntentPayload,
+}
+
+/// The `Concrete`-kind property: the bare type/format/pattern shape
+/// plus the per-kind, context-aware description. Shared by
+/// [`property_schema`]'s `Concrete` arm and by [`intent_arg_schema`],
+/// whose declared arguments are always concrete kinds.
+fn concrete_property(kind: PredicateArgKind, ctx: SchemaContext) -> Value {
+    let mut value = bare_kind_shape(kind);
+    if let Some(obj) = value.as_object_mut()
+        && let Some(desc) = concrete_kind_description(kind, ctx)
+    {
+        obj.insert("description".into(), Value::String(desc.into()));
+    }
+    value
 }
 
 /// The bare JSON-Schema type/format/pattern shape for a concrete
@@ -145,10 +210,12 @@ fn bare_kind_shape(kind: PredicateArgKind) -> Value {
     }
 }
 
-/// The per-kind description used by the `Concrete` rendering.
-/// `None` for kinds where the JSON-Schema type alone is descriptive
-/// enough (booleans).
-fn concrete_kind_description(kind: PredicateArgKind) -> Option<&'static str> {
+/// The per-kind description used by the `Concrete` rendering. `None`
+/// for kinds where the JSON-Schema type alone is descriptive enough
+/// (booleans). Only `Collection` reads `ctx`: a transformation argument
+/// points at the `--args` codec for *sending* a collection; an intent
+/// payload field is read-only output, so that guidance would mislead.
+fn concrete_kind_description(kind: PredicateArgKind, ctx: SchemaContext) -> Option<&'static str> {
     match kind {
         PredicateArgKind::Subject => Some(
             "opaque Morpholog subject identifier or domain symbol. \
@@ -161,12 +228,51 @@ fn concrete_kind_description(kind: PredicateArgKind) -> Option<&'static str> {
             Some("arbitrary-precision decimal carried as a string for exactness")
         }
         PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
-        PredicateArgKind::Collection => Some(
-            "collection; item kind not tracked at the kernel level in v0. \
-             A Collection parameter cannot be sent via `--args-named` (the \
-             named codec cannot decode bare arrays without per-item kind \
-             information); use `--args` with the tagged EvalValue codec.",
-        ),
+        PredicateArgKind::Collection => Some(match ctx {
+            SchemaContext::TransformationArg => {
+                "collection; item kind not tracked at the kernel level in v0. \
+                 A Collection parameter cannot be sent via `--args-named` (the \
+                 named codec cannot decode bare arrays without per-item kind \
+                 information); use `--args` with the tagged EvalValue codec."
+            }
+            SchemaContext::IntentPayload => {
+                "collection; a positional array of values, item kind not \
+                 tracked at the kernel level in v0."
+            }
+        }),
         PredicateArgKind::Bool | PredicateArgKind::Any => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `Collection` description is input-specific: a transformation
+    /// argument is pointed at the `--args` codec for sending a
+    /// collection, but an intent payload is read-only output, so that
+    /// guidance must not leak into the `schema --intent` contract.
+    #[test]
+    fn collection_description_splits_by_context() {
+        let input = concrete_property(
+            PredicateArgKind::Collection,
+            SchemaContext::TransformationArg,
+        );
+        let input_desc = input["description"].as_str().expect("description string");
+        assert!(
+            input_desc.contains("--args"),
+            "transformation-arg Collection points at the --args codec; got: {input_desc}",
+        );
+
+        let payload = concrete_property(PredicateArgKind::Collection, SchemaContext::IntentPayload);
+        let payload_desc = payload["description"].as_str().expect("description string");
+        assert!(
+            !payload_desc.contains("--args"),
+            "intent-payload Collection is read-only output; must not mention a send codec; got: {payload_desc}",
+        );
+
+        // The bare type shape is the same in both contexts.
+        assert_eq!(input["type"], "array");
+        assert_eq!(payload["type"], "array");
     }
 }

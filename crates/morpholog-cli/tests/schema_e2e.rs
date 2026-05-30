@@ -70,6 +70,57 @@ fn schema_emits_json_schema_for_known_transformation() {
 }
 
 #[test]
+fn schema_intent_emits_json_schema_for_known_intent() {
+    let morph = repo_root().join("examples/10_trade_lifecycle/trade_lifecycle.morph");
+    let out = Command::new(bin())
+        .args([
+            "schema",
+            morph.to_str().unwrap(),
+            "--intent",
+            "TradeSettlementRequested",
+        ])
+        .output()
+        .expect("run morpholog schema --intent");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
+    let schema: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(schema["title"], "TradeSettlementRequested");
+    assert_eq!(schema["type"], "object");
+    // `x-morpholog-arg-order` is the positional contract a deliverer
+    // decodes the emitted payload by - not the incidental order of the
+    // `required` set keyword.
+    assert_eq!(
+        schema["x-morpholog-arg-order"],
+        serde_json::json!(["settlement_id", "trade", "settled_qty"]),
+        "intent payload positional order must match the declaration",
+    );
+    assert_eq!(schema["properties"]["settled_qty"]["type"], "string");
+}
+
+#[test]
+fn schema_unknown_intent_errors_to_stderr_and_exits_nonzero() {
+    let morph = repo_root().join("examples/10_trade_lifecycle/trade_lifecycle.morph");
+    let out = Command::new(bin())
+        .args(["schema", morph.to_str().unwrap(), "--intent", "GhostIntent"])
+        .output()
+        .expect("run morpholog schema --intent");
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit on unknown intent"
+    );
+    assert!(out.stdout.is_empty(), "no stdout on error");
+    let stderr = String::from_utf8(out.stderr).expect("utf8 stderr");
+    assert!(
+        stderr.contains("unknown intent") && stderr.contains("GhostIntent"),
+        "stderr should name the missing intent; got:\n{stderr}",
+    );
+}
+
+#[test]
 fn schema_unknown_transformation_errors_to_stderr_and_exits_nonzero() {
     let morph = repo_root().join("examples/10_trade_lifecycle/trade_lifecycle.morph");
     let out = Command::new(bin())

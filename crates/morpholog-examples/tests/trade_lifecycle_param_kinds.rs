@@ -18,8 +18,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{
-    ParamKind, PredicateArgKind, TransformationName, transformation_arg_schema,
-    transformation_param_kinds,
+    IntentName, ParamKind, PredicateArgKind, TransformationName, intent_arg_schema,
+    transformation_arg_schema, transformation_param_kinds,
 };
 use morpholog_examples::trade_lifecycle;
 use serde_json::Value;
@@ -149,17 +149,22 @@ fn settle_trade_schema_pins_typed_inputs() {
 }
 
 fn assert_param_types(schema: &Value, expected: &[(&str, PredicateArgKind)]) {
-    let required: Vec<&str> = schema["required"]
-        .as_array()
-        .expect("required array")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
     let want_names: Vec<&str> = expected.iter().map(|(n, _)| *n).collect();
-    assert_eq!(
-        required, want_names,
-        "required[] order must match declaration order",
-    );
+    // `x-morpholog-arg-order` is the load-bearing positional contract;
+    // `required` is the JSON Schema validation keyword and mirrors the
+    // same names. Both must be in declaration order.
+    for key in ["required", "x-morpholog-arg-order"] {
+        let got: Vec<&str> = schema[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key} array"))
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            got, want_names,
+            "{key}[] order must match declaration order"
+        );
+    }
     for (name, kind) in expected {
         let property = &schema["properties"][name];
         let expected_type = expected_json_type(*kind);
@@ -179,4 +184,41 @@ fn expected_json_type(kind: PredicateArgKind) -> Value {
         PredicateArgKind::Collection => Value::String("array".into()),
         PredicateArgKind::Any => Value::Null,
     }
+}
+
+/// The intent-payload dual of the transformation-arg schema tests: a
+/// deliverer decodes `TradeSettlementRequested` by name from this
+/// contract instead of by hand-coded position. The positional order the
+/// emitted payload arrives in (`settlement_id`, `trade`, `settled_qty`)
+/// is carried by `x-morpholog-arg-order`; `required` only mirrors the
+/// same names as the validation keyword. `assert_param_types` checks
+/// both.
+#[test]
+fn trade_settlement_requested_intent_schema_pins_payload() {
+    let program = trade_lifecycle::program();
+    let schema = intent_arg_schema(
+        &program.validated().expect("trade_lifecycle validates"),
+        &IntentName::from("TradeSettlementRequested"),
+    )
+    .expect("TradeSettlementRequested is a declared intent");
+    assert_param_types(
+        &schema,
+        &[
+            ("settlement_id", PredicateArgKind::Subject),
+            ("trade", PredicateArgKind::Subject),
+            ("settled_qty", PredicateArgKind::Decimal),
+        ],
+    );
+}
+
+#[test]
+fn unknown_intent_schema_is_none() {
+    let program = trade_lifecycle::program();
+    assert!(
+        intent_arg_schema(
+            &program.validated().expect("trade_lifecycle validates"),
+            &IntentName::from("NoSuchIntent"),
+        )
+        .is_none(),
+    );
 }
