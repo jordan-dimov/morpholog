@@ -151,7 +151,11 @@ def outbox_complete(intent_id: str, worker_id: str, outcome: str = "delivered") 
         ]
     )
     if proc.returncode != 0:
-        sys.exit(f"outbox complete {intent_id} failed:\n{proc.stderr}")
+        # `complete` exits 1 (with `{"status":"lease_lost"}` on stdout)
+        # when the lease was lost to another worker; surface both streams
+        # so that outcome is legible rather than a bare non-zero exit.
+        detail = (proc.stdout.strip() + " " + proc.stderr.strip()).strip()
+        sys.exit(f"outbox complete {intent_id} failed (exit {proc.returncode}): {detail}")
 
 
 # --- Decoding an emitted intent's payload --------------------------------
@@ -191,6 +195,14 @@ def decode_intent_payload(intent_type: str, args: list[dict]) -> dict:
     the field names and their order from the declared payload contract."""
     names = intent_schema(intent_type)["required"]
     bare = [a["value"] for a in args]
+    if len(names) != len(bare):
+        # The schema and the emitted payload should always agree; a
+        # mismatch means schema/payload skew. Fail loudly rather than let
+        # zip() silently drop or ignore fields.
+        sys.exit(
+            f"{intent_type}: payload arity {len(bare)} != schema arity {len(names)} "
+            f"(schema/payload skew); fields={names}, values={bare}"
+        )
     return dict(zip(names, bare))
 
 
