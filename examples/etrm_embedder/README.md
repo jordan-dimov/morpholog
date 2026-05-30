@@ -24,7 +24,7 @@ What it still cannot do cleanly is recorded as friction the example prints at th
 DATABASE_URL=postgres:///morpholog_bench python3 examples/etrm_embedder/etrm_lifecycle.py
 ```
 
-Needs three things on your `PATH`: the `morpholog` CLI (set `MORPHOLOG_BIN` to point elsewhere, e.g. `target/release/morpholog`), the `psql` client (the demo-only schema reset shells out to it), and a disposable PostgreSQL database in `DATABASE_URL`. Python standard library only - no packages to install. It prints each lifecycle step, the intent it delivered, and a closing list of the interface friction it hit.
+Needs **Python 3.13+** and three things on your `PATH`: the `morpholog` CLI (set `MORPHOLOG_BIN` to point elsewhere, e.g. `target/release/morpholog`), the `psql` client (the demo-only schema reset shells out to it), and a disposable PostgreSQL database in `DATABASE_URL`. Python standard library only - no packages to install. It prints each lifecycle step, the intent it delivered, and a closing list of the interface friction it hit.
 
 ## What it is not
 

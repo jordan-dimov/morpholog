@@ -94,16 +94,16 @@ enum Command {
         what: OutboxCmd,
     },
 
-    /// Emit a JSON Schema describing the named transformation's
-    /// argument object. Thin wrapper over the library's
-    /// `transformation_arg_schema`: parse, validate, project param
-    /// kinds, render. The schema is the public contract a non-Rust
-    /// embedder uses to validate request bodies, generate input
-    /// forms, or derive typed client models without touching Rust.
-    /// Output is a JSON Schema (Draft 2020-12); exits zero on
-    /// success, non-zero on parse / validation failure or unknown
-    /// transformation. No `--json` flag because the output IS
-    /// JSON.
+    /// Emit a JSON Schema describing a named transformation's argument
+    /// object, or (with `--intent <Type>`) an emitted intent's payload
+    /// object. Thin wrapper over the library's `transformation_arg_schema`
+    /// / `intent_arg_schema`: parse, validate, render. The schema is the
+    /// public contract a non-Rust embedder uses to validate request
+    /// bodies, generate input forms, decode an outbox payload by name, or
+    /// derive typed client models without touching Rust. Output is a JSON
+    /// Schema (Draft 2020-12); exits zero on success, non-zero on parse /
+    /// validation failure or an unknown transformation / intent. No
+    /// `--json` flag because the output IS JSON.
     Schema(SchemaArgs),
 }
 

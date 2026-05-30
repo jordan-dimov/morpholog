@@ -188,9 +188,11 @@ fn expected_json_type(kind: PredicateArgKind) -> Value {
 
 /// The intent-payload dual of the transformation-arg schema tests: a
 /// deliverer decodes `TradeSettlementRequested` by name from this
-/// contract instead of by hand-coded position. Declaration order
-/// (`settlement_id`, `trade`, `settled_qty`) is the positional order the
-/// emitted payload arrives in, so `required[]` order is load-bearing.
+/// contract instead of by hand-coded position. The positional order the
+/// emitted payload arrives in (`settlement_id`, `trade`, `settled_qty`)
+/// is carried by `x-morpholog-arg-order`; `required` only mirrors the
+/// same names as the validation keyword. `assert_param_types` checks
+/// both.
 #[test]
 fn trade_settlement_requested_intent_schema_pins_payload() {
     let program = trade_lifecycle::program();

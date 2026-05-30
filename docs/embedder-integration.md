@@ -90,6 +90,7 @@ Shape:
   "type": "object",
   "additionalProperties": false,
   "required": ["trade", "commodity", ...],
+  "x-morpholog-arg-order": ["trade", "commodity", ...],
   "properties": {
     "trade": { "type": "string", "format": "uuid", "description": "..." },
     ...
