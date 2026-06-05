@@ -150,6 +150,14 @@ Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate
 
 Read-only. Exit code is always zero on a parsed-and-validated programme, whether the verdict is admissible or rejected; explaining is answering a question, not taking an action. Only operational failures exit non-zero.
 
+### `morpholog inspect claims --predicate`
+
+The targeted read of governed state, for building a transition's arguments from claims the embedder did not itself mint (the in-force pointer after a correction, say). `--predicate <Name>` repeats; the result is only claims of the named predicates. Composes with `--as-of <transition_id>` for the historical equivalent, where it scopes the replay itself rather than filtering afterwards.
+
+Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [<tagged values>]}` - the same tagged-value encoding as the `--args` codec and intent payloads. The args are positional; to decode them by field name, read the predicate's declared argument order from `morpholog inspect predicates <file>` (the read-side analogue of `x-morpholog-arg-order` - never hard-code positions). An unknown predicate name yields an empty array, not an error: the claims table is the authority, not any one programme's vocabulary, so a typo is indistinguishable from a true zero by design.
+
+Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering; argument-level selection is deliberately left open below.
+
 ## Stability and what is not pinned
 
 What this document promises:
@@ -158,11 +166,12 @@ What this document promises:
 - The `morpholog schema` output shape, for both transformation arguments and (`--intent`) intent payloads.
 - The `morpholog run` outcome shape, traced and untraced.
 - The `morpholog explain --json` Explanation shape.
+- The `morpholog inspect claims --predicate` claim-object shape (predicate name plus tagged positional args).
 - Exit-code semantics for `run` and `explain`.
 
 What is deliberately left open, pending the worked example that forces the shape:
 
-- **A targeted read of current governed state.** The `examples/etrm_embedder/` worked embedder surfaced this: to build a transition's arguments from state it did not itself mint (the in-force official-price id after a correction, a remaining settleable quantity), an embedder needs to read current claims back. Today the only reads are `inspect derived` (whole derived-claim relations) and `explain` (one verdict); there is no targeted "claims of predicate P matching these args" query. Forced by the example, deferred to its own PR - the query shape (predicate + argument filter, output envelope) needs its own design.
+- **Argument-level claim selection.** `inspect claims --predicate` (forced by the `examples/etrm_embedder/` worked embedder) reads claims back at predicate granularity; picking one subject's claims out of the result is client-side. A `--where trade=t1`-style filter waits for an example with a book big enough that the predicate-level cut is not enough.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
 - **The `morpholog inspect` output shapes.** Varied across the inspect subcommands; their own contract document, when one is forced.
 - **Result schema generation (a `morpholog schema --result` mode).** The outcome envelope is uniform across transformations, so a documented spec covers it. Auto-generation waits for a real consumer that needs to discriminate dynamically.
