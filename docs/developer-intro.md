@@ -42,9 +42,11 @@ checks. If a transformation's result would violate an invariant, the whole thing
 is refused and the database is byte-for-byte what it was before.
 
 The third idea is the one that has no familiar name, so hold it lightly for now:
-Morpholog does not store *entities*. There are no tables-of-objects, no ORM
-classes, no `Invoice` row you `UPDATE` in place. It stores **claims** - small
-statements it has agreed to admit because they obey the rules. A claim is much
+Morpholog stores **claims**, not *entities*. There is no table-of-objects, no
+ORM class, no `Invoice` row you `UPDATE` in place. Your application keeps its
+domain nouns - invoices, trades, assets - and Morpholog stores the admitted
+claims about them: small statements it has agreed to admit because they obey
+the rules, the ones your system is prepared to stand behind. A claim is much
 like a row; the difference is that you never edit one. You admit new claims and
 retract old ones, and the history of what was admitted is the system of record.
 That sounds austere. By the end of this guide it will be the thing you did not
@@ -64,8 +66,10 @@ psql morpholog_intro -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL=postgres:///morpholog_intro
 ```
 
-That is all. The schema you just loaded is Morpholog's own - a claims table, an
-audit table, an outbox. You will never design a table in this guide.
+The setup is deliberately explicit - install the CLI, create a disposable
+database, load the schema, point the CLI at it - so you can see there is no
+magic underneath. The schema you just loaded is Morpholog's own - a claims
+table, an audit table, an outbox. You will never design a table in this guide.
 
 ## Your first program
 
@@ -74,9 +78,11 @@ that a bank relies on, and that later turns out to need correcting.** It is the
 kind of thing every finance system has, and the kind of thing that, done
 casually, quietly corrupts your audit trail.
 
-A Morpholog program is one `.morph` file. Save this as `revenue.morph`. We will
-walk through it piece by piece; the whole file is here so you can run it as we
-go.
+A Morpholog program is one `.morph` file, and we will build it in sections. If
+you would rather have a runnable file from the start, paste
+[the complete `revenue.morph`](#the-complete-revenuemorph) from the end of this
+guide into your working directory now and read along; the snippets below are
+the same file, taken a piece at a time.
 
 ### The vocabulary
 
@@ -214,9 +220,10 @@ transformation correct_revenue(asset, period, new_amount, new_figure_id, prior_f
     emit RevenueCorrected(new_figure_id, prior_figure_id)
 ```
 
-(You will also need the three `intent` declarations the `emit` lines refer to;
-they are in the runnable copy at the end. An `intent` is an outbound
-notification staged at commit and delivered afterward - ignore them for now.)
+(If you are building the file up section by section, also copy the `intent`
+declarations the `emit` lines refer to from the complete file at the end. An
+`intent` is an outbound notification staged at commit and delivered
+afterward - ignore them for now.)
 
 Before running anything, check that the program is well-formed:
 
@@ -486,8 +493,10 @@ if receipt["status"] == "rejected":
     ...  # show receipt["reason"], or ask `morpholog explain` what is missing
 ```
 
-A business refusal is data, not an exception - your endpoint turns it into a
-422 with the reason attached. A worked version of exactly this pattern, driving
+A business refusal is data, not an exception - which is why the snippet does
+not pass `check=True`: a refusal exits non-zero but still writes the structured
+receipt to stdout, and `check=True` would raise before you ever read it. Your
+endpoint turns the rejection into a 422 with the reason attached. A worked version of exactly this pattern, driving
 a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
 contract in [`embedder-integration.md`](embedder-integration.md).
