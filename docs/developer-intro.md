@@ -19,9 +19,9 @@ where the question *"may this be admitted as a valid record?"* needs a definite,
 provable answer. Think of it the way you think of SQL - a small, foreign-looking
 thing you reach for one job, used alongside the language you already write.
 
-## The one idea, in terms you already have
+## The core ideas, in terms you already have
 
-You already know two of Morpholog's three core ideas under different names.
+Most of Morpholog's core ideas you already know under different names.
 
 **A SQL `CHECK` constraint is an invariant the database enforces no matter which
 code path writes the row.** That is its whole appeal: it does not matter whether
@@ -41,7 +41,8 @@ other door. No `UPDATE` from a forgotten script, no direct write that skips the
 checks. If a transformation's result would violate an invariant, the whole thing
 is refused and the database is byte-for-byte what it was before.
 
-The third idea is the one that has no familiar name, so hold it lightly for now:
+The remaining idea is the one that has no familiar name, so hold it lightly for
+now:
 Morpholog stores **claims**, not *entities*. There is no table-of-objects, no
 ORM class, no `Invoice` row you `UPDATE` in place. Your application keeps its
 domain nouns - invoices, trades, assets - and Morpholog stores the admitted
@@ -175,7 +176,7 @@ is the same flavour, so let us get to the interesting part.
 
 ### The ways state can change
 
-Three transformations. Each `admit`s claims, `retract`s claims, and `emit`s a
+Now the transformations. Each `admit`s claims, `retract`s claims, and `emit`s a
 notification; a `require` is a gate checked at the moment of the action.
 
 ```morph
@@ -438,12 +439,12 @@ its proposal, and try again.
 
 Step back and notice what you did *not* write. No bitemporal schema. No
 version-tracking trigger. No `validate_revenue()` that some code path could skip.
-No reconciliation job to catch the cases the validation missed. You wrote four
-kinds of claim, two rules, and three transformations - and got correction without
-overwrite, point-in-time reconstruction, an audit trail that is the system of
-record rather than a sidecar, and a refusal that explains itself.
+No reconciliation job to catch the cases the validation missed. Everything you
+did write fits on one screen - and it bought you correction without overwrite,
+point-in-time reconstruction, an audit trail that is the system of record
+rather than a sidecar, and a refusal that explains itself.
 
-Now the three core ideas have names you have *felt*:
+Now the core ideas have names you have *felt*:
 
 - **State is admitted claims, not facts.** You never overwrote the figure
   because you never had a figure to overwrite - only claims about it, each
@@ -509,7 +510,7 @@ fraction that, when it goes wrong, makes the news.
 
 ## Poke the model
 
-The fastest way to trust an admission boundary is to try to get past it. Three
+The fastest way to trust an admission boundary is to try to get past it. A few
 things to try with the program you already have:
 
 1. **Run a covenant test against the corrected figure** - `f2`, amount `1200`.
