@@ -211,10 +211,10 @@ pub(crate) struct OutboxReleaseArgs {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Inspect {
-    /// List currently-admitted claims, or claims as they were at a
-    /// past `transition_id` via `--as-of`. A repeatable `--predicate
-    /// <Name>` narrows either read to the named predicates - the
-    /// targeted query an embedder uses to read governed state back.
+    /// List currently-admitted claims, or claims as they were at a past
+    /// `transition_id` via `--as-of`. A repeatable `--predicate <Name>`
+    /// narrows either read to the named predicates - the targeted query
+    /// an embedder uses to read governed state back.
     Claims(InspectClaimsArgs),
     /// List every committed audit row, in commit order. `--as-of` does
     /// not apply: the audit table IS the chronological record. For a

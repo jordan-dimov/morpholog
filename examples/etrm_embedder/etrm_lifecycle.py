@@ -99,8 +99,12 @@ class Morpholog:
         )
     def predicate_fields(self, predicate: str) -> list[str]:
         decls = self._json("inspect", "predicates", self.file)
-        return next(
-            [a["name"] for a in d["args"]] for d in decls if d["name"] == predicate
+        for d in decls:
+            if d["name"] == predicate:
+                return [a["name"] for a in d["args"]]
+        raise MorphologError(
+            f"predicate {predicate!r} is not declared in {self.file}; "
+            f"declared: {sorted(d['name'] for d in decls)}"
         )
     def claim(self, intent_type: str) -> dict | None:
         return self._json(
@@ -133,12 +137,18 @@ def read_claims(morph: Morpholog, predicate: str) -> list[dict]:
     """The read side of the contract: currently-admitted claims of one
     predicate, decoded to named fields via the declared vocabulary - the
     same no-hard-coded-positions rule `decode_payload` applies to intent
-    payloads."""
+    payloads, with the same arity guard against programme/database skew."""
     fields = morph.predicate_fields(predicate)
-    return [
-        dict(zip(fields, (a["value"] for a in c["args"]), strict=True))
-        for c in morph.claims(predicate)
-    ]
+    rows = []
+    for c in morph.claims(predicate):
+        values = [a["value"] for a in c["args"]]
+        if len(values) != len(fields):
+            raise MorphologError(
+                f"{predicate}: claim arity {len(values)} != declared arity {len(fields)} "
+                f"(programme/database skew); fields={fields}, values={values}"
+            )
+        rows.append(dict(zip(fields, values, strict=True)))
+    return rows
 
 
 def deliver(morph: Morpholog, outcome: dict) -> None:
