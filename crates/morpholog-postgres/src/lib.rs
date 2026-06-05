@@ -622,6 +622,14 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     .await
     .map_err(classify)?;
 
+    decode_claim_rows(rows)
+}
+
+/// Decode `(predicate_name, arguments)` rows into `ClaimInstance`s -
+/// the shared tail of the current-claims listings.
+fn decode_claim_rows(
+    rows: Vec<(String, serde_json::Value)>,
+) -> Result<Vec<ClaimInstance>, PgError> {
     rows.into_iter()
         .map(|(predicate, args_json)| {
             Ok(ClaimInstance {
@@ -660,14 +668,7 @@ pub async fn list_claims_for_predicates(
     .await
     .map_err(classify)?;
 
-    rows.into_iter()
-        .map(|(predicate, args_json)| {
-            Ok(ClaimInstance {
-                predicate: PredicateName::from(predicate),
-                args: serde_json::from_value(args_json)?,
-            })
-        })
-        .collect()
+    decode_claim_rows(rows)
 }
 
 /// Load the current scoped pre-state a transformation would see, the

@@ -8,7 +8,7 @@ It runs against [`../10_trade_lifecycle/trade_lifecycle.morph`](../10_trade_life
 
 ## Why it exists
 
-A worked example here earns its place by forcing the next improvement, not by looking polished. This one was written to lean on the contract's edges the way a real integration does, and it does two useful things at once.
+A worked example here earns its place by forcing the next improvement, not by looking polished. This one was written to lean on the contract's edges the way a real integration does.
 
 **It uses what the kernel already offers.** The embedder never hard-codes a transformation's parameters: it asks `morpholog schema` and builds the request from the answer. It distinguishes a lawful business rejection (`run` exits 1 with a `rejected` outcome - the over-cap second settlement) from an operational failure, and it asks `morpholog explain` *why* a settlement would be refused before the trade is confirmed, getting back the exact missing gate. The whole lifecycle, including the post-commit delivery of every emitted intent, goes through the CLI alone.
 
