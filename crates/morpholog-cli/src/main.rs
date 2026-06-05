@@ -15,8 +15,9 @@
 //! - `parse` - read a `.morph` source file and print the parsed
 //!   `Program` as JSON. No database connection.
 //! - `check` - parse a `.morph` source file and run
-//!   `Program::validate()` against the IR. Silent on clean input;
-//!   uniform diagnostics on parse or validation failure.
+//!   `Program::validate()` against the IR. Silent on clean input
+//!   (`--verbose` opts into a summary); uniform diagnostics on parse
+//!   or validation failure.
 //!
 //! [`Program`]: morpholog_core::Program
 //!
@@ -58,10 +59,11 @@ enum Command {
     /// runs `Program::validate()` against the IR: declarations and arity
     /// for predicates and intents, kind/type compatibility, binding flow
     /// (unbound variables), expression shape, actor context, and a
-    /// nesting-depth bound. Exits zero on a clean programme; exits one
-    /// with uniform diagnostics on either a parse or a validation
-    /// failure.
-    Check(SourceFileArgs),
+    /// nesting-depth bound. Exits zero on a clean programme - silently by
+    /// default, or with a one-screen summary of what validated under
+    /// `--verbose`; exits one with uniform diagnostics on either a parse
+    /// or a validation failure.
+    Check(CheckArgs),
 
     /// Propose a transformation defined in a `.morph` source file against
     /// a Morpholog PostgreSQL database. Parses and validates the source,
@@ -357,11 +359,26 @@ impl InspectOutboxStatus {
 }
 
 /// Arguments for any subcommand whose only input is a `.morph` source
-/// file (`parse` and `check`). No database connection.
+/// file (`parse`). No database connection.
 #[derive(clap::Args, Debug)]
 pub(crate) struct SourceFileArgs {
     /// Path to a `.morph` source file.
     pub(crate) file: PathBuf,
+}
+
+/// Arguments for `check`: a `.morph` source file plus the optional
+/// summary flag. Success stays silent by default - scripts rely on
+/// the empty-streams contract - so the reassurance a first-time user
+/// wants is opt-in rather than the script-facing default.
+#[derive(clap::Args, Debug)]
+pub(crate) struct CheckArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    /// Print a one-screen summary of the validated programme: its name
+    /// and the count of each declaration kind.
+    #[arg(short, long)]
+    pub(crate) verbose: bool,
 }
 
 /// Arguments for `schema`. A `.morph` source file plus exactly one of:
@@ -1027,6 +1044,29 @@ mod tests {
             panic!("expected Command::Parse, got {:?}", cli.command);
         };
         assert_eq!(args.file.as_os_str(), "demo.morph");
+    }
+
+    /// `check -v` parses to `CheckArgs { verbose: true }`. Pins the
+    /// short form alongside the long one.
+    #[test]
+    fn check_with_verbose_flag_parses() {
+        let cli = Cli::parse_from(["morpholog", "check", "demo.morph", "-v"]);
+        let Command::Check(args) = cli.command else {
+            panic!("expected Command::Check, got {:?}", cli.command);
+        };
+        assert!(args.verbose, "expected -v to set verbose");
+        assert_eq!(args.file.as_os_str(), "demo.morph");
+    }
+
+    /// Without `--verbose`, `CheckArgs.verbose` defaults to false -
+    /// the silent-success contract scripts rely on stays the default.
+    #[test]
+    fn check_without_verbose_defaults_to_false() {
+        let cli = Cli::parse_from(["morpholog", "check", "demo.morph"]);
+        let Command::Check(args) = cli.command else {
+            panic!("expected Command::Check, got {:?}", cli.command);
+        };
+        assert!(!args.verbose, "expected verbose to default to false");
     }
 
     #[test]

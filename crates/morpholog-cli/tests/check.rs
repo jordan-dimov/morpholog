@@ -56,6 +56,70 @@ fn check_clean_program_exits_zero_with_no_output() {
 }
 
 #[test]
+fn check_verbose_clean_program_prints_summary() {
+    // A self-contained fixture so the asserted counts are intrinsic
+    // to the test, not coupled to a worked example that may grow.
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         intent Bar(x: Subject)\n\
+         invariant always: Foo(x) implies Foo(x)\n\
+         transformation t(x):\n    admit Foo(x)\n    emit Bar(x)\n",
+    );
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg("--verbose")
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let expected = format!(
+        "ok: {}\nprogram: demo\n  predicates: 1\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n",
+        tmp.path().display()
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        expected,
+        "verbose summary shape is part of the contract"
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "verbose clean check should not write to stderr; got:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn check_verbose_on_invalid_program_prints_no_summary() {
+    // The summary is a success artifact: a failing check must keep
+    // stdout empty even under --verbose, so scripts piping stdout
+    // never see a half-summary for a programme that did not validate.
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         invariant test: UndeclaredPred(x)\n",
+    );
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg("-v")
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(
+        out.stdout.is_empty(),
+        "failed check must not print a summary; got:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
 fn check_undeclared_predicate_reports_validation_error() {
     let tmp = temp_morph(
         "program demo\n\
