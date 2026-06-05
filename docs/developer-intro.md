@@ -459,6 +459,59 @@ Now the core ideas have names you have *felt*:
   not an invariant, is the whole reason the June test survived the July
   correction.
 
+## Reading state back
+
+Your application still has screens to render - "current revenue, by asset and
+period", say. Morpholog gives you both the raw read and the declared view.
+
+The raw read you have already used; it also narrows to exactly the predicates
+you ask for, which is how a service fetches governed state without dumping
+everything:
+
+```bash
+morpholog inspect claims --predicate CurrentFigure
+```
+
+But a screen does not want the pointer - it wants the joined answer: the
+asset, the period, the figure in force, and its amount. In SQL this is where
+you would write a view, and in a bigger system a read model someone has to
+keep in sync. In Morpholog you declare it next to the rules, and it is
+recomputed from the admitted claims every time it is asked for - a report
+that structurally cannot drift from the state it reports on. Add this to
+`revenue.morph`:
+
+```morph
+predicate CurrentRevenue(asset: Subject, period: Subject, figure_id: Subject, amount: Decimal)
+
+derived CurrentRevenue(asset, period, figure_id):
+    over CurrentFigure(asset, period, figure_id)
+    value amount = value Revenue(asset, period, _, figure_id)
+```
+
+Read it as: one row per in-force pointer, carrying the amount of the figure
+it points at - the `_` marks the slot being extracted. (`morpholog check -v`
+now reports `derived claims: 1`.) Ask for the view:
+
+```bash
+morpholog inspect derived revenue.morph CurrentRevenue
+```
+```
+CurrentRevenue ( battery_07, q1_2026, f2, 1200 )
+```
+
+And because the view is computed from claims, the time travel you already met
+applies to reports too:
+
+```bash
+morpholog inspect derived revenue.morph CurrentRevenue --as-of 019e937d-0e98-7790-897e-30500c744711
+```
+```
+CurrentRevenue ( battery_07, q1_2026, f1, 1000 )
+```
+
+That is last quarter's report, reproduced - not from a snapshot someone
+remembered to take, but recomputed from the audit log on demand.
+
 ## Where this fits in your stack
 
 Morpholog is not your whole system. You drove it through its CLI just now, with
@@ -540,6 +593,9 @@ Each refusal traces to a single `require` line you can point at in
 
 ### The complete `revenue.morph`
 
+This includes the read-side view from "Reading state back", so a fresh
+`morpholog check -v` on it reports `derived claims: 1`.
+
 ```morph
 program reported_revenue
 
@@ -547,6 +603,7 @@ predicate Revenue(asset: Subject, period: Subject, amount: Decimal, figure_id: S
 predicate CurrentFigure(asset: Subject, period: Subject, figure_id: Subject)
 predicate Supersedes(new_figure_id: Subject, prior_figure_id: Subject)
 predicate CovenantTest(test_id: Subject, asset: Subject, period: Subject, amount: Decimal, figure_id: Subject)
+predicate CurrentRevenue(asset: Subject, period: Subject, figure_id: Subject, amount: Decimal)
 
 intent RevenueReported(figure_id: Subject)
 intent RevenueCorrected(new_figure_id: Subject, prior_figure_id: Subject)
@@ -578,4 +635,8 @@ transformation run_covenant_test(test_id, asset, period, amount, figure_id):
     require CurrentFigure(asset, period, figure_id)
     admit CovenantTest(test_id, asset, period, amount, figure_id)
     emit CovenantTestRecorded(test_id)
+
+derived CurrentRevenue(asset, period, figure_id):
+    over CurrentFigure(asset, period, figure_id)
+    value amount = value Revenue(asset, period, _, figure_id)
 ```

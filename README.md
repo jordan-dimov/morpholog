@@ -133,6 +133,8 @@ morpholog check examples/01_settlement_netting/netting.morph
 
 `check` parses the file and runs `Program::validate()` against the IR - one command answers "is this program well-formed?" `parse` prints the parsed `Program` as JSON when you want to see the structure. `run` and `inspect` take a `.morph` file path and run against PostgreSQL once `DATABASE_URL` is set; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for local-database setup.
 
+New to Morpholog? [The developer introduction](docs/developer-intro.md) is the gentle, hands-on place to start - written for a developer who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the as-of replay that keeps both answers true.
+
 ## Status
 
 Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples are all working and tested. Every committed transition records its actor. Writes scale linearly (~1.6s per commit at 100,000-entry scale); as-of replay also linear (~1.5s for 100,000 transitions). Predicate-scoped loading on both read and write paths means a transformation only loads claims it actually consults.
