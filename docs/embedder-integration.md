@@ -156,7 +156,7 @@ The targeted read of governed state, for building a transition's arguments from 
 
 Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [<tagged values>]}` - the same tagged-value encoding as the `--args` codec and intent payloads. The args are positional; to decode them by field name, read the predicate's declared argument order from `morpholog inspect predicates <file>` (the read-side analogue of `x-morpholog-arg-order` - never hard-code positions). An unknown predicate name yields an empty array, not an error: the claims table is the authority, not any one programme's vocabulary, so a typo is indistinguishable from a true zero by design.
 
-Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering; argument-level selection is deliberately left open below.
+Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering, and a predicate read returns zero or more claims - multiplicity is the caller's to handle, except where the programme's own invariants pin it (a singleton in-force pointer, say), which is exactly what licenses a simple lookup. Argument-level selection is deliberately left open below.
 
 ## Stability and what is not pinned
 

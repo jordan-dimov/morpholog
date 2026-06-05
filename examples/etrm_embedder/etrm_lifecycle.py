@@ -211,6 +211,13 @@ def main() -> None:
     # would not know it. So settle the way that process would: read the
     # in-force pointer back through the targeted claim query, then look
     # up the figure it points at.
+    #
+    # A bare `next()` with no zero/many handling is deliberate. The
+    # programme's `at_most_one_current_official_price` invariant means two
+    # pointers for one trade is a state the runtime refuses to commit, and
+    # the confirm step just guaranteed one exists. The model's invariants
+    # are what license the simple read - governed state is not untrusted
+    # input to be defensively re-checked.
     print("6. read the in-force figure back, then settle a 60-lot slice against it")
     pointer = next(
         c for c in read_claims(morph, "CurrentOfficialPrice") if c["trade"] == trade

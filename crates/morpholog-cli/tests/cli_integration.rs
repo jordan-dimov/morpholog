@@ -257,6 +257,25 @@ async fn inspect_claims_predicate_filter_returns_only_matching_claims() {
             .all(|c| c["predicate"] == "JournalEntry" || c["predicate"] == "JournalLine"),
         "repeated filter must still exclude other predicates: {stdout}"
     );
+
+    // Naming the same predicate twice does not duplicate rows: the
+    // filter is a membership test, not a per-flag scan. Pins the
+    // public contract, not just today's SQL.
+    let (status, stdout, _stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalEntry",
+        "--predicate",
+        "JournalEntry",
+    ]);
+    assert!(status.success());
+    let claims: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        claims.as_array().unwrap().len(),
+        1,
+        "duplicate --predicate flags must not duplicate results: {stdout}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
