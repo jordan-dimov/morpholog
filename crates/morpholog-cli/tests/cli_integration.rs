@@ -215,6 +215,111 @@ async fn inspect_claims_as_of_a_prior_transition_returns_state_at_that_point() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_predicate_filter_returns_only_matching_claims() {
+    reset_db().await;
+    // One balanced entry admits one JournalEntry and two JournalLine
+    // claims, so the filtered reads have known shapes.
+    post_balanced_entry("entry_001", 100);
+
+    let (status, stdout, stderr) = run_cli(&["inspect", "claims", "--predicate", "JournalEntry"]);
+    assert!(
+        status.success(),
+        "filtered inspect should succeed; {stderr}"
+    );
+    let claims: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let array = claims.as_array().expect("filtered claims are an array");
+    assert_eq!(array.len(), 1, "one JournalEntry expected: {stdout}");
+    assert!(
+        array.iter().all(|c| c["predicate"] == "JournalEntry"),
+        "filter must exclude every other predicate: {stdout}"
+    );
+
+    // The flag repeats: both predicates come back, nothing else does.
+    let (status, stdout, _stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalEntry",
+        "--predicate",
+        "JournalLine",
+    ]);
+    assert!(status.success());
+    let claims: Value = serde_json::from_str(&stdout).unwrap();
+    let array = claims.as_array().unwrap();
+    assert_eq!(
+        array.len(),
+        3,
+        "one JournalEntry plus two JournalLines: {stdout}"
+    );
+    assert!(
+        array
+            .iter()
+            .all(|c| c["predicate"] == "JournalEntry" || c["predicate"] == "JournalLine"),
+        "repeated filter must still exclude other predicates: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_predicate_filter_composes_with_as_of() {
+    reset_db().await;
+    let first_tid = post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 200);
+
+    // Current filtered state: both entries' JournalEntry claims.
+    let (_status, stdout, _stderr) = run_cli(&["inspect", "claims", "--predicate", "JournalEntry"]);
+    let now: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        now.as_array().unwrap().len(),
+        2,
+        "two entries now: {stdout}"
+    );
+
+    // As-of the first transition, the same filter sees only the first.
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--as-of",
+        &first_tid.to_string(),
+        "--predicate",
+        "JournalEntry",
+    ]);
+    assert!(
+        status.success(),
+        "filtered as-of inspect should succeed; {stderr}"
+    );
+    let then: Value = serde_json::from_str(&stdout).expect("as-of stdout is JSON");
+    let array = then.as_array().unwrap();
+    assert_eq!(array.len(), 1, "one entry as of the first commit: {stdout}");
+    assert!(
+        array.iter().all(|c| c["predicate"] == "JournalEntry"),
+        "as-of filter must exclude other predicates: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_unknown_predicate_returns_empty_array() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    // The claims table is the authority, not a programme's vocabulary:
+    // a predicate with no admitted claims is an empty result, not an
+    // error. (A typo'd name is indistinguishable from a true zero, by
+    // design - `inspect claims` takes no `.morph` file to check against.)
+    let (status, stdout, stderr) =
+        run_cli(&["inspect", "claims", "--predicate", "NoSuchPredicate"]);
+    assert!(
+        status.success(),
+        "unknown predicate should still exit zero; {stderr}"
+    );
+    let claims: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(
+        claims.as_array().expect("an array").len(),
+        0,
+        "unknown predicate yields an empty array: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inspect_audit_returns_one_row_per_committed_transition() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);

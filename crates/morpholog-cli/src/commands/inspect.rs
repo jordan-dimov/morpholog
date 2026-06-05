@@ -4,7 +4,8 @@
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
-    list_audit_rows, list_claims, list_claims_at, list_derived, list_derived_at, list_outbox_rows,
+    list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
+    list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
 };
 
 use crate::Inspect;
@@ -17,11 +18,21 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     match what {
         Inspect::Claims(args) => {
             let pool = connect(&args.database_url).await?;
-            let claims = match args.as_of {
-                Some(tid) => list_claims_at(&pool, tid)
+            // Four paths, one rule: `--as-of` picks current-vs-replay,
+            // `--predicate` picks full-vs-scoped. The scoped replay
+            // filters during reconstruction, not after, so a targeted
+            // historical read never materialises the full past state.
+            let claims = match (args.as_of, args.predicate.as_slice()) {
+                (Some(tid), []) => list_claims_at(&pool, tid)
                     .await
                     .context("list_claims_at failed")?,
-                None => list_claims(&pool).await.context("list_claims failed")?,
+                (Some(tid), preds) => list_claims_at_for_predicates(&pool, tid, preds)
+                    .await
+                    .context("list_claims_at_for_predicates failed")?,
+                (None, []) => list_claims(&pool).await.context("list_claims failed")?,
+                (None, preds) => list_claims_for_predicates(&pool, preds)
+                    .await
+                    .context("list_claims_for_predicates failed")?,
             };
             print_json(&claims)
         }

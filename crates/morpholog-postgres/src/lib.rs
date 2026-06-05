@@ -1592,6 +1592,27 @@ pub async fn list_claims_at(
     Ok(state.claims().to_vec())
 }
 
+/// Returns the claims of the given predicates admitted as of
+/// `transition_id` - the historical counterpart of
+/// [`list_claims_for_predicates`], replaying only the named
+/// predicates rather than reconstructing the full state and
+/// filtering after.
+///
+/// Empty `predicates` still validates that `transition_id` exists
+/// (an unknown id is [`PgError::TransitionNotFound`], same as the
+/// unscoped read) and then returns no claims: an empty footprint is
+/// meaningful, not an error. Unknown predicate names simply match
+/// nothing - the claims table is the authority here, not any
+/// programme's declared vocabulary.
+pub async fn list_claims_at_for_predicates(
+    pool: &PgPool,
+    transition_id: Uuid,
+    predicates: &[String],
+) -> Result<Vec<ClaimInstance>, PgError> {
+    let state = reconstruct_state_at_for_predicates(pool, transition_id, predicates).await?;
+    Ok(state.claims().to_vec())
+}
+
 /// Enumerate a derived claim's extension against the state that
 /// existed immediately after `transition_id` committed.
 ///
