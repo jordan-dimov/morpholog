@@ -211,8 +211,10 @@ pub(crate) struct OutboxReleaseArgs {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Inspect {
-    /// List currently-admitted claims, or claims as they were at a
-    /// past `transition_id` via `--as-of`.
+    /// List currently-admitted claims, or claims as they were at a past
+    /// `transition_id` via `--as-of`. A repeatable `--predicate <Name>`
+    /// narrows either read to the named predicates - the targeted query
+    /// an embedder uses to read governed state back.
     Claims(InspectClaimsArgs),
     /// List every committed audit row, in commit order. `--as-of` does
     /// not apply: the audit table IS the chronological record. For a
@@ -265,7 +267,8 @@ pub(crate) struct InspectGuaranteesArgs {
 }
 
 /// Arguments for `inspect claims`. Like the shared `InspectArgs` plus
-/// an optional `--as-of` for historical claim listing.
+/// an optional `--as-of` for historical claim listing and a repeatable
+/// `--predicate` filter for targeted reads.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectClaimsArgs {
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
@@ -278,6 +281,16 @@ pub(crate) struct InspectClaimsArgs {
     /// named transition. Unknown ids return `TransitionNotFound`.
     #[arg(long)]
     pub(crate) as_of: Option<Uuid>,
+
+    /// Optional, repeatable: return only claims of these predicates -
+    /// the targeted read an embedder uses to fetch governed state back
+    /// (e.g. the in-force pointer claim) instead of the whole claim
+    /// set. Composes with `--as-of`, where it also scopes the replay
+    /// itself. An unknown predicate name matches nothing and yields an
+    /// empty result, not an error: the claims table is the authority,
+    /// not any one programme's vocabulary.
+    #[arg(long = "predicate")]
+    pub(crate) predicate: Vec<String>,
 }
 
 /// Arguments for `inspect derived`.
@@ -643,6 +656,48 @@ mod tests {
             Some(Uuid::parse_str(tid).unwrap()),
             "--as-of must parse into Some(Uuid)"
         );
+    }
+
+    /// `--predicate` repeats into a Vec, in argv order; without it the
+    /// filter defaults to empty (the unfiltered read stays the default).
+    #[test]
+    fn inspect_claims_predicate_flag_repeats_into_vec() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--predicate",
+            "OfficialPrice",
+            "--predicate",
+            "CurrentOfficialPrice",
+        ]);
+        let Command::Inspect {
+            what: Inspect::Claims(args),
+        } = cli.command
+        else {
+            panic!("expected Inspect::Claims, got {:?}", cli.command);
+        };
+        assert_eq!(args.predicate, ["OfficialPrice", "CurrentOfficialPrice"]);
+    }
+
+    #[test]
+    fn inspect_claims_without_predicate_defaults_to_empty_filter() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Inspect {
+            what: Inspect::Claims(args),
+        } = cli.command
+        else {
+            panic!("expected Inspect::Claims, got {:?}", cli.command);
+        };
+        assert!(args.predicate.is_empty(), "no flag means no filter");
     }
 
     /// `inspect claims --as-of <garbage>` is rejected by clap's

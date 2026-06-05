@@ -4,7 +4,7 @@ The other examples here are `.morph` programmes - the rules an auditor reads. Th
 
 > grant the desk its authority -> capture the trade -> confirm it and set the official price -> correct that price -> settle against the corrected figure.
 
-It runs against [`../10_trade_lifecycle/trade_lifecycle.morph`](../10_trade_lifecycle/) using only the public contract in [`docs/embedder-integration.md`](../../docs/embedder-integration.md): `morpholog schema` to learn the input shape, `morpholog run` to commit, `morpholog explain` to ask why a transition would be refused, and `morpholog outbox claim` / `complete` to deliver the intents each commit emits.
+It runs against [`../10_trade_lifecycle/trade_lifecycle.morph`](../10_trade_lifecycle/) using only the public contract in [`docs/embedder-integration.md`](../../docs/embedder-integration.md): `morpholog schema` to learn the input shape, `morpholog run` to commit, `morpholog explain` to ask why a transition would be refused, `morpholog inspect claims --predicate` to read governed state back, and `morpholog outbox claim` / `complete` to deliver the intents each commit emits.
 
 ## Why it exists
 
@@ -14,7 +14,7 @@ A worked example here earns its place by forcing the next improvement, not by lo
 
 **It forced the piece that was missing.** To *deliver* an emitted intent - to turn `TradeSettlementRequested` into a downstream payment request - a deliverer has to read the intent's payload. That payload arrives as positional, tagged values with no field names. An earlier draft of this example had to hard-code "argument 0 is the settlement id, argument 1 is the trade, argument 2 is the quantity" for every intent it consumed - exactly the contract drift a schema exists to prevent. So this example forced `morpholog schema --intent <Type>`, the payload dual of the transformation-argument schema, and the PR that adds the example adds that subcommand with it. The hand-coding is gone; the embedder decodes intents by name from their declared contract.
 
-What it still cannot do cleanly is recorded as friction the example prints at the end: to build a transition from state it did not itself mint, an embedder needs to *read current governed state back*, and there is no targeted claim query yet. That is the next pressure this example puts on the interface.
+It also forced the read side. To settle against a price it did not itself mint - the position of any resumed process or separate service - an embedder has to *read current governed state back*, and an earlier draft could only record that as friction. It forced `morpholog inspect claims --predicate`, the targeted claim query, and the settle step now discovers the in-force figure through it (decoding the positional claim args by declared field name via `inspect predicates`, never by hard-coded position). The residual friction, printed at the end, is that selection stops at predicate granularity: picking *this trade's* pointer out of the result is client-side, and an argument-level filter waits for an example with a book big enough to force it.
 
 ## Running it
 

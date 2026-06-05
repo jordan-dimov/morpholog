@@ -11,8 +11,9 @@ trade through its whole governed life against
 
 using only the public surface in `docs/embedder-integration.md`:
 `morpholog schema` to learn a contract, `run` to commit, `explain` to
-diagnose a refusal, and `outbox claim`/`complete` to deliver the intents
-each commit emits.
+diagnose a refusal, `inspect claims --predicate` to read governed state
+back, and `outbox claim`/`complete` to deliver the intents each commit
+emits.
 
 It is written to lean on the contract's edges, not glide over them: it
 forced `morpholog schema --intent` (so a deliverer decodes payloads by
@@ -37,14 +38,14 @@ MORPH_FILE = REPO_ROOT / "examples" / "10_trade_lifecycle" / "trade_lifecycle.mo
 SCHEMA_SQL = REPO_ROOT / "crates" / "morpholog-core" / "sql" / "schema.sql"
 
 # The friction this lifecycle still hits, printed at the end. (Decoding
-# emitted intents used to be friction too; this example forced
-# `morpholog schema --intent`, which resolved it.)
+# emitted intents used to be friction; it forced `morpholog schema
+# --intent`. Reading governed state back used to be friction; it forced
+# `inspect claims --predicate`.)
 READ_SURFACE_FRICTION = (
-    "Building the next transition needs current governed state - here, the in-force "
-    "official_price_id after a correction. This embedder gets away with tracking ids it "
-    "minted itself; a resumed or separate process could not. There is no targeted read "
-    "of current claims, only `inspect derived` and `explain`. Forces a governed read "
-    "surface, e.g. `morpholog inspect claims <Predicate> --where ...`."
+    "The targeted read stops at predicate granularity: picking THIS trade's pointer out "
+    "of `inspect claims --predicate CurrentOfficialPrice` is client-side filtering. Fine "
+    "at this scale; argument-level selection (e.g. `--where trade=t1`) awaits an example "
+    "with a book big enough to force it."
 )
 
 
@@ -62,7 +63,7 @@ class Morpholog:
         self.database_url = database_url
         self.binary = binary
 
-    def _json(self, *args: str) -> dict:
+    def _json(self, *args: str) -> dict | list:
         proc = subprocess.run([self.binary, *args], capture_output=True, text=True)
         # The contract puts the result on stdout - a committed or rejected
         # outcome, a schema, an outbox row - even when a non-zero exit flags
@@ -90,6 +91,21 @@ class Morpholog:
             "--actor", actor, "--args-named", json.dumps(args),
             "--json", "--database-url", self.database_url,
         )
+    def claims(self, *predicates: str) -> list:
+        flags = [flag for p in predicates for flag in ("--predicate", p)]
+        return self._json(
+            "inspect", "claims", *flags,
+            "--database-url", self.database_url,
+        )
+    def predicate_fields(self, predicate: str) -> list[str]:
+        decls = self._json("inspect", "predicates", self.file)
+        for d in decls:
+            if d["name"] == predicate:
+                return [a["name"] for a in d["args"]]
+        raise MorphologError(
+            f"predicate {predicate!r} is not declared in {self.file}; "
+            f"declared: {sorted(d['name'] for d in decls)}"
+        )
     def claim(self, intent_type: str) -> dict | None:
         return self._json(
             "outbox", "claim", "--intent-type", intent_type,
@@ -115,6 +131,24 @@ def decode_payload(morph: Morpholog, intent_type: str, args: list[dict]) -> dict
             f"(schema/payload skew); fields={order}, values={values}"
         )
     return dict(zip(order, values, strict=True))
+
+
+def read_claims(morph: Morpholog, predicate: str) -> list[dict]:
+    """The read side of the contract: currently-admitted claims of one
+    predicate, decoded to named fields via the declared vocabulary - the
+    same no-hard-coded-positions rule `decode_payload` applies to intent
+    payloads, with the same arity guard against programme/database skew."""
+    fields = morph.predicate_fields(predicate)
+    rows = []
+    for c in morph.claims(predicate):
+        values = [a["value"] for a in c["args"]]
+        if len(values) != len(fields):
+            raise MorphologError(
+                f"{predicate}: claim arity {len(values)} != declared arity {len(fields)} "
+                f"(programme/database skew); fields={fields}, values={values}"
+            )
+        rows.append(dict(zip(fields, values, strict=True)))
+    return rows
 
 
 def deliver(morph: Morpholog, outcome: dict) -> None:
@@ -177,27 +211,43 @@ def main() -> None:
         trade=trade, counterparty="acme", confirmation_id="conf1",
         official_price_id="op1", confirmed_price="45.20",
     ))
-    # We minted op1/op2 ourselves, so we know the in-force price is now op2.
-    # An embedder that did not - a resumed process, a separate service -
-    # would have to read the current official_price_id back, and there is
-    # no targeted query for that (see the friction note at the end).
     print("5. the official price is corrected (restatement; prior settlements stand)")
     deliver(morph, morph.run(
         "correct_official_price", desk,
         trade=trade, prior_official_price_id="op1",
         new_official_price_id="op2", corrected_price="46.00",
     ))
-    print("6. settle a 60-lot slice against the corrected price op2")
+    # We minted op2 ourselves, but a resumed process or separate service
+    # would not know it. So settle the way that process would: read the
+    # in-force pointer back through the targeted claim query, then look
+    # up the figure it points at.
+    #
+    # A bare `next()` with no zero/many handling is deliberate. The
+    # programme's `at_most_one_current_official_price` invariant means two
+    # pointers for one trade is a state the runtime refuses to commit, and
+    # the confirm step just guaranteed one exists. The model's invariants
+    # are what license the simple read - governed state is not untrusted
+    # input to be defensively re-checked.
+    print("6. read the in-force figure back, then settle a 60-lot slice against it")
+    pointer = next(
+        c for c in read_claims(morph, "CurrentOfficialPrice") if c["trade"] == trade
+    )
+    in_force = pointer["official_price_id"]
+    figure = next(
+        c for c in read_claims(morph, "OfficialPrice")
+        if c["trade"] == trade and c["official_price_id"] == in_force
+    )
+    print(f"    in-force official price for {trade}: {figure['price']} under {in_force}")
     deliver(morph, morph.run(
         "settle_trade", desk,
         trade=trade, settled_qty="60", settlement_id="s1",
-        official_price_id="op2", effective_on="2026-06-30",
+        official_price_id=in_force, effective_on="2026-06-30",
     ))
     print("7. an over-cap second settlement (60 + 60 > 100) is refused")
     over = morph.run(
         "settle_trade", desk,
         trade=trade, settled_qty="60", settlement_id="s2",
-        official_price_id="op2", effective_on="2026-06-30",
+        official_price_id=in_force, effective_on="2026-06-30",
     )
     print(f"    settle_trade(s2) -> {json.dumps(over)}")
 
