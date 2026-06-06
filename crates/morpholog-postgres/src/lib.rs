@@ -82,6 +82,13 @@ pub enum PgError {
          outbox idempotency keys collided"
     )]
     DuplicateIntent,
+    /// An `--as-of` timestamp earlier than every committed transition:
+    /// there is no state to reconstruct at or before that instant.
+    /// Distinct from [`PgError::TransitionNotFound`] because the caller
+    /// supplied a time, not an id, and the remedy differs (pick a later
+    /// instant vs fix a wrong id).
+    #[error("no transition committed at or before {0}")]
+    NoTransitionAtOrBefore(DateTime<Utc>),
 }
 
 /// The result of proposing a transformation against PostgreSQL.
@@ -1540,7 +1547,8 @@ pub async fn list_derived(
 ///
 /// Replay cost is O(transitions up to T).
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
-    reconstruct_inner(pool, transition_id, None).await
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    reconstruct_inner(&mut conn, transition_id, None).await
 }
 
 /// Like [`reconstruct_state_at`] but only retains claims whose
@@ -1575,7 +1583,8 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
         return Ok(State::default());
     }
-    reconstruct_inner(pool, transition_id, Some(predicates)).await
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    reconstruct_inner(&mut conn, transition_id, Some(predicates)).await
 }
 
 /// Returns the claims admitted as of `transition_id`, in causal
@@ -1614,6 +1623,161 @@ pub async fn list_claims_at_for_predicates(
     Ok(state.claims().to_vec())
 }
 
+/// Resolve a wall-clock instant to the last transition committed at or
+/// before it - the timestamp form of an as-of coordinate. Uses the
+/// `(committed_at, transition_id)` ordering, the same total order the
+/// replay helpers use, so the answer is exact even when several
+/// transitions share a `committed_at` under concurrent commits.
+///
+/// A timestamp earlier than every committed transition is
+/// [`PgError::NoTransitionAtOrBefore`]: there is no state to
+/// reconstruct at or before that instant.
+pub async fn resolve_transition_at_or_before(
+    pool: &PgPool,
+    at: DateTime<Utc>,
+) -> Result<Uuid, PgError> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT transition_id FROM morpholog.audit
+         WHERE committed_at <= $1
+         ORDER BY committed_at DESC, transition_id DESC
+         LIMIT 1",
+    )
+    .bind(at)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify)?;
+    row.map(|(tid,)| tid)
+        .ok_or(PgError::NoTransitionAtOrBefore(at))
+}
+
+/// The outcome of replaying the audit log against the claims table.
+///
+/// The two tables are independent records of the same history: the
+/// claims table is current state maintained write-by-write, the audit
+/// log is the journal those writes came from. Replaying the journal
+/// must land on the same claim set; a difference is evidence that one
+/// of them was modified outside the runtime.
+///
+/// `Serialize` uses the same `status`-tagged representation as the
+/// other CLI envelopes.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum VerifyOutcome {
+    /// Replay reproduces the claims table exactly.
+    Consistent {
+        /// Committed transitions replayed.
+        transitions: i64,
+        /// Currently-admitted claims confirmed.
+        claims: usize,
+    },
+    /// The two records disagree.
+    Divergent {
+        /// Claims present in the claims table that replaying the audit
+        /// log does not produce - out-of-band inserts or edits.
+        only_in_claims_table: Vec<ClaimInstance>,
+        /// Claims the audit log says should be current but the claims
+        /// table lacks - out-of-band deletes or edits.
+        only_in_replay: Vec<ClaimInstance>,
+    },
+}
+
+/// Replay the audit log to its latest transition and compare the
+/// reconstructed state against the claims table.
+///
+/// All reads happen inside one `REPEATABLE READ READ ONLY`
+/// transaction, so the comparison is over a single database snapshot:
+/// a commit landing while `verify` runs can never manufacture a false
+/// divergence by appearing in one record but not the other. This is
+/// the contract that makes the command safe to run against a live
+/// system, not only during quiescence.
+///
+/// An empty database (no transitions, no claims) is trivially
+/// consistent. The comparison is a multiset diff, order-insensitive:
+/// replay order is causal while the claims table orders by
+/// `(asserted_at, ...)`, and neither order is part of the contract.
+/// The divergence buckets are sorted by `(predicate, args)` so the
+/// operator-facing report is deterministic across runs.
+pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+
+    let latest: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT transition_id FROM morpholog.audit
+         ORDER BY committed_at DESC, transition_id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(classify)?;
+    let (transitions,): (i64,) = sqlx::query_as("SELECT count(*) FROM morpholog.audit")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(classify)?;
+
+    let replayed = match latest {
+        Some((tid,)) => reconstruct_inner(&mut tx, tid, None)
+            .await?
+            .claims()
+            .to_vec(),
+        None => Vec::new(),
+    };
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT predicate_name, arguments
+         FROM morpholog.claims
+         ORDER BY asserted_at, predicate_name, arguments::text",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(classify)?;
+    tx.commit().await.map_err(classify)?;
+    let current = decode_claim_rows(rows)?;
+
+    // Multiset diff: +1 per current claim, -1 per replayed claim.
+    // Positive residue exists only in the claims table, negative only
+    // in the replay.
+    let mut counts: HashMap<&ClaimInstance, i64> = HashMap::new();
+    for c in &current {
+        *counts.entry(c).or_default() += 1;
+    }
+    for c in &replayed {
+        *counts.entry(c).or_default() -= 1;
+    }
+    let mut only_in_claims_table = Vec::new();
+    let mut only_in_replay = Vec::new();
+    for (claim, n) in counts {
+        for _ in 0..n.abs() {
+            if n > 0 {
+                only_in_claims_table.push(claim.clone());
+            } else if n < 0 {
+                only_in_replay.push(claim.clone());
+            }
+        }
+    }
+    let sort_key = |c: &ClaimInstance| {
+        (
+            c.predicate.to_string(),
+            serde_json::to_string(&c.args).unwrap_or_default(),
+        )
+    };
+    only_in_claims_table.sort_by_key(sort_key);
+    only_in_replay.sort_by_key(sort_key);
+
+    if only_in_claims_table.is_empty() && only_in_replay.is_empty() {
+        Ok(VerifyOutcome::Consistent {
+            transitions,
+            claims: current.len(),
+        })
+    } else {
+        Ok(VerifyOutcome::Divergent {
+            only_in_claims_table,
+            only_in_replay,
+        })
+    }
+}
+
 /// Enumerate a derived claim's extension against the state that
 /// existed immediately after `transition_id` committed.
 ///
@@ -1648,7 +1812,7 @@ pub async fn list_derived_at(
 /// is not in the set, so the scoped case never materialises
 /// out-of-footprint claims in memory.
 async fn reconstruct_inner(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
     predicates: Option<&[String]>,
 ) -> Result<State, PgError> {
@@ -1659,7 +1823,7 @@ async fn reconstruct_inner(
         "SELECT committed_at, transition_id FROM morpholog.audit WHERE transition_id = $1",
     )
     .bind(transition_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(classify)?;
     let (target_committed_at, target_transition_id) =
@@ -1683,7 +1847,7 @@ async fn reconstruct_inner(
     )
     .bind(target_committed_at)
     .bind(target_transition_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(classify)?;
 

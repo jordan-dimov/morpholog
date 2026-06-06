@@ -16,6 +16,7 @@
 //!   operational failure; each subcommand's doc comment states its
 //!   own mapping.
 
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -95,6 +96,52 @@ enum Command {
     /// validation failure or an unknown transformation / intent. No
     /// `--json` flag because the output IS JSON.
     Schema(SchemaArgs),
+
+    /// Replay the audit log to its latest transition and compare the
+    /// reconstructed state against the claims table. The two tables are
+    /// independent records of the same history, so a difference is
+    /// evidence that one was modified outside the runtime. Prints the
+    /// outcome as JSON; consistent exits zero, divergent prints the
+    /// claims each record holds that the other does not and exits one.
+    /// Read-only; an empty database is trivially consistent.
+    Verify(VerifyArgs),
+}
+
+/// Arguments for `verify`: just the connection string.
+#[derive(clap::Args, Debug)]
+pub(crate) struct VerifyArgs {
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+}
+
+/// An `--as-of` coordinate: an exact `transition_id` (UUIDv7), or an
+/// RFC 3339 timestamp resolved to the last transition committed at or
+/// before that instant. Parsed at the clap layer so a malformed value
+/// errors before any database work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsOf {
+    /// State immediately after this committed transition.
+    Transition(Uuid),
+    /// State at the last transition committed at or before this instant.
+    AtOrBefore(DateTime<Utc>),
+}
+
+impl std::str::FromStr for AsOf {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(tid) = Uuid::parse_str(s) {
+            return Ok(AsOf::Transition(tid));
+        }
+        if let Ok(at) = DateTime::parse_from_rfc3339(s) {
+            return Ok(AsOf::AtOrBefore(at.with_timezone(&Utc)));
+        }
+        Err(format!(
+            "expected a transition_id (UUID) or an RFC 3339 timestamp \
+             (e.g. 2026-06-30T00:00:00Z), got `{s}`"
+        ))
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -263,12 +310,15 @@ pub(crate) struct InspectClaimsArgs {
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 
-    /// Optional: list claims as they were at this past `transition_id`
-    /// (UUIDv7). Without it, the current admitted claim set is
-    /// returned; with it, the adapter replays the audit log up to the
-    /// named transition. Unknown ids return `TransitionNotFound`.
+    /// Optional: list claims as they were at a past moment - either a
+    /// `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
+    /// the last transition committed at or before it. Without it, the
+    /// current admitted claim set is returned; with it, the adapter
+    /// replays the audit log up to the resolved transition. Unknown
+    /// ids return `TransitionNotFound`; a timestamp earlier than every
+    /// commit returns `NoTransitionAtOrBefore`.
     #[arg(long)]
-    pub(crate) as_of: Option<Uuid>,
+    pub(crate) as_of: Option<AsOf>,
 
     /// Optional, repeatable: return only claims of these predicates -
     /// the targeted read an embedder uses to fetch governed state back
@@ -295,11 +345,14 @@ pub(crate) struct InspectDerivedArgs {
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
 
-    /// Optional: enumerate against the state at this past
-    /// `transition_id` (UUIDv7) instead of current state. Same
-    /// predicate-scoped replay; unknown ids return `TransitionNotFound`.
+    /// Optional: enumerate against the state at a past moment - either
+    /// a `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
+    /// the last transition committed at or before it - instead of
+    /// current state. Same predicate-scoped replay; unknown ids return
+    /// `TransitionNotFound`, and a timestamp earlier than every commit
+    /// returns `NoTransitionAtOrBefore`.
     #[arg(long)]
-    pub(crate) as_of: Option<Uuid>,
+    pub(crate) as_of: Option<AsOf>,
 }
 
 /// Shared arguments for the `inspect` subcommands that do NOT accept
@@ -521,6 +574,7 @@ async fn main() -> anyhow::Result<()> {
             OutboxCmd::Release(args) => commands::outbox::release(args).await,
         },
         Command::Schema(args) => commands::schema::run(args),
+        Command::Verify(args) => commands::verify::run(args).await,
     }
 }
 
@@ -641,8 +695,57 @@ mod tests {
         };
         assert_eq!(
             args.as_of,
-            Some(Uuid::parse_str(tid).unwrap()),
-            "--as-of must parse into Some(Uuid)"
+            Some(AsOf::Transition(Uuid::parse_str(tid).unwrap())),
+            "--as-of with a UUID must parse into the transition form"
+        );
+    }
+
+    /// `--as-of` also accepts an RFC 3339 timestamp, parsed into the
+    /// at-or-before form (resolved against the audit log at run time).
+    #[test]
+    fn inspect_claims_with_as_of_timestamp_parses() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            "2026-06-30T12:00:00Z",
+        ]);
+        let Command::Inspect {
+            what: Inspect::Claims(args),
+        } = cli.command
+        else {
+            panic!("expected Inspect::Claims, got {:?}", cli.command);
+        };
+        let Some(AsOf::AtOrBefore(at)) = args.as_of else {
+            panic!("expected the at-or-before form, got {:?}", args.as_of);
+        };
+        assert_eq!(at.to_rfc3339(), "2026-06-30T12:00:00+00:00");
+    }
+
+    /// A bare date is rejected: the coordinate must be explicit about
+    /// the instant, not leave the time of day to a guess.
+    #[test]
+    fn inspect_claims_with_bare_date_as_of_errors_at_parse_time() {
+        let err = Cli::try_parse_from([
+            "morpholog",
+            "inspect",
+            "claims",
+            "--database-url",
+            "postgres:///morpholog_dev",
+            "--as-of",
+            "2026-06-30",
+        ])
+        .expect_err("bare date must surface a clap parse error");
+        assert!(
+            matches!(
+                err.kind(),
+                ErrorKind::ValueValidation | ErrorKind::InvalidValue
+            ),
+            "expected a value-validation error, got {:?}",
+            err.kind()
         );
     }
 
@@ -735,7 +838,10 @@ mod tests {
         else {
             panic!("expected Inspect::Derived, got {:?}", cli.command);
         };
-        assert_eq!(args.as_of, Some(Uuid::parse_str(tid).unwrap()));
+        assert_eq!(
+            args.as_of,
+            Some(AsOf::Transition(Uuid::parse_str(tid).unwrap()))
+        );
     }
 
     /// `inspect audit --as-of <uuid>` is rejected by clap because

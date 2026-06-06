@@ -332,7 +332,9 @@ JUNE=019e937d-0e98-7790-897e-30500c744711   # yours will differ - use your recei
 Every commit returns a `transition_id` - its exact coordinate in the audit
 log. It is an id rather than a date because a date is ambiguous: many things
 can commit in one day. The id names one precise moment - the state immediately
-after that particular commit.
+after that particular commit. (When an instant is what you have, `--as-of`
+also accepts an RFC 3339 timestamp and resolves it to the last commit at or
+before it; the id remains the precise coordinate.)
 
 (In real life the bank lives in its own systems, of course. What we are
 modelling is the governed record on the asset's side: the bank's decision
@@ -722,10 +724,12 @@ cannot govern a superuser. Two things keep that honest. First, ordinary
 privilege hygiene: only the runtime's role writes the `morpholog` schema;
 applications and people get read-only. Second - and this is where the model
 earns something extra - the claims table and the audit log are two records of
-the same history, so an out-of-band edit to either one is *detectable*: replay
-the log and compare. A `morpholog verify` command for exactly that check, and
-a tamper-evident (hash-chained) audit log, are both recognised hardening
-steps, not yet built.
+the same history, so an edit that leaves them disagreeing is *detectable*:
+replay the log and compare. `morpholog verify` performs exactly that check,
+naming any claims one record holds that the other does not. What it cannot
+catch is a *coordinated* edit of both records at once - that is the job of the
+recognised next hardening step, a tamper-evident (hash-chained) audit log, not
+yet built.
 
 **"A single generic claims table - isn't that an EAV anti-pattern that defeats
 the query planner?"**

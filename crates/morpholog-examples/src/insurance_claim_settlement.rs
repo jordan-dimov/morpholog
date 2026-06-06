@@ -35,28 +35,8 @@ pub fn paid_implies_authorised() -> Invariant {
     crate::invariant(&PROGRAM, "paid_implies_authorised")
 }
 
-pub fn at_most_one_policy_per_id() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_policy_per_id")
-}
-
-pub fn at_most_one_claim_report_per_id() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_claim_report_per_id")
-}
-
 pub fn paid_implies_headroom() -> Invariant {
     crate::invariant(&PROGRAM, "paid_implies_headroom")
-}
-
-pub fn at_most_one_headroom_per_policy() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_headroom_per_policy")
-}
-
-pub fn headroom_consumed_by_payment() -> Invariant {
-    crate::invariant(&PROGRAM, "headroom_consumed_by_payment")
-}
-
-pub fn settlement_id_uniquely_identifies_payment() -> Invariant {
-    crate::invariant(&PROGRAM, "settlement_id_uniquely_identifies_payment")
 }
 
 pub fn issue_policy() -> Transformation {

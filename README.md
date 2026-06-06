@@ -94,7 +94,7 @@ morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBala
 morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow --as-of <transition_id>
 ```
 
-The report is exactly what an auditor would have seen at that moment - recomputed from the audit log, no bitemporal columns anywhere in your schema.
+The report is exactly what an auditor would have seen at that moment - recomputed from the audit log, no bitemporal columns anywhere in your schema. (`--as-of` also accepts an RFC 3339 timestamp, resolved to the last commit at or before it.)
 
 And an unbalanced entry is refused atomically, with the rule named:
 
@@ -147,7 +147,7 @@ The legibility tooling has begun: `morpholog inspect guarantees` names what a mo
 
 **Doesn't a separate system of record create a dual-write problem?** It removes the classic transactional one. Morpholog holds the governed records; downstream stores - analytics tables, caches, search indexes - are derived copies, kept current by consuming the intents each commit emits (at-least-once, with idempotency keys). One write, explicit propagation, no two-phase commit; the projection pipeline is still yours to operate, but it is one system propagating, not two writers pretending to be co-primary. And the schema is plain PostgreSQL: it can share a database with your application's tables, behind its own schema and role.
 
-**Can't someone bypass the rules with raw SQL?** With superuser access, yes - as with any database-backed system of record (a DBA can drop a `CHECK` constraint too). The mitigations are ordinary privilege separation - only the runtime's role writes the `morpholog` schema - plus one the model adds: the claims table and the audit log are two records of one history, so out-of-band edits to either are detectable by replaying one against the other. A `verify` command and a hash-chained audit log are recognised hardening steps, not yet built.
+**Can't someone bypass the rules with raw SQL?** With superuser access, yes - as with any database-backed system of record (a DBA can drop a `CHECK` constraint too). The mitigations are ordinary privilege separation - only the runtime's role writes the `morpholog` schema - plus one the model adds: the claims table and the audit log are two records of one history. `morpholog verify` detects edits that leave the two disagreeing - replaying one against the other, from a single database snapshot, and naming the difference. A *coordinated* edit of both records is what the next hardening step, a hash-chained audit log, addresses.
 
 **Isn't a generic claims table an EAV performance trap?** The claims table is storage, not the query engine. Rules are never evaluated as SQL self-joins: the runtime loads only the claims whose predicates a transformation touches, and the kernel evaluates in memory. The measured shape is linear (the Status numbers above), and the intended workload is the admission line of governed records, not general OLTP - that boundary is the design.
 

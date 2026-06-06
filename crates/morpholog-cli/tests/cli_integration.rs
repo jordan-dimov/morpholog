@@ -338,6 +338,221 @@ async fn inspect_claims_unknown_predicate_returns_empty_array() {
     );
 }
 
+/// `explain` without `--json` renders claim-shaped prose - the default
+/// surface a human reads, previously untested. Pins both verdict
+/// headers; the structured content is pinned by the `--json` test.
+#[tokio::test(flavor = "current_thread")]
+async fn explain_without_json_renders_prose_for_both_verdicts() {
+    reset_db().await;
+    let entry_args = r#"[
+        {"type":"subject","value":"e1"},
+        {"type":"subject","value":"2026-04-15"},
+        {"type":"subject","value":"q1_2026"},
+        {"type":"subject","value":"account_cash"},
+        {"type":"subject","value":"account_revenue"},
+        {"type":"decimal","value":"100"}
+    ]"#;
+
+    // Open period: the same proposal is admissible.
+    let (status, stdout, stderr) = run_cli(&[
+        "explain",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        entry_args,
+    ]);
+    assert!(status.success(), "explain is read-only; {stderr}");
+    assert!(
+        stdout.starts_with("Admissible: post_simple_entry("),
+        "admissible prose header expected; got:\n{stdout}"
+    );
+
+    // Close the period: the same proposal is now refused at the gate,
+    // and the prose names it.
+    let (status, _o, _e) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success());
+    let (status, stdout, _stderr) = run_cli(&[
+        "explain",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        entry_args,
+    ]);
+    assert!(
+        status.success(),
+        "a rejected verdict still exits zero - explaining is answering, not acting"
+    );
+    assert!(
+        stdout.starts_with("Rejected: post_simple_entry("),
+        "rejected prose header expected; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Gate not satisfied:") && stdout.contains("not PeriodClosed(period)"),
+        "the failed gate is named in prose; got:\n{stdout}"
+    );
+}
+
+// ============================================================
+// `verify` - replay-vs-claims consistency
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn verify_is_consistent_after_normal_commits() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 200);
+
+    let (status, stdout, stderr) = run_cli(&["verify"]);
+    assert!(status.success(), "verify should exit zero; {stderr}");
+    let outcome: Value = serde_json::from_str(&stdout).expect("verify output is JSON");
+    assert_eq!(outcome["status"], "consistent", "got: {stdout}");
+    assert_eq!(outcome["transitions"], 2, "two commits replayed: {stdout}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn verify_on_empty_database_is_consistent() {
+    reset_db().await;
+    let (status, stdout, _stderr) = run_cli(&["verify"]);
+    assert!(status.success(), "empty database is trivially consistent");
+    let outcome: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(outcome["status"], "consistent");
+    assert_eq!(outcome["transitions"], 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn verify_stays_consistent_under_concurrent_commits() {
+    reset_db().await;
+    post_balanced_entry("entry_000", 10);
+
+    // A writer hammering commits while verify runs repeatedly. Before
+    // verify read everything from one REPEATABLE READ snapshot, a
+    // commit landing between its reads could manufacture a false
+    // divergence on a perfectly healthy database - under that bug,
+    // this test flakes; under the snapshot contract, it cannot fail.
+    let writer = std::thread::spawn(|| {
+        for i in 0..12 {
+            post_balanced_entry(&format!("entry_w{i:03}"), 100 + i);
+        }
+    });
+    for _ in 0..6 {
+        let (status, stdout, stderr) = run_cli(&["verify"]);
+        assert!(
+            status.success(),
+            "verify must not report false divergence under concurrent \
+             commits; stdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
+    writer.join().expect("writer thread panicked");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn verify_detects_an_out_of_band_edit() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    // Tamper with the claims table behind the runtime's back: rewrite
+    // the JournalEntry's arguments with raw SQL. The audit log still
+    // describes the original, so replay and current state diverge in
+    // both directions - the tampered claim is unjustified, the
+    // original is missing.
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    sqlx::query(
+        "UPDATE morpholog.claims
+         SET arguments = '[{\"type\":\"subject\",\"value\":\"tampered\"}]'
+         WHERE predicate_name = 'JournalEntry'",
+    )
+    .execute(&pool)
+    .await
+    .expect("out-of-band UPDATE");
+
+    let (status, stdout, _stderr) = run_cli(&["verify"]);
+    assert!(!status.success(), "divergence must exit non-zero");
+    let outcome: Value = serde_json::from_str(&stdout).expect("verify output is JSON");
+    assert_eq!(outcome["status"], "divergent", "got: {stdout}");
+    let unjustified = outcome["only_in_claims_table"].as_array().unwrap();
+    let missing = outcome["only_in_replay"].as_array().unwrap();
+    assert!(
+        unjustified
+            .iter()
+            .any(|c| c["args"][0]["value"] == "tampered"),
+        "the tampered claim must be reported as unjustified: {stdout}"
+    );
+    assert!(
+        missing
+            .iter()
+            .any(|c| c["predicate"] == "JournalEntry" && c["args"][0]["value"] == "entry_001"),
+        "the original claim must be reported as missing: {stdout}"
+    );
+}
+
+// ============================================================
+// `--as-of` with a timestamp
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_as_of_timestamp_resolves_to_the_prior_state() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 200);
+
+    // The first commit's exact timestamp, from the audit log. Using it
+    // verbatim also pins that the boundary is inclusive: at the very
+    // instant of a commit, that commit's state is what you get.
+    let (_s, stdout, _e) = run_cli(&["inspect", "audit"]);
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let first_committed_at = rows[0]["committed_at"]
+        .as_str()
+        .expect("audit row carries committed_at")
+        .to_string();
+
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--as-of",
+        &first_committed_at,
+        "--predicate",
+        "JournalEntry",
+    ]);
+    assert!(status.success(), "timestamp as-of should succeed; {stderr}");
+    let claims: Value = serde_json::from_str(&stdout).unwrap();
+    let array = claims.as_array().unwrap();
+    assert_eq!(
+        array.len(),
+        1,
+        "only the first entry exists at the first commit's instant: {stdout}"
+    );
+    assert_eq!(array[0]["args"][0]["value"], "entry_001");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn as_of_timestamp_before_all_commits_errors() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    let (status, _stdout, stderr) =
+        run_cli(&["inspect", "claims", "--as-of", "1970-01-01T00:00:00Z"]);
+    assert!(
+        !status.success(),
+        "a timestamp before every commit must error"
+    );
+    assert!(
+        stderr.contains("no transition committed at or before"),
+        "the error should name the condition; got:\n{stderr}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_audit_returns_one_row_per_committed_transition() {
     reset_db().await;

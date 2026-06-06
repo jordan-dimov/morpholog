@@ -39,3 +39,28 @@ impl Clock for RealClock {
         tokio::time::sleep(duration)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The production clock's `now` is the wall clock and `sleep_for`
+    /// actually elapses. Pinned because every other test injects
+    /// `MockClock`, so nothing else ever constructs `RealClock` - the
+    /// production impl must not be a coverage blind spot.
+    #[tokio::test]
+    async fn real_clock_tracks_wall_time_and_sleeps() {
+        let clock = RealClock;
+        let before = Utc::now();
+        let now = clock.now();
+        let after = Utc::now();
+        assert!(before <= now && now <= after, "now() is the wall clock");
+
+        let started = std::time::Instant::now();
+        clock.sleep_for(Duration::from_millis(20)).await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(20),
+            "sleep_for() elapses real time"
+        );
+    }
+}
