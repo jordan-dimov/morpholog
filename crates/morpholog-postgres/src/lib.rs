@@ -1547,7 +1547,8 @@ pub async fn list_derived(
 ///
 /// Replay cost is O(transitions up to T).
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
-    reconstruct_inner(pool, transition_id, None).await
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    reconstruct_inner(&mut conn, transition_id, None).await
 }
 
 /// Like [`reconstruct_state_at`] but only retains claims whose
@@ -1582,7 +1583,8 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
         return Ok(State::default());
     }
-    reconstruct_inner(pool, transition_id, Some(predicates)).await
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    reconstruct_inner(&mut conn, transition_id, Some(predicates)).await
 }
 
 /// Returns the claims admitted as of `transition_id`, in causal
@@ -1682,29 +1684,56 @@ pub enum VerifyOutcome {
 /// Replay the audit log to its latest transition and compare the
 /// reconstructed state against the claims table.
 ///
+/// All reads happen inside one `REPEATABLE READ READ ONLY`
+/// transaction, so the comparison is over a single database snapshot:
+/// a commit landing while `verify` runs can never manufacture a false
+/// divergence by appearing in one record but not the other. This is
+/// the contract that makes the command safe to run against a live
+/// system, not only during quiescence.
+///
 /// An empty database (no transitions, no claims) is trivially
 /// consistent. The comparison is a multiset diff, order-insensitive:
 /// replay order is causal while the claims table orders by
 /// `(asserted_at, ...)`, and neither order is part of the contract.
+/// The divergence buckets are sorted by `(predicate, args)` so the
+/// operator-facing report is deterministic across runs.
 pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+
     let latest: Option<(Uuid,)> = sqlx::query_as(
         "SELECT transition_id FROM morpholog.audit
          ORDER BY committed_at DESC, transition_id DESC
          LIMIT 1",
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(classify)?;
     let (transitions,): (i64,) = sqlx::query_as("SELECT count(*) FROM morpholog.audit")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(classify)?;
 
     let replayed = match latest {
-        Some((tid,)) => reconstruct_state_at(pool, tid).await?.claims().to_vec(),
+        Some((tid,)) => reconstruct_inner(&mut tx, tid, None)
+            .await?
+            .claims()
+            .to_vec(),
         None => Vec::new(),
     };
-    let current = list_claims(pool).await?;
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT predicate_name, arguments
+         FROM morpholog.claims
+         ORDER BY asserted_at, predicate_name, arguments::text",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(classify)?;
+    tx.commit().await.map_err(classify)?;
+    let current = decode_claim_rows(rows)?;
 
     // Multiset diff: +1 per current claim, -1 per replayed claim.
     // Positive residue exists only in the claims table, negative only
@@ -1727,6 +1756,14 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
             }
         }
     }
+    let sort_key = |c: &ClaimInstance| {
+        (
+            c.predicate.to_string(),
+            serde_json::to_string(&c.args).unwrap_or_default(),
+        )
+    };
+    only_in_claims_table.sort_by_key(sort_key);
+    only_in_replay.sort_by_key(sort_key);
 
     if only_in_claims_table.is_empty() && only_in_replay.is_empty() {
         Ok(VerifyOutcome::Consistent {
@@ -1775,7 +1812,7 @@ pub async fn list_derived_at(
 /// is not in the set, so the scoped case never materialises
 /// out-of-footprint claims in memory.
 async fn reconstruct_inner(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
     predicates: Option<&[String]>,
 ) -> Result<State, PgError> {
@@ -1786,7 +1823,7 @@ async fn reconstruct_inner(
         "SELECT committed_at, transition_id FROM morpholog.audit WHERE transition_id = $1",
     )
     .bind(transition_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(classify)?;
     let (target_committed_at, target_transition_id) =
@@ -1810,7 +1847,7 @@ async fn reconstruct_inner(
     )
     .bind(target_committed_at)
     .bind(target_transition_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(classify)?;
 

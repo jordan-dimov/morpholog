@@ -724,11 +724,12 @@ cannot govern a superuser. Two things keep that honest. First, ordinary
 privilege hygiene: only the runtime's role writes the `morpholog` schema;
 applications and people get read-only. Second - and this is where the model
 earns something extra - the claims table and the audit log are two records of
-the same history, so an out-of-band edit to either one is *detectable*: replay
-the log and compare. `morpholog verify` performs exactly that check, naming
-any claims one record holds that the other does not. A tamper-evident
-(hash-chained) audit log is the recognised next hardening step, not yet
-built.
+the same history, so an edit that leaves them disagreeing is *detectable*:
+replay the log and compare. `morpholog verify` performs exactly that check,
+naming any claims one record holds that the other does not. What it cannot
+catch is a *coordinated* edit of both records at once - that is the job of the
+recognised next hardening step, a tamper-evident (hash-chained) audit log, not
+yet built.
 
 **"A single generic claims table - isn't that an EAV anti-pattern that defeats
 the query planner?"**

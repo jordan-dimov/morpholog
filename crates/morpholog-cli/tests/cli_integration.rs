@@ -432,6 +432,32 @@ async fn verify_on_empty_database_is_consistent() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn verify_stays_consistent_under_concurrent_commits() {
+    reset_db().await;
+    post_balanced_entry("entry_000", 10);
+
+    // A writer hammering commits while verify runs repeatedly. Before
+    // verify read everything from one REPEATABLE READ snapshot, a
+    // commit landing between its reads could manufacture a false
+    // divergence on a perfectly healthy database - under that bug,
+    // this test flakes; under the snapshot contract, it cannot fail.
+    let writer = std::thread::spawn(|| {
+        for i in 0..12 {
+            post_balanced_entry(&format!("entry_w{i:03}"), 100 + i);
+        }
+    });
+    for _ in 0..6 {
+        let (status, stdout, stderr) = run_cli(&["verify"]);
+        assert!(
+            status.success(),
+            "verify must not report false divergence under concurrent \
+             commits; stdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
+    writer.join().expect("writer thread panicked");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn verify_detects_an_out_of_band_edit() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
