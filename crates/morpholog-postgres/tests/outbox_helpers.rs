@@ -319,9 +319,12 @@ async fn record_compensation_errors_on_double_record() {
     )
     .await
     .unwrap();
-    let comp_tid_a = match compensation_outcome {
-        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        _ => unreachable!(),
+    let PgProposalOutcome::Committed {
+        transition_id: comp_tid_a,
+        ..
+    } = compensation_outcome
+    else {
+        unreachable!()
     };
 
     record_compensation(&pool, intent_id, comp_tid_a)
@@ -346,9 +349,12 @@ async fn record_compensation_errors_on_double_record() {
     )
     .await
     .unwrap();
-    let comp_tid_b = match comp_outcome_b {
-        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        _ => unreachable!(),
+    let PgProposalOutcome::Committed {
+        transition_id: comp_tid_b,
+        ..
+    } = comp_outcome_b
+    else {
+        unreachable!()
     };
 
     let err = record_compensation(&pool, intent_id, comp_tid_b)

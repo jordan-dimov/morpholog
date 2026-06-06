@@ -177,7 +177,7 @@ impl State {
             .get(predicate)
             .and_then(|idx| idx.by_arg.get(position))
             .and_then(|m| m.get(value))
-            .map(|v| v.as_slice())
+            .map(Vec::as_slice)
     }
 
     /// Look up a claim by its `claims()` index. Used internally

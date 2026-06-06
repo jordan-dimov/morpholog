@@ -281,7 +281,7 @@ fn is_unique_violation_code(code: Option<&str>) -> bool {
 /// [`PgError::Database`].
 fn classify(err: sqlx::Error) -> PgError {
     let db = err.as_database_error();
-    let code = db.and_then(|e| e.code());
+    let code = db.and_then(sqlx::error::DatabaseError::code);
     if is_serialization_failure_code(code.as_deref()) {
         return PgError::SerializationFailure;
     }
@@ -622,6 +622,14 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     .await
     .map_err(classify)?;
 
+    decode_claim_rows(rows)
+}
+
+/// Decode `(predicate_name, arguments)` rows into `ClaimInstance`s -
+/// the shared tail of the current-claims listings.
+fn decode_claim_rows(
+    rows: Vec<(String, serde_json::Value)>,
+) -> Result<Vec<ClaimInstance>, PgError> {
     rows.into_iter()
         .map(|(predicate, args_json)| {
             Ok(ClaimInstance {
@@ -660,14 +668,7 @@ pub async fn list_claims_for_predicates(
     .await
     .map_err(classify)?;
 
-    rows.into_iter()
-        .map(|(predicate, args_json)| {
-            Ok(ClaimInstance {
-                predicate: PredicateName::from(predicate),
-                args: serde_json::from_value(args_json)?,
-            })
-        })
-        .collect()
+    decode_claim_rows(rows)
 }
 
 /// Load the current scoped pre-state a transformation would see, the
@@ -1961,13 +1962,12 @@ pub async fn process_one_outbox_row<D>(
 where
     D: Deliverer,
 {
-    let row =
-        match claim_pending_outbox_row(pool, worker_id, intent_type, lease_duration, claim_before)
+    let Some(row) =
+        claim_pending_outbox_row(pool, worker_id, intent_type, lease_duration, claim_before)
             .await?
-        {
-            Some(r) => r,
-            None => return Ok(ProcessOutcome::NoRowAvailable),
-        };
+    else {
+        return Ok(ProcessOutcome::NoRowAvailable);
+    };
     let intent_id = row.intent_id;
 
     match deliverer.deliver(&row).await {

@@ -47,3 +47,15 @@ expect_used = "warn"
 # on adversarial input there is a liability, not a bug report).
 todo = "warn"
 unimplemented = "warn"
+# The high-signal residue of a full `clippy::pedantic` survey; the rest
+# of the group is noise here (must_use / doc-markdown churn, length
+# counters, cast lints that only fire on the bench's legitimate float
+# stats). Each of these either catches a real bug class or enforces an
+# edition-2024 idiom the codebase already follows.
+zero_sized_map_values = "warn"               # a Map<K, ()> is a Set in disguise
+manual_let_else = "warn"
+match_wildcard_for_single_variants = "warn"  # `_` hiding one named variant defeats exhaustiveness
+uninlined_format_args = "warn"
+redundant_closure_for_method_calls = "warn"
+single_char_pattern = "warn"
+stable_sort_primitive = "warn"

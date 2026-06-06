@@ -1958,7 +1958,7 @@ mod tests {
         };
         let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
         assert!(
-            failing.contains("B"),
+            failing.contains('B'),
             "expected failing sub-expression to contain B; got: {failing}"
         );
         assert!(
@@ -2255,7 +2255,7 @@ mod tests {
             "binding-flow bug: walker should drill to the failing conjunct under threaded bindings",
         );
         assert!(
-            failing.contains("B"),
+            failing.contains('B'),
             "expected failing conjunct B (no B(a1) in state); got: {failing}"
         );
     }
@@ -2398,7 +2398,7 @@ mod tests {
         };
         let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
         assert!(
-            failing.contains("B"),
+            failing.contains('B'),
             "expected drill past forall + into And, identifying B as failing; got: {failing}"
         );
         assert!(

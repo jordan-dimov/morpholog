@@ -239,7 +239,7 @@ impl fmt::Display for Token {
             Token::KwProgram => write!(f, "`program`"),
             Token::KwPredicate => write!(f, "`predicate`"),
             Token::KwIntent => write!(f, "`intent`"),
-            Token::Kind(k) => write!(f, "kind `{:?}`", k),
+            Token::Kind(k) => write!(f, "kind `{k:?}`"),
             Token::KwInvariant => write!(f, "`invariant`"),
             Token::KwTransformation => write!(f, "`transformation`"),
             Token::KwRequire => write!(f, "`require`"),

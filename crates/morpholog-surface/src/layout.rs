@@ -145,8 +145,7 @@ pub fn apply_layout(
                 if indent_stack.last().copied().unwrap_or(0) != new_indent {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "indentation does not match any enclosing block (got {} columns; valid levels are {:?})",
-                            new_indent, indent_stack
+                            "indentation does not match any enclosing block (got {new_indent} columns; valid levels are {indent_stack:?})"
                         ),
                         line_start_in_source..span.start,
                     ));
@@ -166,7 +165,7 @@ pub fn apply_layout(
                     "tab characters are not allowed in indentation; use spaces",
                     0..span.start,
                 ));
-            } else if gap.chars().all(|c| c.is_whitespace()) {
+            } else if gap.chars().all(char::is_whitespace) {
                 diagnostics.push(Diagnostic::error(
                     "unexpected leading indentation; top-level declarations must start at column 0",
                     0..span.start,

@@ -661,7 +661,10 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
     assert_eq!(checked.len(), 3);
     for entry in checked {
         assert!(entry.get("name").and_then(|v| v.as_str()).is_some());
-        assert_eq!(entry.get("version").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            entry.get("version").and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
     }
 
     // asserted_claims: Vec<ClaimInstance> (objects with predicate + args)

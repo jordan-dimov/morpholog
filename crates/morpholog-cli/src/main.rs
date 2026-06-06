@@ -1,32 +1,20 @@
-//! Morpholog CLI.
-//!
-//! Subcommands:
-//!
-//! - `inspect` - read-only inspection of the durable substrate (claims,
-//!   audit rows, pending outbox intents, derived-claim enumerations,
-//!   declared predicate vocabulary). `inspect claims` and `inspect
-//!   derived` accept an optional `--as-of <transition_id>` for
-//!   historical reconstruction.
-//! - `propose` - runs a named transformation from a built-in
-//!   [`Program`] against a Morpholog PostgreSQL database, with
-//!   arguments supplied as a JSON array of `EvalValue`s. JSON
-//!   outcomes on stdout; exit codes distinguish commit, business
-//!   rejection, and operational error.
-//! - `parse` - read a `.morph` source file and print the parsed
-//!   `Program` as JSON. No database connection.
-//! - `check` - parse a `.morph` source file and run
-//!   `Program::validate()` against the IR. Silent on clean input
-//!   (`--verbose` opts into a summary); uniform diagnostics on parse
-//!   or validation failure.
-//!
-//! [`Program`]: morpholog_core::Program
-//!
-//! `propose` and `inspect` accept `--database-url <url>` or read
-//! `DATABASE_URL` from the environment; if neither is supplied, clap
-//! emits a clear error. Output is pretty-printed JSON.
+//! Morpholog CLI - the `morpholog` binary.
 //!
 //! `main.rs` carries the `clap`-derived CLI structs and the dispatch
-//! loop only; each subcommand's logic lives in `commands::<name>::run`.
+//! loop only; each subcommand's logic lives in `commands::<name>::run`,
+//! and each subcommand's contract is its doc comment on [`Command`]
+//! (rendered by `--help`) - no parallel list here to drift from it.
+//! The shared conventions:
+//!
+//! - Database-backed subcommands accept `--database-url <url>` or fall
+//!   back to the `DATABASE_URL` environment variable; if neither is
+//!   supplied, clap errors before any work happens.
+//! - Results go to stdout (pretty-printed JSON, or prose where a
+//!   subcommand documents it); diagnostics and operational errors go
+//!   to stderr.
+//! - Exit codes distinguish success, business rejection, and
+//!   operational failure; each subcommand's doc comment states its
+//!   own mapping.
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -465,7 +453,7 @@ pub(crate) struct RunArgs {
     pub(crate) database_url: String,
 
     /// When set, emit a structured per-statement trace alongside the
-    /// outcome. Same shape as `propose --trace`.
+    /// outcome - the kernel's `propose_with_trace` shape on the wire.
     #[arg(long)]
     pub(crate) trace: bool,
 }
