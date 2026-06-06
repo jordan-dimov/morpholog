@@ -7,52 +7,47 @@ could only have got there because some code path never called it.
 
 This guide is about that problem, and a different way to make it go away. It
 assumes you know nothing about Morpholog and asks for about half an hour of
-your time. By the end you
-will have run a small program that does something you would find genuinely
-annoying to build correctly in plain Python and SQL - not because the language
-is clever, but because it is built around the part of the problem that is
-actually hard.
+your time. By the end you will have run a small program that does something
+genuinely hard to build well in plain Python and SQL. Not because Morpholog is
+clever - because it is built around the hard part of the problem.
 
-Morpholog is not a new general-purpose language competing for your day job.
-Your UI, your dataloaders, your analytics, your HTTP handlers all stay exactly
-where they are. Morpholog is a focused tool for one job: the place in a system
-where the question *"may this be admitted as a valid record?"* needs a definite,
-provable answer. Think of it the way you think of SQL - a small, foreign-looking
-thing you reach for one job, used alongside the language you already write.
+One thing to settle up front: Morpholog is not a new language for your day
+job. Your UI, your endpoints, your dataloaders, your analytics all stay where
+they are. Morpholog does one job - it decides whether a record may enter the
+system at all, and it can prove why. Think of it like SQL: a small tool you
+reach for one thing, used next to the language you already write.
 
 ## The core ideas, in terms you already have
 
 Most of Morpholog's core ideas you already know under different names.
 
 **A SQL `CHECK` constraint is a rule the database enforces no matter which
-code path writes the row.** That is its whole appeal: it does not matter whether
-the insert came from your API, a migration, a cron job, or someone typing into
-`psql` at midnight - the rule holds, because it lives in the substrate, not in
+code path writes the row.** That is its whole appeal. It does not matter where
+the insert came from - your API, a migration, a cron job, someone typing into
+`psql` at midnight. The rule holds, because it lives in the database, not in
 application code that has to remember to run. Morpholog calls that an
-**invariant**, and removes the ceiling SQL puts on it: a Morpholog invariant can
-span many rows and many tables, do exact decimal arithmetic, and quantify ("for
-all", "there exists", "the sum of") - the rules a `CHECK` constraint cannot
-express, the ones that today live in application code and drift.
+**invariant**, and removes the ceiling SQL puts on it. An invariant can span
+many rows and many tables. It can do exact decimal arithmetic. It can say "for
+all", "there exists", "the sum of". Those are the rules a `CHECK` constraint
+cannot express - the ones that live in application code today, and drift.
 
-**A database transaction with exactly one writer is a transformation.** In
-Morpholog the *only* way state ever changes is a **transformation**: it proposes
-some claims to add and some to remove, the runtime checks every invariant
-against the proposed result, and it commits only if nothing breaks. There is no
-other door. No `UPDATE` from a forgotten script, no direct write that skips the
-checks. If a transformation's result would violate an invariant, the whole thing
-is refused and the database is byte-for-byte what it was before.
+**Now imagine the database had only one door for writes.** In Morpholog, state
+changes one way and one way only: you propose a change - some records to add,
+some to remove - and the runtime checks every invariant against the result. If
+anything would break, nothing happens, and the database is byte-for-byte what
+it was before. Morpholog calls that proposal a **transformation**. There is no
+other door. No `UPDATE` from a forgotten script, no direct write that skips
+the checks.
 
-The remaining idea is the one that has no familiar name, so hold it lightly for
-now:
-Morpholog stores **claims**, not *entities*. There is no table-of-objects, no
-ORM class, no `Invoice` row you `UPDATE` in place. Your application keeps its
-domain nouns - invoices, trades, assets - and Morpholog stores the admitted
-claims about them: small statements it has agreed to admit because they obey
-the rules, the ones your system is prepared to stand behind. A claim is much
-like a row; the difference is that you never edit one. You admit new claims and
-retract old ones, and the history of what was admitted is the system of record.
-That sounds austere. By the end of this guide it will be the thing you did not
-know you wanted.
+The last idea is the one with no familiar name, so hold it lightly for now.
+Morpholog stores **claims**, not objects. There is no `Invoice` class, no row
+you `UPDATE` in place. Your application keeps its nouns - invoices, trades,
+assets. What Morpholog stores is the statements your system has accepted about
+them, the ones it is prepared to stand behind: "this amount was reported for
+this asset", "this person may approve that". A claim is much like a row, with
+one difference: you never edit one. You add new claims and retract old ones,
+and that history is the system of record. If this sounds strange now, that is
+fine - it is the part that pays off at the end of this guide.
 
 ## Setup
 
@@ -76,9 +71,9 @@ table, an audit table, an outbox. You will never design a table in this guide.
 ## Your first program
 
 We are going to model one small, real situation: a **reported revenue figure
-that a bank relies on, and that later turns out to need correcting.** It is the
-kind of thing every finance system has, and the kind of thing that, done
-casually, quietly corrupts your audit trail.
+that a bank relies on, and that later turns out to need correcting.** Every
+finance system has one. And handled casually, it quietly corrupts your audit
+trail.
 
 A Morpholog program is one `.morph` file, and we will build it in sections. If
 you would rather have a runnable file from the start, paste
@@ -88,10 +83,9 @@ the same file, taken a piece at a time.
 
 ### The vocabulary
 
-First, the nouns. A `predicate` declares a *kind of claim* the system can hold,
-and the shape of its arguments. These are the only nouns this world knows - the
-closest analogue is "the tables you would have created", except each one names a
-statement, not a thing.
+First, the vocabulary. A `predicate` declares a *kind of claim* the system can
+hold, and the shape of its arguments. Think of these as the tables you would
+have created - except each one names a statement, not a thing.
 
 ```morph
 program reported_revenue
@@ -130,15 +124,15 @@ already asking the right question: *isn't `(asset, period)` enough?*
 predicate Revenue(asset: Subject, period: Subject, amount: Decimal)
 ```
 
-That shape makes "the Q1 revenue" a *slot* - one value per asset and period,
-which you would inevitably update in place. And the moment you update it, you
-have lost the identity of the figure that used to be there - so nothing else in
-the system can ever again say "I relied on *that* one."
+That shape makes "the Q1 revenue" a *slot*: one value per asset and period,
+which you would inevitably update in place. And the moment you update it, the
+old figure is gone. Nothing in the system can ever again say "I relied on
+*that* one."
 
-Giving every reported figure its own id turns the slot into a series of
-admitted statements, each with an identity that a later decision can point at.
-A correction becomes a *new* figure that sits beside the old one, never an
-overwrite. Everything in the payoff section rests on this one move.
+Giving every reported figure its own id changes the picture. The slot becomes
+a series of statements, each with an identity a later decision can point at.
+A correction becomes a *new* figure beside the old one, never an overwrite.
+Everything in the payoff section rests on this one move.
 
 ### How to read what follows
 
@@ -205,8 +199,8 @@ the live figure, and that is checked *at the moment it acts*. Remember this
 line; it is the hinge of the whole story.
 
 Here is the rest of the file - the second invariant and the correction
-transformation, which we will earn in a moment. Add it, and your `revenue.morph`
-is complete:
+transformation, which will make sense in a moment. Add it, and your
+`revenue.morph` is complete:
 
 ```morph
 invariant correction_chain_never_forks:
@@ -233,10 +227,10 @@ Before running anything, check that the program is well-formed:
 morpholog check revenue.morph
 ```
 
-Silence and a zero exit means it parsed and validated - predicate arities,
-binding flow, expression shapes, the lot. This is your compiler. Success is
-quiet by design (scripts depend on the empty output); when you want the
-reassurance, ask for it:
+Silence and a zero exit means it parsed and validated - argument counts,
+unbound variables, expression shapes, the lot. This is your compiler. Success
+is quiet by design, because scripts depend on the empty output. When you want
+the reassurance, ask for it:
 
 ```bash
 morpholog check -v revenue.morph
@@ -308,8 +302,8 @@ to it.
 Weeks later the meter data is reconciled and the real Q1 figure is **1200**, not
 1000. You need to correct it.
 
-Here is the fork in the road, and it is worth slowing down for, because it is
-the exact moment your instinct as a SQL developer will betray you.
+Here is the fork in the road. It is worth slowing down, because this is
+exactly where SQL habits lead you astray.
 
 Your instinct is `UPDATE revenue SET amount = 1200 WHERE ...`. And the instant
 you type that `UPDATE`, you have destroyed the answer to a question an auditor
@@ -324,8 +318,8 @@ does - and notice it never touches the `CovenantTest`.
 
 ## The wall you would have hit in SQL
 
-You *can* do all this in PostgreSQL. That is the point worth being fair about.
-But look at what it costs you, because this is the part nobody budgets for:
+Let's be fair: you *can* do all this in PostgreSQL. But look at what it costs,
+because nobody budgets for this part:
 
 - You stop storing the figure as a column you update. You give each figure
   version its own row and id.
@@ -412,10 +406,10 @@ in `run_covenant_test` - "the figure must be the one in force" - is a **gate**:
 it governs what you may do *next*, and f1 is no longer in force. But notice what
 the gate did *not* do: it did not reach back and invalidate the June test that
 was made when f1 *was* in force. New reliance on a stale figure is forbidden;
-past reliance stays valid. That asymmetry - "whether a decision was allowed is
-settled when it is made, and stays settled" - is the difference between a gate
-and a standing rule, and it is the thing that is genuinely hard to keep honest
-by hand.
+past reliance stays valid. Whether a decision was allowed is settled when it
+is made, and stays settled. That is the difference between a gate and a
+standing rule - and it is the part that is genuinely hard to keep honest by
+hand.
 
 When something is refused, you do not have to guess why. Ask:
 
@@ -456,9 +450,9 @@ Now the core ideas have names you have *felt*:
   because you never had a figure to overwrite - only claims about it, each
   admitted at a moment, none ever rewritten. "Correction" was new claims beside
   old ones, which is why the past stayed answerable.
-- **There are no entities.** There was no `Revenue` object to mutate. That
-  absence is exactly what made `UPDATE`'s sin impossible to commit - there was
-  nothing to update.
+- **There are no entities.** There was no `Revenue` object to mutate. The
+  destructive `UPDATE` was impossible to write, because there was nothing to
+  update.
 - **Invariants and gates do different jobs.** An invariant (`implies`) is a
   rule about what must always be true. A gate (`require`) governs a single
   action and never looks back. Putting "the figure must be current" in a gate,
@@ -478,12 +472,11 @@ everything:
 morpholog inspect claims --predicate CurrentFigure
 ```
 
-But a screen does not want the pointer - it wants the joined answer: the
-asset, the period, the figure in force, and its amount. In SQL this is where
-you would write a view, and in a bigger system a read model someone has to
-keep in sync. In Morpholog you declare it next to the rules, and it is
-recomputed from the admitted claims every time it is asked for - a report
-that structurally cannot drift from the state it reports on. Add this to
+But a screen does not want the pointer. It wants the joined answer: asset,
+period, the figure in force, its amount. In SQL you would write a view - or,
+in a bigger system, a read model someone has to keep in sync. In Morpholog you
+declare it next to the rules. It is recomputed from the claims every time you
+ask, so it cannot drift from the state it reports on. Add this to
 `revenue.morph`:
 
 ```morph
@@ -520,14 +513,14 @@ remembered to take, but recomputed from the audit log on demand.
 
 ## Where this fits in your stack
 
-Morpholog is not your whole system. You drove it through its CLI just now, with
-JSON arguments - and that is exactly how a real service embeds it. Your Python or
-TypeScript backend calls the `morpholog` binary as a subprocess: ask `morpholog
-schema` for the argument shape, build the request body (`--args-named` takes the
-same JSON your schema describes - it looks just like an API request body),
-`morpholog run` to commit, `morpholog explain` to find out why a refusal
-happened, and the outbox to deliver the notifications each commit emits. No FFI,
-no generated client, no Rust toolchain in your app.
+Morpholog is not your whole system. You drove it through its CLI just now,
+with JSON arguments - and that is exactly how a real service embeds it. Your
+Python or TypeScript backend calls the `morpholog` binary as a subprocess.
+`morpholog schema` tells you the argument shape. `--args-named` takes the same
+JSON the schema describes - it looks just like an API request body. `morpholog
+run` commits, `morpholog explain` tells you why something was refused, and the
+outbox delivers the notifications each commit emits. No FFI, no generated
+client, no Rust toolchain in your app.
 
 In Python, the whole integration is this:
 
@@ -553,11 +546,11 @@ if receipt["status"] == "rejected":
     ...  # show receipt["reason"], or ask `morpholog explain` what is missing
 ```
 
-A business refusal is data, not an exception - which is why the snippet does
-not pass `check=True`: a refusal exits non-zero but still writes the structured
-receipt to stdout, and `check=True` would raise before you ever read it. Your
-endpoint turns the rejection into a 422 with the reason attached. A worked version of exactly this pattern, driving
-a commodity-trade lifecycle end to end, lives in
+A business refusal is data, not an exception. That is why the snippet does not
+pass `check=True`: a refusal exits non-zero but still writes the receipt to
+stdout, and `check=True` would raise before you ever read it. Your endpoint
+turns the rejection into a 422 with the reason attached. A worked version of
+exactly this pattern, driving a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
 contract in [`embedder-integration.md`](embedder-integration.md).
 
