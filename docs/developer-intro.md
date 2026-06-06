@@ -753,8 +753,8 @@ Each solves a neighbouring problem. OPA is a stateless policy decision point:
 it answers "may this happen?" but owns no state, commits nothing, keeps no
 audit trail, replays no history. Datomic and XTDB are immutable temporal
 databases: they keep history beautifully, but rules are not first-class
-admission law and nothing explains a refusal. Datalog derives facts; it does
-not gate transactions. Morpholog's bet is the combination - admission law,
+admission law and nothing explains a refusal. Datalog derives; it does not
+gate transactions. Morpholog's bet is the combination - admission law,
 atomic commit, audit-as-store, replay, and explanation - in one small kernel
 on plain PostgreSQL. [`prior-art.md`](prior-art.md) has the longer comparison.
 
