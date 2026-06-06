@@ -620,6 +620,15 @@ exactly this pattern, driving a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
 contract in [`embedder-integration.md`](embedder-integration.md).
 
+Let's be honest about that snippet, though: a subprocess call is plumbing, and
+it reads like plumbing. What makes it tolerable is that it is *small* plumbing
+around a stable contract - the JSON going in and the receipt coming out are
+the real interface, and they are the same for every language. A native Python
+client that wraps the contract (`morpholog.propose(...)` returning a typed
+receipt, refusals as values) may well come later. It would change how the call
+looks, not what it means - anything you build against the receipt shape today
+carries over unchanged.
+
 So the division of labour is: your UI, your analytics, your market data, your
 dashboards - all of it stays in the tools you already use. Morpholog owns the one
 line where "may this be admitted as a valid record?" needs an answer you can
