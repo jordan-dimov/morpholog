@@ -358,29 +358,34 @@ retracts `CurrentFigure ... f1`, and admits `CurrentFigure ... f2`. The pointer
 has moved. The old figure is untouched.
 
 **Did the bank's June decision survive?** Ask Morpholog for the state exactly as
-it stood at that "as of June" transition id you noted - this is the real output:
+it stood at that "as of June" transition id you noted. The CLI emits a JSON
+array of claim objects; for reading along, flatten it with a one-line `jq`
+helper we will reuse for the rest of this guide:
 
 ```bash
-morpholog inspect claims --as-of 019e937d-0e98-7790-897e-30500c744711
+flat() { jq -r '.[] | "\(.predicate)(\([.args[].value] | join(", ")))"'; }
+
+morpholog inspect claims --as-of 019e937d-0e98-7790-897e-30500c744711 | flat
 ```
 ```
-Revenue       ( battery_07, q1_2026, 1000, f1 )
-CurrentFigure ( battery_07, q1_2026, f1 )
-CovenantTest  ( covtest_june, battery_07, q1_2026, 1000, f1 )
+Revenue(battery_07, q1_2026, 1000, f1)
+CurrentFigure(battery_07, q1_2026, f1)
+CovenantTest(covtest_june, battery_07, q1_2026, 1000, f1)
 ```
 
 That is June, reconstructed: figure f1 at 1000 was in force, and the bank's test
-rested on it. Now ask for the state **today**:
+rested on it. Now ask for the state **today** (the rows come back in admission
+order, which happens to tell the story by itself):
 
 ```bash
-morpholog inspect claims
+morpholog inspect claims | flat
 ```
 ```
-Revenue       ( battery_07, q1_2026, 1000, f1 )      <- the original, still here
-Revenue       ( battery_07, q1_2026, 1200, f2 )      <- the correction, beside it
-CurrentFigure ( battery_07, q1_2026, f2 )            <- the pointer has moved
-Supersedes    ( f2, f1 )                             <- the lineage
-CovenantTest  ( covtest_june, battery_07, q1_2026, 1000, f1 )   <- the June decision, untouched
+Revenue(battery_07, q1_2026, 1000, f1)                       <- the original, still here
+CovenantTest(covtest_june, battery_07, q1_2026, 1000, f1)    <- the June decision, untouched
+CurrentFigure(battery_07, q1_2026, f2)                       <- the pointer has moved
+Revenue(battery_07, q1_2026, 1200, f2)                       <- the correction, beside it
+Supersedes(f2, f1)                                           <- the lineage
 ```
 
 Both answers are true. *What is the Q1 figure now?* 1200. *What did the bank
@@ -493,20 +498,20 @@ it points at - the `_` marks the slot being extracted. (`morpholog check -v`
 now reports `derived claims: 1`.) Ask for the view:
 
 ```bash
-morpholog inspect derived revenue.morph CurrentRevenue
+morpholog inspect derived revenue.morph CurrentRevenue | flat
 ```
 ```
-CurrentRevenue ( battery_07, q1_2026, f2, 1200 )
+CurrentRevenue(battery_07, q1_2026, f2, 1200)
 ```
 
 And because the view is computed from claims, the time travel you already met
 applies to reports too:
 
 ```bash
-morpholog inspect derived revenue.morph CurrentRevenue --as-of 019e937d-0e98-7790-897e-30500c744711
+morpholog inspect derived revenue.morph CurrentRevenue --as-of 019e937d-0e98-7790-897e-30500c744711 | flat
 ```
 ```
-CurrentRevenue ( battery_07, q1_2026, f1, 1000 )
+CurrentRevenue(battery_07, q1_2026, f1, 1000)
 ```
 
 That is last quarter's report, reproduced - not from a snapshot someone
