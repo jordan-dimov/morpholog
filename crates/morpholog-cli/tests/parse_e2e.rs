@@ -51,6 +51,71 @@ fn parse_happy_path_emits_json_and_exits_zero() {
 }
 
 #[test]
+fn parse_projects_invariants_transformations_and_derived_claims() {
+    // The happy-path test above exercises only the predicate
+    // projection; the bulk of the parse command is the three rendered
+    // projections (invariant bodies, transformation bodies, derived
+    // claims), which need a programme that actually has them.
+    let path = write_fixture(
+        "rich",
+        "program rich\n\
+         predicate Balance(acct: Subject, amount: Decimal)\n\
+         predicate Row(acct: Subject, total: Decimal)\n\
+         intent Posted(acct: Subject)\n\
+         invariant non_negative: Balance(a, x) implies 0 <= x\n\
+         transformation post(acct, amount):\n    \
+             require not Balance(acct, _)\n    \
+             admit Balance(acct, amount)\n    \
+             emit Posted(acct)\n\
+         derived Row(acct):\n    \
+             over Balance(acct, _)\n    \
+             value total = sum(x | Balance(acct, x))\n",
+    );
+    let out = Command::new(bin())
+        .args(["parse", path.to_str().unwrap()])
+        .output()
+        .expect("run morpholog parse");
+    assert!(
+        out.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(out.stdout).unwrap()).expect("stdout is JSON");
+
+    let inv = &parsed["invariants"][0];
+    assert_eq!(inv["name"], "non_negative");
+    assert_eq!(inv["version"], 1);
+    assert!(
+        inv["body"].as_str().unwrap().contains("implies"),
+        "invariant body renders inline: {inv}"
+    );
+
+    let t = &parsed["transformations"][0];
+    assert_eq!(t["name"], "post");
+    assert_eq!(t["parameters"][0], "acct");
+    let body: Vec<&str> = t["body"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.as_str().unwrap())
+        .collect();
+    assert!(
+        body.iter().any(|l| l.contains("require")) && body.iter().any(|l| l.contains("emit")),
+        "transformation body renders statement lines: {body:?}"
+    );
+
+    let d = &parsed["derived_claims"][0];
+    assert_eq!(d["predicate"], "Row");
+    assert_eq!(d["keys"][0], "acct");
+    assert_eq!(d["values"][0]["name"], "total");
+    assert!(
+        d["values"][0]["expr"].as_str().unwrap().contains("sum"),
+        "derived value expression renders inline: {d}"
+    );
+}
+
+#[test]
 fn parse_error_emits_diagnostic_on_stderr_and_exits_nonzero() {
     let path = write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");
     let out = Command::new(bin())
