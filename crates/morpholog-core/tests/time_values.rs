@@ -382,3 +382,98 @@ fn a_parameter_used_only_in_time_arithmetic_infers_its_forced_kind() {
         state.claims()
     );
 }
+
+#[test]
+fn the_remaining_matrix_arms_evaluate() {
+    // Timestamp - Duration (shift an instant backwards) and
+    // Min(Duration, Duration) (the floor's sibling) - the two rule
+    // arms no other test reaches.
+    use morpholog_core::ir_builder::min;
+
+    let p = program("arms")
+        .predicates(vec![
+            predicate("Back").subject("v").timestamp("at").build(),
+            predicate("Shorter").subject("v").duration("d").build(),
+        ])
+        .transformations(vec![
+            transformation(
+                "shift_back",
+                params(&["v", "at"]),
+                vec![
+                    let_("earlier", sub(term(var("at")), term(duration("PT2H")))),
+                    assert_("Back", vec![var("v"), var("earlier")]),
+                ],
+            ),
+            transformation(
+                "cap_below",
+                params(&["v", "a", "b"]),
+                vec![
+                    let_("m", min(term(var("a")), term(var("b")))),
+                    assert_("Shorter", vec![var("v"), var("m")]),
+                ],
+            ),
+        ])
+        .build();
+    assert!(p.validate().is_ok(), "{:?}", p.validate());
+
+    let state = must_accept(
+        p.transformation("shift_back").unwrap(),
+        vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
+        State::default(),
+        &[],
+    );
+    assert!(
+        state
+            .claims()
+            .iter()
+            .any(|c| c.args[1] == ts("2026-10-24T12:00:00Z")),
+        "instant shifted backwards: {:?}",
+        state.claims()
+    );
+
+    let state = must_accept(
+        p.transformation("cap_below").unwrap(),
+        vec![subj("v1"), dur("PT5H"), dur("PT3H")],
+        State::default(),
+        &[],
+    );
+    assert!(
+        state.claims().iter().any(|c| c.args[1] == dur("PT3H")),
+        "min picks the shorter span: {:?}",
+        state.claims()
+    );
+}
+
+#[test]
+fn a_reversed_instant_difference_is_a_negative_span() {
+    // Timestamp subtraction is signed: earlier - later is negative,
+    // and the duration max floor is what models clamp with (the
+    // laytime excess does exactly that). Pinned so the sign semantics
+    // are a documented contract, not an accident.
+    let p = program("signed")
+        .predicates(vec![predicate("Gap").subject("v").duration("d").build()])
+        .transformations(vec![transformation(
+            "measure",
+            params(&["v", "from", "to"]),
+            vec![
+                let_("g", sub(term(var("to")), term(var("from")))),
+                assert_("Gap", vec![var("v"), var("g")]),
+            ],
+        )])
+        .build();
+    let state = must_accept(
+        p.transformation("measure").unwrap(),
+        vec![
+            subj("v1"),
+            ts("2026-10-24T14:00:00Z"),
+            ts("2026-10-24T12:00:00Z"),
+        ],
+        State::default(),
+        &[],
+    );
+    assert!(
+        state.claims().iter().any(|c| c.args[1] == dur("-PT2H")),
+        "reversed difference is negative: {:?}",
+        state.claims()
+    );
+}

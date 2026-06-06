@@ -1044,3 +1044,26 @@ transformation t(v):
 ";
     parse_program(source).expect_err("a signed duration literal must not parse");
 }
+
+#[test]
+fn every_time_comparator_form_parses_and_round_trips() {
+    // The Le forms are exercised by the laytime programme; this pins
+    // the remaining six (and re-pins the two) so no comparator token
+    // is dark: each parses to its (op, domain) pair and survives the
+    // formatter round-trip.
+    let source = "program comparators
+predicate E(v: Subject, a: Timestamp, b: Timestamp, x: Duration, y: Duration)
+
+invariant ts_forms:
+    E(v, a, b, x, y) implies (a at_or_before b and a strictly_before b and b at_or_after a and b strictly_after a)
+
+invariant dur_forms:
+    E(v, a, b, x, y) implies (x no_longer_than y and x shorter_than y and y no_shorter_than x and y longer_than x)
+";
+    let program = parse_program(source).expect("all comparator forms should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program);
+}
