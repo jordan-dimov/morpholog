@@ -97,6 +97,16 @@ enum Command {
     /// `--json` flag because the output IS JSON.
     Schema(SchemaArgs),
 
+    /// Emit a stable content hash of a `.morph` programme's rules:
+    /// SHA-256 over the canonical (formatter-rendered) source, as
+    /// `{"program": ..., "hash": "sha256:..."}`. Formatting-only edits
+    /// do not change the hash; comments do not survive
+    /// canonicalisation, so this is rules-identity, not
+    /// file-identity - the right value for a ruleset_version in
+    /// deployment metadata or an evidence pack. Only a valid
+    /// programme hashes; parse or validation failures exit non-zero.
+    Hash(SourceFileArgs),
+
     /// Replay the audit log to its latest transition and compare the
     /// reconstructed state against the claims table. The two tables are
     /// independent records of the same history, so a difference is
@@ -446,13 +456,24 @@ pub(crate) struct SchemaArgs {
     pub(crate) file: PathBuf,
 
     /// Transformation name whose argument contract to emit.
-    #[arg(required_unless_present = "intent", conflicts_with = "intent")]
+    #[arg(
+        required_unless_present_any = ["intent", "all"],
+        conflicts_with_all = ["intent", "all"]
+    )]
     pub(crate) transformation: Option<String>,
 
     /// Intent type name whose payload contract to emit, instead of a
     /// transformation's arguments.
-    #[arg(long, required_unless_present = "transformation")]
+    #[arg(long, required_unless_present_any = ["transformation", "all"], conflicts_with = "all")]
     pub(crate) intent: Option<String>,
+
+    /// Emit one manifest covering the whole programme: every
+    /// transformation's argument schema, every intent's payload
+    /// schema, the declared predicate vocabulary, and the canonical
+    /// model hash. One artefact for codegen to consume and CI to
+    /// drift-check, instead of N subprocess calls.
+    #[arg(long)]
+    pub(crate) all: bool,
 }
 
 /// Arguments for the `run` subcommand: a `.morph` source file plus the
@@ -575,6 +596,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
+        Command::Hash(args) => commands::hash::run(args),
     }
 }
 

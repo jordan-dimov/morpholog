@@ -169,3 +169,122 @@ fn schema_parse_error_renders_diagnostic_and_exits_nonzero() {
         "stderr should carry the parse diagnostic",
     );
 }
+
+// ============================================================
+// `morpholog hash` and `morpholog schema --all`
+// ============================================================
+
+#[test]
+fn hash_is_formatting_insensitive_and_rule_sensitive() {
+    // Same rules, different formatting and different comments: same
+    // hash. Change a rule: different hash. This is the
+    // rules-identity-not-file-identity contract.
+    let original = write_fixture(
+        "hash_a",
+        "program demo\n\
+         -- a teaching comment\n\
+         predicate Foo(x: Subject, n: Decimal)\n\
+         invariant cap: Foo(x, n) implies n <= 100\n",
+    );
+    let reformatted = write_fixture(
+        "hash_b",
+        "program demo\n\
+         predicate Foo(x:    Subject,   n: Decimal)\n\
+         -- entirely different commentary\n\
+         invariant cap:\n    Foo(x, n) implies n <= 100\n",
+    );
+    let rule_changed = write_fixture(
+        "hash_c",
+        "program demo\n\
+         predicate Foo(x: Subject, n: Decimal)\n\
+         invariant cap: Foo(x, n) implies n <= 99\n",
+    );
+
+    let hash_of = |path: &std::path::Path| -> String {
+        let out = Command::new(bin())
+            .args(["hash", path.to_str().unwrap()])
+            .output()
+            .expect("run morpholog hash");
+        assert!(
+            out.status.success(),
+            "hash should succeed; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(out.stdout).unwrap()).unwrap();
+        assert_eq!(v["program"], "demo");
+        let h = v["hash"].as_str().unwrap().to_string();
+        assert!(h.starts_with("sha256:"), "self-describing prefix: {h}");
+        h
+    };
+
+    let a = hash_of(&original);
+    let b = hash_of(&reformatted);
+    let c = hash_of(&rule_changed);
+    assert_eq!(a, b, "formatting and comments must not change the hash");
+    assert_ne!(a, c, "a rule change must change the hash");
+}
+
+#[test]
+fn schema_all_emits_one_manifest_covering_the_whole_programme() {
+    let path = write_fixture(
+        "manifest",
+        "program manifesto\n\
+         predicate Balance(acct: Subject, amount: Decimal)\n\
+         intent Posted(acct: Subject)\n\
+         invariant non_negative: Balance(a, x) implies 0 <= x\n\
+         transformation post(acct, amount):\n    \
+             admit Balance(acct, amount)\n    \
+             emit Posted(acct)\n\
+         transformation wipe(acct):\n    \
+             retract Balance(acct, _)\n",
+    );
+    let out = Command::new(bin())
+        .args(["schema", path.to_str().unwrap(), "--all"])
+        .output()
+        .expect("run morpholog schema --all");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let m: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(out.stdout).unwrap()).unwrap();
+
+    assert_eq!(m["program"], "manifesto");
+    assert!(m["hash"].as_str().unwrap().starts_with("sha256:"));
+    // Every transformation and intent present, schemas intact.
+    assert!(m["transformations"]["post"]["properties"]["amount"].is_object());
+    assert!(m["transformations"]["wipe"]["properties"]["acct"].is_object());
+    assert!(m["intents"]["Posted"]["properties"]["acct"].is_object());
+    // The predicate vocabulary rides along for claim decoding.
+    assert_eq!(m["predicates"][0]["name"], "Balance");
+    assert_eq!(m["predicates"][0]["args"][0]["name"], "acct");
+
+    // The embedded hash is the same hash `morpholog hash` reports.
+    let h = Command::new(bin())
+        .args(["hash", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let hv: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(h.stdout).unwrap()).unwrap();
+    assert_eq!(m["hash"], hv["hash"], "one hash, two surfaces");
+}
+
+#[test]
+fn schema_all_conflicts_with_the_single_shot_forms() {
+    let path = write_fixture("conflicted", "program p\npredicate A(x: Subject)\n");
+    let out = Command::new(bin())
+        .args([
+            "schema",
+            path.to_str().unwrap(),
+            "some_transformation",
+            "--all",
+        ])
+        .output()
+        .expect("run morpholog schema");
+    assert!(
+        !out.status.success(),
+        "--all plus a positional transformation must conflict"
+    );
+}

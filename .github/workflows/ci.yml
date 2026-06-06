@@ -62,13 +62,20 @@ jobs:
         run: cargo audit
 
   test:
-    name: test (with postgres)
+    name: test (postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    strategy:
+      fail-fast: false
+      matrix:
+        # 17 is the stated floor; 18 is what hosted embedders (the
+        # Glasshouse demo) already run on.
+        postgres: [17, 18]
+
     services:
       postgres:
-        image: postgres:17
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: postgres
         ports:

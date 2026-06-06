@@ -150,6 +150,14 @@ Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate
 
 Read-only. Exit code is always zero on a parsed-and-validated programme, whether the verdict is admissible or rejected; explaining is answering a question, not taking an action. Only operational failures exit non-zero.
 
+### `morpholog hash`
+
+A stable content hash of the programme's rules: SHA-256 over the *canonical source* - the formatter's rendering of the parsed programme - emitted as `{"program": "<name>", "hash": "sha256:<hex>"}`. Because the formatter/parser round-trip makes that rendering canonical, formatting-only edits do not change the hash; and because comments do not survive canonicalisation, this is **rules-identity, not file-identity** - editing teaching prose leaves the hash alone, editing a rule does not. Record it as a `ruleset_version` in deployment metadata, generated-code headers, and evidence packs ("built against model hash X"). Only a valid programme hashes; parse or validation failures exit non-zero.
+
+### `morpholog schema --all`
+
+The whole contract in one artefact: `{"program", "hash", "predicates", "transformations", "intents"}` - every transformation's argument schema and every intent's payload schema keyed by name, the declared predicate vocabulary (the same shape `inspect predicates` emits, for decoding claim args by field name), and the canonical model hash from `morpholog hash`. Entries appear in declaration order, so the manifest is stable for CI drift-checking; one build-step call replaces N subprocess invocations and N artefacts. The single-shot forms (`schema <transformation>`, `schema --intent <Type>`) are unchanged and mutually exclusive with `--all`.
+
 ### `morpholog inspect claims --predicate`
 
 The targeted read of governed state, for building a transition's arguments from claims the embedder did not itself mint (the in-force pointer after a correction, say). `--predicate <Name>` repeats; the result is only claims of the named predicates. Composes with `--as-of` for the historical equivalent - a `transition_id`, or an RFC 3339 timestamp resolved to the last transition committed at or before it - where it scopes the replay itself rather than filtering afterwards.
@@ -167,6 +175,8 @@ What this document promises:
 - The `morpholog run` outcome shape, traced and untraced.
 - The `morpholog explain --json` Explanation shape.
 - The `morpholog inspect claims --predicate` claim-object shape (predicate name plus tagged positional args).
+- The `morpholog hash` output shape and its rules-identity semantics (canonical-source SHA-256; formatting and comments excluded).
+- The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; declaration order).
 - Exit-code semantics for `run` and `explain`.
 
 What is deliberately left open, pending the worked example that forces the shape:

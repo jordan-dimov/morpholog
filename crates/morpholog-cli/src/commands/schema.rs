@@ -32,7 +32,41 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
     let validated = validate_or_exit(&program);
 
-    // Clap enforces exactly-one-of `transformation` / `--intent`.
+    // Clap enforces exactly-one-of `transformation` / `--intent` /
+    // `--all`.
+    if args.all {
+        // The manifest: every contract in one artefact, in declaration
+        // order (stable for CI diffing), stamped with the canonical
+        // model hash so generated code can record exactly which rules
+        // it was built against.
+        let mut transformations = serde_json::Map::new();
+        for t in &program.transformations {
+            let Ok(schema) = transformation_arg_schema(&validated, &t.name) else {
+                unreachable!(
+                    "declared transformation `{}` missing from its own programme",
+                    t.name
+                )
+            };
+            transformations.insert(t.name.to_string(), schema);
+        }
+        let mut intents = serde_json::Map::new();
+        for i in &program.intents {
+            let Some(schema) = intent_arg_schema(&validated, &i.name) else {
+                unreachable!(
+                    "declared intent `{}` missing from its own programme",
+                    i.name
+                )
+            };
+            intents.insert(i.name.to_string(), schema);
+        }
+        return print_json(&serde_json::json!({
+            "program": program.name,
+            "hash": crate::commands::hash::canonical_hash(&program),
+            "predicates": program.predicates,
+            "transformations": transformations,
+            "intents": intents,
+        }));
+    }
     if let Some(intent) = &args.intent {
         match intent_arg_schema(&validated, &IntentName::from(intent.as_str())) {
             Some(schema) => print_json(&schema),
