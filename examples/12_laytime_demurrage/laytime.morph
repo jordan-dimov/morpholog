@@ -1,0 +1,167 @@
+-- Laytime and demurrage - the shipping industry's oldest argument
+-- about time, with the clock's rules enforced by the runtime instead
+-- of by competing spreadsheets attached to angry emails.
+--
+-- A quick tour of the domain, in case chartering is not your world.
+-- When a company hires a ship to carry a cargo, the deal (the
+-- "charterparty") includes an allowance of time for loading and
+-- unloading - the "laytime". Say five days. If the port work takes
+-- longer than the allowance, the hirer pays the owner compensation
+-- for every extra day, called "demurrage" - ships earn money by
+-- moving, and a ship stuck at a berth is a ship not moving. Demurrage
+-- is not a fine and not a breach; it is a priced, expected outcome,
+-- settled to the minute.
+--
+-- And the minutes are exactly where the fighting starts. The clock
+-- does not simply run from arrival to departure: it starts only after
+-- the ship gives formal notice that she is ready (the "Notice of
+-- Readiness", NOR), plus an agreed grace period ("turn time"); it
+-- stops for the periods the charterparty excepts - rain that halts
+-- the cranes, a port holiday; and both sides keep a minute-by-minute
+-- log of events (the "Statement of Facts") that they later argue
+-- over. A demurrage claim is an audit of that log. Whole departments
+-- exist to fight them.
+--
+-- Here is how Morpholog thinks about it. The system stores *claims*
+-- it has agreed to admit because they obey the rules - the tendering
+-- of the NOR at an exact instant, the commencement of the clock, each
+-- stretch of time that counted. Two kinds of rule do the work below:
+--
+--   * an `invariant` is a rule that must hold for all admitted state,
+--     forever. Here the invariants are the *bookkeeping truths*: an
+--     interval's recorded length is exactly the gap between its ends;
+--     no counted time exists before the clock started. Notice what is
+--     deliberately NOT an invariant: using up the allowance. Running
+--     over the laytime is the normal story - that is what demurrage
+--     *is* - so the model must record it calmly, not forbid it.
+--   * a `require` is a gate on one action, checked at the moment you
+--     act. The clock may not start before the notice is tendered;
+--     counted time may not be recorded before the clock starts. Gates
+--     police the order of events; invariants keep the arithmetic
+--     honest forever.
+--
+-- Time itself appears in two distinct shapes, and the distinction is
+-- the lesson of this example. A `Timestamp` is an exact instant on
+-- the shared UTC timeline - the moment the NOR was tendered. A
+-- `Duration` is a length of time with no position - six hours of turn
+-- time, three days of counted laytime. Instants subtract into
+-- durations; durations add up and compare. (What this model does not
+-- yet say is anything about *local* port time - the day that is 25
+-- hours long when the clocks fall back. That interpretation enters as
+-- admitted claims in this example's next stage, not as a hidden
+-- runtime assumption.)
+
+program laytime_demurrage
+
+-- The vocabulary. Each `predicate` names a kind of claim this world
+-- can hold: the fixture (the deal's agreed numbers), the notice, the
+-- running clock, and each stretch of time that counted against the
+-- allowance.
+predicate VoyageFixture(voyage: Subject, vessel: Subject, port: Subject, allowed: Duration)
+predicate NorTendered(nor: Subject, voyage: Subject, tendered_at: Timestamp)
+predicate LaytimeCommenced(voyage: Subject, commenced_at: Timestamp)
+predicate CountingInterval(interval: Subject, voyage: Subject, from: Timestamp, to: Timestamp, len: Duration)
+predicate CargoOpsCompleted(voyage: Subject, completed_at: Timestamp)
+
+-- The read-side result both parties actually care about: how much
+-- time, if any, ran past the allowance. Derived, never stored - see
+-- the bottom of the file.
+predicate TimeOnDemurrage(voyage: Subject, excess: Duration)
+
+-- Intents are messages to the outside world after a change commits -
+-- the operations team learns the clock started; the demurrage desk
+-- learns the cargo work is done and the counting can be argued about.
+intent LaytimeClockStarted(voyage: Subject)
+intent CargoOpsDone(voyage: Subject)
+
+-- The bookkeeping truths. If any change below would leave the world
+-- violating one of these, the whole change is rejected.
+
+-- An interval's recorded length is exactly the gap between its ends -
+-- not "about", exactly. Anyone re-adding the Statement of Facts must
+-- reach the same total, or the claim could never have been admitted.
+invariant interval_length_is_its_span:
+    CountingInterval(i, v, f, t, len) implies len = t - f
+
+-- Time can only count after the clock has started, and never from
+-- before it started. (The gate on `record_counting_interval` checks
+-- the same thing at action time; this invariant makes it a permanent
+-- property of the world that even a future, carelessly written
+-- transformation cannot break.)
+invariant counted_time_follows_commencement:
+    CountingInterval(i, v, f, t, len) implies (LaytimeCommenced(v, c) and c at_or_before f)
+
+-- The clock starts once per voyage. Two commencements would mean two
+-- competing readings of every interval that follows.
+invariant clock_starts_once:
+    LaytimeCommenced(v, a) and LaytimeCommenced(v, b) implies a = b
+
+-- One notice per voyage in this simplified model. (Real charterparties
+-- argue about re-tendered notices; that argument arrives with the
+-- Statement-of-Facts corrections in this example's next stage.)
+invariant one_notice_per_voyage:
+    NorTendered(a, v, _) and NorTendered(b, v, _) implies a = b
+
+-- The only ways state may change.
+
+-- Fix the voyage: the deal's numbers, agreed before the ship sails.
+-- The allowance arrives as a duration - `PT120H` is five days - and
+-- stays untouched by everything that follows; the question is only
+-- ever how the counted time compares to it.
+transformation fix_voyage(voyage, vessel, port, allowed):
+    require not VoyageFixture(voyage, _, _, _)
+    admit VoyageFixture(voyage, vessel, port, allowed)
+
+-- The master tenders Notice of Readiness: a formal "we are here and
+-- ready", at an exact instant. Everything downstream hangs off this
+-- moment, which is why it is a first-class claim with its own id.
+transformation tender_nor(nor, voyage, tendered_at):
+    require VoyageFixture(voyage, _, _, _)
+    require not NorTendered(_, voyage, _)
+    admit NorTendered(nor, voyage, tendered_at)
+
+-- Start the clock. The charterparty grants six hours of turn time
+-- after the notice, so commencement is *computed*: the tendering
+-- instant shifted by an exact duration. Note the zero-length seed
+-- interval admitted alongside: it opens the count at zero, so the
+-- running total below is never a sum over nothing.
+transformation commence_laytime(voyage, seed):
+    bind NorTendered(_, voyage, tendered_at)
+    require not LaytimeCommenced(voyage, _)
+    let commenced_at = tendered_at + duration(PT6H)
+    admit LaytimeCommenced(voyage, commenced_at)
+    admit CountingInterval(seed, voyage, commenced_at, commenced_at, duration(PT0S))
+    emit LaytimeClockStarted(voyage)
+
+-- Record a stretch of time that counted against the allowance - the
+-- Statement of Facts, one line at a time. The gates police the order
+-- of events: the clock must be running, the stretch must start no
+-- earlier than commencement, and it must not end before it begins.
+-- The length is computed from the ends, and the invariant above
+-- guarantees it can never drift from them.
+transformation record_counting_interval(interval, voyage, from, to):
+    bind LaytimeCommenced(voyage, commenced_at)
+    require commenced_at at_or_before from
+    require from at_or_before to
+    let len = to - from
+    admit CountingInterval(interval, voyage, from, to, len)
+
+-- Cargo work is done. From this instant the counted total is final
+-- (in this stage of the model) and the demurrage conversation begins.
+transformation complete_cargo_ops(voyage, completed_at):
+    bind LaytimeCommenced(voyage, commenced_at)
+    require commenced_at at_or_before completed_at
+    require not CargoOpsCompleted(voyage, _)
+    admit CargoOpsCompleted(voyage, completed_at)
+    emit CargoOpsDone(voyage)
+
+-- The answer, computed rather than stored. Counted time is the sum of
+-- the interval lengths; time on demurrage is whatever ran past the
+-- allowance, floored at zero - `max` keeps a voyage that finished
+-- early from showing negative demurrage. Because this is derived, it
+-- can never disagree with the intervals it is built from: correct an
+-- interval (next stage) and the answer moves with it, while anything
+-- already settled on the old figure stands on its own record.
+derived TimeOnDemurrage(voyage):
+    over VoyageFixture(voyage, _, _, allowed)
+    value excess = max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S))
