@@ -233,11 +233,11 @@ fn schema_all_emits_one_manifest_covering_the_whole_programme() {
          predicate Balance(acct: Subject, amount: Decimal)\n\
          intent Posted(acct: Subject)\n\
          invariant non_negative: Balance(a, x) implies 0 <= x\n\
+         transformation wipe(acct):\n    \
+             retract Balance(acct, _)\n\
          transformation post(acct, amount):\n    \
              admit Balance(acct, amount)\n    \
-             emit Posted(acct)\n\
-         transformation wipe(acct):\n    \
-             retract Balance(acct, _)\n",
+             emit Posted(acct)\n",
     );
     let out = Command::new(bin())
         .args(["schema", path.to_str().unwrap(), "--all"])
@@ -257,6 +257,16 @@ fn schema_all_emits_one_manifest_covering_the_whole_programme() {
     assert!(m["transformations"]["post"]["properties"]["amount"].is_object());
     assert!(m["transformations"]["wipe"]["properties"]["acct"].is_object());
     assert!(m["intents"]["Posted"]["properties"]["acct"].is_object());
+    // Declaration order is the explicit arrays, never object key
+    // order. The fixture declares `wipe` before `post` precisely so
+    // declaration order differs from alphabetical - a sorted-map
+    // accident cannot satisfy this assertion.
+    assert_eq!(
+        m["transformation_order"],
+        serde_json::json!(["wipe", "post"]),
+        "declaration order, not alphabetical"
+    );
+    assert_eq!(m["intent_order"], serde_json::json!(["Posted"]));
     // The predicate vocabulary rides along for claim decoding.
     assert_eq!(m["predicates"][0]["name"], "Balance");
     assert_eq!(m["predicates"][0]["args"][0]["name"], "acct");
@@ -287,4 +297,16 @@ fn schema_all_conflicts_with_the_single_shot_forms() {
         !out.status.success(),
         "--all plus a positional transformation must conflict"
     );
+    // The mirror: --intent plus --all is the same conflict.
+    let out = Command::new(bin())
+        .args([
+            "schema",
+            path.to_str().unwrap(),
+            "--intent",
+            "Posted",
+            "--all",
+        ])
+        .output()
+        .expect("run morpholog schema");
+    assert!(!out.status.success(), "--all plus --intent must conflict");
 }

@@ -35,10 +35,21 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     // Clap enforces exactly-one-of `transformation` / `--intent` /
     // `--all`.
     if args.all {
-        // The manifest: every contract in one artefact, in declaration
-        // order (stable for CI diffing), stamped with the canonical
-        // model hash so generated code can record exactly which rules
-        // it was built against.
+        // The manifest: every contract in one artefact, stamped with
+        // the canonical model hash so generated code can record
+        // exactly which rules it was built against. Keyed objects give
+        // codegen lookup by name; the *_order arrays carry declaration
+        // order explicitly, because JSON object key order is not a
+        // contract (serde_json's map is sorted, and embedders should
+        // not rely on object ordering anyway) - the manifest-level
+        // analogue of x-morpholog-arg-order.
+        let transformation_order: Vec<String> = program
+            .transformations
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let intent_order: Vec<String> =
+            program.intents.iter().map(|i| i.name.to_string()).collect();
         let mut transformations = serde_json::Map::new();
         for t in &program.transformations {
             let Ok(schema) = transformation_arg_schema(&validated, &t.name) else {
@@ -63,7 +74,9 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
             "program": program.name,
             "hash": crate::commands::hash::canonical_hash(&program),
             "predicates": program.predicates,
+            "transformation_order": transformation_order,
             "transformations": transformations,
+            "intent_order": intent_order,
             "intents": intents,
         }));
     }
@@ -85,6 +98,6 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
             }
         }
     } else {
-        unreachable!("clap enforces exactly-one-of `transformation` and `--intent`");
+        unreachable!("clap enforces exactly-one-of `transformation`, `--intent`, and `--all`");
     }
 }
