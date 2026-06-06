@@ -284,6 +284,10 @@ fn check_all_worked_examples_are_well_formed() {
         "examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph",
         "examples/07_chess_transition_invariants/chess.morph",
         "examples/08_kyc_sanctions_screening/kyc.morph",
+        "examples/09_carbon_credit_provenance/carbon_credit_provenance.morph",
+        "examples/10_trade_lifecycle/trade_lifecycle.morph",
+        "examples/11_borrowing_base/borrowing_base.morph",
+        "examples/12_laytime_demurrage/laytime.morph",
     ] {
         let path = repo_root().join(rel);
         let out = Command::new(bin())

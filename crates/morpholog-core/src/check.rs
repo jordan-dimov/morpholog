@@ -33,8 +33,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value, ValueExpr,
-    Var,
+    ArithOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value,
+    ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -432,6 +432,8 @@ impl CheckCtx<'_> {
                 let kind = match domain {
                     OrderedDomain::Decimal => PredicateArgKind::Decimal,
                     OrderedDomain::Date => PredicateArgKind::Date,
+                    OrderedDomain::Timestamp => PredicateArgKind::Timestamp,
+                    OrderedDomain::Duration => PredicateArgKind::Duration,
                 };
                 self.check_operand_kind(left, kind, token, scope);
                 self.check_operand_kind(right, kind, token, scope);
@@ -640,9 +642,67 @@ impl CheckCtx<'_> {
             }
             ValueExpr::Arith { op, left, right } => {
                 let operator = arith_token(*op);
-                self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
-                self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
-                InferredKind::Known(PredicateArgKind::Decimal)
+                // Mul / Div / Mod remain decimal-only, so both operands
+                // are asserted (and bare variables refined) exactly as
+                // before the time kinds arrived.
+                if matches!(op, ArithOp::Mul | ArithOp::Div | ArithOp::Mod) {
+                    self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
+                    self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
+                    return InferredKind::Known(PredicateArgKind::Decimal);
+                }
+                // Add / Sub / Min / Max span the decimal and time
+                // domains. Infer both sides; when both are known, the
+                // rule matrix decides (and a missing rule is an error
+                // here, at authoring time, not at evaluation). When one
+                // side is a known Decimal the other must be Decimal too
+                // (no mixed rule has a decimal operand), so refinement
+                // is sound; a known time kind leaves the other side
+                // unrefined because two rules could apply.
+                let l = self.infer_value(left, scope);
+                let r = self.infer_value(right, scope);
+                match (l, r) {
+                    (InferredKind::Known(a), InferredKind::Known(b)) => {
+                        match arith_result_kind(*op, a, b) {
+                            Some(kind) => InferredKind::Known(kind),
+                            None => {
+                                let context = self.context.clone();
+                                self.errors.push(ValidationError::NoArithRule {
+                                    operator,
+                                    left: a,
+                                    right: b,
+                                    context,
+                                });
+                                InferredKind::UnknownOrAny
+                            }
+                        }
+                    }
+                    // One side known: when exactly one rule fits that
+                    // side, the other side's kind is forced and a bare
+                    // variable there is refined (an externally supplied
+                    // turn time in `tendered_at + turn_time` infers
+                    // Duration). When several rules fit (`Timestamp -
+                    // x` could subtract an instant or a span), nothing
+                    // is assumed.
+                    (InferredKind::Known(k), InferredKind::UnknownOrAny) => {
+                        match arith_unique_counterpart(*op, k, true) {
+                            Some((expected, result)) => {
+                                self.check_operand_kind(right, expected, operator, scope);
+                                InferredKind::Known(result)
+                            }
+                            None => InferredKind::UnknownOrAny,
+                        }
+                    }
+                    (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
+                        match arith_unique_counterpart(*op, k, false) {
+                            Some((expected, result)) => {
+                                self.check_operand_kind(left, expected, operator, scope);
+                                InferredKind::Known(result)
+                            }
+                            None => InferredKind::UnknownOrAny,
+                        }
+                    }
+                    _ => InferredKind::UnknownOrAny,
+                }
             }
             ValueExpr::Sum { value, body } => {
                 // Body-first inference on a cloned scope so body-
@@ -656,6 +716,12 @@ impl CheckCtx<'_> {
                     self.use_var(&scoped, name);
                 }
                 let resolved = resolved_term_kind(value, &scoped.kinds);
+                // A sum of durations is the laytime-counting shape; a
+                // sum of decimals is every aggregate before it. Any
+                // other known kind is an authoring-time error.
+                if let InferredKind::Known(PredicateArgKind::Duration) = resolved {
+                    return InferredKind::Known(PredicateArgKind::Duration);
+                }
                 if let InferredKind::Known(actual) = resolved
                     && !kinds_compatible(PredicateArgKind::Decimal, actual)
                 {
@@ -957,6 +1023,10 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
     }
 }
 
+/// The arithmetic rule matrix over known operand kinds. `None` means
+/// no rule exists and authoring-time validation reports it. Mirrors
+/// the evaluator's runtime matrix exactly; the time-values test suite
+/// couples the two.
 /// Inherent kind of a `Term`. Variables are `UnknownOrAny` here;
 /// callers that want the env-resolved kind look it up separately.
 fn term_kind(term: &Term) -> InferredKind {
@@ -966,6 +1036,8 @@ fn term_kind(term: &Term) -> InferredKind {
         Term::Literal(Value::Subject(_)) => InferredKind::Known(PredicateArgKind::Subject),
         Term::Literal(Value::Decimal(_)) => InferredKind::Known(PredicateArgKind::Decimal),
         Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),
+        Term::Literal(Value::Timestamp(_)) => InferredKind::Known(PredicateArgKind::Timestamp),
+        Term::Literal(Value::Duration(_)) => InferredKind::Known(PredicateArgKind::Duration),
     }
 }
 
@@ -1761,8 +1833,10 @@ mod tests {
     }
 
     #[test]
-    fn add_with_subject_literal_operand_flags_operand_mismatch() {
-        // Arithmetic on a subject literal is the unambiguous bug.
+    fn add_with_subject_literal_operand_flags_no_arith_rule() {
+        // Arithmetic on a subject literal is the unambiguous bug. With
+        // the time kinds in the matrix, the report names both operand
+        // kinds rather than assuming Decimal was intended.
         let mut p = empty_program();
         p.invariants = vec![invariant(
             "bad_add",
@@ -1775,14 +1849,14 @@ mod tests {
         assert!(
             errs.iter().any(|e| matches!(
                 e,
-                ValidationError::OperandKindMismatch {
+                ValidationError::NoArithRule {
                     operator: "+",
-                    expected: PredicateArgKind::Decimal,
-                    actual: PredicateArgKind::Subject,
+                    left: PredicateArgKind::Decimal,
+                    right: PredicateArgKind::Subject,
                     ..
                 }
             )),
-            "expected OperandKindMismatch on `+`, got {errs:?}"
+            "expected NoArithRule on `+`, got {errs:?}"
         );
     }
 

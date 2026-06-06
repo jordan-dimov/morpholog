@@ -128,6 +128,10 @@ fn decode_value(
         ParamKind::Concrete(PredicateArgKind::Subject) => decode_subject(param, raw, schema_hint),
         ParamKind::Concrete(PredicateArgKind::Decimal) => decode_decimal(param, raw, schema_hint),
         ParamKind::Concrete(PredicateArgKind::Date) => decode_date(param, raw, schema_hint),
+        ParamKind::Concrete(PredicateArgKind::Timestamp) => {
+            decode_timestamp(param, raw, schema_hint)
+        }
+        ParamKind::Concrete(PredicateArgKind::Duration) => decode_duration(param, raw, schema_hint),
         ParamKind::Concrete(PredicateArgKind::Bool) => decode_bool(param, raw, schema_hint),
         ParamKind::Concrete(PredicateArgKind::Collection) => bail!(
             "parameter `{param}` is Collection; --args-named cannot decode bare arrays \
@@ -258,6 +262,41 @@ fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<Ev
     Ok(EvalValue::Date(d))
 }
 
+fn decode_timestamp(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+    let s = raw.as_str().ok_or_else(|| {
+        anyhow!(
+            "parameter `{param}` is Timestamp but received {}; expected an RFC 3339 \
+             instant string (e.g. \"2026-10-24T14:00:00Z\"). {schema_hint}",
+            describe_value(raw),
+        )
+    })?;
+    let t = s.parse::<jiff::Timestamp>().map_err(|e| {
+        anyhow!(
+            "parameter `{param}` is Timestamp but `{s}` failed to parse: {e}. \
+             Expected RFC 3339 (e.g. 2026-10-24T14:00:00Z). {schema_hint}"
+        )
+    })?;
+    Ok(EvalValue::Timestamp(t))
+}
+
+fn decode_duration(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+    let s = raw.as_str().ok_or_else(|| {
+        anyhow!(
+            "parameter `{param}` is Duration but received {}; expected an ISO-8601 \
+             duration string in exact time units (e.g. \"PT6H\"). {schema_hint}",
+            describe_value(raw),
+        )
+    })?;
+    let d = s.parse::<jiff::SignedDuration>().map_err(|e| {
+        anyhow!(
+            "parameter `{param}` is Duration but `{s}` failed to parse: {e}. \
+             Expected ISO 8601 time units (e.g. PT6H, PT1H30M); calendar units \
+             (months, years) are not accepted. {schema_hint}"
+        )
+    })?;
+    Ok(EvalValue::Duration(d))
+}
+
 fn decode_bool(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
     raw.as_bool().map(EvalValue::Bool).ok_or_else(|| {
         anyhow!(
@@ -284,6 +323,8 @@ fn kind_label(kind: &PredicateArgKind) -> &'static str {
         PredicateArgKind::Subject => "Subject",
         PredicateArgKind::Decimal => "Decimal",
         PredicateArgKind::Date => "Date",
+        PredicateArgKind::Timestamp => "Timestamp",
+        PredicateArgKind::Duration => "Duration",
         PredicateArgKind::Bool => "Bool",
         PredicateArgKind::Collection => "Collection",
         PredicateArgKind::Any => "Any",

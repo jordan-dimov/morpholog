@@ -89,6 +89,19 @@ pub fn date(s: &str) -> Term {
     Term::Literal(Value::Date(s.to_string()))
 }
 
+/// RFC 3339 UTC-instant literal. Stored as the exact source string;
+/// the evaluator parses it to `jiff::Timestamp` on use.
+pub fn timestamp(s: &str) -> Term {
+    Term::Literal(Value::Timestamp(s.to_string()))
+}
+
+/// ISO-8601 duration literal in exact time units (e.g. `PT6H`). Stored
+/// as the exact source string; the evaluator parses it to
+/// `jiff::SignedDuration` on use.
+pub fn duration(s: &str) -> Term {
+    Term::Literal(Value::Duration(s.to_string()))
+}
+
 /// Semantic alias for [`subj`]. Identical runtime representation;
 /// documents reader intent at the call site when the subject names a
 /// delegated role. Resist adding more aliases until an example forces
@@ -175,6 +188,14 @@ pub fn le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
 
 pub fn date_le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Le, OrderedDomain::Date, lhs, rhs)
+}
+
+pub fn timestamp_le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
+    compare(CompareOp::Le, OrderedDomain::Timestamp, lhs, rhs)
+}
+
+pub fn duration_le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
+    compare(CompareOp::Le, OrderedDomain::Duration, lhs, rhs)
 }
 
 pub fn in_(elem: Term, coll: Term) -> Prop {
@@ -376,6 +397,14 @@ impl PredicateDeclBuilder {
 
     pub fn date(self, name: &str) -> Self {
         self.arg(name, PredicateArgKind::Date)
+    }
+
+    pub fn timestamp(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Timestamp)
+    }
+
+    pub fn duration(self, name: &str) -> Self {
+        self.arg(name, PredicateArgKind::Duration)
     }
 
     /// Boolean-kinded argument. Named `boolean` rather than `bool`

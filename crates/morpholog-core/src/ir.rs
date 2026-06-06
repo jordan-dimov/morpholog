@@ -261,14 +261,20 @@ pub enum Prop {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueExpr {
     Term(Term),
-    /// Binary decimal arithmetic: `left <op> right`, both operands
-    /// evaluating to `EvalValue::Decimal`. The operator is the [`ArithOp`]
-    /// field rather than a variant per operator - the value-sort analogue
-    /// of [`Prop::Compare`] carrying a [`CompareOp`]. `Div` and `Mod`
-    /// surface [`crate::EvalError::DivisionByZero`] on a zero divisor; the
+    /// Binary arithmetic: `left <op> right`. The operator is the
+    /// [`ArithOp`] field rather than a variant per operator - the
+    /// value-sort analogue of [`Prop::Compare`] carrying a
+    /// [`CompareOp`]. Operand kinds follow the rule matrix
+    /// (`arith_result_kind`): decimals support every operator;
+    /// instants shift by durations (`Add`/`Sub`) and difference into
+    /// durations (`Sub`); durations add, subtract, and cap
+    /// (`Min`/`Max`); `Mul`/`Div`/`Mod` stay decimal-only. A pair with
+    /// no rule is `NoArithRule` at validation and `TypeMismatch` at
+    /// evaluation. `Div` and `Mod` surface
+    /// [`crate::EvalError::DivisionByZero`] on a zero divisor; the
     /// rest are total. Admission gates express ratio rules in the
-    /// multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact; `Div`
-    /// is reserved for read-side projections.
+    /// multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact;
+    /// `Div` is reserved for read-side projections.
     Arith {
         op: ArithOp,
         left: Box<ValueExpr>,
@@ -344,12 +350,61 @@ impl ArithOp {
 
 /// The ordered domain an [`Prop::Compare`] compares over. Explicit in the
 /// IR, never inferred from operand kind: the surface picks it by token (`<`
-/// decimal, `before` date), so there is no runtime operator overloading and
-/// each domain type-checks its own operands.
+/// decimal, `before` date, `strictly_before` timestamp, `shorter_than`
+/// duration), so there is no runtime operator overloading and each domain
+/// type-checks its own operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderedDomain {
     Decimal,
     Date,
+    Timestamp,
+    Duration,
+}
+
+/// Given one known operand of an additive/cap operator, the kind the
+/// other operand must have - if exactly one rule in the matrix fits.
+/// `known_is_left` says which side the known kind sits on (the matrix
+/// is not symmetric: `Timestamp + Duration` has a rule, `Duration +
+/// Timestamp` does not). Returns `(expected other kind, result kind)`,
+/// or `None` when zero or several rules fit and nothing can be
+/// soundly assumed.
+pub(crate) fn arith_unique_counterpart(
+    op: ArithOp,
+    known: PredicateArgKind,
+    known_is_left: bool,
+) -> Option<(PredicateArgKind, PredicateArgKind)> {
+    use PredicateArgKind::{Decimal, Duration, Timestamp};
+    let mut fits = [Decimal, Timestamp, Duration]
+        .into_iter()
+        .filter_map(|other| {
+            let (l, r) = if known_is_left {
+                (known, other)
+            } else {
+                (other, known)
+            };
+            arith_result_kind(op, l, r).map(|result| (other, result))
+        });
+    match (fits.next(), fits.next()) {
+        (Some(unique), None) => Some(unique),
+        _ => None,
+    }
+}
+
+pub(crate) fn arith_result_kind(
+    op: ArithOp,
+    left: PredicateArgKind,
+    right: PredicateArgKind,
+) -> Option<PredicateArgKind> {
+    use PredicateArgKind::{Decimal, Duration, Timestamp};
+    match (op, left, right) {
+        (_, Decimal, Decimal) => Some(Decimal),
+        (ArithOp::Add | ArithOp::Sub, Timestamp, Duration) => Some(Timestamp),
+        (ArithOp::Sub, Timestamp, Timestamp) => Some(Duration),
+        (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Duration, Duration) => {
+            Some(Duration)
+        }
+        _ => None,
+    }
 }
 
 /// A positional argument in a claim, intent, or expression: a variable
@@ -388,6 +443,19 @@ pub enum Value {
     /// No time-of-day, no time zone: validity-window modelling on civil
     /// dates is the only temporal primitive in v0.
     Date(String),
+    /// An exact instant on the UTC timeline (RFC 3339, e.g.
+    /// `2026-10-24T14:00:00Z`), stored as its exact source string;
+    /// parsing into [`jiff::Timestamp`] is the evaluator's concern.
+    /// Deliberately zone-less: civil-time interpretation (port-local
+    /// days, DST boundaries) is domain knowledge to be admitted as
+    /// claims, not a hidden runtime assumption.
+    Timestamp(String),
+    /// An exact span of time (ISO 8601, e.g. `PT6H`), stored as its
+    /// exact source string; parsing into [`jiff::SignedDuration`] is
+    /// the evaluator's concern. Exact seconds only - no calendar
+    /// units (months, years), whose lengths depend on context the
+    /// kernel refuses to guess.
+    Duration(String),
 }
 
 /// A Claim is an admitted assertion candidate - a statement that may be
@@ -659,6 +727,8 @@ pub enum PredicateArgKind {
     Subject,
     Decimal,
     Date,
+    Timestamp,
+    Duration,
     Bool,
     Collection,
     Any,

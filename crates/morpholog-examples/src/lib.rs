@@ -58,6 +58,7 @@ pub mod clinical_trial_enrolment;
 pub mod double_entry_ledger;
 pub mod insurance_claim_settlement;
 pub mod kyc_sanctions_screening;
+pub mod laytime_demurrage;
 pub mod settlement_netting;
 pub mod trade_lifecycle;
 pub mod verified_revenue;

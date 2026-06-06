@@ -159,6 +159,8 @@ impl Ord for EvalValueOrd {
                 EvalValue::Bool(_) => 2,
                 EvalValue::Collection(_) => 3,
                 EvalValue::Date(_) => 4,
+                EvalValue::Timestamp(_) => 5,
+                EvalValue::Duration(_) => 6,
             }
         }
 
@@ -167,6 +169,8 @@ impl Ord for EvalValueOrd {
             (EvalValue::Subject(a), EvalValue::Subject(b)) => a.as_str().cmp(b.as_str()),
             (EvalValue::Bool(a), EvalValue::Bool(b)) => a.cmp(b),
             (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
+            (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a.cmp(b),
+            (EvalValue::Duration(a), EvalValue::Duration(b)) => a.cmp(b),
             (EvalValue::Collection(a), EvalValue::Collection(b)) => {
                 for (l, r) in a.iter().zip(b.iter()) {
                     let ord = EvalValueOrd(l.clone()).cmp(&EvalValueOrd(r.clone()));

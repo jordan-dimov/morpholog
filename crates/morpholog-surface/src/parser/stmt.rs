@@ -50,6 +50,7 @@
 //! "the next statement keyword". The body of a transformation
 //! parses as `stmt+` with no explicit punctuation.
 
+use super::expr::duration_ctor;
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, Value, ValueExpr};
@@ -80,11 +81,17 @@ where
         let date_lit = select! { Token::DateLit(s) => s };
         let subject_lit = select! { Token::SubjectLit(s) => s };
 
-        // term ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
+        // term ::= Ident | "_" | DecimalLit | TimestampLit | DateLit
+        //        | duration(ISO) | SubjectLit
+        let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
             date_lit.map(|s| Term::Literal(Value::Date(s))),
+            // Before bare idents so `duration(...)` is the constructor,
+            // not a variable followed by a stray paren.
+            duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
             subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
             ident.map(|name| {
                 if name == "actor" {

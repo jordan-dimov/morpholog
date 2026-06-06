@@ -1,0 +1,50 @@
+//! Laytime and demurrage example.
+//!
+//! Authored as surface source at
+//! `examples/12_laytime_demurrage/laytime.morph`; this module parses
+//! it and exposes the registered program plus the by-name accessors
+//! the tests use. There is no hand-built IR: the `.morph` file is the
+//! source of truth.
+
+use std::sync::LazyLock;
+
+use morpholog_core::{DerivedClaim, Invariant, Program, Transformation};
+
+static PROGRAM: LazyLock<Program> = LazyLock::new(|| {
+    crate::parse_example(
+        "laytime_demurrage",
+        include_str!("../../../examples/12_laytime_demurrage/laytime.morph"),
+    )
+});
+
+pub fn program() -> Program {
+    PROGRAM.clone()
+}
+
+pub fn all_invariants() -> Vec<Invariant> {
+    PROGRAM.invariants.clone()
+}
+
+pub fn fix_voyage() -> Transformation {
+    crate::transformation(&PROGRAM, "fix_voyage")
+}
+
+pub fn tender_nor() -> Transformation {
+    crate::transformation(&PROGRAM, "tender_nor")
+}
+
+pub fn commence_laytime() -> Transformation {
+    crate::transformation(&PROGRAM, "commence_laytime")
+}
+
+pub fn record_counting_interval() -> Transformation {
+    crate::transformation(&PROGRAM, "record_counting_interval")
+}
+
+pub fn complete_cargo_ops() -> Transformation {
+    crate::transformation(&PROGRAM, "complete_cargo_ops")
+}
+
+pub fn time_on_demurrage() -> DerivedClaim {
+    crate::derived(&PROGRAM, "TimeOnDemurrage")
+}

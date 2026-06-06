@@ -946,3 +946,141 @@ fn duplicate_value_names_in_derived_are_rejected() {
         "expected duplicate-value-name diagnostic; got: {errs:?}"
     );
 }
+
+// ============================================================
+// Time values: timestamp literals, duration constructor, the
+// instant/span comparators, and the formatter round-trip.
+// ============================================================
+
+const TIME_SOURCE: &str = "program time_demo
+predicate NorTendered(voyage: Subject, at: Timestamp)
+predicate Commenced(voyage: Subject, at: Timestamp)
+predicate CountingInterval(interval: Subject, voyage: Subject, len: Duration)
+predicate AllowedLaytime(voyage: Subject, allowed: Duration)
+
+invariant commencement_not_before_nor:
+    Commenced(v, c) and NorTendered(v, n) implies n at_or_before c
+
+invariant counted_within_allowance:
+    AllowedLaytime(v, a) implies sum(len | CountingInterval(_, v, len)) no_longer_than a
+
+transformation commence_after_turn(voyage):
+    bind NorTendered(voyage, n)
+    let c = n + duration(PT6H)
+    admit Commenced(voyage, c)
+
+transformation tender_at_noon(voyage):
+    admit NorTendered(voyage, @2026-10-24T12:00:00Z)
+";
+
+#[test]
+fn time_programme_parses_and_validates() {
+    let program = parse_program(TIME_SOURCE).expect("time programme should parse");
+    assert!(
+        program.validate().is_ok(),
+        "should validate: {:?}",
+        program.validate()
+    );
+    assert_eq!(program.invariants.len(), 2);
+}
+
+#[test]
+fn time_programme_round_trips_through_the_formatter() {
+    let program = parse_program(TIME_SOURCE).expect("parse");
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+}
+
+#[test]
+fn malformed_duration_literal_is_a_parse_diagnostic() {
+    let source = "program bad
+predicate P(x: Duration)
+transformation t(v):
+    admit P(duration(NOT_ISO))
+";
+    let err = parse_program(source).expect_err("NOT_ISO is not a duration");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("invalid duration literal"),
+        "diagnostic should name the bad literal: {msg}"
+    );
+}
+
+#[test]
+fn duration_stays_usable_as_a_variable_name() {
+    // The constructor is contextual: `duration` followed by `(` only.
+    let source = "program ctx
+predicate Holds(duration: Duration)
+transformation t(duration):
+    admit Holds(duration)
+";
+    let program = parse_program(source).expect("`duration` as a name should parse");
+    assert!(program.validate().is_ok());
+}
+
+#[test]
+fn timestamp_literal_with_offset_parses() {
+    let source = "program offsets
+predicate E(at: Timestamp)
+transformation t(v):
+    admit E(@2026-10-25T01:30:00+01:00)
+";
+    let program = parse_program(source).expect("offset timestamp should lex and parse");
+    assert!(program.validate().is_ok());
+}
+
+#[test]
+fn negative_duration_literals_are_deliberately_unsupported_in_surface() {
+    // The constructor payload lexes as a single identifier, so a
+    // leading sign cannot appear. Negative spans arise from
+    // arithmetic (`a - b`), never from literals; if a model ever
+    // genuinely needs a negative literal, that example reopens this.
+    let source = "program neg
+predicate P(x: Duration)
+transformation t(v):
+    admit P(duration(-PT6H))
+";
+    parse_program(source).expect_err("a signed duration literal must not parse");
+}
+
+#[test]
+fn every_time_comparator_form_parses_and_round_trips() {
+    // The Le forms are exercised by the laytime programme; this pins
+    // the remaining six (and re-pins the two) so no comparator token
+    // is dark: each parses to its (op, domain) pair and survives the
+    // formatter round-trip.
+    let source = "program comparators
+predicate E(v: Subject, a: Timestamp, b: Timestamp, x: Duration, y: Duration)
+
+invariant ts_forms:
+    E(v, a, b, x, y) implies (a at_or_before b and a strictly_before b and b at_or_after a and b strictly_after a)
+
+invariant dur_forms:
+    E(v, a, b, x, y) implies (x no_longer_than y and x shorter_than y and y no_shorter_than x and y longer_than x)
+";
+    let program = parse_program(source).expect("all comparator forms should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program);
+}
+
+#[test]
+fn an_impossible_calendar_timestamp_is_a_lex_diagnostic() {
+    // Shape-valid but not a real instant: month 13. Caught at lex via
+    // jiff, the same early-diagnostic treatment `duration(...)` gets.
+    let source = "program bad_instant
+predicate E(at: Timestamp)
+transformation t(v):
+    admit E(@2026-13-40T12:00:00Z)
+";
+    let err = parse_program(source).expect_err("month 13 is not an instant");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("invalid timestamp literal"),
+        "diagnostic should name the bad literal: {msg}"
+    );
+}

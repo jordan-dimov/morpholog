@@ -4,8 +4,8 @@
 //!
 //! - Declaration keywords: `program`, `predicate`, `intent`,
 //!   `invariant`, `transformation`, `derived`.
-//! - Kind keywords: `Subject`, `Decimal`, `Date`, `Bool`,
-//!   `Collection`, `Any`.
+//! - Kind keywords: `Subject`, `Decimal`, `Date`, `Timestamp`,
+//!   `Duration`, `Bool`, `Collection`, `Any`.
 //! - Boolean keywords: `not`, `and`, `or`, `implies`, `pre`.
 //! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
 //!   `_-prefixed` names. The bare `_` is the wildcard token, not
@@ -195,6 +195,14 @@ pub enum Token {
     /// runtime parses it via `jiff::civil::Date`. Lex validates digit
     /// and dash shape only; real-calendar validation is at runtime.
     DateLit(String),
+    /// Timestamp literal: `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`.
+    /// The same `@` sigil as dates, extended to a full RFC 3339 instant;
+    /// the presence of the `T` time part is what distinguishes the two.
+    /// Lex validates both the shape and, via `jiff::Timestamp`, that
+    /// the instant is real - a `@2026-13-40T...` is a spanned lex
+    /// diagnostic, not a runtime evaluation error. (Dates keep their
+    /// validate-at-runtime precedent.) Captured without the `@`.
+    TimestampLit(String),
     /// Subject literal: `#NAME`. The `#` sigil makes opaque symbolic
     /// subjects visibly distinct from variables; the inner string is
     /// the subject identifier (without the `#`). Maps to
@@ -273,6 +281,7 @@ impl fmt::Display for Token {
             Token::KwIn => write!(f, "`in`"),
             Token::Pipe => write!(f, "`|`"),
             Token::DateLit(s) => write!(f, "date literal `@{s}`"),
+            Token::TimestampLit(s) => write!(f, "timestamp literal `@{s}`"),
             Token::SubjectLit(s) => write!(f, "subject literal `#{s}`"),
             Token::Ident(s) => write!(f, "identifier `{s}`"),
             Token::Wildcard => write!(f, "`_`"),
@@ -343,6 +352,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),
+        "Timestamp" => Token::Kind(PredicateArgKind::Timestamp),
+        "Duration" => Token::Kind(PredicateArgKind::Duration),
         "Bool" => Token::Kind(PredicateArgKind::Bool),
         "Collection" => Token::Kind(PredicateArgKind::Collection),
         "Any" => Token::Kind(PredicateArgKind::Any),
@@ -392,6 +403,33 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
             .repeated()
             .exactly(n)
     };
+    // The optional RFC 3339 time part that turns a date literal into a
+    // timestamp literal: `T` HH:MM:SS, optional fractional seconds,
+    // then `Z` or a numeric offset. Shape-validated here; calendar and
+    // range validation is `jiff::Timestamp` at parse time.
+    let frac = just('.').then(
+        any()
+            .filter(|c: &char| c.is_ascii_digit())
+            .repeated()
+            .at_least(1),
+    );
+    let offset = choice((
+        just('Z').ignored(),
+        one_of("+-")
+            .then(digit_run(2))
+            .then(just(':'))
+            .then(digit_run(2))
+            .ignored(),
+    ));
+    let time_part = just('T')
+        .then(digit_run(2))
+        .then(just(':'))
+        .then(digit_run(2))
+        .then(just(':'))
+        .then(digit_run(2))
+        .then(frac.or_not())
+        .then(offset);
+
     let date_lit = just('@')
         .ignore_then(
             digit_run(4)
@@ -399,9 +437,30 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
                 .then(digit_run(2))
                 .then(just('-'))
                 .then(digit_run(2))
+                .then(time_part.or_not())
                 .to_slice(),
         )
-        .map(|s: &str| Token::DateLit(s.to_string()));
+        .validate(|s: &str, e, emitter| {
+            if s.contains('T') {
+                // Shape is already enforced structurally; jiff confirms
+                // the instant is real (no month 13, no 61st second), so
+                // a bad literal is a spanned lex diagnostic rather than
+                // an evaluation-time surprise - the same treatment
+                // `duration(...)` gets in the parser. Dates keep their
+                // validate-at-runtime precedent.
+                if s.parse::<jiff::Timestamp>().is_err() {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        format!(
+                            "invalid timestamp literal `@{s}` (expected a real RFC 3339 instant)"
+                        ),
+                    ));
+                }
+                Token::TimestampLit(s.to_string())
+            } else {
+                Token::DateLit(s.to_string())
+            }
+        });
 
     // ---- Subject literal: #IDENT ----
     //

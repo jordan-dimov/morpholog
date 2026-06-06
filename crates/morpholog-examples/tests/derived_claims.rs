@@ -239,7 +239,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     let err = enumerate_derived(&derived_type_error, &state).unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("Sub expects decimal"),
+        msg.contains("Sub operand types do not match any arithmetic rule"),
         "expected Sub type-mismatch error, got: {msg}"
     );
 }

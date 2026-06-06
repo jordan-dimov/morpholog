@@ -23,6 +23,27 @@ fn eval_value_decimal_round_trips_as_tagged_json_string() {
 }
 
 #[test]
+fn eval_value_timestamp_round_trips_as_tagged_rfc3339_string() {
+    let v = EvalValue::Timestamp("2026-10-24T14:00:00Z".parse().unwrap());
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"timestamp","value":"2026-10-24T14:00:00Z"}"#
+    );
+    let parsed: EvalValue = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, v);
+}
+
+#[test]
+fn eval_value_duration_round_trips_as_tagged_iso8601_string() {
+    let v = EvalValue::Duration("PT6H".parse().unwrap());
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, r#"{"type":"duration","value":"PT6H"}"#);
+    let parsed: EvalValue = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, v);
+}
+
+#[test]
 fn eval_value_subject_round_trips_as_tagged_json_string() {
     let v = EvalValue::Subject("asset_a".into());
     let json = serde_json::to_string(&v).unwrap();
