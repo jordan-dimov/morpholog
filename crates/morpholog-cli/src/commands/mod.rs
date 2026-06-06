@@ -26,6 +26,7 @@ pub(crate) mod outbox;
 pub(crate) mod parse;
 pub(crate) mod run;
 pub(crate) mod schema;
+pub(crate) mod verify;
 
 /// Read a `.morph` source file and parse it. On parse failure,
 /// render diagnostics via ariadne to stderr and exit 1. Shared by

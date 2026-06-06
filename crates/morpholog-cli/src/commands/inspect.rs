@@ -4,12 +4,29 @@
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
-    list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
+    PgPool, list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
     list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
+    resolve_transition_at_or_before,
 };
+use uuid::Uuid;
 
-use crate::Inspect;
 use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
+use crate::{AsOf, Inspect};
+
+/// Resolve an `--as-of` argument to a concrete transition id,
+/// translating the timestamp form through the audit log. `None` stays
+/// `None`: it means "current state", not a coordinate.
+async fn resolve_as_of(pool: &PgPool, as_of: Option<AsOf>) -> anyhow::Result<Option<Uuid>> {
+    Ok(match as_of {
+        None => None,
+        Some(AsOf::Transition(tid)) => Some(tid),
+        Some(AsOf::AtOrBefore(at)) => Some(
+            resolve_transition_at_or_before(pool, at)
+                .await
+                .context("resolving --as-of timestamp")?,
+        ),
+    })
+}
 
 /// Dispatch every `inspect` variant. Each variant either runs inline
 /// (the simple list-claims/audit/outbox ones) or delegates to a
@@ -18,11 +35,12 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     match what {
         Inspect::Claims(args) => {
             let pool = connect(&args.database_url).await?;
+            let as_of = resolve_as_of(&pool, args.as_of).await?;
             // Four paths, one rule: `--as-of` picks current-vs-replay,
             // `--predicate` picks full-vs-scoped. The scoped replay
             // filters during reconstruction, not after, so a targeted
             // historical read never materialises the full past state.
-            let claims = match (args.as_of, args.predicate.as_slice()) {
+            let claims = match (as_of, args.predicate.as_slice()) {
                 (Some(tid), []) => list_claims_at(&pool, tid)
                     .await
                     .context("list_claims_at failed")?,
@@ -91,7 +109,7 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
     })?;
 
     let pool = connect(&args.database_url).await?;
-    let rows = match args.as_of {
+    let rows = match resolve_as_of(&pool, args.as_of).await? {
         Some(tid) => list_derived_at(&pool, derived, tid)
             .await
             .context("list_derived_at failed")?,
