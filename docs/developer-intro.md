@@ -350,21 +350,35 @@ does - and notice it never touches the `CovenantTest`.
 
 ## The wall you would have hit in SQL
 
-Let's be fair: you *can* do all this in PostgreSQL. But look at what it costs,
-because nobody budgets for this part:
+Let's be fair: you *can* do all this in PostgreSQL. People do. But first
+notice how it actually plays out, because nobody designs for corrections on
+day one. The simple `revenue` table ships and runs quietly for a year. Then
+the first correction request arrives - against live data, with decisions
+already recorded on figures that are about to change. Now you retrofit, and
+the retrofit looks like this:
 
-- You stop storing the figure as a column you update. You give each figure
-  version its own row and id.
-- Your `CovenantTest` can no longer reference "the Q1 figure" - it has to
+- You stop storing the figure as a column you update. Each figure version
+  gets its own row and id - and the rows already in production need ids too.
+- Your `CovenantTest` can no longer reference "the Q1 figure". It has to
   foreign-key the *specific version* it relied on, or the correction silently
   reaches back and changes what the test was based on.
 - You add a `current` flag, or a `valid_from` / `valid_to` pair, and a trigger
-  to move it on correction without breaking the one-in-force rule.
-- And to answer "what did the books say as of June?" you add bitemporal columns
+  to move it on correction without ever letting two versions be current at
+  once.
+- To answer "what did the books say as of June?" you add bitemporal columns
   and write effective-dated queries against them.
+- And every one of these disciplines now binds *every* writer - the API, the
+  admin panel, the month-end backfill script, the migration someone runs by
+  hand. One bare `UPDATE` from any of them and the version history is quietly
+  wrong. This is the guide's opening problem again, multiplied.
 
-Every one of those is a place to get it subtly wrong, and the classic bug is the
-worst kind: it is silent. Someone reruns last quarter's report a year later, the
+None of this is exotic, by the way. The data-warehouse world has a name for
+part of it (slowly changing dimensions); the SQL standard has temporal tables.
+The cost is not inventing the techniques. The cost is that you are now the
+integrator of all of them at once, forever, in every code path that writes.
+
+Each piece is a place to get it subtly wrong, and the classic bug is the worst
+kind: it is silent. Someone reruns last quarter's report a year later, the
 effective-dating join is off by one boundary condition, and the report
 confidently shows 1200 where it should show 1000. Nothing errors. You find out
 in an audit.
