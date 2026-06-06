@@ -146,12 +146,14 @@ Everything in the payoff section rests on this one move.
 
 ### How to read what follows
 
-Everything below is built from a handful of forms. Decode them once and the
-rest reads as a business story:
+Everything below is built from a handful of forms. The most important one is
+the *claim pattern*: inside a rule, writing `CurrentFigure(asset, period, f)`
+does not create anything. It asks "is there an admitted claim like this?" -
+and the lowercase names pick up the matching values. The rest decode in a line
+each:
 
 | Form | Read it as |
 |---|---|
-| `Foo(a, b)` | a claim pattern - "a Foo claim with these arguments" |
 | `_` | any value; I do not care which |
 | `not Foo(...)` | no matching claim exists |
 | `A implies B` | whenever A holds, B must hold too |
