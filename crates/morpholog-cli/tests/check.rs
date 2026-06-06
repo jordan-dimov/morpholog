@@ -235,6 +235,43 @@ fn check_date_le_with_decimal_literal_reports_operand_kind_diagnostic() {
 }
 
 #[test]
+fn developer_intro_complete_program_checks() {
+    // The developer introduction embeds a complete `revenue.morph` and
+    // promises every shown artefact is real. Extract that block
+    // verbatim and check it, so a tutorial edit cannot silently break
+    // the programme readers are told to paste.
+    let doc = std::fs::read_to_string(repo_root().join("docs/developer-intro.md"))
+        .expect("read developer intro");
+    let section = doc
+        .split("### The complete `revenue.morph`")
+        .nth(1)
+        .expect("complete-file section present");
+    let fence = "```morph\n";
+    let start = section.find(fence).expect("morph fence opens") + fence.len();
+    let end = section[start..].find("```").expect("morph fence closes") + start;
+    let tmp = temp_morph(&section[start..end]);
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg("-v")
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(
+        out.status.success(),
+        "tutorial's complete revenue.morph failed check; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The doc tells the reader this summary reports one derived claim;
+    // pin the promise, not just well-formedness.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("derived claims: 1"),
+        "tutorial promises `derived claims: 1`; got:\n{stdout}"
+    );
+}
+
+#[test]
 fn check_all_worked_examples_are_well_formed() {
     // Every worked example .morph must parse and validate cleanly.
     // Any future change that breaks one would fail here loudly.
