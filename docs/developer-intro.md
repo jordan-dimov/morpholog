@@ -319,9 +319,19 @@ morpholog run revenue.morph run_covenant_test --actor bank_credit_cttee \
   --args-named '{"test_id":"covtest_june","asset":"battery_07","period":"q1_2026","amount":"1000","figure_id":"f1"}'
 ```
 
-It commits. A `CovenantTest` claim now stands, stamped `1000` and `f1`. Note the
-`transition_id` it returns - that moment is "as of June", and we will come back
-to it.
+It commits. A `CovenantTest` claim now stands, stamped `1000` and `f1`.
+
+One more thing before moving on: copy the `transition_id` from the receipt and
+stash it, because that moment is "as of June" and we will come back to it:
+
+```bash
+JUNE=019e937d-0e98-7790-897e-30500c744711   # yours will differ - use your receipt's id
+```
+
+Every commit returns a `transition_id` - its exact coordinate in the audit
+log. It is an id rather than a date because a date is ambiguous: many things
+can commit in one day. The id names one precise moment - the state immediately
+after that particular commit.
 
 (In real life the bank lives in its own systems, of course. What we are
 modelling is the governed record on the asset's side: the bank's decision
@@ -398,15 +408,16 @@ It commits: it admits the new `Revenue` (f2, 1200) and a `Supersedes(f2, f1)`,
 retracts `CurrentFigure ... f1`, and admits `CurrentFigure ... f2`. The pointer
 has moved. The old figure is untouched.
 
-**Did the bank's June decision survive?** Ask Morpholog for the state exactly as
-it stood at that "as of June" transition id you noted. The CLI emits a JSON
-array of claim objects; for reading along, flatten it with a one-line `jq`
-helper we will reuse for the rest of this guide:
+**Did the bank's June decision survive?** Ask Morpholog for the state exactly
+as it stood at the moment you stashed in `$JUNE`. The claims come back as a
+JSON array; to read along comfortably, here is a small shell helper that
+prints one claim per line. You do not need to read its insides - only its
+output - and we will reuse it for the rest of this guide:
 
 ```bash
 flat() { jq -r '.[] | "\(.predicate)(\([.args[].value] | join(", ")))"'; }
 
-morpholog inspect claims --as-of 019e937d-0e98-7790-897e-30500c744711 | flat
+morpholog inspect claims --as-of "$JUNE" | flat
 ```
 ```
 Revenue(battery_07, q1_2026, 1000, f1)
@@ -548,7 +559,7 @@ And because the view is computed from claims, the time travel you already met
 applies to reports too:
 
 ```bash
-morpholog inspect derived revenue.morph CurrentRevenue --as-of 019e937d-0e98-7790-897e-30500c744711 | flat
+morpholog inspect derived revenue.morph CurrentRevenue --as-of "$JUNE" | flat
 ```
 ```
 CurrentRevenue(battery_07, q1_2026, f1, 1000)
