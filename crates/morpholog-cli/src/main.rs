@@ -88,8 +88,9 @@ enum Command {
     /// Emit a JSON Schema describing a named transformation's argument
     /// object, or (with `--intent <Type>`) an emitted intent's payload
     /// object - or, with `--all`, one manifest covering the whole
-    /// programme (every schema, the predicate vocabulary, declaration-
-    /// order arrays, and the canonical model hash). Thin wrapper over
+    /// programme (every schema, the predicate vocabulary, the
+    /// declaration-order arrays, and the canonical model hash). Thin
+    /// wrapper over
     /// the library's `transformation_arg_schema`
     /// / `intent_arg_schema`: parse, validate, render. The schema is the
     /// public contract a non-Rust embedder uses to validate request
