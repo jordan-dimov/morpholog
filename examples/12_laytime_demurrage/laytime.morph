@@ -64,9 +64,9 @@ predicate CountingInterval(interval: Subject, voyage: Subject, from: Timestamp, 
 predicate CargoOpsCompleted(voyage: Subject, completed_at: Timestamp)
 
 -- The read-side result both parties actually care about: how much
--- time, if any, ran past the allowance. Derived, never stored - see
--- the bottom of the file.
-predicate TimeOnDemurrage(voyage: Subject, excess: Duration)
+-- time, if any, ran past the allowance, shown beside the allowance it
+-- ran past. Derived, never stored - see the bottom of the file.
+predicate TimeOnDemurrage(voyage: Subject, allowed: Duration, excess: Duration)
 
 -- Intents are messages to the outside world after a change commits -
 -- the operations team learns the clock started; the demurrage desk
@@ -162,6 +162,6 @@ transformation complete_cargo_ops(voyage, completed_at):
 -- can never disagree with the intervals it is built from: correct an
 -- interval (next stage) and the answer moves with it, while anything
 -- already settled on the old figure stands on its own record.
-derived TimeOnDemurrage(voyage):
+derived TimeOnDemurrage(voyage, allowed):
     over VoyageFixture(voyage, _, _, allowed)
     value excess = max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S))
