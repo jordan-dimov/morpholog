@@ -70,10 +70,19 @@ table, an audit table, an outbox. You will never design a table in this guide.
 
 ## Your first program
 
-We are going to model one small, real situation: a **reported revenue figure
-that a bank relies on, and that later turns out to need correcting.** Every
-finance system has one. And handled casually, it quietly corrupts your audit
-trail.
+We are going to model one small, real situation, from the world of lending.
+
+A company borrows money against an asset - say a battery-storage plant. The
+loan terms require the asset's revenue to stay above an agreed level, so each
+quarter the company reports its revenue and the bank checks the loan terms
+against it. That check is called a *covenant test*, and lenders run them on
+reported figures all the time. The awkward part: a reported figure can turn
+out to be wrong after the bank has already run its check.
+
+Swap the nouns and this is every system that records decisions made on figures
+that can later change - approvals against invoice amounts, payouts against
+claim values, settlements against prices. Handled casually, the correction
+quietly corrupts your audit trail.
 
 A Morpholog program is one `.morph` file, and we will build it in sections. If
 you would rather have a runnable file from the start, paste
