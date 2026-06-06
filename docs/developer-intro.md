@@ -707,7 +707,21 @@ indexes) is a *derived copy*, kept up to date by consuming the intents each
 commit emits. You never write the same record to two places and hope. You
 write once, and propagation is explicit, at-least-once, and idempotent. And
 since Morpholog's schema is plain PostgreSQL, it can live in the same database
-as your application's tables.
+as your application's tables - behind its own schema and role, which the next
+question explains.
+
+**"If it is all just PostgreSQL, can't someone connect with `psql` and edit
+the claims directly?"**
+With enough privileges, yes - the same way a DBA can drop a `CHECK` constraint
+or rewrite any ledger's rows. The one door governs every *code path*; it
+cannot govern a superuser. Two things keep that honest. First, ordinary
+privilege hygiene: only the runtime's role writes the `morpholog` schema;
+applications and people get read-only. Second - and this is where the model
+earns something extra - the claims table and the audit log are two records of
+the same history, so an out-of-band edit to either one is *detectable*: replay
+the log and compare. A `morpholog verify` command for exactly that check, and
+a tamper-evident (hash-chained) audit log, are both recognised hardening
+steps, not yet built.
 
 **"A single generic claims table - isn't that an EAV anti-pattern that defeats
 the query planner?"**

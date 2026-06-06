@@ -145,7 +145,9 @@ The legibility tooling has begun: `morpholog inspect guarantees` names what a mo
 
 ## Common questions
 
-**Doesn't a separate system of record create a dual-write problem?** It removes one. Morpholog holds the governed records; downstream stores - analytics tables, caches, search indexes - are derived copies, kept current by consuming the intents each commit emits (at-least-once, with idempotency keys). One write, explicit propagation, no two-phase commit. And the schema is plain PostgreSQL: it can share a database with your application's tables.
+**Doesn't a separate system of record create a dual-write problem?** It removes one. Morpholog holds the governed records; downstream stores - analytics tables, caches, search indexes - are derived copies, kept current by consuming the intents each commit emits (at-least-once, with idempotency keys). One write, explicit propagation, no two-phase commit. And the schema is plain PostgreSQL: it can share a database with your application's tables, behind its own schema and role.
+
+**Can't someone bypass the rules with raw SQL?** With superuser access, yes - as with any database-backed system of record (a DBA can drop a `CHECK` constraint too). The mitigations are ordinary privilege separation - only the runtime's role writes the `morpholog` schema - plus one the model adds: the claims table and the audit log are two records of one history, so out-of-band edits to either are detectable by replaying one against the other. A `verify` command and a hash-chained audit log are recognised hardening steps, not yet built.
 
 **Isn't a generic claims table an EAV performance trap?** The claims table is storage, not the query engine. Rules are never evaluated as SQL self-joins: the runtime loads only the claims whose predicates a transformation touches, and the kernel evaluates in memory. The measured shape is linear (the Status numbers above), and the intended workload is the admission line of governed records, not general OLTP - that boundary is the design.
 
