@@ -24,7 +24,7 @@ thing you reach for one job, used alongside the language you already write.
 
 Most of Morpholog's core ideas you already know under different names.
 
-**A SQL `CHECK` constraint is an invariant the database enforces no matter which
+**A SQL `CHECK` constraint is a rule the database enforces no matter which
 code path writes the row.** That is its whole appeal: it does not matter whether
 the insert came from your API, a migration, a cron job, or someone typing into
 `psql` at midnight - the rule holds, because it lives in the substrate, not in
