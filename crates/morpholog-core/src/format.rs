@@ -452,8 +452,9 @@ fn format_value(v: &Value) -> String {
         // instant: @2026-10-24T14:00:00Z.
         Value::Timestamp(s) => format!("@{s}"),
         // Durations use an explicit constructor form rather than a
-        // bare-literal DSL: boring on purpose.
-        Value::Duration(s) => format!("duration(\"{s}\")"),
+        // bare-literal DSL: boring on purpose. No quotes - the payload
+        // is identifier-shaped, and the surface has no string literals.
+        Value::Duration(s) => format!("duration({s})"),
     }
 }
 

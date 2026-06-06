@@ -195,6 +195,12 @@ pub enum Token {
     /// runtime parses it via `jiff::civil::Date`. Lex validates digit
     /// and dash shape only; real-calendar validation is at runtime.
     DateLit(String),
+    /// Timestamp literal: `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`.
+    /// The same `@` sigil as dates, extended to a full RFC 3339 instant;
+    /// the presence of the `T` time part is what distinguishes the two.
+    /// Lex validates the digit/punctuation shape only; real validation
+    /// is `jiff::Timestamp` at parse time. Captured without the `@`.
+    TimestampLit(String),
     /// Subject literal: `#NAME`. The `#` sigil makes opaque symbolic
     /// subjects visibly distinct from variables; the inner string is
     /// the subject identifier (without the `#`). Maps to
@@ -273,6 +279,7 @@ impl fmt::Display for Token {
             Token::KwIn => write!(f, "`in`"),
             Token::Pipe => write!(f, "`|`"),
             Token::DateLit(s) => write!(f, "date literal `@{s}`"),
+            Token::TimestampLit(s) => write!(f, "timestamp literal `@{s}`"),
             Token::SubjectLit(s) => write!(f, "subject literal `#{s}`"),
             Token::Ident(s) => write!(f, "identifier `{s}`"),
             Token::Wildcard => write!(f, "`_`"),
@@ -343,6 +350,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "Subject" => Token::Kind(PredicateArgKind::Subject),
         "Decimal" => Token::Kind(PredicateArgKind::Decimal),
         "Date" => Token::Kind(PredicateArgKind::Date),
+        "Timestamp" => Token::Kind(PredicateArgKind::Timestamp),
+        "Duration" => Token::Kind(PredicateArgKind::Duration),
         "Bool" => Token::Kind(PredicateArgKind::Bool),
         "Collection" => Token::Kind(PredicateArgKind::Collection),
         "Any" => Token::Kind(PredicateArgKind::Any),
@@ -392,6 +401,33 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
             .repeated()
             .exactly(n)
     };
+    // The optional RFC 3339 time part that turns a date literal into a
+    // timestamp literal: `T` HH:MM:SS, optional fractional seconds,
+    // then `Z` or a numeric offset. Shape-validated here; calendar and
+    // range validation is `jiff::Timestamp` at parse time.
+    let frac = just('.').then(
+        any()
+            .filter(|c: &char| c.is_ascii_digit())
+            .repeated()
+            .at_least(1),
+    );
+    let offset = choice((
+        just('Z').ignored(),
+        one_of("+-")
+            .then(digit_run(2))
+            .then(just(':'))
+            .then(digit_run(2))
+            .ignored(),
+    ));
+    let time_part = just('T')
+        .then(digit_run(2))
+        .then(just(':'))
+        .then(digit_run(2))
+        .then(just(':'))
+        .then(digit_run(2))
+        .then(frac.or_not())
+        .then(offset);
+
     let date_lit = just('@')
         .ignore_then(
             digit_run(4)
@@ -399,9 +435,16 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
                 .then(digit_run(2))
                 .then(just('-'))
                 .then(digit_run(2))
+                .then(time_part.or_not())
                 .to_slice(),
         )
-        .map(|s: &str| Token::DateLit(s.to_string()));
+        .map(|s: &str| {
+            if s.contains('T') {
+                Token::TimestampLit(s.to_string())
+            } else {
+                Token::DateLit(s.to_string())
+            }
+        });
 
     // ---- Subject literal: #IDENT ----
     //

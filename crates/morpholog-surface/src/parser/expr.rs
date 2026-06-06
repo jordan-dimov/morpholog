@@ -19,6 +19,37 @@ use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Value, Value
 /// Build a `Prop::Compare` from a factored operator and domain. The
 /// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
 /// factored shape here; the inverse mapping is `format::compare_token`.
+/// The `duration(PT6H)` constructor: an ISO-8601 duration in exact
+/// time units, written without quotes - the payload lexes as a plain
+/// identifier, since ISO durations always start with `P`. Validated
+/// here via jiff so a malformed literal is a parse diagnostic with a
+/// span, not a runtime evaluation error. `duration` itself is
+/// contextual (matched only when followed by `(`), so it remains
+/// usable as an ordinary variable name.
+pub(super) fn duration_ctor<'a, I>()
+-> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    select! { Token::Ident(s) if s == "duration" => () }
+        .ignore_then(
+            select! { Token::Ident(s) => s }.delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .validate(|s: String, e, emitter| {
+            if s.parse::<jiff::SignedDuration>().is_err() {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(
+                    span,
+                    format!(
+                        "invalid duration literal `{s}` (expected ISO 8601 \
+                         time units, e.g. PT6H or PT1H30M)"
+                    ),
+                ));
+            }
+            s
+        })
+}
+
 fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     Prop::Compare {
         op,
@@ -133,10 +164,15 @@ where
         // A `Term` is the limited atom that claim-call args and `In`
         // operands accept: variables (including the special `actor`),
         // wildcards, and decimal / date / subject literals.
+        let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
             decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
             date_lit.map(|s| Term::Literal(Value::Date(s))),
+            // Before bare idents so `duration(...)` is the constructor,
+            // not a variable followed by a stray paren.
+            duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
             subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
             ident.map(|name| {
                 if name == "actor" {
@@ -235,6 +271,14 @@ where
                     // (the worked examples do exactly that).
                     select! { Token::Ident(s) if s == "before" => CmpOp::DateLt },
                     select! { Token::Ident(s) if s == "after" => CmpOp::DateGt },
+                    select! { Token::Ident(s) if s == "at_or_before" => CmpOp::TsLe },
+                    select! { Token::Ident(s) if s == "strictly_before" => CmpOp::TsLt },
+                    select! { Token::Ident(s) if s == "at_or_after" => CmpOp::TsGe },
+                    select! { Token::Ident(s) if s == "strictly_after" => CmpOp::TsGt },
+                    select! { Token::Ident(s) if s == "no_longer_than" => CmpOp::DurLe },
+                    select! { Token::Ident(s) if s == "shorter_than" => CmpOp::DurLt },
+                    select! { Token::Ident(s) if s == "no_shorter_than" => CmpOp::DurGe },
+                    select! { Token::Ident(s) if s == "longer_than" => CmpOp::DurGt },
                     just(Token::KwIn).to(CmpOp::In),
                 ))
                 .then(arith.clone()),
@@ -249,6 +293,14 @@ where
                 CmpOp::DateLt => compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs),
                 CmpOp::DateGe => compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs),
                 CmpOp::DateGt => compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs),
+                CmpOp::TsLe => compare(CompareOp::Le, OrderedDomain::Timestamp, lhs, rhs),
+                CmpOp::TsLt => compare(CompareOp::Lt, OrderedDomain::Timestamp, lhs, rhs),
+                CmpOp::TsGe => compare(CompareOp::Ge, OrderedDomain::Timestamp, lhs, rhs),
+                CmpOp::TsGt => compare(CompareOp::Gt, OrderedDomain::Timestamp, lhs, rhs),
+                CmpOp::DurLe => compare(CompareOp::Le, OrderedDomain::Duration, lhs, rhs),
+                CmpOp::DurLt => compare(CompareOp::Lt, OrderedDomain::Duration, lhs, rhs),
+                CmpOp::DurGe => compare(CompareOp::Ge, OrderedDomain::Duration, lhs, rhs),
+                CmpOp::DurGt => compare(CompareOp::Gt, OrderedDomain::Duration, lhs, rhs),
                 CmpOp::Neq => Prop::Neq(Box::new(lhs), Box::new(rhs)),
                 CmpOp::In => {
                     let span: SimpleSpan = e.span();
@@ -513,10 +565,13 @@ where
     let date_lit = select! { Token::DateLit(s) => s };
     let subject_lit = select! { Token::SubjectLit(s) => s };
 
+    let timestamp_lit = select! { Token::TimestampLit(s) => s };
     let term = choice((
         just(Token::Wildcard).to(Term::Wildcard),
         decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+        timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
         date_lit.map(|s| Term::Literal(Value::Date(s))),
+        duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
         subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
         ident.map(|name| {
             if name == "actor" {
@@ -559,9 +614,14 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let decimal_as_value =
             decimal_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Decimal(s))));
         let date_as_value = date_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Date(s))));
+        let timestamp_as_value =
+            timestamp_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Timestamp(s))));
+        let duration_as_value =
+            duration_ctor().map(|s| ValueExpr::Term(Term::Literal(Value::Duration(s))));
         let subject_as_value =
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
@@ -652,7 +712,10 @@ where
             value_lookup,
             parenthesised,
             decimal_as_value,
+            timestamp_as_value,
             date_as_value,
+            // Before bare idents: `duration(...)` is the constructor.
+            duration_as_value,
             subject_as_value,
             wildcard_as_value,
             bare_ident,
@@ -716,6 +779,21 @@ enum CmpOp {
     /// be `EvalValue::Date` (checked at runtime). `before` and `after`
     /// are matched contextually (in comparator position only), so they
     /// remain usable as ordinary variable names elsewhere.
+    /// Instant comparators (`at_or_before` `strictly_before`
+    /// `at_or_after` `strictly_after`) -> `Prop::Compare` with the
+    /// `Timestamp` domain. All four are contextual identifiers.
+    TsLe,
+    TsLt,
+    TsGe,
+    TsGt,
+    /// Span comparators (`no_longer_than` `shorter_than`
+    /// `no_shorter_than` `longer_than`) -> `Prop::Compare` with the
+    /// `Duration` domain. All four are contextual identifiers; read
+    /// them as length comparisons (`counted no_longer_than allowed`).
+    DurLe,
+    DurLt,
+    DurGe,
+    DurGt,
     DateLe,
     DateLt,
     DateGe,

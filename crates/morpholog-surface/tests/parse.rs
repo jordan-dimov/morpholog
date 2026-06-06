@@ -946,3 +946,87 @@ fn duplicate_value_names_in_derived_are_rejected() {
         "expected duplicate-value-name diagnostic; got: {errs:?}"
     );
 }
+
+// ============================================================
+// Time values: timestamp literals, duration constructor, the
+// instant/span comparators, and the formatter round-trip.
+// ============================================================
+
+const TIME_SOURCE: &str = "program time_demo
+predicate NorTendered(voyage: Subject, at: Timestamp)
+predicate Commenced(voyage: Subject, at: Timestamp)
+predicate CountingInterval(interval: Subject, voyage: Subject, len: Duration)
+predicate AllowedLaytime(voyage: Subject, allowed: Duration)
+
+invariant commencement_not_before_nor:
+    Commenced(v, c) and NorTendered(v, n) implies n at_or_before c
+
+invariant counted_within_allowance:
+    AllowedLaytime(v, a) implies sum(len | CountingInterval(_, v, len)) no_longer_than a
+
+transformation commence_after_turn(voyage):
+    bind NorTendered(voyage, n)
+    let c = n + duration(PT6H)
+    admit Commenced(voyage, c)
+
+transformation tender_at_noon(voyage):
+    admit NorTendered(voyage, @2026-10-24T12:00:00Z)
+";
+
+#[test]
+fn time_programme_parses_and_validates() {
+    let program = parse_program(TIME_SOURCE).expect("time programme should parse");
+    assert!(
+        program.validate().is_ok(),
+        "should validate: {:?}",
+        program.validate()
+    );
+    assert_eq!(program.invariants.len(), 2);
+}
+
+#[test]
+fn time_programme_round_trips_through_the_formatter() {
+    let program = parse_program(TIME_SOURCE).expect("parse");
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+}
+
+#[test]
+fn malformed_duration_literal_is_a_parse_diagnostic() {
+    let source = "program bad
+predicate P(x: Duration)
+transformation t(v):
+    admit P(duration(NOT_ISO))
+";
+    let err = parse_program(source).expect_err("NOT_ISO is not a duration");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("invalid duration literal"),
+        "diagnostic should name the bad literal: {msg}"
+    );
+}
+
+#[test]
+fn duration_stays_usable_as_a_variable_name() {
+    // The constructor is contextual: `duration` followed by `(` only.
+    let source = "program ctx
+predicate Holds(duration: Duration)
+transformation t(duration):
+    admit Holds(duration)
+";
+    let program = parse_program(source).expect("`duration` as a name should parse");
+    assert!(program.validate().is_ok());
+}
+
+#[test]
+fn timestamp_literal_with_offset_parses() {
+    let source = "program offsets
+predicate E(at: Timestamp)
+transformation t(v):
+    admit E(@2026-10-25T01:30:00+01:00)
+";
+    let program = parse_program(source).expect("offset timestamp should lex and parse");
+    assert!(program.validate().is_ok());
+}
