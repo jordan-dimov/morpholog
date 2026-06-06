@@ -32,7 +32,54 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
     let validated = validate_or_exit(&program);
 
-    // Clap enforces exactly-one-of `transformation` / `--intent`.
+    // Clap enforces exactly-one-of `transformation` / `--intent` /
+    // `--all`.
+    if args.all {
+        // The manifest: every contract in one artefact, stamped with
+        // the canonical model hash so generated code can record
+        // exactly which rules it was built against. Keyed objects give
+        // codegen lookup by name; the *_order arrays carry declaration
+        // order explicitly, because JSON object key order is not a
+        // contract (serde_json's map is sorted, and embedders should
+        // not rely on object ordering anyway) - the manifest-level
+        // analogue of x-morpholog-arg-order.
+        let transformation_order: Vec<String> = program
+            .transformations
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let intent_order: Vec<String> =
+            program.intents.iter().map(|i| i.name.to_string()).collect();
+        let mut transformations = serde_json::Map::new();
+        for t in &program.transformations {
+            let Ok(schema) = transformation_arg_schema(&validated, &t.name) else {
+                unreachable!(
+                    "declared transformation `{}` missing from its own programme",
+                    t.name
+                )
+            };
+            transformations.insert(t.name.to_string(), schema);
+        }
+        let mut intents = serde_json::Map::new();
+        for i in &program.intents {
+            let Some(schema) = intent_arg_schema(&validated, &i.name) else {
+                unreachable!(
+                    "declared intent `{}` missing from its own programme",
+                    i.name
+                )
+            };
+            intents.insert(i.name.to_string(), schema);
+        }
+        return print_json(&serde_json::json!({
+            "program": program.name,
+            "hash": crate::commands::hash::canonical_hash(&program),
+            "predicates": program.predicates,
+            "transformation_order": transformation_order,
+            "transformations": transformations,
+            "intent_order": intent_order,
+            "intents": intents,
+        }));
+    }
     if let Some(intent) = &args.intent {
         match intent_arg_schema(&validated, &IntentName::from(intent.as_str())) {
             Some(schema) => print_json(&schema),
@@ -51,6 +98,6 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
             }
         }
     } else {
-        unreachable!("clap enforces exactly-one-of `transformation` and `--intent`");
+        unreachable!("clap enforces exactly-one-of `transformation`, `--intent`, and `--all`");
     }
 }
