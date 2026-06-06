@@ -501,6 +501,33 @@ impl<'a> ParamCollector<'a> {
     /// observation, not via a post-hoc projection. Multi-kind sets
     /// accumulate per variable and project to [`ParamKind::Ambiguous`]
     /// at the end rather than silently committing to one kind.
+    /// The kind of a value expression when it is determinable without
+    /// assumption: a literal's inherent kind, or a variable that every
+    /// position so far has pinned to exactly one concrete kind. `None`
+    /// for anything deeper - this probe is deliberately shallow, a
+    /// sibling of the checker's full inference, used only to decide
+    /// whether the arithmetic matrix forces the *other* operand.
+    fn shallow_value_kind(&self, v: &ValueExpr) -> Option<PredicateArgKind> {
+        match v {
+            ValueExpr::Term(Term::Literal(lit)) => Some(match lit {
+                crate::ir::Value::Subject(_) => PredicateArgKind::Subject,
+                crate::ir::Value::Decimal(_) => PredicateArgKind::Decimal,
+                crate::ir::Value::Date(_) => PredicateArgKind::Date,
+                crate::ir::Value::Timestamp(_) => PredicateArgKind::Timestamp,
+                crate::ir::Value::Duration(_) => PredicateArgKind::Duration,
+            }),
+            ValueExpr::Term(Term::Var(name)) => {
+                let observed = self.observations.get(name)?;
+                if observed.len() == 1 {
+                    observed.iter().next().copied()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn observe(&mut self, name: &Var, kind: PredicateArgKind) {
         // Collect the class members up front so we don't hold a borrow
         // of `current_class` across the mutable borrows of
@@ -712,17 +739,41 @@ impl<'a> ParamCollector<'a> {
             ValueExpr::Arith { op, left, right } => {
                 // Mul / Div / Mod pin both operands to Decimal. The
                 // additive operators span the decimal and time domains,
-                // so they observe nothing: an operand's kind comes from
-                // the claim positions that genuinely pin it, never from
-                // an operator that admits several kinds. (The checker's
-                // rule matrix still rejects impossible pairings; this
-                // walker only refuses to over-claim.)
-                let expected = match op {
-                    ArithOp::Mul | ArithOp::Div | ArithOp::Mod => Some(PredicateArgKind::Decimal),
-                    ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => None,
-                };
-                self.walk_value(left, expected);
-                self.walk_value(right, expected);
+                // so an operand's kind is assumed only when the matrix
+                // forces it: if one side's kind is already determinable
+                // (a literal, or a variable every prior position pinned
+                // to one kind) and exactly one rule fits, the other
+                // side observes the forced counterpart - the externally
+                // supplied turn time in `tendered_at + turn_time`
+                // resolves to Duration this way, so its schema is
+                // honest. When several rules fit (`Timestamp - x`),
+                // nothing is assumed and the checker's matrix remains
+                // the only judge.
+                match op {
+                    ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
+                        self.walk_value(left, Some(PredicateArgKind::Decimal));
+                        self.walk_value(right, Some(PredicateArgKind::Decimal));
+                    }
+                    ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => {
+                        let l_known = self.shallow_value_kind(left);
+                        let r_known = self.shallow_value_kind(right);
+                        let (l_exp, r_exp) = match (l_known, r_known) {
+                            (Some(k), None) => (
+                                None,
+                                crate::ir::arith_unique_counterpart(*op, k, true)
+                                    .map(|(expected, _)| expected),
+                            ),
+                            (None, Some(k)) => (
+                                crate::ir::arith_unique_counterpart(*op, k, false)
+                                    .map(|(expected, _)| expected),
+                                None,
+                            ),
+                            _ => (None, None),
+                        };
+                        self.walk_value(left, l_exp);
+                        self.walk_value(right, r_exp);
+                    }
+                }
             }
             ValueExpr::Sum { value, body } => {
                 // The summed term is decimal or duration; its kind is

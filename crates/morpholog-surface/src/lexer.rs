@@ -4,8 +4,8 @@
 //!
 //! - Declaration keywords: `program`, `predicate`, `intent`,
 //!   `invariant`, `transformation`, `derived`.
-//! - Kind keywords: `Subject`, `Decimal`, `Date`, `Bool`,
-//!   `Collection`, `Any`.
+//! - Kind keywords: `Subject`, `Decimal`, `Date`, `Timestamp`,
+//!   `Duration`, `Bool`, `Collection`, `Any`.
 //! - Boolean keywords: `not`, `and`, `or`, `implies`, `pre`.
 //! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
 //!   `_-prefixed` names. The bare `_` is the wildcard token, not

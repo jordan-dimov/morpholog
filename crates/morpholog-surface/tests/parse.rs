@@ -1030,3 +1030,17 @@ transformation t(v):
     let program = parse_program(source).expect("offset timestamp should lex and parse");
     assert!(program.validate().is_ok());
 }
+
+#[test]
+fn negative_duration_literals_are_deliberately_unsupported_in_surface() {
+    // The constructor payload lexes as a single identifier, so a
+    // leading sign cannot appear. Negative spans arise from
+    // arithmetic (`a - b`), never from literals; if a model ever
+    // genuinely needs a negative literal, that example reopens this.
+    let source = "program neg
+predicate P(x: Duration)
+transformation t(v):
+    admit P(duration(-PT6H))
+";
+    parse_program(source).expect_err("a signed duration literal must not parse");
+}

@@ -306,3 +306,79 @@ fn adding_two_timestamps_is_refused_at_authoring_time() {
         "expected NoArithRule, got {errs:?}"
     );
 }
+
+#[test]
+fn a_parameter_used_only_in_time_arithmetic_infers_its_forced_kind() {
+    // `turn_time` appears in no claim position - only as the right
+    // operand of `tendered_at + turn_time`. The matrix has exactly one
+    // rule for Timestamp + _, so the parameter resolves to Duration
+    // and its schema is honest (review feedback on the time-arc PR:
+    // stage 2 will externalise exactly this kind of parameter).
+    use morpholog_core::transformation_param_kinds;
+    use morpholog_core::{ParamKind, PredicateArgKind};
+
+    let p = program("turnable")
+        .predicates(vec![
+            predicate("Nor").subject("voyage").timestamp("at").build(),
+            predicate("Commenced")
+                .subject("voyage")
+                .timestamp("at")
+                .build(),
+        ])
+        .transformations(vec![transformation(
+            "commence_with_turn_time",
+            params(&["voyage", "turn_time"]),
+            vec![
+                bind_one(claim("Nor", vec![var("voyage"), var("tendered_at")])),
+                let_("c", add(term(var("tendered_at")), term(var("turn_time")))),
+                assert_("Commenced", vec![var("voyage"), var("c")]),
+            ],
+        )])
+        .build();
+    let validated = p.validated().expect("programme validates");
+    let kinds = transformation_param_kinds(&validated, &"commence_with_turn_time".into()).unwrap();
+    let turn_time = kinds
+        .iter()
+        .find(|(v, _)| v.as_str() == "turn_time")
+        .map(|(_, k)| k.clone())
+        .expect("turn_time is a parameter");
+    assert_eq!(
+        turn_time,
+        ParamKind::Concrete(PredicateArgKind::Duration),
+        "the matrix forces Duration for Timestamp + _"
+    );
+
+    // And it works at runtime end to end.
+    let state = must_accept(
+        p.transformation("commence_with_turn_time").unwrap(),
+        vec![subj("v1"), dur("PT6H")],
+        {
+            let pre = program("seed")
+                .predicates(vec![predicate("Nor").subject("v").timestamp("at").build()])
+                .build();
+            let _ = pre;
+            // Admit the NOR through a tiny setup transformation.
+            let setup = transformation(
+                "tender",
+                params(&["voyage", "at"]),
+                vec![assert_("Nor", vec![var("voyage"), var("at")])],
+            );
+            must_accept(
+                &setup,
+                vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
+                State::default(),
+                &[],
+            )
+        },
+        &[],
+    );
+    assert!(
+        state
+            .claims()
+            .iter()
+            .any(|c| c.predicate.as_str() == "Commenced"
+                && c.args[1] == ts("2026-10-24T20:00:00Z")),
+        "turn time applied: {:?}",
+        state.claims()
+    );
+}

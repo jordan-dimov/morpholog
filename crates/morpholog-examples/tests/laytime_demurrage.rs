@@ -206,3 +206,57 @@ fn a_notice_needs_a_fixture_behind_it() {
         &State::default(),
     );
 }
+
+#[test]
+fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
+    // Fixture only: the clock has not started, so the derived view has
+    // no row for the voyage - and crucially does not error. (Without
+    // the LaytimeCommenced conjunct in the domain, this read would hit
+    // the empty-duration-sum landmine the seed pattern exists to
+    // defuse. The review of this PR caught exactly that.)
+    let state = must_accept(
+        &lay::fix_voyage(),
+        vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
+        State::default(),
+        &invariants(),
+    );
+    let rows = enumerate_derived(&lay::time_on_demurrage(), &state)
+        .expect("pre-commencement inspection must not error");
+    assert!(rows.is_empty(), "no clock, no row: {rows:?}");
+}
+
+#[test]
+fn two_voyages_enumerate_deterministically() {
+    // A second voyage alongside the first: two rows, in a stable
+    // order. This also exercises the derived-claim ordering over the
+    // new value kinds (subject keys, duration keys) - the silent
+    // failure mode there would be rows in a varying order.
+    let state = commenced_voyage();
+    let state = must_accept(
+        &lay::fix_voyage(),
+        vec![subj("v2"), subj("mv_borealis"), subj("sines"), dur("PT24H")],
+        state,
+        &invariants(),
+    );
+    let state = must_accept(
+        &lay::tender_nor(),
+        vec![subj("nor2"), subj("v2"), ts("2026-11-01T08:00:00Z")],
+        state,
+        &invariants(),
+    );
+    let state = must_accept(
+        &lay::commence_laytime(),
+        vec![subj("v2"), subj("seed2")],
+        state,
+        &invariants(),
+    );
+    let rows = enumerate_derived(&lay::time_on_demurrage(), &state).unwrap();
+    assert_eq!(rows.len(), 2, "two commenced voyages, two rows");
+    let again = enumerate_derived(&lay::time_on_demurrage(), &state).unwrap();
+    assert_eq!(rows, again, "enumeration order is deterministic");
+    let voyages: Vec<_> = rows.iter().map(|r| r.args[0].clone()).collect();
+    assert!(
+        voyages.contains(&subj("v1")) && voyages.contains(&subj("v2")),
+        "both voyages present: {voyages:?}"
+    );
+}

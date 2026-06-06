@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
     ArithOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value,
-    ValueExpr, Var,
+    ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -676,19 +676,30 @@ impl CheckCtx<'_> {
                             }
                         }
                     }
-                    (
-                        InferredKind::Known(PredicateArgKind::Decimal),
-                        InferredKind::UnknownOrAny,
-                    ) => {
-                        self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
-                        InferredKind::Known(PredicateArgKind::Decimal)
+                    // One side known: when exactly one rule fits that
+                    // side, the other side's kind is forced and a bare
+                    // variable there is refined (an externally supplied
+                    // turn time in `tendered_at + turn_time` infers
+                    // Duration). When several rules fit (`Timestamp -
+                    // x` could subtract an instant or a span), nothing
+                    // is assumed.
+                    (InferredKind::Known(k), InferredKind::UnknownOrAny) => {
+                        match arith_unique_counterpart(*op, k, true) {
+                            Some((expected, result)) => {
+                                self.check_operand_kind(right, expected, operator, scope);
+                                InferredKind::Known(result)
+                            }
+                            None => InferredKind::UnknownOrAny,
+                        }
                     }
-                    (
-                        InferredKind::UnknownOrAny,
-                        InferredKind::Known(PredicateArgKind::Decimal),
-                    ) => {
-                        self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
-                        InferredKind::Known(PredicateArgKind::Decimal)
+                    (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
+                        match arith_unique_counterpart(*op, k, false) {
+                            Some((expected, result)) => {
+                                self.check_operand_kind(left, expected, operator, scope);
+                                InferredKind::Known(result)
+                            }
+                            None => InferredKind::UnknownOrAny,
+                        }
                     }
                     _ => InferredKind::UnknownOrAny,
                 }
@@ -1016,23 +1027,6 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
 /// no rule exists and authoring-time validation reports it. Mirrors
 /// the evaluator's runtime matrix exactly; the time-values test suite
 /// couples the two.
-fn arith_result_kind(
-    op: ArithOp,
-    left: PredicateArgKind,
-    right: PredicateArgKind,
-) -> Option<PredicateArgKind> {
-    use PredicateArgKind::{Decimal, Duration, Timestamp};
-    match (op, left, right) {
-        (_, Decimal, Decimal) => Some(Decimal),
-        (ArithOp::Add | ArithOp::Sub, Timestamp, Duration) => Some(Timestamp),
-        (ArithOp::Sub, Timestamp, Timestamp) => Some(Duration),
-        (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Duration, Duration) => {
-            Some(Duration)
-        }
-        _ => None,
-    }
-}
-
 /// Inherent kind of a `Term`. Variables are `UnknownOrAny` here;
 /// callers that want the env-resolved kind look it up separately.
 fn term_kind(term: &Term) -> InferredKind {

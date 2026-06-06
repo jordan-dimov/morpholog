@@ -162,6 +162,12 @@ transformation complete_cargo_ops(voyage, completed_at):
 -- can never disagree with the intervals it is built from: correct an
 -- interval (next stage) and the answer moves with it, while anything
 -- already settled on the old figure stands on its own record.
+--
+-- The domain requires the clock to have started: before commencement
+-- there is nothing to count and no seed interval, so the question
+-- "how much demurrage?" has no row yet rather than a wrong answer.
+-- (Commencement admits the zero-length seed atomically, so once a
+-- voyage appears here its duration sum is never empty.)
 derived TimeOnDemurrage(voyage, allowed):
-    over VoyageFixture(voyage, _, _, allowed)
+    over VoyageFixture(voyage, _, _, allowed) and LaytimeCommenced(voyage, _)
     value excess = max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S))
