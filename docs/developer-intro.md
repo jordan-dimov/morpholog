@@ -36,8 +36,8 @@ changes one way and one way only: you propose a change - some records to add,
 some to remove - and the runtime checks every invariant against the result. If
 anything would break, nothing happens, and the database is byte-for-byte what
 it was before. Morpholog calls that proposal a **transformation**. There is no
-other door. No `UPDATE` from a forgotten script, no direct write that skips
-the checks.
+other door. No `UPDATE` from a forgotten script, no code path that skips the
+checks.
 
 The last idea is the one with no familiar name, so hold it lightly for now.
 Morpholog stores **claims**, not objects. There is no `Invoice` class, no row
@@ -153,6 +153,7 @@ each:
 
 | Form | Read it as |
 |---|---|
+| `Foo(a, b)` | is there an admitted `Foo` claim with these arguments? |
 | `_` | any value; I do not care which |
 | `not Foo(...)` | no matching claim exists |
 | `A implies B` | whenever A holds, B must hold too |
@@ -701,11 +702,14 @@ The gate refusals each trace to a `require` line you can point at in
 ## Questions you are probably asking
 
 **"Isn't this just the dual-write problem with extra steps?"**
-No - it is the standard cure for it. Morpholog is the system of record for the
-governed records; everything downstream (analytics tables, caches, search
-indexes) is a *derived copy*, kept up to date by consuming the intents each
-commit emits. You never write the same record to two places and hope. You
-write once, and propagation is explicit, at-least-once, and idempotent. And
+No - it is the standard cure for the transactional version of it. Morpholog
+is the system of record for the governed records; everything downstream
+(analytics tables, caches, search indexes) is a *derived copy*, kept up to
+date by consuming the intents each commit emits. You never write the same
+record to two places and hope. You write once, and propagation is explicit,
+at-least-once, and idempotent. The projection pipeline is still yours to
+operate - retries, idempotency keys, monitoring - but it is one system
+propagating, not two writers pretending to be co-primary. And
 since Morpholog's schema is plain PostgreSQL, it can live in the same database
 as your application's tables - behind its own schema and role, which the next
 question explains.
@@ -734,13 +738,15 @@ anything. Morpholog is built for the admission line of governed records, not
 as a general OLTP store; that boundary is the design, not an accident.
 
 **"Nothing is ever deleted - what about GDPR's right to erasure?"**
-This is what opaque subjects are for. Claims reference identifiers like
-`battery_07` or a UUID; the identifier carries no personal data. Keep names,
-emails, and anything personal in an ordinary, erasable store keyed by subject
-id - then erasure means deleting that mapping, and the immutable history holds
-only meaningless identifiers. Blinding parts of history itself (per-subject
-encryption, where erasing a key redacts the past without breaking its
-structure) is a recognised future direction, not yet built.
+Opaque subjects reduce the problem; they do not magically solve it. The
+intended pattern: claims reference identifiers like `battery_07` or a UUID,
+and names, emails, and anything personal live in an ordinary, erasable store
+keyed by subject id - erasure then deletes the mapping. Two honest caveats. A
+pseudonymous id is still personal data while you hold the mapping; and claim
+*contents* can re-identify someone if you model personal details into them, so
+the pattern is also a modelling discipline. Blinding parts of history itself
+(per-subject encryption, where erasing a key redacts the past without breaking
+its structure) is a recognised future direction, not yet built.
 
 **"Why not OPA, Datomic, or plain Datalog?"**
 Each solves a neighbouring problem. OPA is a stateless policy decision point:
