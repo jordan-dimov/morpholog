@@ -349,7 +349,8 @@ pub(crate) struct InspectDerivedArgs {
     /// a `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
     /// the last transition committed at or before it - instead of
     /// current state. Same predicate-scoped replay; unknown ids return
-    /// `TransitionNotFound`.
+    /// `TransitionNotFound`, and a timestamp earlier than every commit
+    /// returns `NoTransitionAtOrBefore`.
     #[arg(long)]
     pub(crate) as_of: Option<AsOf>,
 }
