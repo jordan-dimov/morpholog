@@ -350,6 +350,8 @@ impl ArithOp {
 pub enum OrderedDomain {
     Decimal,
     Date,
+    Timestamp,
+    Duration,
 }
 
 /// A positional argument in a claim, intent, or expression: a variable
@@ -388,6 +390,19 @@ pub enum Value {
     /// No time-of-day, no time zone: validity-window modelling on civil
     /// dates is the only temporal primitive in v0.
     Date(String),
+    /// An exact instant on the UTC timeline (RFC 3339, e.g.
+    /// `2026-10-24T14:00:00Z`), stored as its exact source string;
+    /// parsing into [`jiff::Timestamp`] is the evaluator's concern.
+    /// Deliberately zone-less: civil-time interpretation (port-local
+    /// days, DST boundaries) is domain knowledge to be admitted as
+    /// claims, not a hidden runtime assumption.
+    Timestamp(String),
+    /// An exact span of time (ISO 8601, e.g. `PT6H`), stored as its
+    /// exact source string; parsing into [`jiff::SignedDuration`] is
+    /// the evaluator's concern. Exact seconds only - no calendar
+    /// units (months, years), whose lengths depend on context the
+    /// kernel refuses to guess.
+    Duration(String),
 }
 
 /// A Claim is an admitted assertion candidate - a statement that may be
@@ -659,6 +674,8 @@ pub enum PredicateArgKind {
     Subject,
     Decimal,
     Date,
+    Timestamp,
+    Duration,
     Bool,
     Collection,
     Any,

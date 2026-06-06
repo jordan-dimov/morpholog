@@ -164,6 +164,12 @@ fn ordered_comparison(
             apply_cmp(op, a, b)
         }
         (OrderedDomain::Date, EvalValue::Date(a), EvalValue::Date(b)) => apply_cmp(op, a, b),
+        (OrderedDomain::Timestamp, EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => {
+            apply_cmp(op, a, b)
+        }
+        (OrderedDomain::Duration, EvalValue::Duration(a), EvalValue::Duration(b)) => {
+            apply_cmp(op, a, b)
+        }
         (OrderedDomain::Decimal, _, _) => {
             return Err(EvalError::TypeMismatch(
                 "comparison expects decimal operands".to_string(),
@@ -172,6 +178,16 @@ fn ordered_comparison(
         (OrderedDomain::Date, _, _) => {
             return Err(EvalError::TypeMismatch(
                 "comparison expects civil-date operands".to_string(),
+            ));
+        }
+        (OrderedDomain::Timestamp, _, _) => {
+            return Err(EvalError::TypeMismatch(
+                "comparison expects timestamp operands".to_string(),
+            ));
+        }
+        (OrderedDomain::Duration, _, _) => {
+            return Err(EvalError::TypeMismatch(
+                "comparison expects duration operands".to_string(),
             ));
         }
     };
@@ -289,6 +305,22 @@ pub(crate) fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
         .map_err(|e| EvalError::TypeMismatch(format!("invalid civil date `{s}`: {e}")))
 }
 
+/// Parse a `Value::Timestamp(String)` literal into a [`jiff::Timestamp`]
+/// (RFC 3339). Centralised for the same drift-prevention reason as
+/// [`parse_date_literal`].
+pub(crate) fn parse_timestamp_literal(s: &str) -> Result<jiff::Timestamp, EvalError> {
+    s.parse::<jiff::Timestamp>()
+        .map_err(|e| EvalError::TypeMismatch(format!("invalid timestamp `{s}`: {e}")))
+}
+
+/// Parse a `Value::Duration(String)` literal into a
+/// [`jiff::SignedDuration`] (ISO 8601, e.g. `PT6H`). Exact seconds
+/// only: calendar units are rejected by the type itself.
+pub(crate) fn parse_duration_literal(s: &str) -> Result<jiff::SignedDuration, EvalError> {
+    s.parse::<jiff::SignedDuration>()
+        .map_err(|e| EvalError::TypeMismatch(format!("invalid duration `{s}`: {e}")))
+}
+
 /// The claims worth checking when matching `predicate(args)` against
 /// state, after narrowing by the most selective ground argument.
 /// Computed once and reused by both [`find_claim_matches`] (which
@@ -343,6 +375,12 @@ fn select_candidates<'a>(
             Term::Literal(Value::Subject(s)) => Some(EvalValue::Subject(s.clone())),
             Term::Literal(Value::Decimal(s)) => Decimal::from_str(s).ok().map(EvalValue::Decimal),
             Term::Literal(Value::Date(s)) => parse_date_literal(s).ok().map(EvalValue::Date),
+            Term::Literal(Value::Timestamp(s)) => {
+                parse_timestamp_literal(s).ok().map(EvalValue::Timestamp)
+            }
+            Term::Literal(Value::Duration(s)) => {
+                parse_duration_literal(s).ok().map(EvalValue::Duration)
+            }
             Term::Actor => match actor {
                 Some(a) => Some(EvalValue::Subject(a.clone())),
                 None => return Err(EvalError::UnboundActor),
@@ -481,6 +519,20 @@ pub(crate) fn unify_args(
                     _ => return None,
                 }
             }
+            Term::Literal(Value::Timestamp(s)) => {
+                let parsed = parse_timestamp_literal(s).ok()?;
+                match v {
+                    EvalValue::Timestamp(t) if *t == parsed => {}
+                    _ => return None,
+                }
+            }
+            Term::Literal(Value::Duration(s)) => {
+                let parsed = parse_duration_literal(s).ok()?;
+                match v {
+                    EvalValue::Duration(d) if *d == parsed => {}
+                    _ => return None,
+                }
+            }
             Term::Actor => match actor {
                 Some(a) if matches!(v, EvalValue::Subject(s) if s == a) => {}
                 _ => return None,
@@ -595,21 +647,90 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     };
                     Ok(EvalValue::Decimal(result))
                 }
+                // The time-arithmetic matrix the laytime example
+                // forces: an instant shifted by an exact span stays an
+                // instant; the gap between two instants is a span;
+                // spans add, subtract, and cap. Everything else
+                // (multiplying instants, modding durations) is a
+                // type error until an example argues otherwise.
+                (EvalValue::Timestamp(t), EvalValue::Duration(d)) => {
+                    let shifted = match op {
+                        ArithOp::Add => t.checked_add(d),
+                        ArithOp::Sub => t.checked_sub(d),
+                        _ => {
+                            return Err(EvalError::TypeMismatch(format!(
+                                "{op:?} is not defined for timestamp and duration"
+                            )));
+                        }
+                    };
+                    shifted.map(EvalValue::Timestamp).map_err(|e| {
+                        EvalError::TypeMismatch(format!("timestamp arithmetic out of range: {e}"))
+                    })
+                }
+                (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => match op {
+                    ArithOp::Sub => Ok(EvalValue::Duration(a.duration_since(b))),
+                    _ => Err(EvalError::TypeMismatch(format!(
+                        "{op:?} is not defined for two timestamps (only Sub: the gap between them)"
+                    ))),
+                },
+                (EvalValue::Duration(a), EvalValue::Duration(b)) => {
+                    let result = match op {
+                        ArithOp::Add => a.checked_add(b),
+                        ArithOp::Sub => a.checked_sub(b),
+                        ArithOp::Min => Some(a.min(b)),
+                        ArithOp::Max => Some(a.max(b)),
+                        _ => {
+                            return Err(EvalError::TypeMismatch(format!(
+                                "{op:?} is not defined for durations"
+                            )));
+                        }
+                    };
+                    result.map(EvalValue::Duration).ok_or_else(|| {
+                        EvalError::TypeMismatch("duration arithmetic out of range".to_string())
+                    })
+                }
                 _ => Err(EvalError::TypeMismatch(format!(
-                    "{op:?} expects decimal operands"
+                    "{op:?} operand types do not match any arithmetic rule"
                 ))),
             }
         }
         ValueExpr::Sum { value, body } => {
+            // Type-driven accumulation: a sum of decimals is a decimal,
+            // a sum of durations is a duration (counted laytime is the
+            // forcing case), and the empty sum defaults to decimal zero
+            // - the only choice that keeps every pre-existing decimal
+            // aggregate working. Mixing the two domains is an error.
             let matches = find_matches(body, ctx)?;
-            let mut total = Decimal::ZERO;
+            let mut decimal_total: Option<Decimal> = None;
+            let mut duration_total: Option<jiff::SignedDuration> = None;
             for m in matches {
                 match resolve_term(value, &m, ctx.actor)? {
-                    EvalValue::Decimal(d) => total += d,
-                    _ => return Err(EvalError::TypeMismatch("Sum expects decimal".into())),
+                    EvalValue::Decimal(d) if duration_total.is_none() => {
+                        decimal_total = Some(decimal_total.unwrap_or(Decimal::ZERO) + d);
+                    }
+                    EvalValue::Duration(d) if decimal_total.is_none() => {
+                        let so_far = duration_total.unwrap_or(jiff::SignedDuration::ZERO);
+                        duration_total = Some(so_far.checked_add(d).ok_or_else(|| {
+                            EvalError::TypeMismatch("duration sum out of range".to_string())
+                        })?);
+                    }
+                    EvalValue::Decimal(_) | EvalValue::Duration(_) => {
+                        return Err(EvalError::TypeMismatch(
+                            "Sum cannot mix decimal and duration values".into(),
+                        ));
+                    }
+                    _ => {
+                        return Err(EvalError::TypeMismatch(
+                            "Sum expects decimal or duration values".into(),
+                        ));
+                    }
                 }
             }
-            Ok(EvalValue::Decimal(total))
+            match (decimal_total, duration_total) {
+                (_, Some(total)) => Ok(EvalValue::Duration(total)),
+                (Some(total), None) => Ok(EvalValue::Decimal(total)),
+                (None, None) => Ok(EvalValue::Decimal(Decimal::ZERO)),
+            }
         }
         ValueExpr::ValueOf {
             predicate,
@@ -687,6 +808,8 @@ pub(crate) fn resolve_term(
         }
         Term::Literal(Value::Subject(s)) => Ok(EvalValue::Subject(s.clone())),
         Term::Literal(Value::Date(s)) => Ok(EvalValue::Date(parse_date_literal(s)?)),
+        Term::Literal(Value::Timestamp(s)) => Ok(EvalValue::Timestamp(parse_timestamp_literal(s)?)),
+        Term::Literal(Value::Duration(s)) => Ok(EvalValue::Duration(parse_duration_literal(s)?)),
         Term::Actor => actor
             .map(|a| EvalValue::Subject(a.clone()))
             .ok_or(EvalError::UnboundActor),
@@ -921,6 +1044,8 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
         EvalValue::Decimal(d) => d.to_string(),
         EvalValue::Bool(b) => b.to_string(),
         EvalValue::Date(d) => d.to_string(),
+        EvalValue::Timestamp(t) => t.to_string(),
+        EvalValue::Duration(d) => d.to_string(),
         EvalValue::Collection(items) => {
             let inner: Vec<String> = items.iter().map(render_eval_value).collect();
             format!("[{}]", inner.join(", "))

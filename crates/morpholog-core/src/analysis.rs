@@ -10,8 +10,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ir::{
-    ArgDecl, DerivedClaim, OrderedDomain, PredicateArgKind, PredicateName, Program, Prop, Stmt,
-    Term, TransformationName, ValueExpr, Var,
+    ArgDecl, ArithOp, DerivedClaim, OrderedDomain, PredicateArgKind, PredicateName, Program, Prop,
+    Stmt, Term, TransformationName, ValueExpr, Var,
 };
 use crate::validate::ValidatedProgram;
 
@@ -670,6 +670,8 @@ impl<'a> ParamCollector<'a> {
                 let kind = match domain {
                     OrderedDomain::Decimal => PredicateArgKind::Decimal,
                     OrderedDomain::Date => PredicateArgKind::Date,
+                    OrderedDomain::Timestamp => PredicateArgKind::Timestamp,
+                    OrderedDomain::Duration => PredicateArgKind::Duration,
                 };
                 self.walk_value(left, Some(kind));
                 self.walk_value(right, Some(kind));
@@ -707,14 +709,26 @@ impl<'a> ParamCollector<'a> {
                 }
             }
             ValueExpr::Term(_) => {}
-            ValueExpr::Arith { left, right, .. } => {
-                self.walk_value(left, Some(PredicateArgKind::Decimal));
-                self.walk_value(right, Some(PredicateArgKind::Decimal));
+            ValueExpr::Arith { op, left, right } => {
+                // Mul / Div / Mod pin both operands to Decimal. The
+                // additive operators span the decimal and time domains,
+                // so they observe nothing: an operand's kind comes from
+                // the claim positions that genuinely pin it, never from
+                // an operator that admits several kinds. (The checker's
+                // rule matrix still rejects impossible pairings; this
+                // walker only refuses to over-claim.)
+                let expected = match op {
+                    ArithOp::Mul | ArithOp::Div | ArithOp::Mod => Some(PredicateArgKind::Decimal),
+                    ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => None,
+                };
+                self.walk_value(left, expected);
+                self.walk_value(right, expected);
             }
             ValueExpr::Sum { value, body } => {
-                if let Term::Var(name) = value {
-                    self.observe(name, PredicateArgKind::Decimal);
-                }
+                // The summed term is decimal or duration; its kind is
+                // observed from its claim position inside the body, so
+                // the aggregate itself pins nothing.
+                let _ = value;
                 self.walk_prop(body);
             }
             ValueExpr::ValueOf {

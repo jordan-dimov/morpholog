@@ -201,6 +201,8 @@ fn bare_kind_shape(kind: PredicateArgKind) -> Value {
             json!({"type": "string", "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$"})
         }
         PredicateArgKind::Date => json!({"type": "string", "format": "date"}),
+        PredicateArgKind::Timestamp => json!({"type": "string", "format": "date-time"}),
+        PredicateArgKind::Duration => json!({"type": "string", "format": "duration"}),
         PredicateArgKind::Bool => json!({"type": "boolean"}),
         PredicateArgKind::Collection => json!({"type": "array"}),
         // `Any` carries no constraint at the JSON-Schema level; the
@@ -228,6 +230,15 @@ fn concrete_kind_description(kind: PredicateArgKind, ctx: SchemaContext) -> Opti
             Some("arbitrary-precision decimal carried as a string for exactness")
         }
         PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
+        PredicateArgKind::Timestamp => Some(
+            "RFC 3339 UTC instant (e.g. 2026-10-24T14:00:00Z). Zone-less \
+             by design: local-time interpretation is admitted as claims, \
+             never assumed by the runtime.",
+        ),
+        PredicateArgKind::Duration => Some(
+            "ISO-8601 duration in exact time units (e.g. PT6H); calendar \
+             units (months, years) are not accepted",
+        ),
         PredicateArgKind::Collection => Some(match ctx {
             SchemaContext::TransformationArg => {
                 "collection; item kind not tracked at the kernel level in v0. \

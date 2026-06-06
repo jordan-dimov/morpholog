@@ -38,6 +38,19 @@ pub(crate) fn compare_token(op: CompareOp, domain: OrderedDomain) -> &'static st
         (OrderedDomain::Date, CompareOp::Lt) => "before",
         (OrderedDomain::Date, CompareOp::Ge) => "on_or_after",
         (OrderedDomain::Date, CompareOp::Gt) => "after",
+        // Instants: "at" is the natural preposition for a point on the
+        // timeline, and the strictly_* forms keep the boundary explicit
+        // where a dispute would turn on it.
+        (OrderedDomain::Timestamp, CompareOp::Le) => "at_or_before",
+        (OrderedDomain::Timestamp, CompareOp::Lt) => "strictly_before",
+        (OrderedDomain::Timestamp, CompareOp::Ge) => "at_or_after",
+        (OrderedDomain::Timestamp, CompareOp::Gt) => "strictly_after",
+        // Spans: read as length comparisons - `counted no_longer_than
+        // allowed` is the laytime sentence verbatim.
+        (OrderedDomain::Duration, CompareOp::Le) => "no_longer_than",
+        (OrderedDomain::Duration, CompareOp::Lt) => "shorter_than",
+        (OrderedDomain::Duration, CompareOp::Ge) => "no_shorter_than",
+        (OrderedDomain::Duration, CompareOp::Gt) => "longer_than",
     }
 }
 
@@ -129,6 +142,8 @@ fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
         PredicateArgKind::Subject => "Subject",
         PredicateArgKind::Decimal => "Decimal",
         PredicateArgKind::Date => "Date",
+        PredicateArgKind::Timestamp => "Timestamp",
+        PredicateArgKind::Duration => "Duration",
         PredicateArgKind::Bool => "Bool",
         PredicateArgKind::Collection => "Collection",
         PredicateArgKind::Any => "Any",
@@ -433,6 +448,12 @@ fn format_value(v: &Value) -> String {
         Value::Decimal(s) => s.clone(),
         // Date literals use the @YYYY-MM-DD sigil.
         Value::Date(s) => format!("@{s}"),
+        // Timestamp literals extend the same sigil to a full RFC 3339
+        // instant: @2026-10-24T14:00:00Z.
+        Value::Timestamp(s) => format!("@{s}"),
+        // Durations use an explicit constructor form rather than a
+        // bare-literal DSL: boring on purpose.
+        Value::Duration(s) => format!("duration(\"{s}\")"),
     }
 }
 

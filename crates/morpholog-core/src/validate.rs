@@ -139,6 +139,17 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// An arithmetic operator was applied to a pair of known kinds for
+    /// which no rule exists (e.g. adding two timestamps, or multiplying
+    /// durations). The rule matrix is deliberately small: decimals
+    /// support every operator; instants shift by durations and
+    /// difference into durations; durations add, subtract, and cap.
+    NoArithRule {
+        operator: &'static str,
+        left: PredicateArgKind,
+        right: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// An equality (`==` or `!=`) had two operands of distinct,
     /// incompatible kinds. Symmetric by nature: there is no
     /// "expected" side - both kinds are equally constrained by the
@@ -246,6 +257,15 @@ impl std::fmt::Display for ValidationError {
             } => write!(
                 f,
                 "{operator} expects {expected:?} operand(s) but received {actual:?} in {context}"
+            ),
+            ValidationError::NoArithRule {
+                operator,
+                left,
+                right,
+                context,
+            } => write!(
+                f,
+                "no arithmetic rule for {left:?} {operator} {right:?} in {context}"
             ),
             ValidationError::EqualityKindMismatch {
                 operator,

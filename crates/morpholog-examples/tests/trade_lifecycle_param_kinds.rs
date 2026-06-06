@@ -177,9 +177,11 @@ fn assert_param_types(schema: &Value, expected: &[(&str, PredicateArgKind)]) {
 
 fn expected_json_type(kind: PredicateArgKind) -> Value {
     match kind {
-        PredicateArgKind::Subject | PredicateArgKind::Decimal | PredicateArgKind::Date => {
-            Value::String("string".into())
-        }
+        PredicateArgKind::Subject
+        | PredicateArgKind::Decimal
+        | PredicateArgKind::Date
+        | PredicateArgKind::Timestamp
+        | PredicateArgKind::Duration => Value::String("string".into()),
         PredicateArgKind::Bool => Value::String("boolean".into()),
         PredicateArgKind::Collection => Value::String("array".into()),
         PredicateArgKind::Any => Value::Null,

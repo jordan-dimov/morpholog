@@ -32,6 +32,16 @@ pub enum EvalValue {
     /// time zone. JSON shape: `{ "type": "date", "value": "YYYY-MM-DD" }`
     /// (jiff's default serde format for [`jiff::civil::Date`]).
     Date(Date),
+    /// An exact instant on the UTC timeline. JSON shape:
+    /// `{ "type": "timestamp", "value": "2026-10-24T14:00:00Z" }`
+    /// (jiff's default serde format for [`jiff::Timestamp`]).
+    /// Zone-less by design: local-time interpretation is domain
+    /// modelling, admitted as claims, never a runtime assumption.
+    Timestamp(jiff::Timestamp),
+    /// An exact span of time, in exact seconds (no calendar units).
+    /// JSON shape: `{ "type": "duration", "value": "PT6H" }` (jiff's
+    /// default serde format for [`jiff::SignedDuration`]).
+    Duration(jiff::SignedDuration),
 }
 
 /// A grounded claim: all args are values, no variables or wildcards.
