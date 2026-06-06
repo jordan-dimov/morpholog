@@ -81,7 +81,8 @@ where
         let date_lit = select! { Token::DateLit(s) => s };
         let subject_lit = select! { Token::SubjectLit(s) => s };
 
-        // term ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
+        // term ::= Ident | "_" | DecimalLit | TimestampLit | DateLit
+        //        | duration(ISO) | SubjectLit
         let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),

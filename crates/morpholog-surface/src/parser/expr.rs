@@ -163,7 +163,8 @@ where
 
         // A `Term` is the limited atom that claim-call args and `In`
         // operands accept: variables (including the special `actor`),
-        // wildcards, and decimal / date / subject literals.
+        // wildcards, and decimal / timestamp / date / duration /
+        // subject literals.
         let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),

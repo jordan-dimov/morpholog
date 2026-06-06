@@ -77,18 +77,21 @@ pub fn dec_str(s: &str) -> EvalValue {
     EvalValue::Decimal(s.parse::<Decimal>().expect("valid decimal string"))
 }
 
-/// Build an [`EvalValue::Date`] by parsing an ISO-8601 civil-date
-/// string. Panics on a malformed date - same rationale as [`dec_str`].
+/// Build an [`EvalValue::Timestamp`] by parsing an RFC 3339 instant
+/// string. Panics on a malformed instant - same rationale as
+/// [`dec_str`].
 pub fn ts(s: &str) -> EvalValue {
     EvalValue::Timestamp(s.parse().expect("test timestamp literal must parse"))
 }
 
-/// ISO-8601 duration -> `EvalValue::Duration`, panicking on bad input
-/// (it is a test fixture, same contract as [`date`]).
+/// Build an [`EvalValue::Duration`] by parsing an ISO-8601 duration
+/// string. Panics on bad input - same rationale as [`dec_str`].
 pub fn dur(s: &str) -> EvalValue {
     EvalValue::Duration(s.parse().expect("test duration literal must parse"))
 }
 
+/// Build an [`EvalValue::Date`] by parsing an ISO-8601 civil-date
+/// string. Panics on a malformed date - same rationale as [`dec_str`].
 pub fn date(s: &str) -> EvalValue {
     EvalValue::Date(s.parse::<Date>().expect("valid ISO civil date"))
 }

@@ -1067,3 +1067,20 @@ invariant dur_forms:
         .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
     assert_eq!(reparsed, program);
 }
+
+#[test]
+fn an_impossible_calendar_timestamp_is_a_lex_diagnostic() {
+    // Shape-valid but not a real instant: month 13. Caught at lex via
+    // jiff, the same early-diagnostic treatment `duration(...)` gets.
+    let source = "program bad_instant
+predicate E(at: Timestamp)
+transformation t(v):
+    admit E(@2026-13-40T12:00:00Z)
+";
+    let err = parse_program(source).expect_err("month 13 is not an instant");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("invalid timestamp literal"),
+        "diagnostic should name the bad literal: {msg}"
+    );
+}

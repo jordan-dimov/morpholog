@@ -198,8 +198,10 @@ pub enum Token {
     /// Timestamp literal: `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`.
     /// The same `@` sigil as dates, extended to a full RFC 3339 instant;
     /// the presence of the `T` time part is what distinguishes the two.
-    /// Lex validates the digit/punctuation shape only; real validation
-    /// is `jiff::Timestamp` at parse time. Captured without the `@`.
+    /// Lex validates both the shape and, via `jiff::Timestamp`, that
+    /// the instant is real - a `@2026-13-40T...` is a spanned lex
+    /// diagnostic, not a runtime evaluation error. (Dates keep their
+    /// validate-at-runtime precedent.) Captured without the `@`.
     TimestampLit(String),
     /// Subject literal: `#NAME`. The `#` sigil makes opaque symbolic
     /// subjects visibly distinct from variables; the inner string is
@@ -438,8 +440,22 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
                 .then(time_part.or_not())
                 .to_slice(),
         )
-        .map(|s: &str| {
+        .validate(|s: &str, e, emitter| {
             if s.contains('T') {
+                // Shape is already enforced structurally; jiff confirms
+                // the instant is real (no month 13, no 61st second), so
+                // a bad literal is a spanned lex diagnostic rather than
+                // an evaluation-time surprise - the same treatment
+                // `duration(...)` gets in the parser. Dates keep their
+                // validate-at-runtime precedent.
+                if s.parse::<jiff::Timestamp>().is_err() {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        format!(
+                            "invalid timestamp literal `@{s}` (expected a real RFC 3339 instant)"
+                        ),
+                    ));
+                }
                 Token::TimestampLit(s.to_string())
             } else {
                 Token::DateLit(s.to_string())
