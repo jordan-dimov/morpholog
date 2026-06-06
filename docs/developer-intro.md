@@ -337,7 +337,11 @@ after that particular commit.
 modelling is the governed record on the asset's side: the bank's decision
 *enters as a claim*, proposed under the bank's authority - that is what
 `--actor` is recording. One Morpholog instance is one party's system of
-record, not a ledger shared between organisations.)
+record, not a ledger shared between organisations. And `--actor` is recorded
+provenance, not authentication: verifying who is calling, before proposing in
+their name, is your service's job. When authority itself must be *enforced* -
+"only holders of this role may confirm" - that is a gate, and the
+approval-controls worked example is built around exactly that.)
 
 ## The turn
 
@@ -445,6 +449,14 @@ decide on in June, and against what?* 1000, figure f1 - still a faithful record
 of what was decided that day. The correction moved future reliance to the new
 figure without rewriting a single thing about the past. You did not design a
 bitemporal schema. You did not write a trigger. The as-of query is one flag.
+
+You may have noticed something, though: `correct_revenue` *retracted* a
+claim - the old `CurrentFigure` pointer - and this guide promised that history
+is never rewritten. Both are true, and the two outputs above are the proof.
+Retraction removes a claim from *current* standing; it does not erase it. The
+retraction is itself recorded in the audit log, which is exactly why the as-of
+view can still show the pointer where it stood in June. Nothing is ever
+deleted. Things stop being current.
 
 **And the hinge.** Suppose someone now tries to run a *new* covenant test
 against the old figure f1 - the one that has been superseded:
@@ -588,6 +600,14 @@ run` commits, `morpholog explain` tells you why something was refused, and the
 outbox delivers the notifications each commit emits. No FFI, no generated
 client, no Rust toolchain in your app.
 
+Which brings us back to those `emit` lines you have been ignoring. Remember
+that the bank lives in its own systems - so when the figure was corrected,
+something had to tell the lender. That is what `RevenueCorrected` is for. Each
+commit queues its emitted intents in the outbox, inside the same atomic
+commit, and a worker delivers them to the outside world afterward. So a
+notification never goes out for a change that did not commit, and a change
+that commits never loses its notification.
+
 In Python, the whole integration is this:
 
 ```python
@@ -648,8 +668,35 @@ things to try with the program you already have:
    figure already exists, so a new figure for an already-reported period must
    go through correction, never a silent replace.
 
-Each refusal traces to a single `require` line you can point at in
-`revenue.morph` - and `morpholog explain` will point back.
+4. **The big one: try to break the invariant itself.** Every refusal so far
+   came from a gate. Now add a deliberately careless transformation to
+   `revenue.morph` - same admits as `report_revenue`, but no gate:
+
+   ```morph
+   transformation sloppy_report(asset, period, amount, figure_id):
+       admit Revenue(asset, period, amount, figure_id)
+       admit CurrentFigure(asset, period, figure_id)
+       emit RevenueReported(figure_id)
+   ```
+
+   Run it against the already-reported period, and this time the *invariant*
+   refuses it:
+
+   ```json
+   { "status": "rejected", "reason": "invariant `one_figure_in_force_per_period` violated" }
+   ```
+
+   This is the lesson the other pokes only hint at. A gate makes a bad
+   proposal hard to attempt; the invariant makes the bad state impossible to
+   commit - even for a careless transformation someone adds next year. The
+   rules do not depend on every transformation remembering its checks. You
+   started this guide with a validator some code path forgot to call. Here is
+   the forgetting, made harmless. (Delete `sloppy_report` afterwards - it has
+   made its point.)
+
+The gate refusals each trace to a `require` line you can point at in
+`revenue.morph`; the sloppy one traces to the invariant itself - and
+`morpholog explain` points at both kinds.
 
 ## Where to go next
 
