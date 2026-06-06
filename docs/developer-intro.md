@@ -1,12 +1,13 @@
 # Morpholog for developers: a gentle introduction
 
 You know Python. You have built things on top of an API framework and a SQL
-database. You have, at some point, written a function called something like
-`validate_invoice()` - and you have lived with the quiet dread that somewhere,
-on some code path, someone forgot to call it.
+database. And somewhere along the way you have written a function like
+`validate_invoice()` - then, months later, found a row in the database that
+could only have got there because some code path never called it.
 
-This guide is about that dread, and a different way to make it go away. It
-assumes nothing about Morpholog and asks for about half an hour. By the end you
+This guide is about that problem, and a different way to make it go away. It
+assumes you know nothing about Morpholog and asks for about half an hour of
+your time. By the end you
 will have run a small program that does something you would find genuinely
 annoying to build correctly in plain Python and SQL - not because the language
 is clever, but because it is built around the part of the problem that is
