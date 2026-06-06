@@ -121,7 +121,8 @@ Read these as English statements:
 you here (`battery_07`, `q1_2026`, `f1`); the runtime can also mint fresh unique
 ones, but supplying your own is fine.
 
-A `Decimal` is arbitrary-precision. There is no `f64` anywhere near your money.
+A `Decimal` is an exact number - as many digits as needed, never a float. The
+famous `0.1 + 0.2 != 0.3` surprise cannot happen to an amount of money here.
 
 ### Why `figure_id`? The modelling move this guide turns on
 
