@@ -568,6 +568,15 @@ CurrentRevenue(battery_07, q1_2026, f1, 1000)
 That is last quarter's report, reproduced - not from a snapshot someone
 remembered to take, but recomputed from the audit log on demand.
 
+If you are now wondering what that costs: less than you would think, and not
+where you would think. Current state lives in an ordinary table, so everyday
+reads - the screens, the views you just saw - never replay anything. Only the
+*historical* question replays, the cost is linear in the length of the audit
+log, and the replay is scoped to the predicates the view actually touches
+(measured: about a second and a half through a hundred thousand commits).
+And consider what the alternative costs today: "what did the books say in
+June?" is usually a week of forensics, not a second and a half.
+
 ## Where this fits in your stack
 
 Morpholog is not your whole system. You drove it through its CLI just now,
