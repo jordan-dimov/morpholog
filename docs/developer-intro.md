@@ -698,6 +698,71 @@ The gate refusals each trace to a `require` line you can point at in
 `revenue.morph`; the sloppy one traces to the invariant itself - and
 `morpholog explain` points at both kinds.
 
+## Questions you are probably asking
+
+**"Isn't this just the dual-write problem with extra steps?"**
+No - it is the standard cure for it. Morpholog is the system of record for the
+governed records; everything downstream (analytics tables, caches, search
+indexes) is a *derived copy*, kept up to date by consuming the intents each
+commit emits. You never write the same record to two places and hope. You
+write once, and propagation is explicit, at-least-once, and idempotent. And
+since Morpholog's schema is plain PostgreSQL, it can live in the same database
+as your application's tables.
+
+**"A single generic claims table - isn't that an EAV anti-pattern that defeats
+the query planner?"**
+The claims table is storage, not the query engine. Rules are not evaluated as
+SQL self-joins: the runtime loads only the claims whose predicates a
+transformation touches, and the kernel evaluates the rules in memory. The
+measured shape is linear - about 1.6 seconds per commit with a hundred
+thousand in-scope claims - and as you saw earlier, everyday reads never replay
+anything. Morpholog is built for the admission line of governed records, not
+as a general OLTP store; that boundary is the design, not an accident.
+
+**"Nothing is ever deleted - what about GDPR's right to erasure?"**
+This is what opaque subjects are for. Claims reference identifiers like
+`battery_07` or a UUID; the identifier carries no personal data. Keep names,
+emails, and anything personal in an ordinary, erasable store keyed by subject
+id - then erasure means deleting that mapping, and the immutable history holds
+only meaningless identifiers. Blinding parts of history itself (per-subject
+encryption, where erasing a key redacts the past without breaking its
+structure) is a recognised future direction, not yet built.
+
+**"Why not OPA, Datomic, or plain Datalog?"**
+Each solves a neighbouring problem. OPA is a stateless policy decision point:
+it answers "may this happen?" but owns no state, commits nothing, keeps no
+audit trail, replays no history. Datomic and XTDB are immutable temporal
+databases: they keep history beautifully, but rules are not first-class
+admission law and nothing explains a refusal. Datalog derives facts; it does
+not gate transactions. Morpholog's bet is the combination - admission law,
+atomic commit, audit-as-store, replay, and explanation - in one small kernel
+on plain PostgreSQL. [`prior-art.md`](prior-art.md) has the longer comparison.
+
+**"Are `Subject` and `Decimal` really the only types?"**
+No - this guide's example just never needed more. There are dates with date
+comparison (the clinical-trial example gates enrolment on validity windows),
+booleans, enum-like domain symbols, and collections. Genuinely missing today:
+instants and timezones (dates are civil dates) and units like `MW` or `GBP` -
+both recognised directions, neither built until a worked example forces the
+shape.
+
+**"What happens when a predicate needs to change shape?"**
+Today: the same move this guide taught for figures, applied to vocabulary. You
+do not mutate `Revenue` - you declare the new shape alongside it and write a
+governed transformation that carries forward what should carry forward. Old
+claims stand under the old shape; history replays as it was recorded. A
+first-class migration story - versioned vocabularies, tooling for the
+carry-forward - is acknowledged future work. The honest status: the pattern
+works, the tooling does not exist yet.
+
+**"Does this scale beyond one small file?"**
+The programmes are deliberately small so far, and `.morph` has no imports or
+namespaces yet - they arrive when a real codebase forces them. What exists now
+for keeping a rule set legible: `morpholog inspect guarantees` lists what a
+model makes impossible, and `morpholog explain` turns any refusal into the
+exact failing rule. Debugging is not grepping a thousand global rules; it is
+being handed the one that fired.
+
 ## Where to go next
 
 - The [worked examples](../examples/) - each models a real domain (settlement
