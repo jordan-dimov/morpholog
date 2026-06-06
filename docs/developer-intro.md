@@ -200,9 +200,13 @@ transformation run_covenant_test(test_id, asset, period, amount, figure_id):
     emit CovenantTestRecorded(test_id)
 ```
 
-`report_revenue` records a figure and points `CurrentFigure` at it (refusing if
-one already exists - a fresh figure for an already-reported period goes through
-correction, never a silent replace).
+Take `report_revenue`'s gate first. `require not CurrentFigure(asset, period, _)`
+reads as: "there must be no figure currently in force for this asset and
+period - whatever figure that might be." So you can report revenue only where
+no figure stands yet. That is deliberate: the *first* figure arrives through
+`report_revenue`, and a replacement must arrive through correction - never by
+quietly reporting over the top of what is there. Pass the gate, and the
+transformation records the figure and points `CurrentFigure` at it.
 
 `run_covenant_test` is where a gate earns its keep. Look at its two `require`
 lines. The first says the figure must exist with that amount. The second says it
