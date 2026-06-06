@@ -63,10 +63,9 @@ psql morpholog_intro -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL=postgres:///morpholog_intro
 ```
 
-The setup is deliberately explicit - install the CLI, create a disposable
-database, load the schema, point the CLI at it - so you can see there is no
-magic underneath. The schema you just loaded is Morpholog's own - a claims
-table, an audit table, an outbox. You will never design a table in this guide.
+Four explicit steps, no magic. The schema you just loaded is Morpholog's own -
+a claims table, an audit table, an outbox. You will never design a table in
+this guide.
 
 ## Your first program
 
@@ -92,9 +91,9 @@ the same file, taken a piece at a time.
 
 ### The vocabulary
 
-First, the vocabulary. A `predicate` declares a *kind of claim* the system can
-hold, and the shape of its arguments. Think of these as the tables you would
-have created - except each one names a statement, not a thing.
+A `predicate` declares a *kind of claim* the system can hold, and the shape of
+its arguments. Think of these as the tables you would have created - except
+each one names a statement, not a thing.
 
 ```morph
 program reported_revenue
@@ -117,9 +116,9 @@ Read these as English statements:
   covenant test, on this exact figure, for this amount." A decision - stamped
   with the precise figure it relied on.
 
-`Subject` is Morpholog's opaque identifier type. It is just an opaque string to
-you here (`battery_07`, `q1_2026`, `f1`); the runtime can also mint fresh unique
-ones, but supplying your own is fine.
+`Subject` is Morpholog's identifier type. To you it is just an opaque string
+(`battery_07`, `q1_2026`, `f1`); the runtime can also mint fresh unique ones,
+but supplying your own is fine.
 
 A `Decimal` is an exact number - as many digits as needed, never a float. The
 famous `0.1 + 0.2 != 0.3` surprise cannot happen to an amount of money here.
@@ -263,8 +262,10 @@ program: reported_revenue
 
 ## Make it happen
 
-**Report Q1 revenue of 1000 for a battery-storage asset.** Morpholog can tell
-you the shape of a transformation's arguments - it is just a JSON Schema:
+**First, report Q1 revenue of 1000 for the battery plant.** The figure is
+signed off by an analyst - call her `verifier_anna` - and proposed under her
+name. Morpholog can tell you the shape of a transformation's arguments - it is
+just a JSON Schema:
 
 ```bash
 morpholog schema revenue.morph report_revenue
@@ -310,8 +311,8 @@ first claim shown in full and the rest elided (`...`) to save space - every
 That receipt is not a log line you hope got written. It *is* the audit record -
 the same commit that wrote the claims wrote this, atomically, or wrote nothing.
 
-**Now the bank runs a covenant test against that figure**, in good faith, on
-what the books say today:
+**Now the bank's credit committee (`bank_credit_cttee`) runs its covenant test
+against that figure**, in good faith, on what the books say today:
 
 ```bash
 morpholog run revenue.morph run_covenant_test --actor bank_credit_cttee \
@@ -321,6 +322,12 @@ morpholog run revenue.morph run_covenant_test --actor bank_credit_cttee \
 It commits. A `CovenantTest` claim now stands, stamped `1000` and `f1`. Note the
 `transition_id` it returns - that moment is "as of June", and we will come back
 to it.
+
+(In real life the bank lives in its own systems, of course. What we are
+modelling is the governed record on the asset's side: the bank's decision
+*enters as a claim*, proposed under the bank's authority - that is what
+`--actor` is recording. One Morpholog instance is one party's system of
+record, not a ledger shared between organisations.)
 
 ## The turn
 
@@ -591,7 +598,7 @@ The fastest way to trust an admission boundary is to try to get past it. A few
 things to try with the program you already have:
 
 1. **Run a covenant test against the corrected figure** - `f2`, amount `1200`.
-   It commits: new reliance belongs on the figure in force.
+   It commits: new decisions rest on the figure in force.
 2. **Correct `f1` a second time** - say to `1300` as `f3`. Refused: `f1` has
    already been superseded, and the correction chain must not fork.
 3. **Report revenue for `battery_07` / `q1_2026` again.** Refused: a current
