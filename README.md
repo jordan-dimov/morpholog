@@ -4,13 +4,13 @@ Morpholog is a language and runtime for business systems where a record's legiti
 
 You write the rules your records must obey as invariants. The only way state changes is a transformation, and it commits only if every invariant still holds. The runtime makes invalid business state impossible to commit - and keeps an audit trail that proves why each committed change was allowed.
 
-Underneath, Morpholog treats records not as freestanding facts but as **admitted claims** - statements admitted under specific authority at a specific moment. The same number can carry different *standing* - whether it may be relied on, and for what - for different decisions, granted and revoked by different authorities. A verifier can correct a figure without erasing it: the original stays in the books and the corrected figure becomes current. **Decisions admitted under valid standing remain valid records even when that standing is later revoked** - the legitimacy of a *past* decision was established when it was made. The audit log carries enough provenance to reconstruct any past moment - no bitemporal columns, no shadow tables.
+Underneath, Morpholog treats records as **admitted claims**, not freestanding facts: statements admitted under specific authority, at a specific moment. The same figure can carry different *standing* for different decisions - whether it may be relied on, and for what - granted and revoked by different authorities. A verifier can correct a figure without erasing it: the original stays in the books, the corrected figure becomes current. **A decision made under valid standing remains a valid record even when that standing is later revoked** - its legitimacy was settled when it was made. And the audit log carries enough provenance to reconstruct any past moment: no bitemporal columns, no shadow tables.
 
 The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
 
 That gate runs forward as well as back. Whatever decides what to do next - a person, an optimiser, a heuristic, an AI model - only ever *proposes* a change; the runtime is what admits it or refuses. So the thing making the decision does not have to be trusted. You can put untrusted intelligence to work precisely because legitimacy is enforced outside it, never asked of it.
 
-And when it refuses, it says why. A rejected proposal comes back as a structured, reproducible account - the gate or invariant that failed and, where the cause is a missing claim, that claim and the candidate transformations that could supply it - built from your own predicate and transformation names, never free text. That turns the gate into something an automated searcher can *work against*, not just bounce off: a solver or a model proposes, reads the refusal, repairs its own candidate, and tries again. Whatever finally commits did so by satisfying the same rules a human change would have to.
+And when it refuses, it says why. A rejected proposal comes back as a structured, reproducible account - the gate or invariant that failed and, where the cause is a missing claim, that claim and the candidate transformations that could supply it - built from your own predicate and transformation names, never free text. That turns the gate into something an automated searcher can *work against*, not just bounce off. A solver or a model proposes, reads the refusal, repairs its own candidate, and tries again - and whatever finally commits did so by satisfying the same rules a human change would have to.
 
 ## The questions you can answer
 
@@ -81,14 +81,8 @@ Post a journal entry - debit $100 to cash, credit $100 to revenue:
 ```bash
 morpholog run examples/03_double_entry_ledger/ledger.morph post_simple_entry \
   --actor jordan \
-  --args '[
-    {"type":"subject","value":"entry_001"},
-    {"type":"subject","value":"2026-04-15"},
-    {"type":"subject","value":"q1_2026"},
-    {"type":"subject","value":"account_cash"},
-    {"type":"subject","value":"account_revenue"},
-    {"type":"decimal","value":"100"}
-  ]'
+  --args-named '{"entry_id":"entry_001","posting_date":"2026-04-15","period":"q1_2026",
+                 "debit_account":"account_cash","credit_account":"account_revenue","amount":"100"}'
 ```
 
 The receipt carries the transition id, the actor, the asserted claims, and the emitted intents. `--actor` records under whose authority the transition was proposed; the audit row carries it for the next three years.
@@ -102,7 +96,11 @@ morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBala
 
 The report is exactly what an auditor would have seen at that moment - recomputed from the audit log, no bitemporal columns anywhere in your schema.
 
-An unbalanced entry would come back as `{"status":"rejected","reason":"balanced_posted_entry invariant did not hold"}`.
+And an unbalanced entry is refused atomically, with the rule named:
+
+```json
+{ "status": "rejected", "reason": "invariant `balanced_posted_entry` violated" }
+```
 
 ## Worked examples
 
@@ -144,6 +142,24 @@ The `.morph` parser arc is complete: every worked example parses end-to-end as `
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
 The legibility tooling has begun: `morpholog inspect guarantees` names what a model makes impossible, and `morpholog explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap. What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching for higher-order authority; materialised derived claims; the rest of the legibility set (transformation graphs, mechanically-derived exclusion matrices). Each lands when a worked example forces the shape.
+
+## Common questions
+
+**Doesn't a separate system of record create a dual-write problem?** It removes the classic transactional one. Morpholog holds the governed records; downstream stores - analytics tables, caches, search indexes - are derived copies, kept current by consuming the intents each commit emits (at-least-once, with idempotency keys). One write, explicit propagation, no two-phase commit; the projection pipeline is still yours to operate, but it is one system propagating, not two writers pretending to be co-primary. And the schema is plain PostgreSQL: it can share a database with your application's tables, behind its own schema and role.
+
+**Can't someone bypass the rules with raw SQL?** With superuser access, yes - as with any database-backed system of record (a DBA can drop a `CHECK` constraint too). The mitigations are ordinary privilege separation - only the runtime's role writes the `morpholog` schema - plus one the model adds: the claims table and the audit log are two records of one history, so out-of-band edits to either are detectable by replaying one against the other. A `verify` command and a hash-chained audit log are recognised hardening steps, not yet built.
+
+**Isn't a generic claims table an EAV performance trap?** The claims table is storage, not the query engine. Rules are never evaluated as SQL self-joins: the runtime loads only the claims whose predicates a transformation touches, and the kernel evaluates in memory. The measured shape is linear (the Status numbers above), and the intended workload is the admission line of governed records, not general OLTP - that boundary is the design.
+
+**What about GDPR's right to erasure, if nothing is ever deleted?** Opaque subjects reduce the problem rather than solve it. The pattern: keep personal data in an ordinary, erasable store keyed by subject id, so erasure deletes the mapping - and keep personal details out of claim contents, which is a modelling discipline, not a free lunch. Redaction within history itself (per-subject crypto-shredding) is a recognised future direction.
+
+**Why not OPA, Datomic, or Datalog?** Neighbouring problems. OPA decides policy but owns no state, no commit, no audit, no replay. Datomic and XTDB keep immutable history, but rules are not admission law and refusals are not explained. Datalog derives; it does not gate transactions. Morpholog is the combination - admission law, atomic commit, audit-as-store, replay, explanation - in one small kernel on plain PostgreSQL. [`docs/prior-art.md`](docs/prior-art.md) has the longer comparison.
+
+**How does a predicate evolve once history exists?** By supersession, the same way records do: declare the new shape, carry forward with a governed transformation, and history stands as recorded. First-class migration tooling is future work.
+
+**Do I have to shell out to a CLI on every request?** Today the CLI is the non-Rust integration surface (~9ms per call, measured); Rust embeds the library in-process. The JSON contract is the interface - a long-running server mode and native language clients are contemplated next steps, and they would wrap the same contract unchanged.
+
+The [developer introduction](docs/developer-intro.md) closes with a longer-form version of these questions.
 
 ## Deeper reading
 
