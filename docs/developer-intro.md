@@ -279,8 +279,9 @@ morpholog run revenue.morph report_revenue --actor verifier_anna \
 ```
 
 `--actor` records *under whose authority* this change was proposed; it is written
-to the audit row and kept. The receipt comes back as JSON - this is the real
-output, lightly trimmed:
+to the audit row and kept. The receipt comes back as JSON. Here it is with the
+first claim shown in full and the rest elided (`...`) to save space - every
+`args` array has the same shape, one tagged value per argument:
 
 ```json
 {
@@ -288,12 +289,20 @@ output, lightly trimmed:
   "transition_id": "019e937d-0dcf-7f00-b66d-c43a47bd84f8",
   "actor": { "type": "subject", "value": "verifier_anna" },
   "asserted_claims": [
-    { "predicate": "Revenue", "args": [ ...battery_07, q1_2026, 1000, f1 ] },
-    { "predicate": "CurrentFigure", "args": [ ...battery_07, q1_2026, f1 ] }
+    {
+      "predicate": "Revenue",
+      "args": [
+        { "type": "subject", "value": "battery_07" },
+        { "type": "subject", "value": "q1_2026" },
+        { "type": "decimal", "value": "1000" },
+        { "type": "subject", "value": "f1" }
+      ]
+    },
+    { "predicate": "CurrentFigure", "args": [ ... ] }
   ],
   "retracted_claims": [],
   "emitted_intents": [
-    { "name": "RevenueReported", "args": [ ...f1 ] }
+    { "name": "RevenueReported", "args": [ ... ] }
   ]
 }
 ```
