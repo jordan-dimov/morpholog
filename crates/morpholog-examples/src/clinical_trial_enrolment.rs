@@ -35,18 +35,6 @@ pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
 }
 
-pub fn at_most_one_protocol_window_per_version() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_protocol_window_per_version")
-}
-
-pub fn at_most_one_consent_window_per_version() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_consent_window_per_version")
-}
-
-pub fn participant_randomised_once_per_trial() -> Invariant {
-    crate::invariant(&PROGRAM, "participant_randomised_once_per_trial")
-}
-
 pub fn consent_obtained_before_randomisation() -> Invariant {
     crate::invariant(&PROGRAM, "consent_obtained_before_randomisation")
 }

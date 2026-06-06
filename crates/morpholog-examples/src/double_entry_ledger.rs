@@ -29,16 +29,8 @@ pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
 }
 
-pub fn balanced_posted_entry() -> Invariant {
-    crate::invariant(&PROGRAM, "balanced_posted_entry")
-}
-
 pub fn journal_entry_has_lines() -> Invariant {
     crate::invariant(&PROGRAM, "journal_entry_has_lines")
-}
-
-pub fn at_most_one_direct_successor() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_direct_successor")
 }
 
 pub fn post_simple_entry() -> Transformation {

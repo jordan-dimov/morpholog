@@ -24,3 +24,24 @@ impl JitterRng for RandJitter {
         rand::rng().random_range(low..high)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The production jitter draws inside the configured range. A
+    /// handful of draws, not a distribution test - the contract is the
+    /// bounds. Pinned for the same reason as `RealClock`: every other
+    /// test injects `FixedJitter`.
+    #[test]
+    fn rand_jitter_stays_inside_the_bounds() {
+        let jitter = RandJitter;
+        for _ in 0..100 {
+            let factor = jitter.jitter_factor(0.75, 1.25);
+            assert!(
+                (0.75..1.25).contains(&factor),
+                "factor out of range: {factor}"
+            );
+        }
+    }
+}

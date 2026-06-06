@@ -34,25 +34,6 @@ pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
 }
 
-pub fn admissibility_has_provenance() -> Invariant {
-    crate::invariant(&PROGRAM, "admissibility_has_provenance")
-}
-
-pub fn admissibility_excludes_revocation() -> Invariant {
-    crate::invariant(&PROGRAM, "admissibility_excludes_revocation")
-}
-
-pub fn at_most_one_current_verification_per_asset_period() -> Invariant {
-    crate::invariant(
-        &PROGRAM,
-        "at_most_one_current_verification_per_asset_period",
-    )
-}
-
-pub fn at_most_one_direct_successor() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_direct_successor")
-}
-
 pub fn admit_independent_verification() -> Transformation {
     crate::transformation(&PROGRAM, "admit_independent_verification")
 }

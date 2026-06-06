@@ -30,32 +30,8 @@ pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
 }
 
-pub fn at_most_one_verified_quantity_per_measurement() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_verified_quantity_per_measurement")
-}
-
 pub fn no_double_issuance() -> Invariant {
     crate::invariant(&PROGRAM, "no_double_issuance")
-}
-
-pub fn credit_backed_by_one_measurement() -> Invariant {
-    crate::invariant(&PROGRAM, "credit_backed_by_one_measurement")
-}
-
-pub fn single_custody() -> Invariant {
-    crate::invariant(&PROGRAM, "single_custody")
-}
-
-pub fn retirement_terminal() -> Invariant {
-    crate::invariant(&PROGRAM, "retirement_terminal")
-}
-
-pub fn at_most_one_obligation_per_id() -> Invariant {
-    crate::invariant(&PROGRAM, "at_most_one_obligation_per_id")
-}
-
-pub fn obligation_not_both_satisfied_and_breached() -> Invariant {
-    crate::invariant(&PROGRAM, "obligation_not_both_satisfied_and_breached")
 }
 
 pub fn grant_accreditation() -> Transformation {

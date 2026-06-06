@@ -173,32 +173,8 @@ pub fn le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Le, OrderedDomain::Decimal, lhs, rhs)
 }
 
-pub fn lt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
-    compare(CompareOp::Lt, OrderedDomain::Decimal, lhs, rhs)
-}
-
-pub fn ge(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
-    compare(CompareOp::Ge, OrderedDomain::Decimal, lhs, rhs)
-}
-
-pub fn gt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
-    compare(CompareOp::Gt, OrderedDomain::Decimal, lhs, rhs)
-}
-
 pub fn date_le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     compare(CompareOp::Le, OrderedDomain::Date, lhs, rhs)
-}
-
-pub fn date_lt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
-    compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs)
-}
-
-pub fn date_ge(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
-    compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs)
-}
-
-pub fn date_gt(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
-    compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs)
 }
 
 pub fn in_(elem: Term, coll: Term) -> Prop {
@@ -430,65 +406,6 @@ impl PredicateDeclBuilder {
 /// position and finish with `.build()`.
 pub fn predicate(name: &str) -> PredicateDeclBuilder {
     PredicateDeclBuilder {
-        name: name.to_string(),
-        args: Vec::new(),
-    }
-}
-
-/// Builder for an [`crate::IntentDecl`]. Structurally identical to
-/// [`PredicateDeclBuilder`] but distinct so the decl lands in the
-/// right vocabulary (`Program::intents` vs `Program::predicates`).
-#[must_use]
-pub struct IntentDeclBuilder {
-    name: String,
-    args: Vec<ArgDecl>,
-}
-
-impl IntentDeclBuilder {
-    fn arg(mut self, name: &str, kind: PredicateArgKind) -> Self {
-        self.args.push(ArgDecl {
-            name: name.to_string(),
-            kind,
-        });
-        self
-    }
-
-    pub fn subject(self, name: &str) -> Self {
-        self.arg(name, PredicateArgKind::Subject)
-    }
-
-    pub fn decimal(self, name: &str) -> Self {
-        self.arg(name, PredicateArgKind::Decimal)
-    }
-
-    pub fn date(self, name: &str) -> Self {
-        self.arg(name, PredicateArgKind::Date)
-    }
-
-    pub fn boolean(self, name: &str) -> Self {
-        self.arg(name, PredicateArgKind::Bool)
-    }
-
-    pub fn collection(self, name: &str) -> Self {
-        self.arg(name, PredicateArgKind::Collection)
-    }
-
-    pub fn any(self, name: &str) -> Self {
-        self.arg(name, PredicateArgKind::Any)
-    }
-
-    pub fn build(self) -> crate::IntentDecl {
-        crate::IntentDecl {
-            name: self.name.into(),
-            args: self.args,
-        }
-    }
-}
-
-/// Start an intent declaration. Chain one kind method per argument
-/// position and finish with `.build()`.
-pub fn intent_decl(name: &str) -> IntentDeclBuilder {
-    IntentDeclBuilder {
         name: name.to_string(),
         args: Vec::new(),
     }
