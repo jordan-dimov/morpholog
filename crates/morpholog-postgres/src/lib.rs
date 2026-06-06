@@ -281,7 +281,7 @@ fn is_unique_violation_code(code: Option<&str>) -> bool {
 /// [`PgError::Database`].
 fn classify(err: sqlx::Error) -> PgError {
     let db = err.as_database_error();
-    let code = db.and_then(|e| e.code());
+    let code = db.and_then(sqlx::error::DatabaseError::code);
     if is_serialization_failure_code(code.as_deref()) {
         return PgError::SerializationFailure;
     }
@@ -1962,13 +1962,12 @@ pub async fn process_one_outbox_row<D>(
 where
     D: Deliverer,
 {
-    let row =
-        match claim_pending_outbox_row(pool, worker_id, intent_type, lease_duration, claim_before)
+    let Some(row) =
+        claim_pending_outbox_row(pool, worker_id, intent_type, lease_duration, claim_before)
             .await?
-        {
-            Some(r) => r,
-            None => return Ok(ProcessOutcome::NoRowAvailable),
-        };
+    else {
+        return Ok(ProcessOutcome::NoRowAvailable);
+    };
     let intent_id = row.intent_id;
 
     match deliverer.deliver(&row).await {

@@ -7,7 +7,7 @@ use morpholog_core::{
     ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateDecl, Program,
     Transformation, Var,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::{Diagnostic, Span};
 use crate::lexer::{Token, lex, token_stream};
@@ -157,15 +157,13 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         // The IR's `keys` (a `Vec<Var>`) is positional; two same-named
         // keys would shadow each other in the binding context and
         // produce silently wrong enumeration.
-        let mut seen_keys: HashMap<&str, ()> = HashMap::new();
+        let mut seen_keys: HashSet<&str> = HashSet::new();
         for k in &d.keys {
-            if seen_keys.contains_key(k.as_str()) {
+            if !seen_keys.insert(k.as_str()) {
                 diagnostics.push(Diagnostic::error(
                     format!("duplicate key `{}` in derived-claim `{}`", k, d.predicate),
                     span.clone(),
                 ));
-            } else {
-                seen_keys.insert(k.as_str(), ());
             }
         }
 
@@ -175,9 +173,9 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         // same documentary name (the kernel doesn't enforce
         // uniqueness internally, but a derived claim with two `v`
         // outputs is a programmer error).
-        let mut seen_values: HashMap<&str, ()> = HashMap::new();
+        let mut seen_values: HashSet<&str> = HashSet::new();
         for v in &d.values {
-            if seen_values.contains_key(v.name.as_str()) {
+            if !seen_values.insert(v.name.as_str()) {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "duplicate value name `{}` in derived-claim `{}`",
@@ -185,8 +183,6 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
                     ),
                     span.clone(),
                 ));
-            } else {
-                seen_values.insert(v.name.as_str(), ());
             }
         }
     }

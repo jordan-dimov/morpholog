@@ -91,7 +91,7 @@ fn decode_named(
     let extra: Vec<&str> = object
         .keys()
         .filter(|k| !declared.contains(&k.as_str()))
-        .map(|s| s.as_str())
+        .map(String::as_str)
         .collect();
     if !extra.is_empty() {
         bail!(

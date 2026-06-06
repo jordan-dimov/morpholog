@@ -460,7 +460,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         .filter(|(_, count)| **count > 1)
         .map(|(name, _)| *name)
         .collect();
-    duplicates.sort();
+    duplicates.sort_unstable();
     for name in duplicates {
         errors.push(ValidationError::DuplicateDecl {
             vocabulary: VocabularyKind::Predicate,
@@ -478,7 +478,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         .filter(|(_, count)| **count > 1)
         .map(|(name, _)| *name)
         .collect();
-    dup_intents.sort();
+    dup_intents.sort_unstable();
     for name in dup_intents {
         errors.push(ValidationError::DuplicateDecl {
             vocabulary: VocabularyKind::Intent,

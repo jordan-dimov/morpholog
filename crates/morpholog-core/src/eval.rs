@@ -532,9 +532,8 @@ pub(crate) fn find_in_matches(
     let base = ctx.bindings;
     let actor = ctx.actor;
     let coll_val = resolve_term(coll, base, actor)?;
-    let items = match coll_val {
-        EvalValue::Collection(v) => v,
-        _ => return Err(EvalError::TypeMismatch("In expects a collection".into())),
+    let EvalValue::Collection(items) = coll_val else {
+        return Err(EvalError::TypeMismatch("In expects a collection".into()));
     };
     match elem {
         Term::Wildcard => Err(EvalError::TypeMismatch("wildcard not valid in In".into())),

@@ -550,9 +550,8 @@ pub(crate) fn execute_stmt(
         } => {
             let coll_ctx = EvalContext::new(pre_state, None, bindings, actor);
             let coll_val = eval_value(collection, &coll_ctx)?;
-            let items = match coll_val {
-                EvalValue::Collection(v) => v,
-                _ => return Err(EvalError::TypeMismatch("For expects a collection".into())),
+            let EvalValue::Collection(items) = coll_val else {
+                return Err(EvalError::TypeMismatch("For expects a collection".into()));
             };
             // Iteration scope: snapshot outer bindings, reset per
             // iteration, restore on exit. Branched on `trace.is_on()` so

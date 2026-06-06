@@ -273,8 +273,7 @@ fn check_reset_ack(reset: bool, database_url: &str) -> Result<()> {
     if !reset {
         return Err(anyhow!(
             "this benchmark TRUNCATES the morpholog schema in the target database. \
-             Re-run with `--reset` to acknowledge. Target: {}",
-            database_url
+             Re-run with `--reset` to acknowledge. Target: {database_url}"
         ));
     }
     Ok(())

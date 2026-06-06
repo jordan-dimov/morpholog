@@ -229,7 +229,7 @@ fn example_enumeration_has_unique_names() {
     let enumeration = common::all_programs();
     let mut names: Vec<&str> = enumeration.iter().map(|p| p.name.as_str()).collect();
     let total = names.len();
-    names.sort();
+    names.sort_unstable();
     names.dedup();
     assert_eq!(names.len(), total, "example program names must be unique");
 }

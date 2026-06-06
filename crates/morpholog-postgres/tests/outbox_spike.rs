@@ -139,9 +139,8 @@ async fn process_one_pending(
     compensation: Option<SpikeCompensation>,
 ) -> Result<Option<Uuid>, Box<dyn std::error::Error>> {
     let pending = list_pending_outbox(pool).await?;
-    let row = match pending.first() {
-        Some(r) => r,
-        None => return Ok(None),
+    let Some(row) = pending.first() else {
+        return Ok(None);
     };
 
     // Reconstruct an IntentInstance from the outbox row. In

@@ -201,9 +201,8 @@ where
             return Ok(base_dur);
         };
         let now = self.clock.now();
-        let until = match (next - now).to_std() {
-            Ok(d) => d,
-            Err(_) => return Ok(base_dur),
+        let Ok(until) = (next - now).to_std() else {
+            return Ok(base_dur);
         };
         Ok(std::cmp::min(base_dur, until))
     }
