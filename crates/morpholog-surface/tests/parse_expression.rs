@@ -1192,7 +1192,7 @@ fn in_as_comparator_inside_forall_body() {
 }
 
 // ============================================================
-// PR #58 review tightenings: forall source restriction +
+// Review tightenings: forall source restriction +
 // strict date literal lexing
 // ============================================================
 

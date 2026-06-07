@@ -535,7 +535,7 @@ fn reserved_keyword_cannot_be_transformation_name() {
 }
 
 // ============================================================
-// PR #62 review tightenings
+// Review tightenings: bind is parser-restricted to a claim pattern
 // ============================================================
 
 /// `bind` accepts only a claim pattern. Arbitrary propositions
@@ -758,9 +758,9 @@ fn top_level_for_is_rejected() {
     assert!(!errs.is_empty());
 }
 
-// PR #63 review tightening: admit/emit reject wildcards at parse
-// time because the kernel rejects them at runtime; the parser
-// refuses to produce IR the kernel will refuse to evaluate.
+// Admit/emit reject wildcards at parse time because the kernel
+// rejects them at runtime; the parser refuses to produce IR the
+// kernel will refuse to evaluate.
 
 #[test]
 fn admit_rejects_wildcard_arg() {
