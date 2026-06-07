@@ -368,6 +368,16 @@ pub(crate) struct InspectClaimsArgs {
     /// not any one programme's vocabulary.
     #[arg(long = "predicate")]
     pub(crate) predicate: Vec<String>,
+
+    /// Optional: decode each claim's positional args into a bare named
+    /// object using the declared vocabulary of this `.morph` file -
+    /// the read-side mirror of `--args-named`. With it, the programme
+    /// becomes the authority: a returned claim whose predicate is
+    /// undeclared, or whose arity disagrees with its declaration, is a
+    /// hard error naming both sides (programme/database skew), never a
+    /// silent skip. Composes with `--predicate` and `--as-of`.
+    #[arg(long = "named", value_name = "FILE")]
+    pub(crate) named: Option<PathBuf>,
 }
 
 /// Arguments for `inspect derived`.

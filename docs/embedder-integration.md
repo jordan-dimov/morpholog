@@ -150,6 +150,14 @@ Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate
 
 Read-only. Exit code is always zero on a parsed-and-validated programme, whether the verdict is admissible or rejected; explaining is answering a question, not taking an action. Only operational failures exit non-zero.
 
+### `morpholog init`
+
+Provisions the `morpholog` schema (claims, audit, outbox) in an existing database, from the canonical schema **embedded in the binary** - a binary-only deployment provisions exactly the schema its build expects, with nothing to vendor and nothing to drift. Day-zero only: if the schema already exists it refuses (exit non-zero, the remedy named), or reports `{"status": "already-initialised"}` and exits zero under `--skip-if-exists` - the flag for deployment entrypoints that may re-run. It never drops and never migrates; schema evolution is deliberately out of this command's scope.
+
+### `run --explain-on-reject`
+
+With the flag, a business rejection's envelope carries an `explanation` field: the same structured account `explain --json` emits, computed against **the exact pre-state the gates evaluated** - one snapshot, not a run-then-explain pair whose second read can describe different state than the one that refused. Committed envelopes are unchanged (no `explanation` field), exit codes are unchanged, and only business rejections are explained - kernel errors and serialization failures have no admissibility story to tell. Mutually exclusive with `--trace`.
+
 ### `morpholog hash`
 
 A stable content hash of the programme's rules: SHA-256 over the *canonical source* - the formatter's rendering of the parsed programme - emitted as `{"program": "<name>", "hash": "sha256:<hex>"}`. Because the formatter/parser round-trip makes that rendering canonical, formatting-only edits do not change the hash; and because comments do not survive canonicalisation, this is **rules-identity, not file-identity** - editing teaching prose leaves the hash alone, editing a rule does not. Record it as a `ruleset_version` in deployment metadata, generated-code headers, and evidence packs ("built against model hash X"). Only a valid programme hashes; parse or validation failures exit non-zero.
@@ -162,7 +170,9 @@ The whole contract in one artefact, with top-level keys `program`, `hash`, `pred
 
 The targeted read of governed state, for building a transition's arguments from claims the embedder did not itself mint (the in-force pointer after a correction, say). `--predicate <Name>` repeats; the result is only claims of the named predicates. Composes with `--as-of` for the historical equivalent - a `transition_id`, or an RFC 3339 timestamp resolved to the last transition committed at or before it - where it scopes the replay itself rather than filtering afterwards.
 
-Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [<tagged values>]}` - the same tagged-value encoding as the `--args` codec and intent payloads. The args are positional; to decode them by field name, read the predicate's declared argument order from `morpholog inspect predicates <file>` (the read-side analogue of `x-morpholog-arg-order` - never hard-code positions). An unknown predicate name yields an empty array, not an error: the claims table is the authority, not any one programme's vocabulary, so a typo is indistinguishable from a true zero by design.
+Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [<tagged values>]}` - the same tagged-value encoding as the `--args` codec and intent payloads. An unknown predicate name yields an empty array, not an error: the claims table is the authority, not any one programme's vocabulary, so a typo is indistinguishable from a true zero by design.
+
+**`--named <file.morph>`** decodes each claim's positional args into a bare named object - `{"predicate": "<Name>", "args": {field: bare_value, ...}}`, the read-side mirror of `--args-named` (same exactness rules: decimals, dates, timestamps, and durations stay strings; booleans are booleans; collections recurse). With `--named` the programme becomes the authority: a returned claim whose predicate is undeclared, or whose arity disagrees with its declaration, is a **hard error naming both sides** (programme/database skew), never a silent skip. Composes with `--predicate` and `--as-of`. Without `--named`, decoding by hand stays possible via `inspect predicates` and the tagged output above.
 
 Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering, and a predicate read returns zero or more claims - multiplicity is the caller's to handle, except where the programme's own invariants pin it (a singleton in-force pointer, say), which is exactly what licenses a simple lookup. Argument-level selection is deliberately left open below.
 
@@ -175,6 +185,9 @@ What this document promises:
 - The `morpholog run` outcome shape, traced and untraced.
 - The `morpholog explain --json` Explanation shape.
 - The `morpholog inspect claims --predicate` claim-object shape (predicate name plus tagged positional args).
+- The `morpholog init` provisioning contract (embedded schema, day-zero only, refuse-or-skip on an existing schema, never drop or migrate).
+- The `run --explain-on-reject` envelope (rejections gain `explanation` in the `explain --json` shape, computed against the rejecting snapshot; commits unchanged).
+- The `inspect claims --named` decoded-claim shape and its hard-error skew contract.
 - The `morpholog hash` output shape and its rules-identity semantics (canonical-source SHA-256; formatting and comments excluded).
 - The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; declaration order).
 - Exit-code semantics for `run` and `explain`.

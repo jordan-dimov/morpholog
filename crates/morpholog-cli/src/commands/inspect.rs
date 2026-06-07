@@ -2,13 +2,17 @@
 //! (claims, audit rows, pending outbox intents, derived-claim
 //! enumerations, declared predicate vocabulary).
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
+use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
     PgPool, list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
     list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
     resolve_transition_at_or_before,
 };
+use std::path::Path;
 use uuid::Uuid;
+
+use crate::commands::args::eval_value_to_bare_json;
 
 use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 use crate::{AsOf, Inspect};
@@ -52,7 +56,10 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                     .await
                     .context("list_claims_for_predicates failed")?,
             };
-            print_json(&claims)
+            match &args.named {
+                Some(file) => print_json(&decode_claims_named(file, &claims)?),
+                None => print_json(&claims),
+            }
         }
         Inspect::Audit(args) => {
             let pool = connect(&args.database_url).await?;
@@ -73,6 +80,64 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         Inspect::Predicates(args) => inspect_predicates(args),
         Inspect::Guarantees(args) => inspect_guarantees(args),
     }
+}
+
+/// Decode positional, tagged claims into bare named objects using the
+/// declared vocabulary of `file` - the read-side mirror of
+/// `--args-named`. With `--named`, the programme becomes the
+/// authority: an undeclared predicate or an arity mismatch is
+/// programme/database skew and a hard error naming both sides, never
+/// a silent skip. (The bare read keeps the opposite contract - claims
+/// table as authority - which is why decoding requires the file.)
+fn decode_claims_named(
+    file: &Path,
+    claims: &[ClaimInstance],
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let (program, _source, _name) = parse_or_exit(file)?;
+    validate_or_exit(&program);
+
+    let mut rows = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let Some(decl) = program
+            .predicates
+            .iter()
+            .find(|d| d.name.as_str() == claim.predicate.as_str())
+        else {
+            bail!(
+                "claim predicate `{}` is not declared in `{}` \
+                 (programme/database skew); declared: {}",
+                claim.predicate,
+                file.display(),
+                program
+                    .predicates
+                    .iter()
+                    .map(|d| d.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        };
+        if decl.args.len() != claim.args.len() {
+            bail!(
+                "claim `{}` has arity {} but `{}` declares arity {} \
+                 (programme/database skew)",
+                claim.predicate,
+                claim.args.len(),
+                file.display(),
+                decl.args.len(),
+            );
+        }
+        let fields: serde_json::Map<String, serde_json::Value> = decl
+            .args
+            .iter()
+            .zip(claim.args.iter())
+            .map(|(arg, value)| (arg.name.clone(), eval_value_to_bare_json(value)))
+            .collect();
+        rows.push(serde_json::json!({
+            "predicate": claim.predicate,
+            "args": fields,
+        }));
+    }
+    Ok(rows)
 }
 
 /// Run the `inspect derived` subcommand end-to-end: look up the named
