@@ -427,8 +427,10 @@ pub(crate) fn arith_result_kind(
         (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Duration, Duration) => {
             Some(Duration)
         }
-        // The ratio of two spans is a dimensionless exact decimal -
-        // how many days of demurrage, how many turn-times in the gap.
+        // The ratio of two spans is a dimensionless decimal - how many
+        // days of demurrage, how many turn-times in the gap. Exact for
+        // terminating ratios; see the evaluator's arm for the precision
+        // contract.
         (ArithOp::Div, Duration, Duration) => Some(Decimal),
         // The unit algebra, deliberately minimal: amounts combine only
         // under the SAME label; the ratio of two same-unit amounts is
@@ -481,8 +483,9 @@ pub enum Value {
     /// ISO-8601 civil date (`YYYY-MM-DD`) stored as its exact source string.
     /// Parsing into [`jiff::civil::Date`] is the evaluator's concern, not the
     /// IR's; mirrors how [`Value::Decimal`] defers parsing to evaluation.
-    /// No time-of-day, no time zone: validity-window modelling on civil
-    /// dates is the only temporal primitive in v0.
+    /// No time-of-day, no time zone: the civil-date kind for
+    /// validity-window modelling, beside the exact-instant
+    /// [`Value::Timestamp`] and exact-span [`Value::Duration`] kinds.
     Date(String),
     /// An exact instant on the UTC timeline (RFC 3339, e.g.
     /// `2026-10-24T14:00:00Z`), stored as its exact source string;

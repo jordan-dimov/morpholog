@@ -383,3 +383,24 @@ fn demurrage_due_has_no_row_before_the_rate_is_agreed() {
     let rows = enumerate_derived(&lay::demurrage_due(), &state).unwrap();
     assert!(rows.is_empty(), "no rate agreed yet: {rows:?}");
 }
+
+#[test]
+fn settlement_before_the_rate_is_agreed_is_refused() {
+    // Without a rate the delay has no price, and the cap invariant's
+    // antecedent would be vacuously false - so both the gate and the
+    // settlement_requires_rate invariant refuse the attempt. Cargo
+    // ops are completed first, so the rate really is the only thing
+    // missing.
+    let state = commenced_voyage();
+    let state = must_accept(
+        &lay::complete_cargo_ops(),
+        vec![subj("v1"), ts("2026-10-25T08:00:00Z")],
+        state,
+        &invariants(),
+    );
+    must_reject(
+        &lay::settle_demurrage(),
+        vec![subj("s1"), subj("v1"), qty("1000", "USD")],
+        &state,
+    );
+}

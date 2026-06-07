@@ -757,9 +757,14 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         })
                     }
                     // The ratio between two spans is a dimensionless
-                    // exact decimal - how many turn-times fit in the
-                    // excess, how many days of demurrage. The division
-                    // is exact in integer nanoseconds.
+                    // decimal - how many turn-times fit in the excess,
+                    // how many days of demurrage. The inputs are exact
+                    // integer nanoseconds and the division is Decimal
+                    // division: terminating ratios (132h/24h = 5.5)
+                    // are exact; a repeating ratio carries Decimal's
+                    // 28-digit precision. Money settled off a ratio
+                    // eventually wants an explicit rounding rule -
+                    // a domain decision, not a hidden kernel one.
                     ArithOp::Div => {
                         let divisor = duration_nanos_decimal(b);
                         if divisor == Decimal::ZERO {

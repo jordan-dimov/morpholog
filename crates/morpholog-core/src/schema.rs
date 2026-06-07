@@ -32,8 +32,10 @@
 //!   stores them as exact source strings; the pattern is strict
 //!   enough to reject `00.12`, leading-`+`, and other ambiguous
 //!   forms that the parser normalises.
-//! - Dates carry as ISO-8601 civil dates (no time of day, no zone) -
-//!   the only temporal primitive in v0.
+//! - Dates carry as ISO-8601 civil dates (no time of day, no zone);
+//!   timestamps as RFC 3339 instants; durations as ISO-8601
+//!   exact-time spans; quantity amounts as the same bare decimal
+//!   string as `Decimal`, with the unit in `x-morpholog-unit`.
 //! - `Polymorphic` and `Unconstrained` parameters become properties
 //!   with no `type` constraint and a description carrying their
 //!   state - the embedder can render them but should flag that the

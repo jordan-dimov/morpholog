@@ -118,11 +118,17 @@ pub fn enumerate_derived(
 /// [`enumerate_derived`]; not exposed.
 ///
 /// The ordering is infallible and `Eq`-consistent:
-/// - Variants order as `Decimal < Subject < Bool < Collection`.
-/// - Within `Decimal`, the natural decimal ordering applies (so
-///   `100` sorts before `200`, not lexicographic on the string).
+/// - Variants order by the stable discriminant in `cmp` (`Decimal <
+///   Subject < Bool < Collection < Date < Timestamp < Duration <
+///   Quantity`) - arbitrary but fixed.
+/// - Within `Decimal`, `Date`, `Timestamp`, and `Duration`, the
+///   natural ordering of the underlying value applies (so `100`
+///   sorts before `200`, not lexicographic on the string).
 /// - Within `Subject`, the natural string ordering applies.
 /// - Within `Bool`, `false < true` (the derived `Ord` on `bool`).
+/// - Within `Quantity`, by unit first, then amount - units are
+///   incomparable domains, so grouping by label is the only
+///   deterministic order that never ranks across units.
 /// - Within `Collection`, lexicographic on elements with the same
 ///   structural ordering applied recursively; shorter tuples
 ///   sort before longer when one is a prefix of the other.

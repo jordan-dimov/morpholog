@@ -148,6 +148,15 @@ invariant settlements_within_due:
         sum(amount | DemurrageSettled(_, v, amount)) <=
             daily * (max(sum(len | CountingInterval(_, v, _, _, len)) - allowed, duration(PT0S)) / duration(PT24H)))
 
+-- A settlement can only ever exist under an agreed rate. The gate on
+-- `settle_demurrage` checks the same thing at action time; this
+-- invariant makes it a permanent property of the world - the same
+-- gate-plus-invariant pairing as the counting rules above. It holds
+-- even for the zero-dollar seed, because the rate and the seed are
+-- admitted together.
+invariant settlement_requires_rate:
+    DemurrageSettled(_, v, _) implies DemurrageRate(v, _)
+
 -- The only ways state may change.
 
 -- Fix the voyage: the deal's numbers, agreed before the ship sails.
@@ -228,12 +237,15 @@ transformation agree_demurrage_rate(voyage, seed_settlement, daily):
     admit DemurrageSettled(seed_settlement, voyage, 0 USD)
 
 -- Settle part (or all) of the demurrage. Only after the cargo work is
--- done - until then the counted time is still moving - and never past
--- what the delay is worth, which the invariant recomputes rather than
--- trusts. The amount is dollars by declaration: offer tonnes here and
--- the proposal does not type, let alone commit.
+-- done - until then the counted time is still moving - and only under
+-- an agreed rate, because without one the delay has no price and the
+-- cap above has nothing to cap against. Never past what the delay is
+-- worth, which the invariant recomputes rather than trusts. The
+-- amount is dollars by declaration: offer tonnes here and the
+-- proposal does not type, let alone commit.
 transformation settle_demurrage(settlement, voyage, amount):
     require CargoOpsCompleted(voyage, _)
+    require DemurrageRate(voyage, _)
     admit DemurrageSettled(settlement, voyage, amount)
     emit DemurrageSettlementRecorded(settlement)
 
