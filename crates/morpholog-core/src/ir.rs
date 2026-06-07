@@ -154,7 +154,7 @@ opaque_id! {
     /// combine like-labelled amounts, and knows nothing else. Case-sensitive,
     /// no registry, no aliases, no compound symbols (`USD/day` is a business
     /// concept expressed in a predicate's field name and formula, never a
-    /// unit). Conversions between units are domain facts with provenance and
+    /// unit). Conversions between units are domain knowledge with provenance and
     /// time, so they enter as claims when a worked example forces them - the
     /// same doctrine that keeps timezone interpretation out of the runtime.
     /// Ordered because [`PredicateArgKind`] is ordered (the analysis walkers

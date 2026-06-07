@@ -75,7 +75,7 @@ Deliberately not yet here, each waiting for its stage of this example:
   verified-revenue and trade-lifecycle examples pin, in a new costume.
 - **Unit conversions.** The model has tonnes and dollars but no idea how
   either relates to anything else - deliberately. Conversion factors are
-  domain facts with provenance and time (whose table? as of when?), so they
+  domain knowledge with provenance and time (whose table? as of when?), so they
   enter as admitted claims when an example genuinely needs one, never as
   kernel constants.
 

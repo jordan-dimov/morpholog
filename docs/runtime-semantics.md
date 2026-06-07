@@ -303,7 +303,7 @@ The doctrinal floors - no entities/classes/services, no workflow engine, no arbi
 - No invariant lifecycle. v0 has one canonical epoch; all invariants are `version: 1`, status `enforced`.
 - No SQL generation from claim shapes. v0 uses a small hand-written PG schema at `crates/morpholog-core/sql/schema.sql` for the runtime tables (claims, audit, outbox).
 - No model checker; the decidable-core spec is a later artefact.
-- No unit conversions, registries, aliases, or compound units. Units themselves are contractual labels on exact decimals (`Decimal[USD]`); everything relating one unit to another is a domain fact that enters as claims when an example forces it. No floating-point arithmetic; decimal only.
+- No unit conversions, registries, aliases, or compound units. Units themselves are contractual labels on exact decimals (`Decimal[USD]`); everything relating one unit to another is domain knowledge that enters as admitted claims when an example forces it. No floating-point arithmetic; decimal only.
 
 ## Success criterion
 
