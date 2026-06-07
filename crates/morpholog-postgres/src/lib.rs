@@ -1668,19 +1668,27 @@ pub enum InitOutcome {
 /// exists this returns [`InitOutcome::AlreadyInitialised`] without
 /// touching anything - it never drops and never migrates. Schema
 /// *evolution* is the deferred migrations story, not this function.
+///
+/// Provisioning is atomic: the existence check and the whole schema
+/// script run in one transaction (the script is plain DDL, which
+/// PostgreSQL rolls back like any other statement), so a mid-script
+/// failure leaves nothing behind - in particular, no partial schema
+/// the existence guard would later misread as already-initialised.
 pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
     let exists: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM pg_namespace WHERE nspname = 'morpholog'")
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(classify)?;
     if exists.is_some() {
         return Ok(InitOutcome::AlreadyInitialised);
     }
     sqlx::raw_sql(SCHEMA_SQL)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify)?;
+    tx.commit().await.map_err(classify)?;
     Ok(InitOutcome::Initialised)
 }
 

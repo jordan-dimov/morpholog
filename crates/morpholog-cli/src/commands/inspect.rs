@@ -133,13 +133,16 @@ fn decode_claims_named(
     file: &Path,
     claims: &[ClaimInstance],
 ) -> anyhow::Result<Vec<serde_json::Value>> {
+    // The vocabulary is static for the whole invocation; index it once
+    // rather than scanning the declarations per returned claim.
+    let decls: std::collections::HashMap<&str, &morpholog_core::PredicateDecl> = program
+        .predicates
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
     let mut rows = Vec::with_capacity(claims.len());
     for claim in claims {
-        let Some(decl) = program
-            .predicates
-            .iter()
-            .find(|d| d.name.as_str() == claim.predicate.as_str())
-        else {
+        let Some(decl) = decls.get(claim.predicate.as_str()) else {
             bail!(
                 "claim predicate `{}` is not declared in `{}` \
                  (programme/database skew); declared: {}",
