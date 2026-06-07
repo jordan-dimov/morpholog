@@ -40,6 +40,18 @@
 --     police the order of events; invariants keep the arithmetic
 --     honest forever.
 --
+-- Money and cargo bring a third shape: a number that knows what it
+-- counts. The cargo is so many tonnes; the demurrage rate is so many
+-- dollars per day of delay. In this model those are not bare numbers
+-- but quantities with a unit on them - `Decimal[t]`, `Decimal[USD]` -
+-- and the runtime refuses to add, compare, or confuse amounts of
+-- different units. Tonnes never meet dollars by accident; a sum of
+-- settlements is a sum of dollars or it is rejected. The unit is a
+-- label the rules respect, nothing more: the system knows no exchange
+-- rates and no tonne-to-kilogram table, and "per day" is not a unit
+-- here but a calculation you can read below - the daily amount times
+-- the number of days, with the days computed exactly.
+--
 -- Time itself appears in two distinct shapes, and the distinction is
 -- the lesson of this example. A `Timestamp` is an exact instant on
 -- the shared UTC timeline - the moment the NOR was tendered. A
@@ -63,16 +75,31 @@ predicate LaytimeCommenced(voyage: Subject, commenced_at: Timestamp)
 predicate CountingInterval(interval: Subject, voyage: Subject, from: Timestamp, to: Timestamp, len: Duration)
 predicate CargoOpsCompleted(voyage: Subject, completed_at: Timestamp)
 
+-- The cargo book: what the vessel may carry, and each parcel booked
+-- onto her, in tonnes. And the money book: the agreed daily demurrage
+-- amount, and each settlement paid against the delay, in dollars.
+predicate VesselCapacity(voyage: Subject, capacity: Decimal[t])
+predicate CargoParcel(parcel: Subject, voyage: Subject, qty: Decimal[t])
+predicate DemurrageRate(voyage: Subject, daily: Decimal[USD])
+predicate DemurrageSettled(settlement: Subject, voyage: Subject, amount: Decimal[USD])
+
 -- The read-side result both parties actually care about: how much
 -- time, if any, ran past the allowance, shown beside the allowance it
 -- ran past. Derived, never stored - see the bottom of the file.
 predicate TimeOnDemurrage(voyage: Subject, allowed: Duration, excess: Duration)
+
+-- What the delay is worth: the daily amount times the exact count of
+-- days on demurrage. Also derived, never stored - and it shows the
+-- figures it was computed from (the allowance, the daily amount)
+-- beside the answer, the way a demurrage invoice does.
+predicate DemurrageDue(voyage: Subject, allowed: Duration, daily: Decimal[USD], due: Decimal[USD])
 
 -- Intents are messages to the outside world after a change commits -
 -- the operations team learns the clock started; the demurrage desk
 -- learns the cargo work is done and the counting can be argued about.
 intent LaytimeClockStarted(voyage: Subject)
 intent CargoOpsDone(voyage: Subject)
+intent DemurrageSettlementRecorded(settlement: Subject)
 
 -- The bookkeeping truths. If any change below would leave the world
 -- violating one of these, the whole change is rejected.
@@ -101,6 +128,25 @@ invariant clock_starts_once:
 -- Statement-of-Facts corrections in this example's next stage.)
 invariant one_notice_per_voyage:
     NorTendered(a, v, _) and NorTendered(b, v, _) implies a = b
+
+-- The cargo never exceeds what the vessel can carry. Tonnes against
+-- tonnes: the comparison is only possible because both sides carry
+-- the same unit, and the sum opens at the zero-tonne seed admitted
+-- with the capacity (a sum over nothing is a bare number, and a bare
+-- number does not compare with tonnes - so the book is never empty).
+invariant cargo_within_capacity:
+    VesselCapacity(v, cap) implies sum(qty | CargoParcel(_, v, qty)) <= cap
+
+-- Settlements never exceed what the delay is worth. The right-hand
+-- side recomputes the due figure from first principles - the counted
+-- time past the allowance, in exact days, times the daily amount - so
+-- there is no stored "amount due" to drift or to quietly edit. The
+-- rule only takes hold once the clock has started: before that there
+-- is no counted time to price.
+invariant settlements_within_due:
+    ((DemurrageRate(v, daily) and VoyageFixture(v, _, _, allowed) and LaytimeCommenced(v, _)) implies
+        sum(amount | DemurrageSettled(_, v, amount)) <=
+            daily * (max(sum(len | CountingInterval(_, v, _, _, len)) - allowed, duration(PT0S)) / duration(PT24H)))
 
 -- The only ways state may change.
 
@@ -155,6 +201,42 @@ transformation complete_cargo_ops(voyage, completed_at):
     admit CargoOpsCompleted(voyage, completed_at)
     emit CargoOpsDone(voyage)
 
+-- Declare what the vessel can carry. The zero-tonne seed parcel
+-- admitted alongside opens the cargo book, exactly as the zero-length
+-- interval opens the time book at commencement.
+transformation declare_capacity(voyage, seed_parcel, capacity):
+    require VoyageFixture(voyage, _, _, _)
+    require not VesselCapacity(voyage, _)
+    admit VesselCapacity(voyage, capacity)
+    admit CargoParcel(seed_parcel, voyage, 0 t)
+
+-- Book a parcel of cargo. The gate asks only that the capacity has
+-- been declared; the invariant above decides whether this parcel
+-- still fits, against everything already booked.
+transformation load_parcel(parcel, voyage, qty):
+    require VesselCapacity(voyage, _)
+    admit CargoParcel(parcel, voyage, qty)
+
+-- Agree the demurrage rate - part of the deal, in dollars per day of
+-- delay. "Per day" is not a unit the system knows; it is the formula
+-- in the invariant and the derived figure below. The zero-dollar seed
+-- settlement opens the money book, same pattern as the cargo.
+transformation agree_demurrage_rate(voyage, seed_settlement, daily):
+    require VoyageFixture(voyage, _, _, _)
+    require not DemurrageRate(voyage, _)
+    admit DemurrageRate(voyage, daily)
+    admit DemurrageSettled(seed_settlement, voyage, 0 USD)
+
+-- Settle part (or all) of the demurrage. Only after the cargo work is
+-- done - until then the counted time is still moving - and never past
+-- what the delay is worth, which the invariant recomputes rather than
+-- trusts. The amount is dollars by declaration: offer tonnes here and
+-- the proposal does not type, let alone commit.
+transformation settle_demurrage(settlement, voyage, amount):
+    require CargoOpsCompleted(voyage, _)
+    admit DemurrageSettled(settlement, voyage, amount)
+    emit DemurrageSettlementRecorded(settlement)
+
 -- The answer, computed rather than stored. Counted time is the sum of
 -- the interval lengths; time on demurrage is whatever ran past the
 -- allowance, floored at zero - `max` keeps a voyage that finished
@@ -171,3 +253,11 @@ transformation complete_cargo_ops(voyage, completed_at):
 derived TimeOnDemurrage(voyage, allowed):
     over VoyageFixture(voyage, _, _, allowed) and LaytimeCommenced(voyage, _)
     value excess = max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S))
+
+-- And what it is worth: the same excess, divided by twenty-four hours
+-- into an exact count of days (5.5 days is 5.5, not "about five"),
+-- times the agreed daily amount. Dollars out, because dollars times a
+-- bare number is dollars - the only multiplication the units allow.
+derived DemurrageDue(voyage, allowed, daily):
+    over VoyageFixture(voyage, _, _, allowed) and DemurrageRate(voyage, daily) and LaytimeCommenced(voyage, _)
+    value due = daily * (max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S)) / duration(PT24H))

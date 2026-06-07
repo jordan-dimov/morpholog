@@ -45,6 +45,26 @@ pub fn complete_cargo_ops() -> Transformation {
     crate::transformation(&PROGRAM, "complete_cargo_ops")
 }
 
+pub fn declare_capacity() -> Transformation {
+    crate::transformation(&PROGRAM, "declare_capacity")
+}
+
+pub fn load_parcel() -> Transformation {
+    crate::transformation(&PROGRAM, "load_parcel")
+}
+
+pub fn agree_demurrage_rate() -> Transformation {
+    crate::transformation(&PROGRAM, "agree_demurrage_rate")
+}
+
+pub fn settle_demurrage() -> Transformation {
+    crate::transformation(&PROGRAM, "settle_demurrage")
+}
+
 pub fn time_on_demurrage() -> DerivedClaim {
     crate::derived(&PROGRAM, "TimeOnDemurrage")
+}
+
+pub fn demurrage_due() -> DerivedClaim {
+    crate::derived(&PROGRAM, "DemurrageDue")
 }
