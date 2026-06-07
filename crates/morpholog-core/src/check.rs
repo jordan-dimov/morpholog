@@ -44,7 +44,7 @@ use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 /// the `UnknownOrAny` state. A variable seen only through an `Any`
 /// slot stays unconstrained and refines to a specific kind when
 /// later observed in a specific slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InferredKind {
     /// Either an `Any`-declared slot or a variable not yet observed
     /// in any specific slot. Compatible with every other kind and
@@ -69,7 +69,7 @@ impl InferredKind {
             (InferredKind::UnknownOrAny, observed) => Ok(observed),
             (existing, InferredKind::UnknownOrAny) => Ok(existing),
             (InferredKind::Known(prev), InferredKind::Known(new)) => {
-                if kinds_compatible(prev, new) {
+                if kinds_compatible(&prev, &new) {
                     // Prefer the more specific of the two: `Any` on
                     // either side loses to a concrete kind.
                     if matches!(prev, PredicateArgKind::Any) {
@@ -88,8 +88,8 @@ impl InferredKind {
 /// Compatibility rule for two specific declared kinds. `Any` on
 /// either side is the declaration-level escape hatch; otherwise
 /// strict equality is required.
-fn kinds_compatible(a: PredicateArgKind, b: PredicateArgKind) -> bool {
-    a == PredicateArgKind::Any || b == PredicateArgKind::Any || a == b
+fn kinds_compatible(a: &PredicateArgKind, b: &PredicateArgKind) -> bool {
+    *a == PredicateArgKind::Any || *b == PredicateArgKind::Any || a == b
 }
 
 /// Scope-local map from variable name to inferred kind. Mutable
@@ -110,7 +110,7 @@ impl KindEnv {
     pub(crate) fn lookup(&self, name: &Var) -> InferredKind {
         self.bindings
             .get(name)
-            .copied()
+            .cloned()
             .unwrap_or(InferredKind::UnknownOrAny)
     }
 
@@ -311,11 +311,11 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             let actual = if position < derived.keys.len() {
                 scope.kinds.lookup(&derived.keys[position])
             } else {
-                value_kinds[position - derived.keys.len()]
+                value_kinds[position - derived.keys.len()].clone()
             };
-            let expected = decl.args[position].kind;
+            let expected = decl.args[position].kind.clone();
             if let InferredKind::Known(actual_kind) = actual
-                && !kinds_compatible(expected, actual_kind)
+                && !kinds_compatible(&expected, &actual_kind)
             {
                 let context = cx.context.clone();
                 cx.errors.push(ValidationError::ArgKindMismatch {
@@ -429,14 +429,27 @@ impl CheckCtx<'_> {
                 right,
             } => {
                 let token = compare_token(*op, *domain);
-                let kind = match domain {
-                    OrderedDomain::Decimal => PredicateArgKind::Decimal,
-                    OrderedDomain::Date => PredicateArgKind::Date,
-                    OrderedDomain::Timestamp => PredicateArgKind::Timestamp,
-                    OrderedDomain::Duration => PredicateArgKind::Duration,
-                };
-                self.check_operand_kind(left, kind, token, scope);
-                self.check_operand_kind(right, kind, token, scope);
+                match domain {
+                    // The decimal ordered domain admits two flavours: bare
+                    // decimals and unit-tagged quantities (a `Decimal[U]`
+                    // IS a decimal, under a contract label the comparison
+                    // must respect). Both operands must share one flavour.
+                    OrderedDomain::Decimal => {
+                        self.check_decimal_domain_operands(left, right, token, scope);
+                    }
+                    OrderedDomain::Date => {
+                        self.check_operand_kind(left, PredicateArgKind::Date, token, scope);
+                        self.check_operand_kind(right, PredicateArgKind::Date, token, scope);
+                    }
+                    OrderedDomain::Timestamp => {
+                        self.check_operand_kind(left, PredicateArgKind::Timestamp, token, scope);
+                        self.check_operand_kind(right, PredicateArgKind::Timestamp, token, scope);
+                    }
+                    OrderedDomain::Duration => {
+                        self.check_operand_kind(left, PredicateArgKind::Duration, token, scope);
+                        self.check_operand_kind(right, PredicateArgKind::Duration, token, scope);
+                    }
+                }
             }
             Prop::Eq(left, right) => {
                 self.check_equality_operands(left, right, "=", scope);
@@ -467,7 +480,7 @@ impl CheckCtx<'_> {
                     Term::Wildcard => {}
                     other => {
                         if let InferredKind::Known(actual) = term_kind(other)
-                            && !kinds_compatible(PredicateArgKind::Collection, actual)
+                            && !kinds_compatible(&PredicateArgKind::Collection, &actual)
                         {
                             let context = self.context.clone();
                             self.errors.push(ValidationError::OperandKindMismatch {
@@ -563,7 +576,7 @@ impl CheckCtx<'_> {
         }
         let inferred = self.infer_value(operand, scope);
         if let InferredKind::Known(actual) = inferred
-            && !kinds_compatible(expected, actual)
+            && !kinds_compatible(&expected, &actual)
         {
             let context = self.context.clone();
             self.errors.push(ValidationError::OperandKindMismatch {
@@ -572,6 +585,98 @@ impl CheckCtx<'_> {
                 actual,
                 context,
             });
+        }
+    }
+
+    /// One operand of a decimal-domain comparison. A bare variable is
+    /// a use whose kind is left to the cross-refinement step (the
+    /// other operand decides the flavour); anything else infers, and
+    /// a known kind outside the domain's two flavours (bare decimal,
+    /// unit-tagged quantity) is reported against the bare-decimal
+    /// expectation.
+    fn infer_decimal_domain_operand(
+        &mut self,
+        operand: &ValueExpr,
+        operator: &'static str,
+        scope: &mut Scope,
+    ) -> InferredKind {
+        if let ValueExpr::Term(Term::Var(name)) = operand {
+            self.use_var(scope, name);
+            return scope.kinds.lookup(name);
+        }
+        let inferred = self.infer_value(operand, scope);
+        if let InferredKind::Known(actual) = &inferred
+            && !matches!(
+                actual,
+                PredicateArgKind::Decimal | PredicateArgKind::Quantity(_) | PredicateArgKind::Any
+            )
+        {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::OperandKindMismatch {
+                operator,
+                expected: PredicateArgKind::Decimal,
+                actual: actual.clone(),
+                context,
+            });
+            // Already reported; degrade to unknown so the pair check
+            // neither reports the same operand twice nor refines a
+            // variable toward the bad kind.
+            return InferredKind::UnknownOrAny;
+        }
+        inferred
+    }
+
+    /// Both operands of a decimal-domain comparison: each must be a
+    /// bare decimal or a quantity, and the two must agree - two bare
+    /// decimals, or two quantities of the SAME unit. A known side
+    /// refines an unknown variable to its own flavour (so
+    /// `settled <= due` infers the settlement parameter at the due
+    /// figure's unit); two unknowns default to the bare-decimal
+    /// flavour, the domain's neutral reading.
+    fn check_decimal_domain_operands(
+        &mut self,
+        left: &ValueExpr,
+        right: &ValueExpr,
+        operator: &'static str,
+        scope: &mut Scope,
+    ) {
+        let l = self.infer_decimal_domain_operand(left, operator, scope);
+        let r = self.infer_decimal_domain_operand(right, operator, scope);
+        let refine =
+            |this: &mut Self, operand: &ValueExpr, kind: PredicateArgKind, scope: &mut Scope| {
+                if let ValueExpr::Term(Term::Var(name)) = operand {
+                    this.observe_or_report(scope, name, InferredKind::Known(kind));
+                }
+            };
+        match (l, r) {
+            (InferredKind::Known(a), InferredKind::Known(b)) => {
+                if kinds_compatible(&a, &b) {
+                    // Compatible pair: variable operands still refine
+                    // toward the more specific side (`Any` from a
+                    // polymorphic slot loses to the literal's kind).
+                    let specific = more_specific(a, b);
+                    refine(self, left, specific.clone(), scope);
+                    refine(self, right, specific, scope);
+                } else {
+                    let context = self.context.clone();
+                    self.errors.push(ValidationError::OperandKindMismatch {
+                        operator,
+                        expected: a,
+                        actual: b,
+                        context,
+                    });
+                }
+            }
+            (InferredKind::Known(k), InferredKind::UnknownOrAny) => {
+                refine(self, right, k, scope);
+            }
+            (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
+                refine(self, left, k, scope);
+            }
+            (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => {
+                refine(self, left, PredicateArgKind::Decimal, scope);
+                refine(self, right, PredicateArgKind::Decimal, scope);
+            }
         }
     }
 
@@ -590,7 +695,7 @@ impl CheckCtx<'_> {
     ) {
         let combined = match (left.0, right.0) {
             (InferredKind::Known(l), InferredKind::Known(r)) => {
-                if !kinds_compatible(l, r) {
+                if !kinds_compatible(&l, &r) {
                     let context = self.context.clone();
                     self.errors.push(ValidationError::EqualityKindMismatch {
                         operator,
@@ -609,7 +714,7 @@ impl CheckCtx<'_> {
         };
         if let Some(refined) = combined {
             for name in [left.1, right.1].into_iter().flatten() {
-                self.observe_or_report(scope, name, refined);
+                self.observe_or_report(scope, name, refined.clone());
             }
         }
     }
@@ -642,27 +747,19 @@ impl CheckCtx<'_> {
             }
             ValueExpr::Arith { op, left, right } => {
                 let operator = arith_token(*op);
-                // Mul / Div / Mod remain decimal-only, so both operands
-                // are asserted (and bare variables refined) exactly as
-                // before the time kinds arrived.
-                if matches!(op, ArithOp::Mul | ArithOp::Div | ArithOp::Mod) {
-                    self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
-                    self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
-                    return InferredKind::Known(PredicateArgKind::Decimal);
-                }
-                // Add / Sub / Min / Max span the decimal and time
-                // domains. Infer both sides; when both are known, the
-                // rule matrix decides (and a missing rule is an error
-                // here, at authoring time, not at evaluation). When one
-                // side is a known Decimal the other must be Decimal too
-                // (no mixed rule has a decimal operand), so refinement
-                // is sound; a known time kind leaves the other side
-                // unrefined because two rules could apply.
+                // Every operator flows through the rule matrix (Mul /
+                // Div stopped being decimal-only when quantities
+                // brought scaling and ratios). Infer both sides; when
+                // both are known, the matrix decides (and a missing
+                // rule is an error here, at authoring time, not at
+                // evaluation). When one side is known and exactly one
+                // rule fits it, the other side is forced and a bare
+                // variable there is refined.
                 let l = self.infer_value(left, scope);
                 let r = self.infer_value(right, scope);
                 match (l, r) {
                     (InferredKind::Known(a), InferredKind::Known(b)) => {
-                        match arith_result_kind(*op, a, b) {
+                        match arith_result_kind(*op, &a, &b) {
                             Some(kind) => InferredKind::Known(kind),
                             None => {
                                 let context = self.context.clone();
@@ -684,7 +781,7 @@ impl CheckCtx<'_> {
                     // x` could subtract an instant or a span), nothing
                     // is assumed.
                     (InferredKind::Known(k), InferredKind::UnknownOrAny) => {
-                        match arith_unique_counterpart(*op, k, true) {
+                        match arith_unique_counterpart(*op, &k, true) {
                             Some((expected, result)) => {
                                 self.check_operand_kind(right, expected, operator, scope);
                                 InferredKind::Known(result)
@@ -693,13 +790,24 @@ impl CheckCtx<'_> {
                         }
                     }
                     (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
-                        match arith_unique_counterpart(*op, k, false) {
+                        match arith_unique_counterpart(*op, &k, false) {
                             Some((expected, result)) => {
                                 self.check_operand_kind(left, expected, operator, scope);
                                 InferredKind::Known(result)
                             }
                             None => InferredKind::UnknownOrAny,
                         }
+                    }
+                    // Both unknown: Mul / Div / Mod keep their
+                    // historical bare-decimal default (a unit cannot
+                    // be inferred from nothing, and `rate * factor`
+                    // with two free parameters has always read as
+                    // decimal arithmetic). Add / Sub / Min / Max stay
+                    // unrefined, as the time kinds left them.
+                    _ if matches!(op, ArithOp::Mul | ArithOp::Div | ArithOp::Mod) => {
+                        self.check_operand_kind(left, PredicateArgKind::Decimal, operator, scope);
+                        self.check_operand_kind(right, PredicateArgKind::Decimal, operator, scope);
+                        InferredKind::Known(PredicateArgKind::Decimal)
                     }
                     _ => InferredKind::UnknownOrAny,
                 }
@@ -719,11 +827,14 @@ impl CheckCtx<'_> {
                 // A sum of durations is the laytime-counting shape; a
                 // sum of decimals is every aggregate before it. Any
                 // other known kind is an authoring-time error.
-                if let InferredKind::Known(PredicateArgKind::Duration) = resolved {
-                    return InferredKind::Known(PredicateArgKind::Duration);
+                if let InferredKind::Known(
+                    k @ (PredicateArgKind::Duration | PredicateArgKind::Quantity(_)),
+                ) = resolved
+                {
+                    return InferredKind::Known(k);
                 }
                 if let InferredKind::Known(actual) = resolved
-                    && !kinds_compatible(PredicateArgKind::Decimal, actual)
+                    && !kinds_compatible(&PredicateArgKind::Decimal, &actual)
                 {
                     let context = self.context.clone();
                     self.errors.push(ValidationError::OperandKindMismatch {
@@ -751,8 +862,8 @@ impl CheckCtx<'_> {
                     // is the same class of error as a comparator
                     // mismatch.
                     if let (InferredKind::Known(expected), InferredKind::Known(actual)) =
-                        (result_kind, default_kind)
-                        && !kinds_compatible(expected, actual)
+                        (result_kind.clone(), default_kind)
+                        && !kinds_compatible(&expected, &actual)
                     {
                         let context = self.context.clone();
                         self.errors.push(ValidationError::OperandKindMismatch {
@@ -858,7 +969,15 @@ impl CheckCtx<'_> {
             .zip(decl_args.iter().take(n))
             .enumerate()
         {
-            self.check_one_arg(vocabulary, name, position, arg, decl_arg.kind, mode, scope);
+            self.check_one_arg(
+                vocabulary,
+                name,
+                position,
+                arg,
+                decl_arg.kind.clone(),
+                mode,
+                scope,
+            );
         }
     }
 
@@ -893,7 +1012,7 @@ impl CheckCtx<'_> {
             // VariableKindConflict is the right diagnostic when the
             // variable already held an incompatible kind.
         } else if let InferredKind::Known(actual_kind) = actual
-            && !kinds_compatible(expected, actual_kind)
+            && !kinds_compatible(&expected, &actual_kind)
         {
             let context = self.context.clone();
             self.errors.push(ValidationError::ArgKindMismatch {
@@ -969,7 +1088,7 @@ fn value_of_result_kind(
     args.iter()
         .position(|a| matches!(a, Term::Wildcard))
         .and_then(|p| decl.args.get(p))
-        .map(|a| InferredKind::Known(a.kind))
+        .map(|a| InferredKind::Known(a.kind.clone()))
         .unwrap_or(InferredKind::UnknownOrAny)
 }
 
@@ -1038,6 +1157,9 @@ fn term_kind(term: &Term) -> InferredKind {
         Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),
         Term::Literal(Value::Timestamp(_)) => InferredKind::Known(PredicateArgKind::Timestamp),
         Term::Literal(Value::Duration(_)) => InferredKind::Known(PredicateArgKind::Duration),
+        Term::Literal(Value::Quantity { unit, .. }) => {
+            InferredKind::Known(PredicateArgKind::Quantity(unit.clone()))
+        }
     }
 }
 
@@ -1150,7 +1272,7 @@ mod tests {
                 .iter()
                 .map(|(n, k)| ArgDecl {
                     name: n.to_string(),
-                    kind: *k,
+                    kind: k.clone(),
                 })
                 .collect(),
         }
@@ -2432,7 +2554,7 @@ mod tests {
                 .iter()
                 .map(|(n, k)| ArgDecl {
                     name: n.to_string(),
-                    kind: *k,
+                    kind: k.clone(),
                 })
                 .collect(),
         }

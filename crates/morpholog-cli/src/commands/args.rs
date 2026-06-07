@@ -132,6 +132,26 @@ fn decode_value(
             decode_timestamp(param, raw, schema_hint)
         }
         ParamKind::Concrete(PredicateArgKind::Duration) => decode_duration(param, raw, schema_hint),
+        // The named codec's quantity rule: the wire value is the same
+        // bare decimal string as `Decimal` - the declaration already
+        // fixes the unit, so sending it again would create a second
+        // source of truth. The kernel attaches the declared unit here.
+        ParamKind::Concrete(PredicateArgKind::Quantity(unit)) => {
+            let EvalValue::Decimal(amount) =
+                decode_decimal(param, raw, schema_hint).map_err(|e| {
+                    anyhow!("{e}").context(format!(
+                        "parameter `{param}` is Decimal[{unit}]; the named codec takes the \
+                     bare decimal amount (the unit comes from the declaration)"
+                    ))
+                })?
+            else {
+                unreachable!("decode_decimal returns EvalValue::Decimal on success")
+            };
+            Ok(EvalValue::Quantity {
+                amount,
+                unit: unit.clone(),
+            })
+        }
         ParamKind::Concrete(PredicateArgKind::Bool) => decode_bool(param, raw, schema_hint),
         ParamKind::Concrete(PredicateArgKind::Collection) => bail!(
             "parameter `{param}` is Collection; --args-named cannot decode bare arrays \
@@ -152,7 +172,7 @@ fn decode_value(
              kind is observed. {schema_hint}"
         ),
         ParamKind::Ambiguous(observed) => {
-            let names: Vec<&'static str> = observed.iter().map(kind_label).collect();
+            let names: Vec<String> = observed.iter().map(kind_label).collect();
             bail!(
                 "parameter `{param}` is Ambiguous ({}); --args-named cannot choose a branch \
                  safely. Use --args with the tagged EvalValue codec, or refactor the model \
@@ -165,9 +185,10 @@ fn decode_value(
 
 /// Render an [`EvalValue`] as the bare JSON the named codec accepts -
 /// the read-side mirror of `--args-named`. Exactness rules match the
-/// write side: decimals, dates, timestamps, and durations are strings
-/// (a JSON number would round-trip through a double), booleans are
-/// booleans, collections recurse.
+/// write side: decimals, dates, timestamps, durations, and quantity
+/// amounts are strings (a JSON number would round-trip through a
+/// double; a quantity's unit lives in the declaration, mirroring the
+/// write side), booleans are booleans, collections recurse.
 pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
     match v {
         EvalValue::Subject(s) => Value::String(s.to_string()),
@@ -175,6 +196,9 @@ pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
         EvalValue::Date(d) => Value::String(d.to_string()),
         EvalValue::Timestamp(t) => Value::String(t.to_string()),
         EvalValue::Duration(d) => Value::String(d.to_string()),
+        // The bare amount only: the unit lives in the declaration on
+        // both sides of the codec.
+        EvalValue::Quantity { amount, .. } => Value::String(amount.to_string()),
         EvalValue::Bool(b) => Value::Bool(*b),
         EvalValue::Collection(items) => {
             Value::Array(items.iter().map(eval_value_to_bare_json).collect())
@@ -337,16 +361,17 @@ fn describe_value(raw: &Value) -> &'static str {
     }
 }
 
-fn kind_label(kind: &PredicateArgKind) -> &'static str {
+fn kind_label(kind: &PredicateArgKind) -> String {
     match kind {
-        PredicateArgKind::Subject => "Subject",
-        PredicateArgKind::Decimal => "Decimal",
-        PredicateArgKind::Date => "Date",
-        PredicateArgKind::Timestamp => "Timestamp",
-        PredicateArgKind::Duration => "Duration",
-        PredicateArgKind::Bool => "Bool",
-        PredicateArgKind::Collection => "Collection",
-        PredicateArgKind::Any => "Any",
+        PredicateArgKind::Subject => "Subject".to_string(),
+        PredicateArgKind::Decimal => "Decimal".to_string(),
+        PredicateArgKind::Date => "Date".to_string(),
+        PredicateArgKind::Timestamp => "Timestamp".to_string(),
+        PredicateArgKind::Duration => "Duration".to_string(),
+        PredicateArgKind::Bool => "Bool".to_string(),
+        PredicateArgKind::Collection => "Collection".to_string(),
+        PredicateArgKind::Quantity(u) => format!("Decimal[{u}]"),
+        PredicateArgKind::Any => "Any".to_string(),
     }
 }
 

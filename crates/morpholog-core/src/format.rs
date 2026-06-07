@@ -121,7 +121,7 @@ pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
     let args: Vec<String> = decl
         .args
         .iter()
-        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(a.kind)))
+        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(&a.kind)))
         .collect();
     format!("predicate {}({})\n", decl.name, args.join(", "))
 }
@@ -132,22 +132,16 @@ pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
     let args: Vec<String> = decl
         .args
         .iter()
-        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(a.kind)))
+        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(&a.kind)))
         .collect();
     format!("intent {}({})\n", decl.name, args.join(", "))
 }
 
-fn format_predicate_arg_kind(k: PredicateArgKind) -> &'static str {
-    match k {
-        PredicateArgKind::Subject => "Subject",
-        PredicateArgKind::Decimal => "Decimal",
-        PredicateArgKind::Date => "Date",
-        PredicateArgKind::Timestamp => "Timestamp",
-        PredicateArgKind::Duration => "Duration",
-        PredicateArgKind::Bool => "Bool",
-        PredicateArgKind::Collection => "Collection",
-        PredicateArgKind::Any => "Any",
-    }
+/// The declaration syntax IS the diagnostic syntax: one `Display`
+/// impl on [`PredicateArgKind`] serves both, so the unit always
+/// renders (`Decimal[USD]`) and the two surfaces cannot drift.
+fn format_predicate_arg_kind(k: &PredicateArgKind) -> String {
+    k.to_string()
 }
 
 pub fn format_invariant(inv: &Invariant) -> String {
@@ -455,6 +449,9 @@ fn format_value(v: &Value) -> String {
         // bare-literal DSL: boring on purpose. No quotes - the payload
         // is identifier-shaped, and the surface has no string literals.
         Value::Duration(s) => format!("duration({s})"),
+        // Quantity literals are amount-then-unit juxtaposition: the
+        // way a charterparty or an invoice writes them.
+        Value::Quantity { amount, unit } => format!("{amount} {unit}"),
     }
 }
 
@@ -570,7 +567,7 @@ mod tests {
             (PredicateArgKind::Collection, "Collection"),
             (PredicateArgKind::Any, "Any"),
         ] {
-            assert_eq!(format_predicate_arg_kind(kind), expected);
+            assert_eq!(format_predicate_arg_kind(&kind), expected);
         }
     }
 

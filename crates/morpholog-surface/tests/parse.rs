@@ -44,7 +44,11 @@ program kinds_demo
 predicate Every(a: Subject, b: Decimal, c: Date, d: Bool, e: Collection, f: Any)
 "#;
     let program = parse_program(source).expect("parse should succeed");
-    let kinds: Vec<PredicateArgKind> = program.predicates[0].args.iter().map(|a| a.kind).collect();
+    let kinds: Vec<PredicateArgKind> = program.predicates[0]
+        .args
+        .iter()
+        .map(|a| a.kind.clone())
+        .collect();
     assert_eq!(
         kinds,
         vec![

@@ -161,6 +161,7 @@ impl Ord for EvalValueOrd {
                 EvalValue::Date(_) => 4,
                 EvalValue::Timestamp(_) => 5,
                 EvalValue::Duration(_) => 6,
+                EvalValue::Quantity { .. } => 7,
             }
         }
 
@@ -171,6 +172,13 @@ impl Ord for EvalValueOrd {
             (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
             (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a.cmp(b),
             (EvalValue::Duration(a), EvalValue::Duration(b)) => a.cmp(b),
+            // Quantities order by unit first, then amount - units are
+            // incomparable domains, so grouping by label is the only
+            // deterministic order that never ranks across units.
+            (
+                EvalValue::Quantity { amount: a, unit: u },
+                EvalValue::Quantity { amount: b, unit: v },
+            ) => u.cmp(v).then_with(|| a.cmp(b)),
             (EvalValue::Collection(a), EvalValue::Collection(b)) => {
                 for (l, r) in a.iter().zip(b.iter()) {
                     let ord = EvalValueOrd(l.clone()).cmp(&EvalValueOrd(r.clone()));

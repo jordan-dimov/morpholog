@@ -12,7 +12,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::ir::{IntentName, PredicateName, Subject, Var};
+use crate::ir::{IntentName, PredicateName, Subject, Unit, Var};
 
 /// A runtime value flowing through evaluation. Distinct from the IR's
 /// `Value` (which holds literals only).
@@ -42,6 +42,15 @@ pub enum EvalValue {
     /// JSON shape: `{ "type": "duration", "value": "PT6H" }` (jiff's
     /// default serde format for [`jiff::SignedDuration`]).
     Duration(jiff::SignedDuration),
+    /// A unit-tagged exact decimal quantity. The amount serialises as a
+    /// JSON **string** (exactness, like [`EvalValue::Decimal`]); the
+    /// unit is an opaque case-sensitive symbol. JSON shape:
+    /// `{ "type": "quantity", "value": { "amount": "25000", "unit": "USD" } }`.
+    Quantity {
+        #[serde(with = "rust_decimal::serde::str")]
+        amount: Decimal,
+        unit: Unit,
+    },
 }
 
 /// A grounded claim: all args are values, no variables or wildcards.

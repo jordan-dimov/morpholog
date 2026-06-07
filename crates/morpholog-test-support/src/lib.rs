@@ -90,6 +90,16 @@ pub fn dur(s: &str) -> EvalValue {
     EvalValue::Duration(s.parse().expect("test duration literal must parse"))
 }
 
+/// Build an [`EvalValue::Quantity`] from an exact decimal amount
+/// string and a unit symbol. Panics on a malformed amount - same
+/// rationale as [`dec_str`].
+pub fn qty(amount: &str, unit: &str) -> EvalValue {
+    EvalValue::Quantity {
+        amount: amount.parse().expect("test quantity amount must parse"),
+        unit: morpholog_core::Unit::from(unit.to_string()),
+    }
+}
+
 /// Build an [`EvalValue::Date`] by parsing an ISO-8601 civil-date
 /// string. Panics on a malformed date - same rationale as [`dec_str`].
 pub fn date(s: &str) -> EvalValue {

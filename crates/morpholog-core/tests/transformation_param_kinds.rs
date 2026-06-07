@@ -186,7 +186,7 @@ fn every_concrete_kind_round_trips() {
         .unwrap();
         assert_eq!(
             kinds,
-            vec![(Var::from(param), ParamKind::Concrete(expected))],
+            vec![(Var::from(param), ParamKind::Concrete(expected.clone()))],
             "transformation `{transformation_name}` should resolve `{param}` to {expected:?}",
         );
     }

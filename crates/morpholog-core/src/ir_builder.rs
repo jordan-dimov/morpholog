@@ -102,6 +102,16 @@ pub fn duration(s: &str) -> Term {
     Term::Literal(Value::Duration(s.to_string()))
 }
 
+/// Unit-tagged quantity literal (`qty("25000", "USD")` builds the IR
+/// for the surface's `25000 USD`). Amount stored as the exact source
+/// string; the unit is an opaque symbol.
+pub fn qty(amount: &str, unit: &str) -> Term {
+    Term::Literal(Value::Quantity {
+        amount: amount.to_string(),
+        unit: crate::ir::Unit::from(unit.to_string()),
+    })
+}
+
 /// Semantic alias for [`subj`]. Identical runtime representation;
 /// documents reader intent at the call site when the subject names a
 /// delegated role. Resist adding more aliases until an example forces
@@ -405,6 +415,14 @@ impl PredicateDeclBuilder {
 
     pub fn duration(self, name: &str) -> Self {
         self.arg(name, PredicateArgKind::Duration)
+    }
+
+    /// Unit-tagged decimal argument - the surface's `name: Decimal[USD]`.
+    pub fn quantity(self, name: &str, unit: &str) -> Self {
+        self.arg(
+            name,
+            PredicateArgKind::Quantity(crate::ir::Unit::from(unit.to_string())),
+        )
     }
 
     /// Boolean-kinded argument. Named `boolean` rather than `bool`
