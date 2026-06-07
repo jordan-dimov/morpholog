@@ -1615,3 +1615,42 @@ async fn inspect_derived_validates_before_touching_the_database() {
         "stderr should name the undeclared predicate: {stderr}"
     );
 }
+
+// ============================================================
+// `init` - schema provisioning from the embedded schema
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn init_provisions_then_refuses_then_skips() {
+    // This test owns the whole schema lifecycle: drop it, provision it
+    // through the binary, prove the provisioned schema actually works,
+    // then pin both already-initialised behaviours. Safe in this
+    // serial suite - every other test only TRUNCATEs.
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+
+    let (status, stdout, stderr) = run_cli(&["init"]);
+    assert!(status.success(), "init should provision; stderr:\n{stderr}");
+    let v: Value = serde_json::from_str(&stdout).expect("init output is JSON");
+    assert_eq!(v["status"], "initialised");
+
+    // The provisioned schema is the real one: a governed commit works.
+    post_balanced_entry("entry_001", 100);
+
+    // Re-running refuses, with the remedy named.
+    let (status, _stdout, stderr) = run_cli(&["init"]);
+    assert!(!status.success(), "second init must refuse");
+    assert!(
+        stderr.contains("--skip-if-exists"),
+        "the refusal names the entrypoint escape hatch: {stderr}"
+    );
+
+    // The escape hatch: report and exit zero.
+    let (status, stdout, _stderr) = run_cli(&["init", "--skip-if-exists"]);
+    assert!(status.success(), "skip-if-exists exits zero");
+    let v: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["status"], "already-initialised");
+}

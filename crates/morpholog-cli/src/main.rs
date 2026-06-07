@@ -101,6 +101,16 @@ enum Command {
     /// `--json` flag because the output IS JSON.
     Schema(SchemaArgs),
 
+    /// Provision the Morpholog schema (claims, audit, outbox) in an
+    /// existing PostgreSQL database, from the canonical schema embedded
+    /// in this binary - so a binary-only deployment provisions exactly
+    /// the schema this build expects, with nothing to vendor and
+    /// nothing to drift. Day-zero only: refuses if the `morpholog`
+    /// schema already exists (`--skip-if-exists` reports and exits
+    /// zero instead, for idempotent entrypoints); never drops, never
+    /// migrates.
+    Init(InitArgs),
+
     /// Emit a stable content hash of a `.morph` programme's rules:
     /// SHA-256 over the canonical (formatter-rendered) source, as
     /// `{"program": ..., "hash": "sha256:..."}`. Formatting-only edits
@@ -119,6 +129,21 @@ enum Command {
     /// claims each record holds that the other does not and exits one.
     /// Read-only; an empty database is trivially consistent.
     Verify(VerifyArgs),
+}
+
+/// Arguments for `init`: the connection string plus the idempotent
+/// entrypoint escape hatch.
+#[derive(clap::Args, Debug)]
+pub(crate) struct InitArgs {
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
+
+    /// Exit zero with an `already-initialised` report when the
+    /// `morpholog` schema already exists, instead of erroring. For
+    /// deployment entrypoints that may run more than once.
+    #[arg(long)]
+    pub(crate) skip_if_exists: bool,
 }
 
 /// Arguments for `verify`: just the connection string.
@@ -601,6 +626,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
         Command::Hash(args) => commands::hash::run(args),
+        Command::Init(args) => commands::init::run(args).await,
     }
 }
 

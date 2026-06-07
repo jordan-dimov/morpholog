@@ -1623,6 +1623,41 @@ pub async fn list_claims_at_for_predicates(
     Ok(state.claims().to_vec())
 }
 
+/// The canonical Morpholog schema, compiled into this crate. The same
+/// file a repo checkout applies with `psql -f`; embedding it means a
+/// binary-only deployment provisions exactly the schema this build
+/// expects - nothing to vendor, nothing to drift.
+pub const SCHEMA_SQL: &str = include_str!("../../morpholog-core/sql/schema.sql");
+
+/// Outcome of [`initialise_schema`]: provisioned now, or found already
+/// provisioned (the caller decides whether that is fine or an error).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitOutcome {
+    Initialised,
+    AlreadyInitialised,
+}
+
+/// Provision the `morpholog` schema in an existing database from the
+/// embedded [`SCHEMA_SQL`]. Day-zero only: if the schema already
+/// exists this returns [`InitOutcome::AlreadyInitialised`] without
+/// touching anything - it never drops and never migrates. Schema
+/// *evolution* is the deferred migrations story, not this function.
+pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM pg_namespace WHERE nspname = 'morpholog'")
+            .fetch_optional(pool)
+            .await
+            .map_err(classify)?;
+    if exists.is_some() {
+        return Ok(InitOutcome::AlreadyInitialised);
+    }
+    sqlx::raw_sql(SCHEMA_SQL)
+        .execute(pool)
+        .await
+        .map_err(classify)?;
+    Ok(InitOutcome::Initialised)
+}
+
 /// Resolve a wall-clock instant to the last transition committed at or
 /// before it - the timestamp form of an as-of coordinate. Uses the
 /// `(committed_at, transition_id)` ordering, the same total order the

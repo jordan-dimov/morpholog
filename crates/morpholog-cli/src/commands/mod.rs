@@ -22,6 +22,7 @@ pub(crate) mod args;
 pub(crate) mod check;
 pub(crate) mod explain;
 pub(crate) mod hash;
+pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod outbox;
 pub(crate) mod parse;
