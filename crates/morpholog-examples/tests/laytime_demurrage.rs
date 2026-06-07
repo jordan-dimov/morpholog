@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{dur, must_accept, propose_with_test_actor, subj, ts};
+use common::{dur, must_accept, propose_with_test_actor, qty, subj, ts};
 use morpholog_core::{EvalValue, Invariant, Outcome, State, Transformation, enumerate_derived};
 use morpholog_examples::laytime_demurrage as lay;
 
@@ -258,5 +258,149 @@ fn two_voyages_enumerate_deterministically() {
     assert!(
         voyages.contains(&subj("v1")) && voyages.contains(&subj("v2")),
         "both voyages present: {voyages:?}"
+    );
+}
+
+// ============================================================
+// Stage 3: unit-tagged quantities - the cargo book in tonnes,
+// the money book in dollars.
+// ============================================================
+
+#[test]
+fn cargo_book_caps_at_the_declared_capacity() {
+    let state = must_accept(
+        &lay::fix_voyage(),
+        vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
+        State::default(),
+        &invariants(),
+    );
+    let state = must_accept(
+        &lay::declare_capacity(),
+        vec![subj("v1"), subj("seed_parcel"), qty("45000", "t")],
+        state,
+        &invariants(),
+    );
+    let state = must_accept(
+        &lay::load_parcel(),
+        vec![subj("p1"), subj("v1"), qty("30000", "t")],
+        state,
+        &invariants(),
+    );
+    // To the boundary: the comparison is exact, tonnes against tonnes.
+    let state = must_accept(
+        &lay::load_parcel(),
+        vec![subj("p2"), subj("v1"), qty("15000", "t")],
+        state,
+        &invariants(),
+    );
+    // One more tonne does not fit.
+    must_reject(
+        &lay::load_parcel(),
+        vec![subj("p3"), subj("v1"), qty("1", "t")],
+        &state,
+    );
+}
+
+/// Fixture: a commenced voyage that ran 132 hours past its 48-hour
+/// allowance (one 180-hour counting interval), with the demurrage
+/// rate agreed at 25000 USD per day and cargo ops completed - the
+/// state a settlement negotiation starts from. 132 hours is exactly
+/// 5.5 days, so the due figure is exactly 137500 USD.
+fn voyage_on_demurrage() -> State {
+    let state = commenced_voyage();
+    let state = must_accept(
+        &lay::record_counting_interval(),
+        vec![
+            subj("i1"),
+            subj("v1"),
+            ts("2026-10-24T20:00:00Z"),
+            ts("2026-11-01T08:00:00Z"),
+        ],
+        state,
+        &invariants(),
+    );
+    let state = must_accept(
+        &lay::agree_demurrage_rate(),
+        vec![subj("v1"), subj("seed_settlement"), qty("25000", "USD")],
+        state,
+        &invariants(),
+    );
+    must_accept(
+        &lay::complete_cargo_ops(),
+        vec![subj("v1"), ts("2026-11-01T08:00:00Z")],
+        state,
+        &invariants(),
+    )
+}
+
+#[test]
+fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
+    let state = voyage_on_demurrage();
+    // The derived figure prices the delay before anything is paid:
+    // row shape (voyage, allowed, daily, due).
+    let rows = enumerate_derived(&lay::demurrage_due(), &state).unwrap();
+    assert_eq!(rows.len(), 1, "one voyage on demurrage: {rows:?}");
+    assert_eq!(rows[0].args[3], qty("137500.00", "USD"));
+
+    // Settle the whole figure, to the cent.
+    let state = must_accept(
+        &lay::settle_demurrage(),
+        vec![subj("s1"), subj("v1"), qty("137500.00", "USD")],
+        state,
+        &invariants(),
+    );
+    // A cent past what the delay is worth is refused.
+    must_reject(
+        &lay::settle_demurrage(),
+        vec![subj("s2"), subj("v1"), qty("0.01", "USD")],
+        &state,
+    );
+}
+
+#[test]
+fn tonnes_offered_as_dollars_do_not_evaluate_let_alone_commit() {
+    let state = voyage_on_demurrage();
+    let err = propose_with_test_actor(
+        &lay::settle_demurrage(),
+        vec![subj("s1"), subj("v1"), qty("5", "t")],
+        &state,
+        &invariants(),
+    )
+    .expect_err("a tonne is not a dollar: kernel error, not rejection");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("Decimal[USD]") && msg.contains("Decimal[t]"),
+        "the refusal names both units: {msg}"
+    );
+}
+
+#[test]
+fn demurrage_due_has_no_row_before_the_rate_is_agreed() {
+    // Same vacuity discipline as TimeOnDemurrage: before the rate (or
+    // the clock) exists, the question "what is owed?" has no row
+    // rather than a wrong answer.
+    let state = commenced_voyage();
+    let rows = enumerate_derived(&lay::demurrage_due(), &state).unwrap();
+    assert!(rows.is_empty(), "no rate agreed yet: {rows:?}");
+}
+
+#[test]
+fn settlement_before_the_rate_is_agreed_is_refused() {
+    // Without a rate the delay has no price, and the cap invariant's
+    // antecedent would be vacuously false - so both the gate and the
+    // settlement_requires_rate invariant refuse the attempt. Cargo
+    // ops are completed first, so the rate really is the only thing
+    // missing.
+    let state = commenced_voyage();
+    let state = must_accept(
+        &lay::complete_cargo_ops(),
+        vec![subj("v1"), ts("2026-10-25T08:00:00Z")],
+        state,
+        &invariants(),
+    );
+    must_reject(
+        &lay::settle_demurrage(),
+        vec![subj("s1"), subj("v1"), qty("1000", "USD")],
+        &state,
     );
 }

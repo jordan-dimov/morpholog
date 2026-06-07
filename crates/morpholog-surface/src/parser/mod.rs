@@ -8,8 +8,9 @@
 //! program_header ::= "program" Ident
 //! predicate_decl ::= "predicate" Ident "(" arg_list? ")"
 //! arg_list       ::= arg ("," arg)* ","?
-//! arg            ::= Ident ":" Kind
+//! arg            ::= Ident ":" Kind ("[" Ident "]")?
 //! Kind           ::= "Subject" | "Decimal" | "Date" | "Bool" | "Collection" | "Any"
+//!                    (unit brackets attach only to "Decimal": `Decimal[USD]`)
 //! invariant_decl ::= "invariant" Ident ":" expression
 //!
 //! expression     ::= quantifier | implies

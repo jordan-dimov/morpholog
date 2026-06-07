@@ -49,6 +49,20 @@ against an allowance, and the comparator families that read like the domain
 sentences they enforce (`commenced_at at_or_before from`, counted
 `no_longer_than` allowed).
 
+Its next stage forced **unit-tagged quantities**: the cargo book in tonnes
+(`Decimal[t]`) capped by the vessel's capacity, the money book in dollars
+(`Decimal[USD]`) capped by what the delay is worth. A unit here is a
+contractual label on an exact decimal, not a physical dimension - the runtime
+enforces that tonnes only meet tonnes and dollars only meet dollars, and
+knows nothing else: no conversion table, no currency list, no `USD/day`
+compound unit. "Per day" is a calculation you can read in the model - the
+daily amount times an exact count of days, with `excess / duration(PT24H)`
+producing 5.5, not "about five". The due figure is derived, never stored:
+correct an interval and the price of the delay moves with it, while anything
+already settled stands on its own record. The settlement cap recomputes that
+figure from first principles inside the invariant, so there is no stored
+amount to quietly edit.
+
 Deliberately not yet here, each waiting for its stage of this example:
 
 - **Port-local time.** Every instant above is UTC. The 25-hour local day when
@@ -59,8 +73,11 @@ Deliberately not yet here, each waiting for its stage of this example:
   demurrage claim settles. The prior settlement must stand on its own record
   while future calculation follows the corrected facts - the pattern the
   verified-revenue and trade-lifecycle examples pin, in a new costume.
-- **Units.** The demurrage *rate* (USD per day) and the cargo's tonnage are
-  deliberately absent: money enters when unit-tagged quantities do.
+- **Unit conversions.** The model has tonnes and dollars but no idea how
+  either relates to anything else - deliberately. Conversion factors are
+  domain knowledge with provenance and time (whose table? as of when?), so they
+  enter as admitted claims when an example genuinely needs one, never as
+  kernel constants.
 
 ## Running it
 
@@ -72,4 +89,7 @@ morpholog inspect guarantees examples/12_laytime_demurrage/laytime.morph
 The typed walkthrough lives in
 `crates/morpholog-examples/tests/laytime_demurrage.rs`: a full voyage from
 fixture to ten hours on demurrage, the zero-floor for a voyage that finished
-early, and each gate refusing the out-of-order event it exists to refuse.
+early, each gate refusing the out-of-order event it exists to refuse - and
+the money stage: cargo loaded to exactly the declared capacity and not a
+tonne more, a 132-hour excess priced at exactly 137500.00 USD and settled to
+the cent, and a settlement offered in tonnes refused with both units named.

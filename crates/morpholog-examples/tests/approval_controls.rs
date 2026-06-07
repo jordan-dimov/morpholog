@@ -342,8 +342,8 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     match err {
         EvalError::TypeMismatch(msg) => {
             assert!(
-                msg.contains("decimal operands"),
-                "TypeMismatch should mention the decimal-operand requirement; got `{msg}`",
+                msg.contains("decimal-domain operands") && msg.contains("subject"),
+                "TypeMismatch names the domain requirement and the offending kind; got `{msg}`",
             );
         }
         other => panic!("expected TypeMismatch, got {other:?}"),

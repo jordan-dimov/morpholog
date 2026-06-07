@@ -167,7 +167,7 @@ fn assert_param_types(schema: &Value, expected: &[(&str, PredicateArgKind)]) {
     }
     for (name, kind) in expected {
         let property = &schema["properties"][name];
-        let expected_type = expected_json_type(*kind);
+        let expected_type = expected_json_type(kind);
         assert_eq!(
             property["type"], expected_type,
             "type for `{name}` should be {expected_type} (kind {kind:?})",
@@ -175,13 +175,14 @@ fn assert_param_types(schema: &Value, expected: &[(&str, PredicateArgKind)]) {
     }
 }
 
-fn expected_json_type(kind: PredicateArgKind) -> Value {
+fn expected_json_type(kind: &PredicateArgKind) -> Value {
     match kind {
         PredicateArgKind::Subject
         | PredicateArgKind::Decimal
         | PredicateArgKind::Date
         | PredicateArgKind::Timestamp
-        | PredicateArgKind::Duration => Value::String("string".into()),
+        | PredicateArgKind::Duration
+        | PredicateArgKind::Quantity(_) => Value::String("string".into()),
         PredicateArgKind::Bool => Value::String("boolean".into()),
         PredicateArgKind::Collection => Value::String("array".into()),
         PredicateArgKind::Any => Value::Null,

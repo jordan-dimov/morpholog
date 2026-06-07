@@ -163,6 +163,22 @@ fn ordered_comparison(
         (OrderedDomain::Decimal, EvalValue::Decimal(a), EvalValue::Decimal(b)) => {
             apply_cmp(op, a, b)
         }
+        // Quantities ride the decimal ordered domain - a `Decimal[U]`
+        // IS an exact decimal, under a contractual label the comparison
+        // must respect: same unit or no verdict at all.
+        (
+            OrderedDomain::Decimal,
+            EvalValue::Quantity { amount: a, unit: u },
+            EvalValue::Quantity { amount: b, unit: v },
+        ) => {
+            if u != v {
+                return Err(EvalError::TypeMismatch(format!(
+                    "cannot compare Decimal[{u}] with Decimal[{v}]: \
+                     comparison requires the same unit"
+                )));
+            }
+            apply_cmp(op, a, b)
+        }
         (OrderedDomain::Date, EvalValue::Date(a), EvalValue::Date(b)) => apply_cmp(op, a, b),
         (OrderedDomain::Timestamp, EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => {
             apply_cmp(op, a, b)
@@ -170,10 +186,13 @@ fn ordered_comparison(
         (OrderedDomain::Duration, EvalValue::Duration(a), EvalValue::Duration(b)) => {
             apply_cmp(op, a, b)
         }
-        (OrderedDomain::Decimal, _, _) => {
-            return Err(EvalError::TypeMismatch(
-                "comparison expects decimal operands".to_string(),
-            ));
+        (OrderedDomain::Decimal, l, r) => {
+            return Err(EvalError::TypeMismatch(format!(
+                "comparison expects two decimal-domain operands of one flavour \
+                 (bare decimals, or quantities of the same unit); got {} vs {}",
+                runtime_kind_label(&l),
+                runtime_kind_label(&r),
+            )));
         }
         (OrderedDomain::Date, _, _) => {
             return Err(EvalError::TypeMismatch(
@@ -313,6 +332,48 @@ pub(crate) fn parse_timestamp_literal(s: &str) -> Result<jiff::Timestamp, EvalEr
         .map_err(|e| EvalError::TypeMismatch(format!("invalid timestamp `{s}`: {e}")))
 }
 
+/// An exact span as a decimal count of nanoseconds - the common
+/// integer representation under which two durations divide exactly.
+/// A [`jiff::SignedDuration`]'s magnitude always fits a `Decimal`
+/// (|i64 seconds| * 1e9 + nanos < 2^96), so the conversion is total.
+fn duration_nanos_decimal(d: jiff::SignedDuration) -> Decimal {
+    let nanos = i128::from(d.as_secs()) * 1_000_000_000 + i128::from(d.subsec_nanos());
+    Decimal::try_from_i128_with_scale(nanos, 0)
+        .unwrap_or_else(|_| unreachable!("duration nanoseconds always fit a Decimal"))
+}
+
+/// The author-facing label for a runtime value's arithmetic kind, for
+/// no-rule errors: units must appear (`Decimal[USD]`), never a
+/// unit-erased "quantity".
+fn runtime_kind_label(v: &EvalValue) -> String {
+    match v {
+        EvalValue::Decimal(_) => "decimal".to_string(),
+        EvalValue::Subject(_) => "subject".to_string(),
+        EvalValue::Bool(_) => "bool".to_string(),
+        EvalValue::Date(_) => "date".to_string(),
+        EvalValue::Timestamp(_) => "timestamp".to_string(),
+        EvalValue::Duration(_) => "duration".to_string(),
+        EvalValue::Quantity { unit, .. } => format!("Decimal[{unit}]"),
+        EvalValue::Collection(_) => "collection".to_string(),
+    }
+}
+
+/// Parse a `Value::Quantity` literal's amount into the runtime
+/// quantity value, keeping the unit label. Centralised for the same
+/// drift-prevention reason as [`parse_date_literal`].
+pub(crate) fn parse_quantity_literal(
+    amount: &str,
+    unit: &crate::ir::Unit,
+) -> Result<EvalValue, EvalError> {
+    let d = Decimal::from_str(amount).map_err(|_| {
+        EvalError::TypeMismatch(format!("invalid quantity amount `{amount} {unit}`"))
+    })?;
+    Ok(EvalValue::Quantity {
+        amount: d,
+        unit: unit.clone(),
+    })
+}
+
 /// Parse a `Value::Duration(String)` literal into a
 /// [`jiff::SignedDuration`] (ISO 8601, e.g. `PT6H`). Exact seconds
 /// only: calendar units are rejected by the type itself.
@@ -380,6 +441,9 @@ fn select_candidates<'a>(
             }
             Term::Literal(Value::Duration(s)) => {
                 parse_duration_literal(s).ok().map(EvalValue::Duration)
+            }
+            Term::Literal(Value::Quantity { amount, unit }) => {
+                parse_quantity_literal(amount, unit).ok()
             }
             Term::Actor => match actor {
                 Some(a) => Some(EvalValue::Subject(a.clone())),
@@ -533,6 +597,12 @@ pub(crate) fn unify_args(
                     _ => return None,
                 }
             }
+            Term::Literal(Value::Quantity { amount, unit }) => {
+                let parsed = parse_quantity_literal(amount, unit).ok()?;
+                if *v != parsed {
+                    return None;
+                }
+            }
             Term::Actor => match actor {
                 Some(a) if matches!(v, EvalValue::Subject(s) if s == a) => {}
                 _ => return None,
@@ -673,64 +743,183 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         "{op:?} is not defined for two timestamps (only Sub: the gap between them)"
                     ))),
                 },
-                (EvalValue::Duration(a), EvalValue::Duration(b)) => {
-                    let result = match op {
-                        ArithOp::Add => a.checked_add(b),
-                        ArithOp::Sub => a.checked_sub(b),
-                        ArithOp::Min => Some(a.min(b)),
-                        ArithOp::Max => Some(a.max(b)),
-                        _ => {
-                            return Err(EvalError::TypeMismatch(format!(
-                                "{op:?} is not defined for durations"
-                            )));
+                (EvalValue::Duration(a), EvalValue::Duration(b)) => match op {
+                    ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => {
+                        let result = match op {
+                            ArithOp::Add => a.checked_add(b),
+                            ArithOp::Sub => a.checked_sub(b),
+                            ArithOp::Min => Some(a.min(b)),
+                            ArithOp::Max => Some(a.max(b)),
+                            _ => unreachable!("outer match restricts the op"),
+                        };
+                        result.map(EvalValue::Duration).ok_or_else(|| {
+                            EvalError::TypeMismatch("duration arithmetic out of range".to_string())
+                        })
+                    }
+                    // The ratio between two spans is a dimensionless
+                    // decimal - how many turn-times fit in the excess,
+                    // how many days of demurrage. The inputs are exact
+                    // integer nanoseconds and the division is Decimal
+                    // division: terminating ratios (132h/24h = 5.5)
+                    // are exact; a repeating ratio carries Decimal's
+                    // 28-digit precision. Money settled off a ratio
+                    // eventually wants an explicit rounding rule -
+                    // a domain decision, not a hidden kernel one.
+                    ArithOp::Div => {
+                        let divisor = duration_nanos_decimal(b);
+                        if divisor == Decimal::ZERO {
+                            return Err(EvalError::DivisionByZero);
                         }
-                    };
-                    result.map(EvalValue::Duration).ok_or_else(|| {
-                        EvalError::TypeMismatch("duration arithmetic out of range".to_string())
-                    })
+                        Ok(EvalValue::Decimal(duration_nanos_decimal(a) / divisor))
+                    }
+                    _ => Err(EvalError::TypeMismatch(format!(
+                        "{op:?} is not defined for durations"
+                    ))),
+                },
+                // The unit algebra, deliberately minimal: a quantity is
+                // an exact decimal under a contractual label, so amounts
+                // combine only under the SAME label; a bare decimal
+                // scales a quantity (Mul/Div); the ratio of two
+                // same-unit quantities is a bare decimal. There is no
+                // unit-producing arithmetic - no compound units, ever,
+                // until a worked example forces a revisit.
+                (
+                    EvalValue::Quantity { amount: a, unit: u },
+                    EvalValue::Quantity { amount: b, unit: v },
+                ) => {
+                    if u != v {
+                        return Err(EvalError::TypeMismatch(format!(
+                            "no arithmetic rule for Decimal[{u}] {op:?} Decimal[{v}]: \
+                             quantity arithmetic requires the same unit"
+                        )));
+                    }
+                    match op {
+                        ArithOp::Add => Ok(EvalValue::Quantity {
+                            amount: a + b,
+                            unit: u,
+                        }),
+                        ArithOp::Sub => Ok(EvalValue::Quantity {
+                            amount: a - b,
+                            unit: u,
+                        }),
+                        ArithOp::Min => Ok(EvalValue::Quantity {
+                            amount: a.min(b),
+                            unit: u,
+                        }),
+                        ArithOp::Max => Ok(EvalValue::Quantity {
+                            amount: a.max(b),
+                            unit: u,
+                        }),
+                        ArithOp::Div => {
+                            if b == Decimal::ZERO {
+                                return Err(EvalError::DivisionByZero);
+                            }
+                            Ok(EvalValue::Decimal(a / b))
+                        }
+                        ArithOp::Mul | ArithOp::Mod => Err(EvalError::TypeMismatch(format!(
+                            "{op:?} is not defined for Decimal[{u}] and Decimal[{u}]: \
+                             two amounts of one unit multiply into no meaningful unit"
+                        ))),
+                    }
                 }
-                _ => Err(EvalError::TypeMismatch(format!(
-                    "{op:?} operand types do not match any arithmetic rule"
+                (EvalValue::Quantity { amount: a, unit }, EvalValue::Decimal(b)) => match op {
+                    ArithOp::Mul => Ok(EvalValue::Quantity {
+                        amount: a * b,
+                        unit,
+                    }),
+                    ArithOp::Div => {
+                        if b == Decimal::ZERO {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(EvalValue::Quantity {
+                            amount: a / b,
+                            unit,
+                        })
+                    }
+                    _ => Err(EvalError::TypeMismatch(format!(
+                        "{op:?} is not defined for Decimal[{unit}] and a bare decimal \
+                         (only Mul/Div: a bare decimal scales a quantity)"
+                    ))),
+                },
+                (EvalValue::Decimal(a), EvalValue::Quantity { amount: b, unit }) => match op {
+                    ArithOp::Mul => Ok(EvalValue::Quantity {
+                        amount: a * b,
+                        unit,
+                    }),
+                    _ => Err(EvalError::TypeMismatch(format!(
+                        "{op:?} is not defined for a bare decimal and Decimal[{unit}] \
+                         (only Mul: a bare decimal scales a quantity)"
+                    ))),
+                },
+                (l, r) => Err(EvalError::TypeMismatch(format!(
+                    "no arithmetic rule for {} {op:?} {}",
+                    runtime_kind_label(&l),
+                    runtime_kind_label(&r),
                 ))),
             }
         }
         ValueExpr::Sum { value, body } => {
             // Type-driven accumulation: a sum of decimals is a decimal,
             // a sum of durations is a duration (counted laytime is the
-            // forcing case), and the empty sum defaults to decimal zero
-            // - the only choice that keeps every pre-existing decimal
-            // aggregate working. Mixing the two domains is an error.
+            // forcing case), a sum of same-unit quantities is a quantity
+            // of that unit, and the empty sum defaults to decimal zero -
+            // the only choice that keeps every pre-existing decimal
+            // aggregate working (unitful aggregates seed a zero-amount
+            // element, the same pattern as durations). Mixing kinds, or
+            // units within the quantity kind, is an error.
+            enum SumTotal {
+                Empty,
+                Decimal(Decimal),
+                Duration(jiff::SignedDuration),
+                Quantity(Decimal, crate::ir::Unit),
+            }
             let matches = find_matches(body, ctx)?;
-            let mut decimal_total: Option<Decimal> = None;
-            let mut duration_total: Option<jiff::SignedDuration> = None;
+            let mut total = SumTotal::Empty;
             for m in matches {
-                match resolve_term(value, &m, ctx.actor)? {
-                    EvalValue::Decimal(d) if duration_total.is_none() => {
-                        decimal_total = Some(decimal_total.unwrap_or(Decimal::ZERO) + d);
+                let next = resolve_term(value, &m, ctx.actor)?;
+                total = match (total, next) {
+                    (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(d),
+                    (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d),
+                    (SumTotal::Empty, EvalValue::Quantity { amount, unit }) => {
+                        SumTotal::Quantity(amount, unit)
                     }
-                    EvalValue::Duration(d) if decimal_total.is_none() => {
-                        let so_far = duration_total.unwrap_or(jiff::SignedDuration::ZERO);
-                        duration_total = Some(so_far.checked_add(d).ok_or_else(|| {
+                    (SumTotal::Decimal(t), EvalValue::Decimal(d)) => SumTotal::Decimal(t + d),
+                    (SumTotal::Duration(t), EvalValue::Duration(d)) => {
+                        SumTotal::Duration(t.checked_add(d).ok_or_else(|| {
                             EvalError::TypeMismatch("duration sum out of range".to_string())
-                        })?);
+                        })?)
                     }
-                    EvalValue::Decimal(_) | EvalValue::Duration(_) => {
-                        return Err(EvalError::TypeMismatch(
-                            "Sum cannot mix decimal and duration values".into(),
-                        ));
+                    (SumTotal::Quantity(t, u), EvalValue::Quantity { amount, unit }) => {
+                        if u != unit {
+                            return Err(EvalError::TypeMismatch(format!(
+                                "Sum cannot mix Decimal[{u}] and Decimal[{unit}] values"
+                            )));
+                        }
+                        SumTotal::Quantity(t + amount, u)
                     }
-                    _ => {
-                        return Err(EvalError::TypeMismatch(
-                            "Sum expects decimal or duration values".into(),
-                        ));
+                    (
+                        SumTotal::Decimal(_) | SumTotal::Duration(_) | SumTotal::Quantity(..),
+                        other,
+                    ) => {
+                        return Err(EvalError::TypeMismatch(format!(
+                            "Sum cannot mix value kinds (next value is {})",
+                            runtime_kind_label(&other)
+                        )));
                     }
-                }
+                    (SumTotal::Empty, other) => {
+                        return Err(EvalError::TypeMismatch(format!(
+                            "Sum expects decimal, duration, or quantity values, got {}",
+                            runtime_kind_label(&other)
+                        )));
+                    }
+                };
             }
-            match (decimal_total, duration_total) {
-                (_, Some(total)) => Ok(EvalValue::Duration(total)),
-                (Some(total), None) => Ok(EvalValue::Decimal(total)),
-                (None, None) => Ok(EvalValue::Decimal(Decimal::ZERO)),
-            }
+            Ok(match total {
+                SumTotal::Empty => EvalValue::Decimal(Decimal::ZERO),
+                SumTotal::Decimal(t) => EvalValue::Decimal(t),
+                SumTotal::Duration(t) => EvalValue::Duration(t),
+                SumTotal::Quantity(amount, unit) => EvalValue::Quantity { amount, unit },
+            })
         }
         ValueExpr::ValueOf {
             predicate,
@@ -810,6 +999,9 @@ pub(crate) fn resolve_term(
         Term::Literal(Value::Date(s)) => Ok(EvalValue::Date(parse_date_literal(s)?)),
         Term::Literal(Value::Timestamp(s)) => Ok(EvalValue::Timestamp(parse_timestamp_literal(s)?)),
         Term::Literal(Value::Duration(s)) => Ok(EvalValue::Duration(parse_duration_literal(s)?)),
+        Term::Literal(Value::Quantity { amount, unit }) => {
+            Ok(parse_quantity_literal(amount, unit)?)
+        }
         Term::Actor => actor
             .map(|a| EvalValue::Subject(a.clone()))
             .ok_or(EvalError::UnboundActor),
@@ -1046,6 +1238,7 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
         EvalValue::Date(d) => d.to_string(),
         EvalValue::Timestamp(t) => t.to_string(),
         EvalValue::Duration(d) => d.to_string(),
+        EvalValue::Quantity { amount, unit } => format!("{amount} {unit}"),
         EvalValue::Collection(items) => {
             let inner: Vec<String> = items.iter().map(render_eval_value).collect();
             format!("[{}]", inner.join(", "))

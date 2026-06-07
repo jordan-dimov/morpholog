@@ -147,6 +147,21 @@ opaque_id! {
     InvariantName
 }
 
+opaque_id! {
+    /// An opaque unit symbol on a quantity - `USD`, `t`, `MWh`. A unit in
+    /// Morpholog is a contractual label on an exact decimal, not a physical
+    /// dimension: the kernel enforces that arithmetic and comparison only
+    /// combine like-labelled amounts, and knows nothing else. Case-sensitive,
+    /// no registry, no aliases, no compound symbols (`USD/day` is a business
+    /// concept expressed in a predicate's field name and formula, never a
+    /// unit). Conversions between units are domain knowledge with provenance and
+    /// time, so they enter as claims when a worked example forces them - the
+    /// same doctrine that keeps timezone interpretation out of the runtime.
+    /// Ordered because [`PredicateArgKind`] is ordered (the analysis walkers
+    /// collect kind sets into `BTreeSet`s) and the unit is part of the kind.
+    ord Unit
+}
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is
@@ -267,8 +282,10 @@ pub enum ValueExpr {
     /// [`CompareOp`]. Operand kinds follow the rule matrix
     /// (`arith_result_kind`): decimals support every operator;
     /// instants shift by durations (`Add`/`Sub`) and difference into
-    /// durations (`Sub`); durations add, subtract, and cap
-    /// (`Min`/`Max`); `Mul`/`Div`/`Mod` stay decimal-only. A pair with
+    /// durations (`Sub`); durations add, subtract, cap (`Min`/`Max`),
+    /// and divide into a dimensionless ratio; same-unit quantities
+    /// add, subtract, cap, and ratio, with a bare decimal scaling
+    /// them (`Mul`/`Div`); `Mod` stays decimal-only. A pair with
     /// no rule is `NoArithRule` at validation and `TypeMismatch` at
     /// evaluation. `Div` and `Mod` surface
     /// [`crate::EvalError::DivisionByZero`] on a zero divisor; the
@@ -370,20 +387,27 @@ pub enum OrderedDomain {
 /// soundly assumed.
 pub(crate) fn arith_unique_counterpart(
     op: ArithOp,
-    known: PredicateArgKind,
+    known: &PredicateArgKind,
     known_is_left: bool,
 ) -> Option<(PredicateArgKind, PredicateArgKind)> {
     use PredicateArgKind::{Decimal, Duration, Timestamp};
-    let mut fits = [Decimal, Timestamp, Duration]
-        .into_iter()
-        .filter_map(|other| {
-            let (l, r) = if known_is_left {
-                (known, other)
-            } else {
-                (other, known)
-            };
-            arith_result_kind(op, l, r).map(|result| (other, result))
-        });
+    // Candidate counterparts: the unit-less arithmetic kinds, plus the
+    // known side's own unit when the known side is a quantity. A unit
+    // the expression has not already named cannot be INFERRED - only
+    // declared - so a bare-decimal known side never infers a quantity
+    // counterpart, even though the scaling rule would evaluate one.
+    let mut candidates = vec![Decimal, Timestamp, Duration];
+    if let PredicateArgKind::Quantity(u) = known {
+        candidates.push(PredicateArgKind::Quantity(u.clone()));
+    }
+    let mut fits = candidates.into_iter().filter_map(|other| {
+        let (l, r) = if known_is_left {
+            (known, &other)
+        } else {
+            (&other, known)
+        };
+        arith_result_kind(op, l, r).map(|result| (other.clone(), result))
+    });
     match (fits.next(), fits.next()) {
         (Some(unique), None) => Some(unique),
         _ => None,
@@ -392,10 +416,10 @@ pub(crate) fn arith_unique_counterpart(
 
 pub(crate) fn arith_result_kind(
     op: ArithOp,
-    left: PredicateArgKind,
-    right: PredicateArgKind,
+    left: &PredicateArgKind,
+    right: &PredicateArgKind,
 ) -> Option<PredicateArgKind> {
-    use PredicateArgKind::{Decimal, Duration, Timestamp};
+    use PredicateArgKind::{Decimal, Duration, Quantity, Timestamp};
     match (op, left, right) {
         (_, Decimal, Decimal) => Some(Decimal),
         (ArithOp::Add | ArithOp::Sub, Timestamp, Duration) => Some(Timestamp),
@@ -403,6 +427,25 @@ pub(crate) fn arith_result_kind(
         (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Duration, Duration) => {
             Some(Duration)
         }
+        // The ratio of two spans is a dimensionless decimal - how many
+        // days of demurrage, how many turn-times in the gap. Exact for
+        // terminating ratios; see the evaluator's arm for the precision
+        // contract.
+        (ArithOp::Div, Duration, Duration) => Some(Decimal),
+        // The unit algebra, deliberately minimal: amounts combine only
+        // under the SAME label; the ratio of two same-unit amounts is
+        // a bare decimal; a bare decimal scales a quantity. Nothing
+        // here produces a unit that was not already written down - no
+        // compound units, no unit-producing multiplication.
+        (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Quantity(u), Quantity(v))
+            if u == v =>
+        {
+            Some(Quantity(u.clone()))
+        }
+        (ArithOp::Div, Quantity(u), Quantity(v)) if u == v => Some(Decimal),
+        (ArithOp::Mul, Quantity(u), Decimal)
+        | (ArithOp::Mul, Decimal, Quantity(u))
+        | (ArithOp::Div, Quantity(u), Decimal) => Some(Quantity(u.clone())),
         _ => None,
     }
 }
@@ -440,8 +483,9 @@ pub enum Value {
     /// ISO-8601 civil date (`YYYY-MM-DD`) stored as its exact source string.
     /// Parsing into [`jiff::civil::Date`] is the evaluator's concern, not the
     /// IR's; mirrors how [`Value::Decimal`] defers parsing to evaluation.
-    /// No time-of-day, no time zone: validity-window modelling on civil
-    /// dates is the only temporal primitive in v0.
+    /// No time-of-day, no time zone: the civil-date kind for
+    /// validity-window modelling, beside the exact-instant
+    /// [`Value::Timestamp`] and exact-span [`Value::Duration`] kinds.
     Date(String),
     /// An exact instant on the UTC timeline (RFC 3339, e.g.
     /// `2026-10-24T14:00:00Z`), stored as its exact source string;
@@ -456,6 +500,12 @@ pub enum Value {
     /// units (months, years), whose lengths depend on context the
     /// kernel refuses to guess.
     Duration(String),
+    /// A unit-tagged exact decimal quantity (`25000 USD`, `0 t`). The
+    /// amount is stored as its exact source string, like
+    /// [`Value::Decimal`]; the unit is an opaque [`Unit`] symbol. The
+    /// evaluator enforces same-unit arithmetic and comparison; the
+    /// kernel holds no unit knowledge beyond label equality.
+    Quantity { amount: String, unit: Unit },
 }
 
 /// A Claim is an admitted assertion candidate - a statement that may be
@@ -722,7 +772,7 @@ pub struct IntentDecl {
 /// hold any admitted value), or for declarations that are not yet
 /// ready to commit to a kind. Use it sparingly; the value of the
 /// declaration metadata is highest when kinds are specific.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PredicateArgKind {
     Subject,
     Decimal,
@@ -731,7 +781,32 @@ pub enum PredicateArgKind {
     Duration,
     Bool,
     Collection,
+    /// A unit-tagged exact decimal - declared `Decimal[USD]` on the
+    /// surface. Two quantity kinds are compatible only when their
+    /// units are equal; the unit is the whole of the kind's meaning
+    /// (a contractual label, not a physical dimension).
+    Quantity(Unit),
     Any,
+}
+
+/// Renders the declaration syntax - `Decimal[USD]`, never a
+/// unit-erased "Quantity" - so every diagnostic that names a kind
+/// names the unit. The formatter and the validation errors both
+/// route through this impl; they cannot drift.
+impl std::fmt::Display for PredicateArgKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PredicateArgKind::Subject => write!(f, "Subject"),
+            PredicateArgKind::Decimal => write!(f, "Decimal"),
+            PredicateArgKind::Date => write!(f, "Date"),
+            PredicateArgKind::Timestamp => write!(f, "Timestamp"),
+            PredicateArgKind::Duration => write!(f, "Duration"),
+            PredicateArgKind::Bool => write!(f, "Bool"),
+            PredicateArgKind::Collection => write!(f, "Collection"),
+            PredicateArgKind::Quantity(u) => write!(f, "Decimal[{u}]"),
+            PredicateArgKind::Any => write!(f, "Any"),
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedClaim {

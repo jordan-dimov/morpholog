@@ -53,7 +53,7 @@
 use super::expr::duration_ctor;
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, Value, ValueExpr};
+use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, Unit, Value, ValueExpr};
 
 use crate::lexer::Token;
 
@@ -86,7 +86,22 @@ where
         let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
-            decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            decimal_lit
+                .then(ident.or_not())
+                .map(|(s, unit)| match unit {
+                    // A numeric literal followed by an identifier in
+                    // term position is a quantity literal: `25000 USD`.
+                    // The identifier is committed as the unit, so an
+                    // ill-typed contextual keyword here (e.g. a time
+                    // comparator after a bare number) reads as a unit
+                    // and fails downstream - acceptable, since that
+                    // expression was already ill-typed.
+                    Some(u) => Term::Literal(Value::Quantity {
+                        amount: s,
+                        unit: Unit::from(u),
+                    }),
+                    None => Term::Literal(Value::Decimal(s)),
+                }),
             timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
             date_lit.map(|s| Term::Literal(Value::Date(s))),
             // Before bare idents so `duration(...)` is the constructor,

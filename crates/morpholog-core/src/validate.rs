@@ -246,8 +246,8 @@ impl std::fmt::Display for ValidationError {
                 context,
             } => write!(
                 f,
-                "{vocabulary} `{name}` arg #{position} expects {expected:?} but \
-                 received {actual:?} in {context}"
+                "{vocabulary} `{name}` arg #{position} expects {expected} but \
+                 received {actual} in {context}"
             ),
             ValidationError::OperandKindMismatch {
                 operator,
@@ -256,7 +256,7 @@ impl std::fmt::Display for ValidationError {
                 context,
             } => write!(
                 f,
-                "{operator} expects {expected:?} operand(s) but received {actual:?} in {context}"
+                "{operator} expects {expected} operand(s) but received {actual} in {context}"
             ),
             ValidationError::NoArithRule {
                 operator,
@@ -265,7 +265,7 @@ impl std::fmt::Display for ValidationError {
                 context,
             } => write!(
                 f,
-                "no arithmetic rule for {left:?} {operator} {right:?} in {context}"
+                "no arithmetic rule for {left} {operator} {right} in {context}"
             ),
             ValidationError::EqualityKindMismatch {
                 operator,
@@ -274,7 +274,7 @@ impl std::fmt::Display for ValidationError {
                 context,
             } => write!(
                 f,
-                "{operator} operands must have the same kind; got {left:?} vs {right:?} in {context}"
+                "{operator} operands must have the same kind; got {left} vs {right} in {context}"
             ),
             ValidationError::VariableKindConflict {
                 variable,
@@ -283,8 +283,8 @@ impl std::fmt::Display for ValidationError {
                 context,
             } => write!(
                 f,
-                "variable `{variable}` was first constrained to {previous:?} but later \
-                 used as {new:?} in {context}"
+                "variable `{variable}` was first constrained to {previous} but later \
+                 used as {new} in {context}"
             ),
             ValidationError::ActorNotAvailable { context } => write!(
                 f,

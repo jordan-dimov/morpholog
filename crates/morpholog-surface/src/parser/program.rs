@@ -4,8 +4,8 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateDecl, Program,
-    Transformation, Var,
+    ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateArgKind, PredicateDecl,
+    Program, Transformation, Unit, Var,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -222,11 +222,36 @@ where
     let ident = select! { Token::Ident(s) => s };
     let kind = select! { Token::Kind(k) => k };
 
-    // arg ::= Ident ":" Kind
+    // arg ::= Ident ":" Kind ("[" Ident "]")?
+    // The unit brackets attach only to `Decimal` - `Decimal[USD]` is a
+    // unit-tagged exact decimal. A unit on any other kind has no
+    // meaning the kernel could honour, so it is a parse-time error.
+    let unit = just(Token::LBracket)
+        .ignore_then(ident)
+        .then_ignore(just(Token::RBracket));
     let arg = ident
         .then_ignore(just(Token::Colon))
         .then(kind)
-        .map(|(name, kind)| ArgDecl { name, kind });
+        .then(unit.or_not())
+        .validate(|((name, kind), unit), e, emitter| {
+            let kind = match (kind, unit) {
+                (k, None) => k,
+                (PredicateArgKind::Decimal, Some(u)) => {
+                    PredicateArgKind::Quantity(Unit::from(u.clone()))
+                }
+                (k, Some(_)) => {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        format!(
+                            "only `Decimal` takes a unit annotation; `{k}[...]` has no meaning"
+                        ),
+                    ));
+                    k
+                }
+            };
+            ArgDecl { name, kind }
+        });
 
     // arg_list ::= arg ("," arg)* ","?
     let arg_list = arg

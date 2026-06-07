@@ -422,7 +422,7 @@ fn project(observations: BTreeSet<PredicateArgKind>) -> ParamKind {
     match (concrete.len(), has_any) {
         (0, false) => ParamKind::Unconstrained,
         (0, true) => ParamKind::Polymorphic,
-        (1, _) => ParamKind::Concrete(concrete[0]),
+        (1, _) => ParamKind::Concrete(concrete[0].clone()),
         _ => ParamKind::Ambiguous(concrete),
     }
 }
@@ -515,11 +515,12 @@ impl<'a> ParamCollector<'a> {
                 crate::ir::Value::Date(_) => PredicateArgKind::Date,
                 crate::ir::Value::Timestamp(_) => PredicateArgKind::Timestamp,
                 crate::ir::Value::Duration(_) => PredicateArgKind::Duration,
+                crate::ir::Value::Quantity { unit, .. } => PredicateArgKind::Quantity(unit.clone()),
             }),
             ValueExpr::Term(Term::Var(name)) => {
                 let observed = self.observations.get(name)?;
                 if observed.len() == 1 {
-                    observed.iter().next().copied()
+                    observed.iter().next().cloned()
                 } else {
                     None
                 }
@@ -538,7 +539,10 @@ impl<'a> ParamCollector<'a> {
             None => vec![name.clone()],
         };
         for member in members {
-            self.observations.entry(member).or_default().insert(kind);
+            self.observations
+                .entry(member)
+                .or_default()
+                .insert(kind.clone());
         }
     }
 
@@ -695,12 +699,28 @@ impl<'a> ParamCollector<'a> {
                 ..
             } => {
                 let kind = match domain {
-                    OrderedDomain::Decimal => PredicateArgKind::Decimal,
+                    // The decimal domain has two flavours (bare decimal,
+                    // unit-tagged quantity). If either side's shallow
+                    // kind already names a unit, both sides observe at
+                    // that quantity kind - so `settled <= due` pins the
+                    // settlement parameter to the due figure's unit.
+                    // Otherwise the domain's neutral bare-decimal
+                    // reading stands, as before quantities existed.
+                    OrderedDomain::Decimal => {
+                        match (
+                            self.shallow_value_kind(left),
+                            self.shallow_value_kind(right),
+                        ) {
+                            (Some(q @ PredicateArgKind::Quantity(_)), _)
+                            | (_, Some(q @ PredicateArgKind::Quantity(_))) => q,
+                            _ => PredicateArgKind::Decimal,
+                        }
+                    }
                     OrderedDomain::Date => PredicateArgKind::Date,
                     OrderedDomain::Timestamp => PredicateArgKind::Timestamp,
                     OrderedDomain::Duration => PredicateArgKind::Duration,
                 };
-                self.walk_value(left, Some(kind));
+                self.walk_value(left, Some(kind.clone()));
                 self.walk_value(right, Some(kind));
             }
             Prop::Eq(left, right) | Prop::Neq(left, right) => {
@@ -737,48 +757,48 @@ impl<'a> ParamCollector<'a> {
             }
             ValueExpr::Term(_) => {}
             ValueExpr::Arith { op, left, right } => {
-                // Mul / Div / Mod pin both operands to Decimal. The
-                // additive operators span the decimal and time domains,
-                // so an operand's kind is assumed only when the matrix
-                // forces it: if one side's kind is already determinable
-                // (a literal, or a variable every prior position pinned
-                // to one kind) and exactly one rule fits, the other
-                // side observes the forced counterpart - the externally
-                // supplied turn time in `tendered_at + turn_time`
-                // resolves to Duration this way, so its schema is
-                // honest. When several rules fit (`Timestamp - x`),
-                // nothing is assumed and the checker's matrix remains
-                // the only judge.
-                match op {
-                    ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
-                        self.walk_value(left, Some(PredicateArgKind::Decimal));
-                        self.walk_value(right, Some(PredicateArgKind::Decimal));
-                    }
-                    ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => {
-                        let l_known = self.shallow_value_kind(left);
-                        let r_known = self.shallow_value_kind(right);
-                        let (l_exp, r_exp) = match (l_known, r_known) {
-                            (Some(k), None) => (
-                                None,
-                                crate::ir::arith_unique_counterpart(*op, k, true)
-                                    .map(|(expected, _)| expected),
-                            ),
-                            (None, Some(k)) => (
-                                crate::ir::arith_unique_counterpart(*op, k, false)
-                                    .map(|(expected, _)| expected),
-                                None,
-                            ),
-                            _ => (None, None),
-                        };
-                        self.walk_value(left, l_exp);
-                        self.walk_value(right, r_exp);
-                    }
-                }
+                // Every operator runs the matrix's one-side-known
+                // refinement: if one side's kind is already
+                // determinable (a literal, or a variable every prior
+                // position pinned to one kind) and exactly one rule
+                // fits, the other side observes the forced
+                // counterpart - the externally supplied turn time in
+                // `tendered_at + turn_time` resolves to Duration this
+                // way, and the scaling factor in `daily_amount * x`
+                // resolves to Decimal. When several rules fit
+                // (`Timestamp - x`, `usd_amount / x`), nothing is
+                // assumed and the checker's matrix remains the only
+                // judge. With NEITHER side determinable, Mul / Div /
+                // Mod keep their historical bare-decimal default
+                // (mirroring the checker; a unit cannot be inferred
+                // from nothing); the additive operators stay
+                // unrefined, as the time kinds left them.
+                let l_known = self.shallow_value_kind(left);
+                let r_known = self.shallow_value_kind(right);
+                let (l_exp, r_exp) = match (l_known, r_known) {
+                    (Some(k), None) => (
+                        None,
+                        crate::ir::arith_unique_counterpart(*op, &k, true)
+                            .map(|(expected, _)| expected),
+                    ),
+                    (None, Some(k)) => (
+                        crate::ir::arith_unique_counterpart(*op, &k, false)
+                            .map(|(expected, _)| expected),
+                        None,
+                    ),
+                    (None, None) if matches!(op, ArithOp::Mul | ArithOp::Div | ArithOp::Mod) => (
+                        Some(PredicateArgKind::Decimal),
+                        Some(PredicateArgKind::Decimal),
+                    ),
+                    _ => (None, None),
+                };
+                self.walk_value(left, l_exp);
+                self.walk_value(right, r_exp);
             }
             ValueExpr::Sum { value, body } => {
-                // The summed term is decimal or duration; its kind is
-                // observed from its claim position inside the body, so
-                // the aggregate itself pins nothing.
+                // The summed term is decimal, duration, or quantity;
+                // its kind is observed from its claim position inside
+                // the body, so the aggregate itself pins nothing.
                 let _ = value;
                 self.walk_prop(body);
             }
@@ -804,7 +824,7 @@ impl<'a> ParamCollector<'a> {
         };
         for (arg, decl_arg) in args.iter().zip(decl_args.iter()) {
             if let Term::Var(name) = arg {
-                self.observe(name, decl_arg.kind);
+                self.observe(name, decl_arg.kind.clone());
             }
         }
     }
@@ -817,7 +837,7 @@ impl<'a> ParamCollector<'a> {
         };
         for (arg, decl_arg) in args.iter().zip(decl_args.iter()) {
             if let Term::Var(name) = arg {
-                self.observe(name, decl_arg.kind);
+                self.observe(name, decl_arg.kind.clone());
             }
         }
     }

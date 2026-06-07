@@ -32,8 +32,10 @@
 //!   stores them as exact source strings; the pattern is strict
 //!   enough to reject `00.12`, leading-`+`, and other ambiguous
 //!   forms that the parser normalises.
-//! - Dates carry as ISO-8601 civil dates (no time of day, no zone) -
-//!   the only temporal primitive in v0.
+//! - Dates carry as ISO-8601 civil dates (no time of day, no zone);
+//!   timestamps as RFC 3339 instants; durations as ISO-8601
+//!   exact-time spans; quantity amounts as the same bare decimal
+//!   string as `Decimal`, with the unit in `x-morpholog-unit`.
 //! - `Polymorphic` and `Unconstrained` parameters become properties
 //!   with no `type` constraint and a description carrying their
 //!   state - the embedder can render them but should flag that the
@@ -106,7 +108,7 @@ pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> O
     for arg in &decl.args {
         properties.insert(
             arg.name.clone(),
-            concrete_property(arg.kind, SchemaContext::IntentPayload),
+            concrete_property(&arg.kind, SchemaContext::IntentPayload),
         );
         required.push(Value::String(arg.name.clone()));
     }
@@ -136,7 +138,7 @@ pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> O
 /// belongs at the property level, naming the ambiguity.
 fn property_schema(kind: &ParamKind) -> Value {
     match kind {
-        ParamKind::Concrete(k) => concrete_property(*k, SchemaContext::TransformationArg),
+        ParamKind::Concrete(k) => concrete_property(k, SchemaContext::TransformationArg),
         // `Polymorphic` is the projection of "observed only at `Any`
         // slots"; the analysis layer never emits `Concrete(Any)`, but
         // the type permits it, so render it the same way.
@@ -147,7 +149,7 @@ fn property_schema(kind: &ParamKind) -> Value {
             "description": "unconstrained; parameter is never observed at a kind-bearing position (likely a modelling smell)"
         }),
         ParamKind::Ambiguous(kinds) => {
-            let alternatives: Vec<Value> = kinds.iter().map(|k| bare_kind_shape(*k)).collect();
+            let alternatives: Vec<Value> = kinds.iter().map(bare_kind_shape).collect();
             json!({
                 "description": "ambiguous; parameter is observed at different concrete kinds across branch-local positions (typically `Or` branches the static checker does not refine across)",
                 "anyOf": alternatives,
@@ -171,12 +173,12 @@ enum SchemaContext {
 /// plus the per-kind, context-aware description. Shared by
 /// [`property_schema`]'s `Concrete` arm and by [`intent_arg_schema`],
 /// whose declared arguments are always concrete kinds.
-fn concrete_property(kind: PredicateArgKind, ctx: SchemaContext) -> Value {
+fn concrete_property(kind: &PredicateArgKind, ctx: SchemaContext) -> Value {
     let mut value = bare_kind_shape(kind);
     if let Some(obj) = value.as_object_mut()
         && let Some(desc) = concrete_kind_description(kind, ctx)
     {
-        obj.insert("description".into(), Value::String(desc.into()));
+        obj.insert("description".into(), Value::String(desc));
     }
     value
 }
@@ -186,7 +188,7 @@ fn concrete_property(kind: PredicateArgKind, ctx: SchemaContext) -> Value {
 /// for both the `Concrete` rendering (which adds the per-kind
 /// description on top) and the `Ambiguous` `anyOf` alternatives
 /// (which deliberately omit per-alternative descriptions).
-fn bare_kind_shape(kind: PredicateArgKind) -> Value {
+fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
     match kind {
         // `Subject` deliberately carries NO `format: "uuid"`.
         // Morpholog's `Subject` is the only primitive noun and
@@ -205,6 +207,18 @@ fn bare_kind_shape(kind: PredicateArgKind) -> Value {
         PredicateArgKind::Duration => json!({"type": "string", "format": "duration"}),
         PredicateArgKind::Bool => json!({"type": "boolean"}),
         PredicateArgKind::Collection => json!({"type": "array"}),
+        // A quantity travels as the SAME bare decimal string as
+        // `Decimal` - the declaration supplies the unit, so the wire
+        // shape does not change. The unit rides as an
+        // `x-morpholog-unit` extension (the machine-readable
+        // contract); the human-readable unit lands in the
+        // description, because many form generators ignore custom
+        // extensions.
+        PredicateArgKind::Quantity(u) => json!({
+            "type": "string",
+            "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$",
+            "x-morpholog-unit": u.as_str(),
+        }),
         // `Any` carries no constraint at the JSON-Schema level; the
         // contract-level "this is polymorphic" lives in the
         // property's description, not on the bare shape.
@@ -217,42 +231,52 @@ fn bare_kind_shape(kind: PredicateArgKind) -> Value {
 /// (booleans). Only `Collection` reads `ctx`: a transformation argument
 /// points at the `--args` codec for *sending* a collection; an intent
 /// payload field is read-only output, so that guidance would mislead.
-fn concrete_kind_description(kind: PredicateArgKind, ctx: SchemaContext) -> Option<&'static str> {
-    match kind {
-        PredicateArgKind::Subject => Some(
-            "opaque Morpholog subject identifier or domain symbol. \
+fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Option<String> {
+    let owned = match kind {
+        PredicateArgKind::Quantity(u) => {
+            return Some(format!(
+                "exact decimal amount in {u}, carried as a string for \
+                 exactness. The unit is fixed by the declaration \
+                 (`Decimal[{u}]`) and is not sent with the value."
+            ));
+        }
+        _ => match kind {
+            PredicateArgKind::Subject => Some(
+                "opaque Morpholog subject identifier or domain symbol. \
              Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by \
              runtime convention; externally supplied Subjects (commodity \
              codes, period names, direction enums, etc.) are opaque \
              strings. The schema describes the shape, not a format constraint.",
-        ),
-        PredicateArgKind::Decimal => {
-            Some("arbitrary-precision decimal carried as a string for exactness")
-        }
-        PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
-        PredicateArgKind::Timestamp => Some(
-            "RFC 3339 UTC instant (e.g. 2026-10-24T14:00:00Z). Zone-less \
+            ),
+            PredicateArgKind::Decimal => {
+                Some("arbitrary-precision decimal carried as a string for exactness")
+            }
+            PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
+            PredicateArgKind::Timestamp => Some(
+                "RFC 3339 UTC instant (e.g. 2026-10-24T14:00:00Z). Zone-less \
              by design: local-time interpretation is admitted as claims, \
              never assumed by the runtime.",
-        ),
-        PredicateArgKind::Duration => Some(
-            "ISO-8601 duration in exact time units (e.g. PT6H); calendar \
+            ),
+            PredicateArgKind::Duration => Some(
+                "ISO-8601 duration in exact time units (e.g. PT6H); calendar \
              units (months, years) are not accepted",
-        ),
-        PredicateArgKind::Collection => Some(match ctx {
-            SchemaContext::TransformationArg => {
-                "collection; item kind not tracked at the kernel level in v0. \
+            ),
+            PredicateArgKind::Collection => Some(match ctx {
+                SchemaContext::TransformationArg => {
+                    "collection; item kind not tracked at the kernel level in v0. \
                  A Collection parameter cannot be sent via `--args-named` (the \
                  named codec cannot decode bare arrays without per-item kind \
                  information); use `--args` with the tagged EvalValue codec."
-            }
-            SchemaContext::IntentPayload => {
-                "collection; a positional array of values, item kind not \
+                }
+                SchemaContext::IntentPayload => {
+                    "collection; a positional array of values, item kind not \
                  tracked at the kernel level in v0."
-            }
-        }),
-        PredicateArgKind::Bool | PredicateArgKind::Any => None,
-    }
+                }
+            }),
+            PredicateArgKind::Bool | PredicateArgKind::Any | PredicateArgKind::Quantity(_) => None,
+        },
+    };
+    owned.map(String::from)
 }
 
 #[cfg(test)]
@@ -266,7 +290,7 @@ mod tests {
     #[test]
     fn collection_description_splits_by_context() {
         let input = concrete_property(
-            PredicateArgKind::Collection,
+            &PredicateArgKind::Collection,
             SchemaContext::TransformationArg,
         );
         let input_desc = input["description"].as_str().expect("description string");
@@ -275,7 +299,8 @@ mod tests {
             "transformation-arg Collection points at the --args codec; got: {input_desc}",
         );
 
-        let payload = concrete_property(PredicateArgKind::Collection, SchemaContext::IntentPayload);
+        let payload =
+            concrete_property(&PredicateArgKind::Collection, SchemaContext::IntentPayload);
         let payload_desc = payload["description"].as_str().expect("description string");
         assert!(
             !payload_desc.contains("--args"),

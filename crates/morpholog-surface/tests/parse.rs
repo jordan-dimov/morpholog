@@ -44,7 +44,11 @@ program kinds_demo
 predicate Every(a: Subject, b: Decimal, c: Date, d: Bool, e: Collection, f: Any)
 "#;
     let program = parse_program(source).expect("parse should succeed");
-    let kinds: Vec<PredicateArgKind> = program.predicates[0].args.iter().map(|a| a.kind).collect();
+    let kinds: Vec<PredicateArgKind> = program.predicates[0]
+        .args
+        .iter()
+        .map(|a| a.kind.clone())
+        .collect();
     assert_eq!(
         kinds,
         vec![
@@ -55,6 +59,71 @@ predicate Every(a: Subject, b: Decimal, c: Date, d: Bool, e: Collection, f: Any)
             PredicateArgKind::Collection,
             PredicateArgKind::Any,
         ]
+    );
+}
+
+#[test]
+fn quantity_kind_parses_with_unit_brackets() {
+    let source = r#"program cargo
+
+predicate Parcel(parcel: Subject, qty: Decimal[t])
+predicate Rate(voyage: Subject, daily: Decimal[USD])
+"#;
+    let program = parse_program(source).expect("parse should succeed");
+    assert_eq!(
+        program.predicates[0].args[1].kind,
+        PredicateArgKind::Quantity(morpholog_core::Unit::from("t")),
+    );
+    assert_eq!(
+        program.predicates[1].args[1].kind,
+        PredicateArgKind::Quantity(morpholog_core::Unit::from("USD")),
+    );
+}
+
+#[test]
+fn quantity_literals_parse_in_statement_and_expression_position() {
+    // A numeric literal followed by an identifier in term position is
+    // a quantity literal: whole, fractional, and the zero a unitful
+    // aggregate seeds with. The invariant exercises expression
+    // position; the admits exercise statement-arg position.
+    let source = r#"program cargo
+
+predicate Parcel(parcel: Subject, qty: Decimal[t])
+
+invariant parcel_within_largest_hold:
+    Parcel(p, q) implies q <= 50000 t
+
+transformation load(parcel):
+    admit Parcel(parcel, 25000 t)
+
+transformation seed(parcel):
+    admit Parcel(parcel, 0 t)
+
+transformation precise(parcel):
+    admit Parcel(parcel, 100.50 t)
+"#;
+    let program = parse_program(source).expect("parse should succeed");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    // Round-trip: the canonical rendering reparses to the same IR, so
+    // the formatter and parser agree on both the kind annotation and
+    // the literal.
+    let rendered = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&rendered)
+        .unwrap_or_else(|e| panic!("canonical text must reparse: {e:?}\n{rendered}"));
+    assert_eq!(program, reparsed);
+}
+
+#[test]
+fn unit_brackets_on_a_non_decimal_kind_are_a_parse_error() {
+    let source = r#"program bad
+
+predicate P(x: Subject[USD])
+"#;
+    let errs = parse_program(source).expect_err("unit on Subject must not parse");
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e:?}").contains("only `Decimal` takes a unit annotation")),
+        "expected the only-Decimal diagnostic; got {errs:?}"
     );
 }
 

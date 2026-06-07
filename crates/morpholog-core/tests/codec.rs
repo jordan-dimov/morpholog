@@ -35,6 +35,24 @@ fn eval_value_timestamp_round_trips_as_tagged_rfc3339_string() {
 }
 
 #[test]
+fn eval_value_quantity_round_trips_with_string_amount_and_unit() {
+    // The amount is a JSON string (exactness, like Decimal); the unit
+    // rides beside it - the tagged codec is self-describing, unlike
+    // the named codec where the declaration supplies the unit.
+    let v = EvalValue::Quantity {
+        amount: Decimal::from_str("25000.50").unwrap(),
+        unit: morpholog_core::Unit::from("USD"),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"quantity","value":{"amount":"25000.50","unit":"USD"}}"#
+    );
+    let parsed: EvalValue = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, v);
+}
+
+#[test]
 fn eval_value_duration_round_trips_as_tagged_iso8601_string() {
     let v = EvalValue::Duration("PT6H".parse().unwrap());
     let json = serde_json::to_string(&v).unwrap();
