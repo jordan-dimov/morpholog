@@ -784,11 +784,12 @@ No - this guide's example just never needed more. There are dates with date
 comparison (the clinical-trial example gates enrolment on validity windows),
 exact timestamps and durations with exact arithmetic (the laytime example
 computes deadlines by shifting an instant and sums interval lengths against an
-allowance), booleans, enum-like domain symbols, and collections. Genuinely
-missing today: calendar arithmetic on civil dates, timezone-aware local time
-(planned to enter as admitted claims from a calendar authority, never as a
-hidden runtime timezone lookup), and units like `MW` or `GBP` - recognised
-directions, each waiting for the worked example that forces its shape.
+allowance), unit-tagged amounts (`Decimal[USD]`, `Decimal[t]` - the runtime
+refuses to add or compare across units, so money never meets tonnes by
+accident), booleans, enum-like domain symbols, and collections. Genuinely
+missing today: calendar arithmetic on civil dates, timezone-aware local time,
+and unit conversions - each planned to enter as admitted claims from an
+authority you choose, never as a hidden runtime lookup table.
 
 **"What happens when a predicate needs to change shape?"**
 Today: the same move this guide taught for figures, applied to vocabulary. You
