@@ -38,6 +38,34 @@ async fn resolve_as_of(pool: &PgPool, as_of: Option<AsOf>) -> anyhow::Result<Opt
 pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     match what {
         Inspect::Claims(args) => {
+            // With `--named`, the programme is the authority - so it is
+            // parsed and validated before any database work, and a
+            // requested `--predicate` the file does not declare is a
+            // hard error: the typo this mode exists to catch. (The bare
+            // read keeps the opposite contract: claims table as
+            // authority, an unknown predicate matches nothing.)
+            let named_program = match &args.named {
+                Some(file) => {
+                    let (program, _source, _name) = parse_or_exit(file)?;
+                    validate_or_exit(&program);
+                    for requested in &args.predicate {
+                        if !program
+                            .predicates
+                            .iter()
+                            .any(|d| d.name.as_str() == requested.as_str())
+                        {
+                            bail!(
+                                "requested predicate `{requested}` is not declared in `{}`; \
+                                 declared: {}",
+                                file.display(),
+                                declared_predicates(&program),
+                            );
+                        }
+                    }
+                    Some((program, file))
+                }
+                None => None,
+            };
             let pool = connect(&args.db.database_url).await?;
             let as_of = resolve_as_of(&pool, args.as_of).await?;
             // Four paths, one rule: `--as-of` picks current-vs-replay,
@@ -56,8 +84,8 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                     .await
                     .context("list_claims_for_predicates failed")?,
             };
-            match &args.named {
-                Some(file) => print_json(&decode_claims_named(file, &claims)?),
+            match named_program {
+                Some((program, file)) => print_json(&decode_claims_named(&program, file, &claims)?),
                 None => print_json(&claims),
             }
         }
@@ -82,20 +110,29 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     }
 }
 
+/// The declared predicate names of a programme, comma-joined for the
+/// hard-error messages that list what the file does declare.
+fn declared_predicates(program: &morpholog_core::Program) -> String {
+    program
+        .predicates
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Decode positional, tagged claims into bare named objects using the
-/// declared vocabulary of `file` - the read-side mirror of
-/// `--args-named`. With `--named`, the programme becomes the
-/// authority: an undeclared predicate or an arity mismatch is
+/// declared vocabulary of the already-parsed programme - the
+/// read-side mirror of `--args-named`. With `--named`, the programme
+/// is the authority: an undeclared predicate or an arity mismatch is
 /// programme/database skew and a hard error naming both sides, never
 /// a silent skip. (The bare read keeps the opposite contract - claims
 /// table as authority - which is why decoding requires the file.)
 fn decode_claims_named(
+    program: &morpholog_core::Program,
     file: &Path,
     claims: &[ClaimInstance],
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let (program, _source, _name) = parse_or_exit(file)?;
-    validate_or_exit(&program);
-
     let mut rows = Vec::with_capacity(claims.len());
     for claim in claims {
         let Some(decl) = program
@@ -108,12 +145,7 @@ fn decode_claims_named(
                  (programme/database skew); declared: {}",
                 claim.predicate,
                 file.display(),
-                program
-                    .predicates
-                    .iter()
-                    .map(|d| d.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                declared_predicates(program),
             );
         };
         if decl.args.len() != claim.args.len() {

@@ -139,7 +139,7 @@ New to Morpholog? [The developer introduction](docs/developer-intro.md) is the g
 
 ## Status
 
-Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples are all working and tested. Every committed transition records its actor. A governed commit is ~9ms end to end at worked-example scale, and writes scale linearly from there (~1.6s per commit with 100,000 in-scope claims); as-of replay is also linear (~1.5s through 100,000 transitions). Predicate-scoped loading on both read and write paths means a transformation only loads claims it actually consults.
+Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples are all working and tested. Every committed transition records its actor. A governed commit is ~9ms end to end at worked-example scale (measured by `scripts/embedder_latency.sh`), and writes scale linearly from there (~1.6s per commit with 100,000 in-scope claims, from the `morpholog-bench` write scenario); as-of replay is also linear (~1.5s through 100,000 transitions). Predicate-scoped loading on both read and write paths means a transformation only loads claims it actually consults.
 
 The `.morph` parser arc is complete: every worked example parses end-to-end as `.morph` source. The formatter and parser are coupled by a round-trip property test. Diagnostics surface through `ariadne` with source spans.
 

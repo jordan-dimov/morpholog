@@ -1811,3 +1811,41 @@ async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
         "the error names both arities: {stderr}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_named_errors_on_undeclared_requested_predicate() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    // The bare read keeps claims-table-as-authority: an unknown
+    // requested predicate matches nothing and yields an empty result.
+    let (status, stdout, stderr) = run_cli(&["inspect", "claims", "--predicate", "JornalLine"]);
+    assert!(status.success(), "bare read tolerates the typo; {stderr}");
+    let rows: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(rows.as_array().unwrap().len(), 0, "typo matches nothing");
+
+    // With `--named`, the programme is the authority for the request
+    // too: the same typo is a hard error naming the declared
+    // vocabulary, raised before any database read.
+    let ledger = ledger_morph();
+    let (status, _stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JornalLine",
+        "--named",
+        &ledger,
+    ]);
+    assert!(
+        !status.success(),
+        "a typoed requested predicate must be a hard error under --named"
+    );
+    assert!(
+        stderr.contains("JornalLine") && stderr.contains("not declared"),
+        "the error names the typo: {stderr}"
+    );
+    assert!(
+        stderr.contains("JournalLine"),
+        "the error lists the declared vocabulary: {stderr}"
+    );
+}
