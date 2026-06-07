@@ -163,6 +163,25 @@ fn decode_value(
     }
 }
 
+/// Render an [`EvalValue`] as the bare JSON the named codec accepts -
+/// the read-side mirror of `--args-named`. Exactness rules match the
+/// write side: decimals, dates, timestamps, and durations are strings
+/// (a JSON number would round-trip through a double), booleans are
+/// booleans, collections recurse.
+pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
+    match v {
+        EvalValue::Subject(s) => Value::String(s.to_string()),
+        EvalValue::Decimal(d) => Value::String(d.to_string()),
+        EvalValue::Date(d) => Value::String(d.to_string()),
+        EvalValue::Timestamp(t) => Value::String(t.to_string()),
+        EvalValue::Duration(d) => Value::String(d.to_string()),
+        EvalValue::Bool(b) => Value::Bool(*b),
+        EvalValue::Collection(items) => {
+            Value::Array(items.iter().map(eval_value_to_bare_json).collect())
+        }
+    }
+}
+
 fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
     let s = raw.as_str().ok_or_else(|| {
         anyhow!(

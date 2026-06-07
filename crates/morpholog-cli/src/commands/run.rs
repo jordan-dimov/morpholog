@@ -8,15 +8,18 @@
 //! an external system proposes against its own `.morph` programme by
 //! path, without forking the CLI or compiling Rust.
 
-use anyhow::{Context, anyhow};
-use morpholog_core::{Subject, Transition};
+use anyhow::Context;
+use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::{
-    PgProposalOutcome, PgTracedOutcome, propose_against_pg, propose_against_pg_with_trace,
+    PgProposalOutcome, PgTracedOutcome, propose_against_pg,
+    propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 
 use crate::RunArgs;
 use crate::commands::args::{CliArgs, decode_args};
-use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{
+    connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
+};
 
 pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
@@ -30,22 +33,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     let validated = validate_or_exit(&program);
 
     // 3. Resolve the transformation.
-    let transformation = program
-        .transformation(&args.transformation)
-        .ok_or_else(|| {
-            let available = program
-                .transformations
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "transformation `{}` not found in `{}`. Available: {}",
-                args.transformation,
-                args.file.display(),
-                available
-            )
-        })?;
+    let transformation = lookup_transformation(&program, &args.transformation, &args.file)?;
 
     // 4. Decode --args or --args-named into `Vec<EvalValue>`. Clap
     //    has already enforced exactly-one-of via `conflicts_with` +
@@ -61,7 +49,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
 
     // 5. Connect and propose. Same retry caveat as `propose`:
     //    `PgError::SerializationFailure` is the caller's to retry.
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
@@ -93,6 +81,32 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
                 }))?;
                 std::process::exit(1);
             }
+        }
+    } else if args.explain_on_reject {
+        // Same-snapshot diagnosis: the variant hands back the exact
+        // pre-state the gates evaluated, and the explanation engine
+        // (pure, in-memory) runs against it - never a second read
+        // that could describe different state than the one that
+        // refused.
+        let (outcome, rejection_state) = propose_against_pg_with_rejection_state(
+            &pool,
+            transformation,
+            &transition,
+            &program.invariants,
+        )
+        .await
+        .context("propose_against_pg_with_rejection_state failed")?;
+        match (&outcome, rejection_state) {
+            (PgProposalOutcome::Rejected { reason }, Some(state)) => {
+                let explanation = explain(&program, &transition, &state);
+                print_json(&serde_json::json!({
+                    "status": "rejected",
+                    "reason": reason,
+                    "explanation": explanation,
+                }))?;
+                std::process::exit(1);
+            }
+            _ => print_json(&outcome)?,
         }
     } else {
         let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)

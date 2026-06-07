@@ -20,7 +20,7 @@ psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL=postgres:///morpholog_dev
 ```
 
-The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. For an existing database, the migrations under `crates/morpholog-core/sql/migrations/` apply in numeric order.
+The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. For an existing database, the migrations under `crates/morpholog-core/sql/migrations/` apply in numeric order. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
 
 Optional but recommended:
 

@@ -14,13 +14,15 @@
 //! an unknown transformation, a database failure - exit non-zero. A script
 //! that wants the gate uses `run`.
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
 use crate::commands::args::{CliArgs, decode_args};
-use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{
+    connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
+};
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same parse + validate front-end as `run`: a malformed programme
@@ -29,22 +31,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
     let validated = validate_or_exit(&program);
 
-    let transformation = program
-        .transformation(&args.transformation)
-        .ok_or_else(|| {
-            let available = program
-                .transformations
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!(
-                "transformation `{}` not found in `{}`. Available: {}",
-                args.transformation,
-                args.file.display(),
-                available
-            )
-        })?;
+    let transformation = lookup_transformation(&program, &args.transformation, &args.file)?;
 
     // Decode --args or --args-named via the same shared codec `run`
     // uses, so the two paths cannot drift on what is a valid input.
@@ -55,7 +42,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     };
     let eval_args = decode_args(&validated, transformation, &args.file, codec_input)?;
 
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let state = load_scoped_state(&pool, transformation, &program.invariants)
         .await
         .context("failed to load scoped pre-state")?;

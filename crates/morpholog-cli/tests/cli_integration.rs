@@ -1615,3 +1615,237 @@ async fn inspect_derived_validates_before_touching_the_database() {
         "stderr should name the undeclared predicate: {stderr}"
     );
 }
+
+// ============================================================
+// `init` - schema provisioning from the embedded schema
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn init_provisions_then_refuses_then_skips() {
+    // This test owns the whole schema lifecycle: drop it, provision it
+    // through the binary, prove the provisioned schema actually works,
+    // then pin both already-initialised behaviours. Safe in this
+    // serial suite - every other test only TRUNCATEs.
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+
+    let (status, stdout, stderr) = run_cli(&["init"]);
+    assert!(status.success(), "init should provision; stderr:\n{stderr}");
+    let v: Value = serde_json::from_str(&stdout).expect("init output is JSON");
+    assert_eq!(v["status"], "initialised");
+
+    // The provisioned schema is the real one: a governed commit works.
+    post_balanced_entry("entry_001", 100);
+
+    // Re-running refuses, with the remedy named.
+    let (status, _stdout, stderr) = run_cli(&["init"]);
+    assert!(!status.success(), "second init must refuse");
+    assert!(
+        stderr.contains("--skip-if-exists"),
+        "the refusal names the entrypoint escape hatch: {stderr}"
+    );
+
+    // The escape hatch: report and exit zero.
+    let (status, stdout, _stderr) = run_cli(&["init", "--skip-if-exists"]);
+    assert!(status.success(), "skip-if-exists exits zero");
+    let v: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["status"], "already-initialised");
+}
+
+// ============================================================
+// `run --explain-on-reject` - same-snapshot diagnosis
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
+    reset_db().await;
+    // Close the period, then propose into it with the flag: the
+    // rejection envelope carries the explanation computed against the
+    // exact pre-state the gate evaluated.
+    let (status, _o, _e) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success());
+
+    let (status, stdout, _stderr) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--explain-on-reject",
+        "--args",
+        r#"[
+            {"type":"subject","value":"entry_001"},
+            {"type":"subject","value":"2026-04-15"},
+            {"type":"subject","value":"q1_2026"},
+            {"type":"subject","value":"account_cash"},
+            {"type":"subject","value":"account_revenue"},
+            {"type":"decimal","value":"100"}
+        ]"#,
+    ]);
+    assert!(!status.success(), "rejection still exits one");
+    let v: Value = serde_json::from_str(&stdout).expect("envelope is JSON");
+    assert_eq!(v["status"], "rejected");
+    assert!(v["reason"].as_str().unwrap().contains("require"));
+    let explanation = serde_json::to_string(&v["explanation"]);
+    assert!(
+        explanation.unwrap().contains("PeriodClosed"),
+        "the explanation names the failed gate: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_explain_on_reject_leaves_committed_envelopes_unchanged() {
+    reset_db().await;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--explain-on-reject",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success(), "commit path unaffected; {stderr}");
+    let v: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["status"], "committed");
+    assert!(
+        v.get("explanation").is_none(),
+        "an admitted change carries no admissibility diagnosis: {stdout}"
+    );
+}
+
+// ============================================================
+// `inspect claims --named` - vocabulary-decoded reads
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_named_decodes_args_by_declared_field_name() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    let ledger = ledger_morph();
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalLine",
+        "--named",
+        &ledger,
+    ]);
+    assert!(status.success(), "named read should succeed; {stderr}");
+    let rows: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "two journal lines: {stdout}");
+    let debit = rows
+        .iter()
+        .find(|r| r["args"]["debit_amount"] == "100")
+        .expect("the debit line, decoded by field name");
+    assert_eq!(debit["predicate"], "JournalLine");
+    assert_eq!(debit["args"]["entry_id"], "entry_001");
+    assert_eq!(
+        debit["args"]["credit_amount"], "0",
+        "decimals stay strings - the named codec's exactness rule, mirrored"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    // A programme whose vocabulary does not declare the claims in the
+    // database: the named read refuses by name, never silently skips.
+    let mut other = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(
+        &mut other,
+        b"program other\npredicate Unrelated(x: Subject)\n",
+    )
+    .unwrap();
+    let (status, _stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--named",
+        other.path().to_str().unwrap(),
+    ]);
+    assert!(!status.success(), "skew must be a hard error");
+    assert!(
+        stderr.contains("not declared") && stderr.contains("skew"),
+        "the error names the condition: {stderr}"
+    );
+
+    // Same vocabulary, wrong arity: also skew, naming both arities.
+    let mut wrong_arity = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(
+        &mut wrong_arity,
+        b"program other\n\
+          predicate JournalEntry(entry_id: Subject, posting_date: Subject)\n\
+          predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)\n\
+          predicate PeriodClosed(period: Subject)\n\
+          predicate Supersedes(new_entry_id: Subject, prior_entry_id: Subject)\n\
+          predicate TrialBalanceRow(account: Subject, balance: Decimal)\n",
+    )
+    .unwrap();
+    let (status, _stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalEntry",
+        "--named",
+        wrong_arity.path().to_str().unwrap(),
+    ]);
+    assert!(!status.success(), "arity skew must be a hard error");
+    assert!(
+        stderr.contains("arity 3") && stderr.contains("arity 2"),
+        "the error names both arities: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_named_errors_on_undeclared_requested_predicate() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    // The bare read keeps claims-table-as-authority: an unknown
+    // requested predicate matches nothing and yields an empty result.
+    let (status, stdout, stderr) = run_cli(&["inspect", "claims", "--predicate", "JornalLine"]);
+    assert!(status.success(), "bare read tolerates the typo; {stderr}");
+    let rows: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(rows.as_array().unwrap().len(), 0, "typo matches nothing");
+
+    // With `--named`, the programme is the authority for the request
+    // too: the same typo is a hard error naming the declared
+    // vocabulary, raised before any database read.
+    let ledger = ledger_morph();
+    let (status, _stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JornalLine",
+        "--named",
+        &ledger,
+    ]);
+    assert!(
+        !status.success(),
+        "a typoed requested predicate must be a hard error under --named"
+    );
+    assert!(
+        stderr.contains("JornalLine") && stderr.contains("not declared"),
+        "the error names the typo: {stderr}"
+    );
+    assert!(
+        stderr.contains("JournalLine"),
+        "the error lists the declared vocabulary: {stderr}"
+    );
+}

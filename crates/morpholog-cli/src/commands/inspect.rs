@@ -2,13 +2,17 @@
 //! (claims, audit rows, pending outbox intents, derived-claim
 //! enumerations, declared predicate vocabulary).
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
+use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
     PgPool, list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
     list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
     resolve_transition_at_or_before,
 };
+use std::path::Path;
 use uuid::Uuid;
+
+use crate::commands::args::eval_value_to_bare_json;
 
 use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
 use crate::{AsOf, Inspect};
@@ -34,7 +38,35 @@ async fn resolve_as_of(pool: &PgPool, as_of: Option<AsOf>) -> anyhow::Result<Opt
 pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     match what {
         Inspect::Claims(args) => {
-            let pool = connect(&args.database_url).await?;
+            // With `--named`, the programme is the authority - so it is
+            // parsed and validated before any database work, and a
+            // requested `--predicate` the file does not declare is a
+            // hard error: the typo this mode exists to catch. (The bare
+            // read keeps the opposite contract: claims table as
+            // authority, an unknown predicate matches nothing.)
+            let named_program = match &args.named {
+                Some(file) => {
+                    let (program, _source, _name) = parse_or_exit(file)?;
+                    validate_or_exit(&program);
+                    for requested in &args.predicate {
+                        if !program
+                            .predicates
+                            .iter()
+                            .any(|d| d.name.as_str() == requested.as_str())
+                        {
+                            bail!(
+                                "requested predicate `{requested}` is not declared in `{}`; \
+                                 declared: {}",
+                                file.display(),
+                                declared_predicates(&program),
+                            );
+                        }
+                    }
+                    Some((program, file))
+                }
+                None => None,
+            };
+            let pool = connect(&args.db.database_url).await?;
             let as_of = resolve_as_of(&pool, args.as_of).await?;
             // Four paths, one rule: `--as-of` picks current-vs-replay,
             // `--predicate` picks full-vs-scoped. The scoped replay
@@ -52,7 +84,10 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                     .await
                     .context("list_claims_for_predicates failed")?,
             };
-            print_json(&claims)
+            match named_program {
+                Some((program, file)) => print_json(&decode_claims_named(&program, file, &claims)?),
+                None => print_json(&claims),
+            }
         }
         Inspect::Audit(args) => {
             let pool = connect(&args.database_url).await?;
@@ -62,7 +97,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             print_json(&rows)
         }
         Inspect::Outbox(args) => {
-            let pool = connect(&args.database_url).await?;
+            let pool = connect(&args.db.database_url).await?;
             let rows =
                 list_outbox_rows(&pool, args.status.db_filter(), args.intent_type.as_deref())
                     .await
@@ -73,6 +108,71 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         Inspect::Predicates(args) => inspect_predicates(args),
         Inspect::Guarantees(args) => inspect_guarantees(args),
     }
+}
+
+/// The declared predicate names of a programme, comma-joined for the
+/// hard-error messages that list what the file does declare.
+fn declared_predicates(program: &morpholog_core::Program) -> String {
+    program
+        .predicates
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Decode positional, tagged claims into bare named objects using the
+/// declared vocabulary of the already-parsed programme - the
+/// read-side mirror of `--args-named`. With `--named`, the programme
+/// is the authority: an undeclared predicate or an arity mismatch is
+/// programme/database skew and a hard error naming both sides, never
+/// a silent skip. (The bare read keeps the opposite contract - claims
+/// table as authority - which is why decoding requires the file.)
+fn decode_claims_named(
+    program: &morpholog_core::Program,
+    file: &Path,
+    claims: &[ClaimInstance],
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    // The vocabulary is static for the whole invocation; index it once
+    // rather than scanning the declarations per returned claim.
+    let decls: std::collections::HashMap<&str, &morpholog_core::PredicateDecl> = program
+        .predicates
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
+    let mut rows = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let Some(decl) = decls.get(claim.predicate.as_str()) else {
+            bail!(
+                "claim predicate `{}` is not declared in `{}` \
+                 (programme/database skew); declared: {}",
+                claim.predicate,
+                file.display(),
+                declared_predicates(program),
+            );
+        };
+        if decl.args.len() != claim.args.len() {
+            bail!(
+                "claim `{}` has arity {} but `{}` declares arity {} \
+                 (programme/database skew)",
+                claim.predicate,
+                claim.args.len(),
+                file.display(),
+                decl.args.len(),
+            );
+        }
+        let fields: serde_json::Map<String, serde_json::Value> = decl
+            .args
+            .iter()
+            .zip(claim.args.iter())
+            .map(|(arg, value)| (arg.name.clone(), eval_value_to_bare_json(value)))
+            .collect();
+        rows.push(serde_json::json!({
+            "predicate": claim.predicate,
+            "args": fields,
+        }));
+    }
+    Ok(rows)
 }
 
 /// Run the `inspect derived` subcommand end-to-end: look up the named
@@ -108,7 +208,7 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
         }
     })?;
 
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let rows = match resolve_as_of(&pool, args.as_of).await? {
         Some(tid) => list_derived_at(&pool, derived, tid)
             .await

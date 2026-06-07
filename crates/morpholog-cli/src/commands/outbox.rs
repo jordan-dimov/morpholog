@@ -51,7 +51,7 @@ pub(crate) async fn claim(args: OutboxClaimArgs) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| Uuid::now_v7().to_string());
     let lease = Duration::from_secs(args.lease_seconds);
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let row = claim_pending_outbox_row(&pool, &worker_id, &args.intent_type, lease, Utc::now())
         .await
         .context("claim_pending_outbox_row failed")?;
@@ -99,7 +99,7 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
         return Err(anyhow!("--reason is only meaningful with --outcome failed"));
     }
 
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let update = match args.outcome {
         OutboxCompleteOutcome::Delivered => {
             mark_outbox_delivered(&pool, args.intent_id, &args.worker_id)
@@ -139,7 +139,7 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
 /// graceful shutdown of an external deliverer that has in-flight
 /// claims it can no longer service.
 pub(crate) async fn release(args: OutboxReleaseArgs) -> anyhow::Result<()> {
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let update = release_outbox_claim(&pool, args.intent_id, &args.worker_id)
         .await
         .context("release_outbox_claim failed")?;

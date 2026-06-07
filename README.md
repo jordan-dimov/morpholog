@@ -30,7 +30,7 @@ The worked examples below answer concrete instances of these against a real Post
 - **Atomic commit or full rollback.** A change either lands every part of itself - records, audit row, outbound notifications - or none of them. PostgreSQL's `SERIALIZABLE` isolation does the work.
 - **Reports computed by the same rules they're governed by.** A trial balance, an exposure summary, an account balance - declared alongside the rules, computed by the same kernel. A report cannot show a record an invariant would have refused.
 - **Notifications that respect the commit boundary.** Outbound side effects stage at commit and deliver afterward through a worker. They never run inside the transaction; they never run if the commit rolled back.
-- **Arbitrary-precision decimals.** No floating-point drift. Adds, subtracts, sums - all exact.
+- **Exact numbers, exact time.** Arbitrary-precision decimals with no floating-point drift; instants and durations that shift, difference, and sum exactly. Money and minutes - the two things business arguments are made of - never approximate.
 
 ## How it works
 
@@ -72,9 +72,12 @@ One-time setup (PostgreSQL 17+):
 
 ```bash
 createdb my_books
-psql my_books -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL=postgres:///my_books
+morpholog init
 ```
+
+`init` provisions Morpholog's schema from a copy embedded in the binary - a
+deployment carries exactly the schema its build expects, nothing to vendor.
 
 Post a journal entry - debit $100 to cash, credit $100 to revenue:
 
@@ -136,13 +139,17 @@ New to Morpholog? [The developer introduction](docs/developer-intro.md) is the g
 
 ## Status
 
-Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples are all working and tested. Every committed transition records its actor. Writes scale linearly (~1.6s per commit at 100,000-entry scale); as-of replay also linear (~1.5s for 100,000 transitions). Predicate-scoped loading on both read and write paths means a transformation only loads claims it actually consults.
+Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and worked examples are all working and tested. Every committed transition records its actor. A governed commit is ~9ms end to end at worked-example scale (measured by `scripts/embedder_latency.sh`), and writes scale linearly from there (~1.6s per commit with 100,000 in-scope claims, from the `morpholog-bench` write scenario); as-of replay is also linear (~1.5s through 100,000 transitions). Predicate-scoped loading on both read and write paths means a transformation only loads claims it actually consults.
 
 The `.morph` parser arc is complete: every worked example parses end-to-end as `.morph` source. The formatter and parser are coupled by a round-trip property test. Diagnostics surface through `ariadne` with source spans.
 
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
-The legibility tooling has begun: `morpholog inspect guarantees` names what a model makes impossible, and `morpholog explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap. What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; predicate-pattern matching for higher-order authority; materialised derived claims; the rest of the legibility set (transformation graphs, mechanically-derived exclusion matrices). Each lands when a worked example forces the shape.
+The legibility tooling has begun: `morpholog inspect guarantees` names what a model makes impossible, `morpholog explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap, and `morpholog verify` replays the audit log against the claims table and names any divergence between the two records of history.
+
+The integration surface is a pinned contract ([`docs/embedder-integration.md`](docs/embedder-integration.md)): JSON-Schema contracts for every transformation and intent, named-argument codecs in both directions, schema provisioning from the binary, a canonical hash that identifies the rules in force, and rejections that carry their own explanation. It is already exercised end to end by an external embedder - an open-source energy-trading system driving a governed trade lifecycle through it.
+
+What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; a hash-chained (tamper-evident) audit log; predicate-pattern matching for higher-order authority; materialised derived claims; the rest of the legibility set (transformation graphs, mechanically-derived exclusion matrices). Each lands when a worked example forces the shape.
 
 ## Common questions
 

@@ -136,6 +136,30 @@ pub async fn propose_against_pg(
     transition: &Transition,
     invariants: &[Invariant],
 ) -> Result<PgProposalOutcome, PgError> {
+    // The rejection-state variant is the primitive: it is this function
+    // plus a free hand-off (the scoped state is moved, never cloned,
+    // and only on rejection), so the SERIALIZABLE-setup ritual lives
+    // in one fewer place.
+    let (outcome, _) =
+        propose_against_pg_with_rejection_state(pool, transformation, transition, invariants)
+            .await?;
+    Ok(outcome)
+}
+
+/// [`propose_against_pg`], additionally returning the scoped
+/// pre-state the kernel evaluated - but only when the outcome is a
+/// rejection, because that state is exactly what a same-snapshot
+/// explanation must describe. A run-then-explain pair reads two
+/// snapshots, and the second can differ from the one that refused;
+/// handing back the rejecting state closes that gap without a second
+/// read. `None` on commit: an admitted change needs no admissibility
+/// diagnosis, and the happy path stays free of the hand-off.
+pub async fn propose_against_pg_with_rejection_state(
+    pool: &PgPool,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+) -> Result<(PgProposalOutcome, Option<State>), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *tx)
@@ -145,7 +169,9 @@ pub async fn propose_against_pg(
     let scope = compute_load_scope(transformation, invariants);
     let state = load_state(&mut tx, &scope).await?;
     let outcome = propose(transformation, transition, &state, invariants)?;
-    finalise_outcome(tx, transformation, transition, invariants, outcome).await
+    let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
+    let pg_outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+    Ok((pg_outcome, rejection_state))
 }
 
 /// Three-way outcome returned by [`propose_against_pg_with_trace`].
@@ -1621,6 +1647,49 @@ pub async fn list_claims_at_for_predicates(
 ) -> Result<Vec<ClaimInstance>, PgError> {
     let state = reconstruct_state_at_for_predicates(pool, transition_id, predicates).await?;
     Ok(state.claims().to_vec())
+}
+
+/// The canonical Morpholog schema, compiled into this crate. The same
+/// file a repo checkout applies with `psql -f`; embedding it means a
+/// binary-only deployment provisions exactly the schema this build
+/// expects - nothing to vendor, nothing to drift.
+pub const SCHEMA_SQL: &str = include_str!("../../morpholog-core/sql/schema.sql");
+
+/// Outcome of [`initialise_schema`]: provisioned now, or found already
+/// provisioned (the caller decides whether that is fine or an error).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitOutcome {
+    Initialised,
+    AlreadyInitialised,
+}
+
+/// Provision the `morpholog` schema in an existing database from the
+/// embedded [`SCHEMA_SQL`]. Day-zero only: if the schema already
+/// exists this returns [`InitOutcome::AlreadyInitialised`] without
+/// touching anything - it never drops and never migrates. Schema
+/// *evolution* is the deferred migrations story, not this function.
+///
+/// Provisioning is atomic: the existence check and the whole schema
+/// script run in one transaction (the script is plain DDL, which
+/// PostgreSQL rolls back like any other statement), so a mid-script
+/// failure leaves nothing behind - in particular, no partial schema
+/// the existence guard would later misread as already-initialised.
+pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM pg_namespace WHERE nspname = 'morpholog'")
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(classify)?;
+    if exists.is_some() {
+        return Ok(InitOutcome::AlreadyInitialised);
+    }
+    sqlx::raw_sql(SCHEMA_SQL)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+    tx.commit().await.map_err(classify)?;
+    Ok(InitOutcome::Initialised)
 }
 
 /// Resolve a wall-clock instant to the last transition committed at or
