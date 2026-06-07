@@ -159,7 +159,7 @@ The cost of this discipline is that the parser does real translation work (infix
 **What this rules out:**
 
 - A surface form that maps to no IR construct (would be a fictitious operator).
-- A surface form that adds an interpretation the kernel does not have (e.g., calendar arithmetic like `@2026-05-22 + 30d` - the kernel compares civil dates but does not add to them, so the form stays out of the surface until a worked example forces the kernel to grow it. This discipline has already run one full cycle: instant-and-duration arithmetic stayed out until the laytime example forced it, and then kernel and surface grew it together).
+- A surface form that adds an interpretation the kernel does not have (e.g., calendar arithmetic like `@2026-05-22 + 30d` - the kernel compares civil dates but does not add to them, so the form stays out of the surface until a worked example forces the kernel to grow it. This discipline has already run full cycles: instant-and-duration arithmetic, and then unit-tagged quantities, each stayed out until a laytime stage forced it - and then kernel and surface grew together).
 - A surface escape hatch like `unsafe_block { ... }` or `evaluate_in_rust(...)`.
 
 **What this leaves room for:**

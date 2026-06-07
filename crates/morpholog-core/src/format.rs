@@ -121,7 +121,7 @@ pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
     let args: Vec<String> = decl
         .args
         .iter()
-        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(&a.kind)))
+        .map(|a| format!("{}: {}", a.name, a.kind))
         .collect();
     format!("predicate {}({})\n", decl.name, args.join(", "))
 }
@@ -132,16 +132,9 @@ pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
     let args: Vec<String> = decl
         .args
         .iter()
-        .map(|a| format!("{}: {}", a.name, format_predicate_arg_kind(&a.kind)))
+        .map(|a| format!("{}: {}", a.name, a.kind))
         .collect();
     format!("intent {}({})\n", decl.name, args.join(", "))
-}
-
-/// The declaration syntax IS the diagnostic syntax: one `Display`
-/// impl on [`PredicateArgKind`] serves both, so the unit always
-/// renders (`Decimal[USD]`) and the two surfaces cannot drift.
-fn format_predicate_arg_kind(k: &PredicateArgKind) -> String {
-    k.to_string()
 }
 
 pub fn format_invariant(inv: &Invariant) -> String {
@@ -554,9 +547,11 @@ mod tests {
         );
     }
 
-    /// Every `PredicateArgKind` variant has a stable display name. The
-    /// exhaustive match means a future variant must extend
-    /// `format_predicate_arg_kind`.
+    /// Every `PredicateArgKind` variant has a stable display name via
+    /// the `Display` impl the formatter and the validation errors
+    /// share - the declaration syntax IS the diagnostic syntax, so the
+    /// unit always renders (`Decimal[USD]`) and the surfaces cannot
+    /// drift. The exhaustive impl means a future variant must extend it.
     #[test]
     fn format_predicate_arg_kind_renders_each_variant() {
         for (kind, expected) in [
@@ -567,7 +562,7 @@ mod tests {
             (PredicateArgKind::Collection, "Collection"),
             (PredicateArgKind::Any, "Any"),
         ] {
-            assert_eq!(format_predicate_arg_kind(&kind), expected);
+            assert_eq!(kind.to_string(), expected);
         }
     }
 

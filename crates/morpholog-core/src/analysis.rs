@@ -796,9 +796,9 @@ impl<'a> ParamCollector<'a> {
                 self.walk_value(right, r_exp);
             }
             ValueExpr::Sum { value, body } => {
-                // The summed term is decimal or duration; its kind is
-                // observed from its claim position inside the body, so
-                // the aggregate itself pins nothing.
+                // The summed term is decimal, duration, or quantity;
+                // its kind is observed from its claim position inside
+                // the body, so the aggregate itself pins nothing.
                 let _ = value;
                 self.walk_prop(body);
             }

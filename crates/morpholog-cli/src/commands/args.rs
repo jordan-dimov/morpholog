@@ -172,7 +172,9 @@ fn decode_value(
              kind is observed. {schema_hint}"
         ),
         ParamKind::Ambiguous(observed) => {
-            let names: Vec<String> = observed.iter().map(kind_label).collect();
+            // Kind names render via the shared `Display` impl, so the
+            // unit always appears (`Decimal[USD]`).
+            let names: Vec<String> = observed.iter().map(ToString::to_string).collect();
             bail!(
                 "parameter `{param}` is Ambiguous ({}); --args-named cannot choose a branch \
                  safely. Use --args with the tagged EvalValue codec, or refactor the model \
@@ -358,20 +360,6 @@ fn describe_value(raw: &Value) -> &'static str {
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "object",
-    }
-}
-
-fn kind_label(kind: &PredicateArgKind) -> String {
-    match kind {
-        PredicateArgKind::Subject => "Subject".to_string(),
-        PredicateArgKind::Decimal => "Decimal".to_string(),
-        PredicateArgKind::Date => "Date".to_string(),
-        PredicateArgKind::Timestamp => "Timestamp".to_string(),
-        PredicateArgKind::Duration => "Duration".to_string(),
-        PredicateArgKind::Bool => "Bool".to_string(),
-        PredicateArgKind::Collection => "Collection".to_string(),
-        PredicateArgKind::Quantity(u) => format!("Decimal[{u}]"),
-        PredicateArgKind::Any => "Any".to_string(),
     }
 }
 

@@ -282,8 +282,10 @@ pub enum ValueExpr {
     /// [`CompareOp`]. Operand kinds follow the rule matrix
     /// (`arith_result_kind`): decimals support every operator;
     /// instants shift by durations (`Add`/`Sub`) and difference into
-    /// durations (`Sub`); durations add, subtract, and cap
-    /// (`Min`/`Max`); `Mul`/`Div`/`Mod` stay decimal-only. A pair with
+    /// durations (`Sub`); durations add, subtract, cap (`Min`/`Max`),
+    /// and divide into a dimensionless ratio; same-unit quantities
+    /// add, subtract, cap, and ratio, with a bare decimal scaling
+    /// them (`Mul`/`Div`); `Mod` stays decimal-only. A pair with
     /// no rule is `NoArithRule` at validation and `TypeMismatch` at
     /// evaluation. `Div` and `Mod` surface
     /// [`crate::EvalError::DivisionByZero`] on a zero divisor; the

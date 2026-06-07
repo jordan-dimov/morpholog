@@ -224,14 +224,14 @@ pub enum Token {
     Eq,
     /// `!=` (Neq).
     Neq,
-    /// `<=`, decimal-only; lowers to `Prop::Compare` (`Le`, `Decimal`).
+    /// `<=`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Le`, `Decimal`).
     /// (`on_or_before` is the civil-date surface for the same operator.)
     Le,
-    /// `<`, decimal-only; lowers to `Prop::Compare` (`Lt`, `Decimal`).
+    /// `<`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Lt`, `Decimal`).
     Lt,
-    /// `>=`, decimal-only; lowers to `Prop::Compare` (`Ge`, `Decimal`).
+    /// `>=`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Ge`, `Decimal`).
     Ge,
-    /// `>`, decimal-only; lowers to `Prop::Compare` (`Gt`, `Decimal`).
+    /// `>`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Gt`, `Decimal`).
     Gt,
     /// `+` (Add).
     Plus,
