@@ -1654,3 +1654,74 @@ async fn init_provisions_then_refuses_then_skips() {
     let v: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(v["status"], "already-initialised");
 }
+
+// ============================================================
+// `run --explain-on-reject` - same-snapshot diagnosis
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
+    reset_db().await;
+    // Close the period, then propose into it with the flag: the
+    // rejection envelope carries the explanation computed against the
+    // exact pre-state the gate evaluated.
+    let (status, _o, _e) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success());
+
+    let (status, stdout, _stderr) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--explain-on-reject",
+        "--args",
+        r#"[
+            {"type":"subject","value":"entry_001"},
+            {"type":"subject","value":"2026-04-15"},
+            {"type":"subject","value":"q1_2026"},
+            {"type":"subject","value":"account_cash"},
+            {"type":"subject","value":"account_revenue"},
+            {"type":"decimal","value":"100"}
+        ]"#,
+    ]);
+    assert!(!status.success(), "rejection still exits one");
+    let v: Value = serde_json::from_str(&stdout).expect("envelope is JSON");
+    assert_eq!(v["status"], "rejected");
+    assert!(v["reason"].as_str().unwrap().contains("require"));
+    let explanation = serde_json::to_string(&v["explanation"]);
+    assert!(
+        explanation.unwrap().contains("PeriodClosed"),
+        "the explanation names the failed gate: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_explain_on_reject_leaves_committed_envelopes_unchanged() {
+    reset_db().await;
+    let (status, stdout, stderr) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--explain-on-reject",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success(), "commit path unaffected; {stderr}");
+    let v: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["status"], "committed");
+    assert!(
+        v.get("explanation").is_none(),
+        "an admitted change carries no admissibility diagnosis: {stdout}"
+    );
+}

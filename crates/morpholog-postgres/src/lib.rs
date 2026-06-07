@@ -148,6 +148,34 @@ pub async fn propose_against_pg(
     finalise_outcome(tx, transformation, transition, invariants, outcome).await
 }
 
+/// [`propose_against_pg`], additionally returning the scoped
+/// pre-state the kernel evaluated - but only when the outcome is a
+/// rejection, because that state is exactly what a same-snapshot
+/// explanation must describe. A run-then-explain pair reads two
+/// snapshots, and the second can differ from the one that refused;
+/// handing back the rejecting state closes that gap without a second
+/// read. `None` on commit: an admitted change needs no admissibility
+/// diagnosis, and the happy path stays free of the hand-off.
+pub async fn propose_against_pg_with_rejection_state(
+    pool: &PgPool,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+) -> Result<(PgProposalOutcome, Option<State>), PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+
+    let scope = compute_load_scope(transformation, invariants);
+    let state = load_state(&mut tx, &scope).await?;
+    let outcome = propose(transformation, transition, &state, invariants)?;
+    let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
+    let pg_outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+    Ok((pg_outcome, rejection_state))
+}
+
 /// Three-way outcome returned by [`propose_against_pg_with_trace`].
 /// Distinguishes kernel-side outcomes (success, lawful rejection,
 /// kernel error) from PG-layer errors that flow through

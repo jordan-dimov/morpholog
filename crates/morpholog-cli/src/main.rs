@@ -557,8 +557,16 @@ pub(crate) struct RunArgs {
 
     /// When set, emit a structured per-statement trace alongside the
     /// outcome - the kernel's `propose_with_trace` shape on the wire.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "explain_on_reject")]
     pub(crate) trace: bool,
+
+    /// When set, a business rejection carries an `explanation` field:
+    /// the same structured account `explain --json` produces, computed
+    /// against the exact pre-state the gates evaluated - one snapshot,
+    /// not a run-then-explain pair that can describe different states.
+    /// Committed outcomes are unchanged; exit codes are unchanged.
+    #[arg(long, conflicts_with = "trace")]
+    pub(crate) explain_on_reject: bool,
 }
 
 /// Arguments for `explain`. The same source/transformation/args/actor

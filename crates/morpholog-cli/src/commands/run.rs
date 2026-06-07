@@ -9,9 +9,10 @@
 //! path, without forking the CLI or compiling Rust.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{Subject, Transition};
+use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::{
-    PgProposalOutcome, PgTracedOutcome, propose_against_pg, propose_against_pg_with_trace,
+    PgProposalOutcome, PgTracedOutcome, propose_against_pg,
+    propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 
 use crate::RunArgs;
@@ -93,6 +94,32 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
                 }))?;
                 std::process::exit(1);
             }
+        }
+    } else if args.explain_on_reject {
+        // Same-snapshot diagnosis: the variant hands back the exact
+        // pre-state the gates evaluated, and the explanation engine
+        // (pure, in-memory) runs against it - never a second read
+        // that could describe different state than the one that
+        // refused.
+        let (outcome, rejection_state) = propose_against_pg_with_rejection_state(
+            &pool,
+            transformation,
+            &transition,
+            &program.invariants,
+        )
+        .await
+        .context("propose_against_pg_with_rejection_state failed")?;
+        match (&outcome, rejection_state) {
+            (PgProposalOutcome::Rejected { reason }, Some(state)) => {
+                let explanation = explain(&program, &transition, &state);
+                print_json(&serde_json::json!({
+                    "status": "rejected",
+                    "reason": reason,
+                    "explanation": explanation,
+                }))?;
+                std::process::exit(1);
+            }
+            _ => print_json(&outcome)?,
         }
     } else {
         let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
