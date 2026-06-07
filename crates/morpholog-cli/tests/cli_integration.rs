@@ -1813,6 +1813,84 @@ async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
+    reset_db().await;
+
+    // A minimal unit-tagged model: settlements in USD.
+    let mut model = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(
+        &mut model,
+        b"program quantities\n\
+          predicate Settled(settlement: Subject, amount: Decimal[USD])\n\
+          transformation settle(settlement, amount):\n    \
+              admit Settled(settlement, amount)\n",
+    )
+    .unwrap();
+    let path = model.path().to_str().unwrap();
+
+    // The schema carries the unit as the machine-readable extension
+    // AND in the human-readable description (form generators ignore
+    // custom extensions), while the wire shape stays the bare decimal
+    // pattern - the declaration is the single source of truth.
+    // `schema` is static (no database flag), so it bypasses run_cli.
+    let output = Command::new(morpholog_bin())
+        .args(["schema", path, "settle"])
+        .output()
+        .expect("spawn morpholog binary");
+    let (status, stdout, stderr) = (
+        output.status,
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    );
+    assert!(status.success(), "schema failed: {stderr}");
+    let schema: Value = serde_json::from_str(&stdout).unwrap();
+    let amount = &schema["properties"]["amount"];
+    assert_eq!(amount["x-morpholog-unit"], "USD");
+    assert_eq!(amount["type"], "string");
+    assert!(
+        amount["description"].as_str().unwrap().contains("USD"),
+        "unit in description: {amount}"
+    );
+
+    // Named codec in: the bare amount, no unit on the wire.
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path,
+        "settle",
+        "--actor",
+        "ops",
+        "--args-named",
+        r#"{"settlement":"s1","amount":"137500.00"}"#,
+    ]);
+    assert!(status.success(), "named-codec run failed: {stderr}");
+
+    // Named read out: the same bare amount, decoded by field name.
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "Settled",
+        "--named",
+        path,
+    ]);
+    assert!(status.success(), "named read failed: {stderr}");
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["args"]["amount"], "137500.00", "{stdout}");
+
+    // Tagged codec in: self-describing, the unit rides the value.
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        path,
+        "settle",
+        "--actor",
+        "ops",
+        "--args",
+        r#"[{"type":"subject","value":"s2"},{"type":"quantity","value":{"amount":"1","unit":"USD"}}]"#,
+    ]);
+    assert!(status.success(), "tagged-codec run failed: {stderr}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inspect_claims_named_errors_on_undeclared_requested_predicate() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);

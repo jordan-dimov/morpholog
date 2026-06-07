@@ -517,7 +517,8 @@ pub(crate) struct RunArgs {
     /// JSON array of arguments matching the transformation's parameter
     /// list. Each element is an `EvalValue` in the tagged form:
     /// `{"type":"subject","value":"..."}`, `{"type":"decimal",
-    /// "value":"100"}`, `{"type":"bool","value":true}`, or
+    /// "value":"100"}`, `{"type":"quantity","value":{"amount":"100",
+    /// "unit":"USD"}}`, `{"type":"bool","value":true}`, or
     /// `{"type":"collection","value":[...]}`. The implementer-facing
     /// codec; carries Polymorphic / Ambiguous / Collection inputs the
     /// schema cannot describe unambiguously.
