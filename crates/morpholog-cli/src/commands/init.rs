@@ -13,7 +13,7 @@ use crate::InitArgs;
 use crate::commands::{connect, print_json};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     match initialise_schema(&pool)
         .await
         .context("initialise_schema failed")?

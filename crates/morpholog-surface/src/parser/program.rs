@@ -83,76 +83,37 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     // context; invariant- and transformation-name duplication
     // are not validated kernel-side at all, so the parser is the
     // only place they get caught.
-    let mut pred_by_name: HashMap<&str, &Span> = HashMap::new();
-    for (decl, span) in &raw.predicates {
-        if let Some(first_span) = pred_by_name.get(decl.name.as_str()) {
-            diagnostics.push(
-                Diagnostic::error(
-                    format!("duplicate predicate declaration `{}`", decl.name),
-                    span.clone(),
-                )
-                .with_secondary((*first_span).clone(), "previously declared here"),
-            );
-        } else {
-            pred_by_name.insert(decl.name.as_str(), span);
-        }
-    }
-    let mut intent_by_name: HashMap<&str, &Span> = HashMap::new();
-    for (decl, span) in &raw.intents {
-        if let Some(first_span) = intent_by_name.get(decl.name.as_str()) {
-            diagnostics.push(
-                Diagnostic::error(
-                    format!("duplicate intent declaration `{}`", decl.name),
-                    span.clone(),
-                )
-                .with_secondary((*first_span).clone(), "previously declared here"),
-            );
-        } else {
-            intent_by_name.insert(decl.name.as_str(), span);
-        }
-    }
-    let mut inv_by_name: HashMap<&str, &Span> = HashMap::new();
-    for (inv, span) in &raw.invariants {
-        if let Some(first_span) = inv_by_name.get(inv.name.as_str()) {
-            diagnostics.push(
-                Diagnostic::error(
-                    format!("duplicate invariant declaration `{}`", inv.name),
-                    span.clone(),
-                )
-                .with_secondary((*first_span).clone(), "previously declared here"),
-            );
-        } else {
-            inv_by_name.insert(inv.name.as_str(), span);
-        }
-    }
-    let mut txn_by_name: HashMap<&str, &Span> = HashMap::new();
-    for (txn, span) in &raw.transformations {
-        if let Some(first_span) = txn_by_name.get(txn.name.as_str()) {
-            diagnostics.push(
-                Diagnostic::error(
-                    format!("duplicate transformation declaration `{}`", txn.name),
-                    span.clone(),
-                )
-                .with_secondary((*first_span).clone(), "previously declared here"),
-            );
-        } else {
-            txn_by_name.insert(txn.name.as_str(), span);
-        }
-    }
-    let mut derived_by_name: HashMap<&str, &Span> = HashMap::new();
-    for (d, span) in &raw.derived_claims {
-        if let Some(first_span) = derived_by_name.get(d.predicate.as_str()) {
-            diagnostics.push(
-                Diagnostic::error(
-                    format!("duplicate derived-claim declaration `{}`", d.predicate),
-                    span.clone(),
-                )
-                .with_secondary((*first_span).clone(), "previously declared here"),
-            );
-        } else {
-            derived_by_name.insert(d.predicate.as_str(), span);
-        }
+    report_duplicates(
+        &mut diagnostics,
+        "predicate",
+        raw.predicates.iter().map(|(d, s)| (d.name.as_str(), s)),
+    );
+    report_duplicates(
+        &mut diagnostics,
+        "intent",
+        raw.intents.iter().map(|(d, s)| (d.name.as_str(), s)),
+    );
+    report_duplicates(
+        &mut diagnostics,
+        "invariant",
+        raw.invariants.iter().map(|(i, s)| (i.name.as_str(), s)),
+    );
+    report_duplicates(
+        &mut diagnostics,
+        "transformation",
+        raw.transformations
+            .iter()
+            .map(|(t, s)| (t.name.as_str(), s)),
+    );
+    report_duplicates(
+        &mut diagnostics,
+        "derived-claim",
+        raw.derived_claims
+            .iter()
+            .map(|(d, s)| (d.predicate.as_str(), s)),
+    );
 
+    for (d, span) in &raw.derived_claims {
         // Duplicate key names inside a single derived declaration.
         // The IR's `keys` (a `Vec<Var>`) is positional; two same-named
         // keys would shadow each other in the binding context and
@@ -199,6 +160,31 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
     })
+}
+
+/// Report every name declared more than once in `items`: the
+/// diagnostic points at the repeat, the secondary at the first
+/// declaration. One shape serves every declaration kind; only the
+/// noun differs.
+fn report_duplicates<'a>(
+    diagnostics: &mut Vec<Diagnostic>,
+    what: &str,
+    items: impl Iterator<Item = (&'a str, &'a Span)>,
+) {
+    let mut by_name: HashMap<&str, &Span> = HashMap::new();
+    for (name, span) in items {
+        if let Some(first_span) = by_name.get(name) {
+            diagnostics.push(
+                Diagnostic::error(
+                    format!("duplicate {what} declaration `{name}`"),
+                    span.clone(),
+                )
+                .with_secondary((*first_span).clone(), "previously declared here"),
+            );
+        } else {
+            by_name.insert(name, span);
+        }
+    }
 }
 
 /// Intermediate parse result. Carries spans alongside the parsed

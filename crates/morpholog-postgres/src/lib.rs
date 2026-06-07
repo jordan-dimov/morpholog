@@ -136,16 +136,14 @@ pub async fn propose_against_pg(
     transition: &Transition,
     invariants: &[Invariant],
 ) -> Result<PgProposalOutcome, PgError> {
-    let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
-
-    let scope = compute_load_scope(transformation, invariants);
-    let state = load_state(&mut tx, &scope).await?;
-    let outcome = propose(transformation, transition, &state, invariants)?;
-    finalise_outcome(tx, transformation, transition, invariants, outcome).await
+    // The rejection-state variant is the primitive: it is this function
+    // plus a free hand-off (the scoped state is moved, never cloned,
+    // and only on rejection), so the SERIALIZABLE-setup ritual lives
+    // in one fewer place.
+    let (outcome, _) =
+        propose_against_pg_with_rejection_state(pool, transformation, transition, invariants)
+            .await?;
+    Ok(outcome)
 }
 
 /// [`propose_against_pg`], additionally returning the scoped

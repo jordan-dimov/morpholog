@@ -11,8 +11,8 @@
 //! Shared helpers used across handlers (`connect`, `print_json`) live at
 //! the bottom of this file.
 
-use anyhow::Context;
-use morpholog_core::{Program, ValidatedProgram};
+use anyhow::{Context, anyhow};
+use morpholog_core::{Program, Transformation, ValidatedProgram};
 use morpholog_postgres::PgPool;
 use morpholog_surface::parse_program;
 use serde::Serialize;
@@ -77,6 +77,29 @@ pub(crate) fn validate_or_exit(program: &Program) -> ValidatedProgram<'_> {
             std::process::exit(1);
         }
     }
+}
+
+/// Resolve a transformation by name against a parsed programme, the
+/// not-found error naming every transformation the file does declare.
+/// Shared by `run` and `explain` so the lookup error (and any future
+/// "did you mean?" refinement) cannot drift between them.
+pub(crate) fn lookup_transformation<'a>(
+    program: &'a Program,
+    name: &str,
+    file: &Path,
+) -> anyhow::Result<&'a Transformation> {
+    program.transformation(name).ok_or_else(|| {
+        let available = program
+            .transformations
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow!(
+            "transformation `{name}` not found in `{}`. Available: {available}",
+            file.display(),
+        )
+    })
 }
 
 /// Open a PostgreSQL connection pool. Shared by every subcommand that

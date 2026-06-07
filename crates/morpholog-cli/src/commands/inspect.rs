@@ -38,7 +38,7 @@ async fn resolve_as_of(pool: &PgPool, as_of: Option<AsOf>) -> anyhow::Result<Opt
 pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     match what {
         Inspect::Claims(args) => {
-            let pool = connect(&args.database_url).await?;
+            let pool = connect(&args.db.database_url).await?;
             let as_of = resolve_as_of(&pool, args.as_of).await?;
             // Four paths, one rule: `--as-of` picks current-vs-replay,
             // `--predicate` picks full-vs-scoped. The scoped replay
@@ -69,7 +69,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             print_json(&rows)
         }
         Inspect::Outbox(args) => {
-            let pool = connect(&args.database_url).await?;
+            let pool = connect(&args.db.database_url).await?;
             let rows =
                 list_outbox_rows(&pool, args.status.db_filter(), args.intent_type.as_deref())
                     .await
@@ -173,7 +173,7 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
         }
     })?;
 
-    let pool = connect(&args.database_url).await?;
+    let pool = connect(&args.db.database_url).await?;
     let rows = match resolve_as_of(&pool, args.as_of).await? {
         Some(tid) => list_derived_at(&pool, derived, tid)
             .await

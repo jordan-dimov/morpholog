@@ -128,30 +128,31 @@ enum Command {
     /// outcome as JSON; consistent exits zero, divergent prints the
     /// claims each record holds that the other does not and exits one.
     /// Read-only; an empty database is trivially consistent.
-    Verify(VerifyArgs),
+    Verify(DatabaseArgs),
+}
+
+/// The connection-string flag every database-backed subcommand
+/// shares, declared once and `#[command(flatten)]`ed in. Subcommands
+/// whose only input is the connection take this struct directly.
+#[derive(clap::Args, Debug)]
+pub(crate) struct DatabaseArgs {
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: String,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent
 /// entrypoint escape hatch.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InitArgs {
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 
     /// Exit zero with an `already-initialised` report when the
     /// `morpholog` schema already exists, instead of erroring. For
     /// deployment entrypoints that may run more than once.
     #[arg(long)]
     pub(crate) skip_if_exists: bool,
-}
-
-/// Arguments for `verify`: just the connection string.
-#[derive(clap::Args, Debug)]
-pub(crate) struct VerifyArgs {
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
 }
 
 /// An `--as-of` coordinate: an exact `transition_id` (UUIDv7), or an
@@ -222,9 +223,8 @@ pub(crate) struct OutboxClaimArgs {
     #[arg(long)]
     pub(crate) worker_id: Option<String>,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -257,9 +257,8 @@ pub(crate) struct OutboxCompleteArgs {
     #[arg(long)]
     pub(crate) reason: Option<String>,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
@@ -278,9 +277,8 @@ pub(crate) struct OutboxReleaseArgs {
     #[arg(long)]
     pub(crate) worker_id: String,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -297,7 +295,7 @@ pub(crate) enum Inspect {
     /// `reconstruct_state_at` uses - not `transition_id <= T` alone,
     /// which selects the wrong rows when commit order and UUID order
     /// diverge under concurrent commits.
-    Audit(InspectArgs),
+    Audit(DatabaseArgs),
     /// List outbox rows, in enqueue order. Defaults to `--status
     /// pending`; use `--status all` for a full view, or any of
     /// `delivered|failed|in-progress` for a specific slice. `--as-of`
@@ -340,14 +338,13 @@ pub(crate) struct InspectGuaranteesArgs {
     pub(crate) json: bool,
 }
 
-/// Arguments for `inspect claims`. Like the shared `InspectArgs` plus
-/// an optional `--as-of` for historical claim listing and a repeatable
+/// Arguments for `inspect claims`: the connection flag plus an
+/// optional `--as-of` for historical claim listing and a repeatable
 /// `--predicate` filter for targeted reads.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectClaimsArgs {
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 
     /// Optional: list claims as they were at a past moment - either a
     /// `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
@@ -390,9 +387,8 @@ pub(crate) struct InspectDerivedArgs {
     /// up against the program's `derived_claims` by `predicate`.
     pub(crate) derived: String,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 
     /// Optional: enumerate against the state at a past moment - either
     /// a `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
@@ -402,19 +398,6 @@ pub(crate) struct InspectDerivedArgs {
     /// returns `NoTransitionAtOrBefore`.
     #[arg(long)]
     pub(crate) as_of: Option<AsOf>,
-}
-
-/// Shared arguments for the `inspect` subcommands that do NOT accept
-/// `--as-of` (audit, outbox). `inspect claims` uses its own
-/// `InspectClaimsArgs` to expose the optional flag.
-///
-/// The `env` attribute falls back to `DATABASE_URL`; if neither flag
-/// nor env is set, clap errors before any async work happens.
-#[derive(clap::Args, Debug)]
-pub(crate) struct InspectArgs {
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
 }
 
 /// Arguments for `inspect outbox`: the connection-string flag plus the
@@ -431,9 +414,8 @@ pub(crate) struct InspectOutboxArgs {
     #[arg(long)]
     pub(crate) intent_type: Option<String>,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 /// Status filter for `inspect outbox`. The named values map to the
@@ -561,9 +543,8 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) actor: String,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 
     /// When set, emit a structured per-statement trace alongside the
     /// outcome - the kernel's `propose_with_trace` shape on the wire.
@@ -618,9 +599,8 @@ pub(crate) struct ExplainArgs {
     #[arg(long)]
     pub(crate) actor: String,
 
-    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
-    #[arg(long, env = "DATABASE_URL")]
-    pub(crate) database_url: String,
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 
     /// Emit the structured JSON `Explanation` instead of prose.
     #[arg(long)]
@@ -664,17 +644,16 @@ mod tests {
     use clap::error::ErrorKind;
 
     /// Helper: parse the argv into our `Cli` and return the `database_url`
-    /// that landed on the resulting `InspectArgs` (or
-    /// `InspectClaimsArgs` for claims).
+    /// that landed on the resulting inspect-subcommand args.
     fn parsed_url(argv: &[&str]) -> String {
         let cli = Cli::parse_from(argv);
         let Command::Inspect { what } = cli.command else {
             panic!("expected Command::Inspect, got {:?}", cli.command);
         };
         match what {
-            Inspect::Claims(args) => args.database_url,
+            Inspect::Claims(args) => args.db.database_url,
             Inspect::Audit(args) => args.database_url,
-            Inspect::Outbox(args) => args.database_url,
+            Inspect::Outbox(args) => args.db.database_url,
             Inspect::Derived(_) => {
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
             }
@@ -915,7 +894,7 @@ mod tests {
     }
 
     /// `inspect audit --as-of <uuid>` is rejected by clap because
-    /// `Inspect::Audit` uses `InspectArgs`, which does not declare
+    /// `Inspect::Audit` takes `DatabaseArgs` directly, which does not declare
     /// the `--as-of` flag. Pins the design decision that as-of does
     /// not apply to the audit subcommand.
     #[test]
@@ -974,7 +953,7 @@ mod tests {
         assert_eq!(args.args.as_deref(), Some("[]"));
         assert!(args.args_named.is_none());
         assert_eq!(args.actor, "jordan");
-        assert_eq!(args.database_url, "postgres:///morpholog_dev");
+        assert_eq!(args.db.database_url, "postgres:///morpholog_dev");
     }
 
     /// `run --args-named '{...}'` parses with `args_named: Some(...)`
@@ -1095,7 +1074,7 @@ mod tests {
             std::path::PathBuf::from("examples/03_double_entry_ledger/ledger.morph")
         );
         assert_eq!(args.derived, "TrialBalanceRow");
-        assert_eq!(args.database_url, "postgres:///morpholog_dev");
+        assert_eq!(args.db.database_url, "postgres:///morpholog_dev");
     }
 
     #[test]
@@ -1321,7 +1300,7 @@ mod tests {
         assert_eq!(args.args.as_deref(), Some("[]"));
         assert!(args.args_named.is_none());
         assert_eq!(args.actor, "jordan");
-        assert_eq!(args.database_url, "postgres:///morpholog_dev");
+        assert_eq!(args.db.database_url, "postgres:///morpholog_dev");
         assert!(!args.json, "expected --json to default to false");
     }
 
