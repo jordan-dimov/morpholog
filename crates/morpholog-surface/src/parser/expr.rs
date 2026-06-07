@@ -14,7 +14,7 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
+use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Unit, Value, ValueExpr};
 
 /// Build a `Prop::Compare` from a factored operator and domain. The
 /// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
@@ -168,7 +168,22 @@ where
         let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let term = choice((
             just(Token::Wildcard).to(Term::Wildcard),
-            decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            decimal_lit
+                .then(ident.or_not())
+                .map(|(s, unit)| match unit {
+                    // A numeric literal followed by an identifier in
+                    // term position is a quantity literal: `25000 USD`.
+                    // The identifier is committed as the unit, so an
+                    // ill-typed contextual keyword here (e.g. a time
+                    // comparator after a bare number) reads as a unit
+                    // and fails downstream - acceptable, since that
+                    // expression was already ill-typed.
+                    Some(u) => Term::Literal(Value::Quantity {
+                        amount: s,
+                        unit: Unit::from(u),
+                    }),
+                    None => Term::Literal(Value::Decimal(s)),
+                }),
             timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
             date_lit.map(|s| Term::Literal(Value::Date(s))),
             // Before bare idents so `duration(...)` is the constructor,
@@ -569,7 +584,22 @@ where
     let timestamp_lit = select! { Token::TimestampLit(s) => s };
     let term = choice((
         just(Token::Wildcard).to(Term::Wildcard),
-        decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+        decimal_lit
+            .then(ident.or_not())
+            .map(|(s, unit)| match unit {
+                // A numeric literal followed by an identifier in
+                // term position is a quantity literal: `25000 USD`.
+                // The identifier is committed as the unit, so an
+                // ill-typed contextual keyword here (e.g. a time
+                // comparator after a bare number) reads as a unit
+                // and fails downstream - acceptable, since that
+                // expression was already ill-typed.
+                Some(u) => Term::Literal(Value::Quantity {
+                    amount: s,
+                    unit: Unit::from(u),
+                }),
+                None => Term::Literal(Value::Decimal(s)),
+            }),
         timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
         date_lit.map(|s| Term::Literal(Value::Date(s))),
         duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
@@ -616,8 +646,16 @@ where
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
         let timestamp_lit = select! { Token::TimestampLit(s) => s };
-        let decimal_as_value =
-            decimal_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Decimal(s))));
+        let decimal_as_value = decimal_lit.then(ident.or_not()).map(|(s, unit)| {
+            // Same quantity-literal rule as term position.
+            ValueExpr::Term(match unit {
+                Some(u) => Term::Literal(Value::Quantity {
+                    amount: s,
+                    unit: Unit::from(u),
+                }),
+                None => Term::Literal(Value::Decimal(s)),
+            })
+        });
         let date_as_value = date_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Date(s))));
         let timestamp_as_value =
             timestamp_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Timestamp(s))));
@@ -647,7 +685,22 @@ where
         // plain identifier, so it must be rejected here.
         let sum_target = choice((
             ident.map(|name| Term::Var(name.into())),
-            decimal_lit.map(|s| Term::Literal(Value::Decimal(s))),
+            decimal_lit
+                .then(ident.or_not())
+                .map(|(s, unit)| match unit {
+                    // A numeric literal followed by an identifier in
+                    // term position is a quantity literal: `25000 USD`.
+                    // The identifier is committed as the unit, so an
+                    // ill-typed contextual keyword here (e.g. a time
+                    // comparator after a bare number) reads as a unit
+                    // and fails downstream - acceptable, since that
+                    // expression was already ill-typed.
+                    Some(u) => Term::Literal(Value::Quantity {
+                        amount: s,
+                        unit: Unit::from(u),
+                    }),
+                    None => Term::Literal(Value::Decimal(s)),
+                }),
         ));
         let sum_expr = just(Token::KwSum)
             .ignore_then(

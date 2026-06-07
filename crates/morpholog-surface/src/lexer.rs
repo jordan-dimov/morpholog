@@ -13,7 +13,7 @@
 //! - Decimal literals: `<digits>` or `<digits>.<digits>`,
 //!   string-valued because the runtime parses to
 //!   `rust_decimal::Decimal`, never to a float.
-//! - Punctuation: `(`, `)`, `:`, `,`.
+//! - Punctuation: `(`, `)`, `[`, `]`, `:`, `,`.
 //! - Comparators: `=`, `!=`, `<=`, `<`, `>=`, `>`.
 //! - Arithmetic: `+`, `-`, `*`, `/` (infix); `min` / `max` (functions).
 //! - Wildcard: `_`.
@@ -212,6 +212,10 @@ pub enum Token {
     // ---- Punctuation ----
     LParen,
     RParen,
+    /// `[` / `]` - the unit brackets of a `Decimal[USD]` kind
+    /// annotation. No other production uses them in v0.
+    LBracket,
+    RBracket,
     Colon,
     Comma,
 
@@ -288,6 +292,8 @@ impl fmt::Display for Token {
             Token::DecimalLit(s) => write!(f, "decimal literal `{s}`"),
             Token::LParen => write!(f, "`(`"),
             Token::RParen => write!(f, "`)`"),
+            Token::LBracket => write!(f, "`[`"),
+            Token::RBracket => write!(f, "`]`"),
             Token::Colon => write!(f, "`:`"),
             Token::Comma => write!(f, "`,`"),
             Token::Eq => write!(f, "`=`"),
@@ -495,6 +501,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     let punct = choice((
         just('(').to(Token::LParen),
         just(')').to(Token::RParen),
+        just('[').to(Token::LBracket),
+        just(']').to(Token::RBracket),
         just(':').to(Token::Colon),
         just(',').to(Token::Comma),
     ));
