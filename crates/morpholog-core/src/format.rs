@@ -20,8 +20,8 @@
 //! degrades the rendering.
 
 use crate::{
-    ArithOp, Claim, CompareOp, DerivedClaim, Intent, Invariant, OrderedDomain, PredicateArgKind,
-    PredicateDecl, Program, Prop, Stmt, Term, Transformation, Value, ValueExpr, Var,
+    ArithOp, Claim, CompareOp, DerivedClaim, Intent, Invariant, OrderedDomain, PredicateDecl,
+    Program, Prop, Stmt, Term, Transformation, Value, ValueExpr, Var,
 };
 
 /// The surface token for an ordered comparison. The single source of
@@ -472,8 +472,8 @@ mod tests {
     //! every variant is reachable and produces readable output.
 
     use super::*;
-    use crate::Value;
     use crate::ir_builder::*;
+    use crate::{PredicateArgKind, Value};
 
     #[test]
     fn format_program_starts_with_program_header() {
