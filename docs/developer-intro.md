@@ -59,13 +59,14 @@ cargo install --path crates/morpholog-cli
 
 # a throwaway database to play in
 createdb morpholog_intro
-psql morpholog_intro -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL=postgres:///morpholog_intro
+morpholog init
 ```
 
-Four explicit steps, no magic. The schema you just loaded is Morpholog's own -
-a claims table, an audit table, an outbox. You will never design a table in
-this guide.
+Four explicit steps, no magic. `init` provisions Morpholog's own schema - a
+claims table, an audit table, an outbox - from a copy embedded in the binary
+itself, so there is nothing else to download and nothing to drift. You will
+never design a table in this guide.
 
 ## Your first program
 
@@ -505,7 +506,10 @@ Directly missing claims:
 That is not a string you grepped out of a stack trace. It is the exact missing
 claim and the named transformations that could supply it - structured enough
 that a program (or an AI agent proposing changes) can read the refusal, repair
-its proposal, and try again.
+its proposal, and try again. And when the caller is a service rather than a
+person at a terminal, you do not need the second command: `morpholog run
+--explain-on-reject` attaches this same account to the rejection receipt
+itself, computed against the very state that refused.
 
 ## What just happened
 
@@ -542,6 +546,18 @@ everything:
 
 ```bash
 morpholog inspect claims --predicate CurrentFigure
+```
+
+And if positional args feel fragile to consume from a service, add
+`--named revenue.morph` and they come back keyed by the field names you
+declared:
+
+```bash
+morpholog inspect claims --predicate CurrentFigure --named revenue.morph
+```
+```json
+[{ "predicate": "CurrentFigure",
+   "args": { "asset": "battery_07", "period": "q1_2026", "figure_id": "f2" } }]
 ```
 
 But a screen does not want the pointer. It wants the joined answer: asset,
@@ -632,7 +648,8 @@ receipt = propose("report_revenue", "verifier_anna", {
     "amount": "1000", "figure_id": "f1",
 })
 if receipt["status"] == "rejected":
-    ...  # show receipt["reason"], or ask `morpholog explain` what is missing
+    ...  # show receipt["reason"] (run with --explain-on-reject and the
+         # receipt carries the full missing-evidence account too)
 ```
 
 A business refusal is data, not an exception. That is why the snippet does not
@@ -765,10 +782,13 @@ on plain PostgreSQL. [`prior-art.md`](prior-art.md) has the longer comparison.
 **"Are `Subject` and `Decimal` really the only types?"**
 No - this guide's example just never needed more. There are dates with date
 comparison (the clinical-trial example gates enrolment on validity windows),
-booleans, enum-like domain symbols, and collections. Genuinely missing today:
-instants and timezones (dates are civil dates) and units like `MW` or `GBP` -
-both recognised directions, neither built until a worked example forces the
-shape.
+exact timestamps and durations with exact arithmetic (the laytime example
+computes deadlines by shifting an instant and sums interval lengths against an
+allowance), booleans, enum-like domain symbols, and collections. Genuinely
+missing today: calendar arithmetic on civil dates, timezone-aware local time
+(planned to enter as admitted claims from a calendar authority, never as a
+hidden runtime timezone lookup), and units like `MW` or `GBP` - recognised
+directions, each waiting for the worked example that forces its shape.
 
 **"What happens when a predicate needs to change shape?"**
 Today: the same move this guide taught for figures, applied to vocabulary. You
