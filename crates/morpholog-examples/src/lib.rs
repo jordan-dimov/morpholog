@@ -51,6 +51,7 @@ pub(crate) fn derived(program: &Program, predicate: &str) -> morpholog_core::Der
 }
 
 pub mod approval_controls;
+pub mod biometric_identification_oversight;
 pub mod borrowing_base;
 pub mod carbon_credit_provenance;
 pub mod chess_transition_invariants;
