@@ -30,8 +30,9 @@ log is not a subsystem bolted on - the log IS the governed record, read back.
 ## The statute, clause by clause
 
 Every rule in [`biometric_oversight.morph`](biometric_oversight.morph) traces
-to a clause of the final text (verified against Regulation (EU) 2024/1689 as
-published; article numbers are from the final regulation, not the draft):
+to a clause of the final text, verified against the Official Journal
+(Regulation (EU) 2024/1689, OJ L, 12.7.2024; article numbers are from the
+final regulation, not the draft):
 
 | Statute | Requirement | Rule in the model |
 |---|---|---|
