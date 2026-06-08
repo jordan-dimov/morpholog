@@ -19,6 +19,7 @@ And when it refuses, it says why. A rejected proposal comes back as a structured
 - *If that authority was rescinded yesterday, was yesterday's decision still valid?*
 - *What did the books say on the last day of Q1, under the close rules in force then?*
 - *Did this trade conform to our exposure limits when it was booked? Not now - then?*
+- *On what basis did the AI system identify this person, who verified it, and were they authorised that day?*
 
 The worked examples below answer concrete instances of these against a real PostgreSQL database, through a small CLI.
 
@@ -122,6 +123,8 @@ Each runs both in memory (against the kernel) and durably (against PostgreSQL). 
 - [**Borrowing base**](examples/11_borrowing_base/) - asset-backed lending: the total drawn against a facility can never exceed its **advance rate times the eligible collateral**, and a read-side view reports each facility's drawn-to-collateral utilisation. The example that completes the decimal arithmetic - the advance-limit invariant **multiplies** (cross-multiplied so the decision is exact), the utilisation projection **divides**.
 - [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes, and the example that forced Morpholog's time values *and* its units. Notice of Readiness at an exact instant; laytime commencement **computed** by shifting that instant by the agreed turn time; the Statement of Facts as counting intervals whose recorded lengths can never disagree with their ends; time on demurrage as a **derived excess, floored at zero** - because running over the allowance is the normal priced outcome, deliberately *not* an invariant violation; and the money stage: cargo in tonnes capped by the vessel's capacity, the delay priced in dollars at **an exact count of days times the agreed daily amount**, settlements capped by a figure the invariant recomputes rather than trusts. All instants are zone-less UTC and all units are opaque labels by design: port-local days and unit conversions arrive as admitted claims, never as hidden runtime lookup tables.
 
+- [**Biometric identification oversight (EU AI Act Article 12)**](examples/13_biometric_identification_oversight/) - a statute, not a market, as the forcing catalyst. From 2 August 2026 the EU AI Act demands automatic, reconstructable records of high-risk AI decisions and verification by **two distinct people** before any action. The AI system's output enters the record as a claim with **no standing**; standing comes only from verification under live, revocable human authority; a decision without two distinct verifications **cannot commit**; revoking an overseer governs the future and leaves past decisions standing. A use period cannot be backdated to exclude a match it already produced. **It forced no new language** - authority (04), validity windows (06), standing (02), and instants (12) meeting a statute - which is the headline. The README carries the statute-clause-to-rule mapping table, regenerable as `morpholog inspect controls`.
+
 Morpholog is not the whole stack. UIs, dashboards, dataloaders, ML pipelines stay in normal tools. What Morpholog owns is the line where *"may this be admitted as a valid record?"* needs a definite answer - the small fraction of any real business system that, when it fails, makes the news.
 
 ## Try it yourself
@@ -145,7 +148,7 @@ The `.morph` parser arc is complete: every worked example parses end-to-end as `
 
 Built in Rust on PostgreSQL 17+. The kernel is `#[forbid(unsafe_code)]`; the PG adapter leans on SERIALIZABLE isolation and JSONB so an entire commit lands atomically or not at all.
 
-The legibility tooling has begun: `morpholog inspect guarantees` names what a model makes impossible, `morpholog explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap, and `morpholog verify` replays the audit log against the claims table and names any divergence between the two records of history.
+The legibility tooling has begun: `morpholog inspect guarantees` names what a model makes impossible, `morpholog inspect controls` renders the control matrix - what must be true before each action, beside what can never be true - the view an auditor reads and a compliance mapping cites, `morpholog explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap, and `morpholog verify` replays the audit log against the claims table and names any divergence between the two records of history.
 
 The integration surface is a pinned contract ([`docs/embedder-integration.md`](docs/embedder-integration.md)): JSON-Schema contracts for every transformation and intent, named-argument codecs in both directions, schema provisioning from the binary, a canonical hash that identifies the rules in force, and rejections that carry their own explanation. It is already exercised end to end by an external embedder - an open-source energy-trading system driving a governed trade lifecycle through it.
 
