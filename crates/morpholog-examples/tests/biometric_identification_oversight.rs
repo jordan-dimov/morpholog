@@ -15,8 +15,8 @@ mod common;
 
 use common::{must_accept_as, propose_with_test_actor, subj, ts};
 use morpholog_core::{
-    EvalValue, Invariant, Outcome, State, Subject, Transformation, Transition, enumerate_derived,
-    propose,
+    EvalValue, Invariant, Outcome, Rejection, State, Subject, Transformation, Transition, Verdict,
+    enumerate_derived, propose,
 };
 use morpholog_examples::biometric_identification_oversight as bio;
 
@@ -175,6 +175,85 @@ fn decision_with_one_verification_is_refused() {
         ],
         "anna",
         &state,
+    );
+}
+
+// The PR's headline, pinned: a refused decision explains itself in
+// the statute's own terms. With no verification yet on record, asking
+// why the decision is refused names the verification gate AND the
+// directly-missing MatchVerified claim, with `verify_match` as the
+// transformation that supplies it - the missing-evidence checklist an
+// auditor (or an agent retrying) can act on.
+#[test]
+fn the_refused_decision_explains_itself_in_the_statutes_terms() {
+    let state = match_awaiting_verification();
+    // A match recorded, but not yet verified by anyone.
+    let transition = Transition {
+        transformation_name: bio::decide_on_identification().name.clone(),
+        args: vec![
+            subj("decision_1"),
+            subj("match_1"),
+            subj("confirmed_identification"),
+            ts("2026-10-12T11:00:00Z"),
+        ],
+        actor: Subject::from("anna"),
+    };
+    let explanation = morpholog_core::explain(&bio::program(), &transition, &state);
+    let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
+        panic!("expected a gate rejection, got {:?}", explanation.verdict);
+    };
+    assert!(
+        gate.gate.contains("MatchVerified"),
+        "the failing gate names the verification rule: {}",
+        gate.gate
+    );
+    assert!(
+        gate.directly_missing_claims
+            .iter()
+            .any(|m| m.predicate == "MatchVerified"
+                && m.candidate_supplier_transformations
+                    .contains(&"verify_match".to_string())),
+        "a missing MatchVerified names verify_match as its supplier: {:?}",
+        gate.directly_missing_claims
+    );
+}
+
+// The one-hop explanation engine's honest boundary, pinned so it
+// cannot regress unnoticed: once ONE verification exists, the gate
+// still fails (a second distinct verifier is needed), but the gap is
+// the `v1 != v2` distinctness, not an absent claim - so the engine
+// names the failing gate without a directly-missing-claim checklist.
+// Distinctness-aware why-not is a deferred tier; this test documents
+// that the example sits right at its edge.
+#[test]
+fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
+    let state = match_awaiting_verification();
+    let state = must_accept_as(
+        &bio::verify_match(),
+        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        "anna",
+        state,
+        &invariants(),
+    );
+    let transition = Transition {
+        transformation_name: bio::decide_on_identification().name.clone(),
+        args: vec![
+            subj("decision_1"),
+            subj("match_1"),
+            subj("confirmed_identification"),
+            ts("2026-10-12T11:00:00Z"),
+        ],
+        actor: Subject::from("anna"),
+    };
+    let explanation = morpholog_core::explain(&bio::program(), &transition, &state);
+    let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
+        panic!("expected a gate rejection, got {:?}", explanation.verdict);
+    };
+    assert!(gate.gate.contains("MatchVerified"));
+    assert!(
+        gate.directly_missing_claims.is_empty(),
+        "distinctness failure surfaces no missing claim in v0: {:?}",
+        gate.directly_missing_claims
     );
 }
 

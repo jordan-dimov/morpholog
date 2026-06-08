@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::ir_builder::{
-    and, assert_, bind_one, claim, implies, invariant, neq, not, params, predicate, program,
+    and, assert_, bind_one, claim, for_, implies, invariant, neq, not, params, predicate, program,
     require, var,
 };
 use morpholog_core::{controls, render_controls};
@@ -109,4 +109,77 @@ fn rendered_matrix_reads_as_the_auditor_view() {
             "`{fragment}` not in:\n{rendered}"
         );
     }
+}
+
+#[test]
+fn a_gateless_transformation_renders_its_invariant_only_admission() {
+    // A transformation with no require/bind preconditions is governed
+    // by the invariants alone; the matrix says so rather than showing
+    // an empty gate list silently.
+    let p = program("open_admit")
+        .predicates(vec![predicate("Note").subject("note").build()])
+        .transformations(vec![morpholog_core::ir_builder::transformation(
+            "jot",
+            params(&["note"]),
+            vec![assert_("Note", vec![var("note")])],
+        )])
+        .build();
+    let matrix = controls(&p);
+    assert!(matrix.transformations[0].gates.is_empty());
+    let rendered = render_controls(&matrix);
+    assert!(
+        rendered.contains("no preconditions: admission is governed by the invariants alone"),
+        "the gateless case is named, not blank:\n{rendered}"
+    );
+}
+
+#[test]
+fn gates_inside_a_for_body_are_not_lifted_as_preconditions() {
+    // Doctrine pin: a `require` inside a `for` body is an iteration
+    // condition, not an admission precondition, so the control matrix
+    // does not surface it among the transformation's gates. Only the
+    // top-level statements count. If this ever changes, the matrix
+    // would start reporting per-item conditions as if they gated the
+    // whole transformation - a misreading an auditor must not be given.
+    let p = program("loops")
+        .predicates(vec![
+            predicate("Batch")
+                .subject("batch")
+                .collection("items")
+                .build(),
+            predicate("Seen").subject("item").build(),
+            predicate("Allowed").subject("item").build(),
+            predicate("Done").subject("batch").build(),
+        ])
+        .transformations(vec![morpholog_core::ir_builder::transformation(
+            "process",
+            params(&["batch", "items"]),
+            vec![
+                require(claim("Batch", vec![var("batch"), var("items")])),
+                for_(
+                    "item",
+                    morpholog_core::ir_builder::term(var("items")),
+                    vec![
+                        require(claim("Allowed", vec![var("item")])),
+                        assert_("Seen", vec![var("item")]),
+                    ],
+                ),
+                assert_("Done", vec![var("batch")]),
+            ],
+        )])
+        .build();
+    let matrix = controls(&p);
+    let process = &matrix.transformations[0];
+    // Only the top-level require is a gate; the in-loop `Allowed`
+    // check is not lifted.
+    assert_eq!(process.gates.len(), 1, "{:?}", process.gates);
+    assert_eq!(process.gates[0].consults, vec!["Batch"]);
+    assert!(
+        !process
+            .gates
+            .iter()
+            .any(|g| g.consults.contains(&"Allowed".to_string())),
+        "in-loop conditions must not surface as transformation gates: {:?}",
+        process.gates
+    );
 }

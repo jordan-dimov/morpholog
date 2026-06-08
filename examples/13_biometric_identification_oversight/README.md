@@ -55,9 +55,14 @@ proposal the runtime refuses, with the reason named:
 1. **A use cannot start under a model version not in service.** An unassessed
    version cannot put anything on the record - not flagged later, never
    admitted.
-2. **A decision on one verification is refused.** Ask `morpholog explain` and
-   the answer names the missing claim in the statute's own terms: a
-   verification by a second person.
+2. **A decision before any verification is refused, and explains itself.** Ask
+   `morpholog explain` and the answer names the failing gate and the
+   directly-missing claim in the statute's own terms - a `MatchVerified`,
+   with `verify_match` as the transformation that supplies it. (Once one
+   verification exists, the gate still refuses a decision - a second, distinct
+   verifier is needed - but the gap is now distinctness rather than an absent
+   claim, which the one-hop engine names as the failing gate without a
+   missing-claim checklist. The deeper why-not is a deferred tier.)
 3. **The same overseer verifying twice is one voice, not two.** The second
    verification is itself refused; the two-person rule cannot be satisfied
    single-handedly.
