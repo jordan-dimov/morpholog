@@ -28,6 +28,7 @@ pub mod ir_builder;
 
 pub mod analysis;
 mod check;
+mod controls;
 mod derive;
 mod eval;
 mod explain;
@@ -43,6 +44,7 @@ pub use analysis::{
     predicates_referenced_by_prop, predicates_referenced_by_stmt, predicates_referenced_by_value,
     transformation_param_kinds, transformations_asserting,
 };
+pub use controls::{ControlMatrix, GateControl, TransformationControls, controls, render_controls};
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::{EvalError, RenderedClaim};
 pub use explain::{

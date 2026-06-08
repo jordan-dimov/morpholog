@@ -316,6 +316,14 @@ pub(crate) enum Inspect {
     /// mechanically obvious. Read-only and static: no database, no
     /// state. Prose by default; `--json` for the structured form.
     Guarantees(InspectGuaranteesArgs),
+    /// Show a programme's control matrix: what must already be true
+    /// before each action (every transformation's `require` and `bind`
+    /// preconditions, with the predicates each consults) and what can
+    /// never be true (the invariant guarantees). The view an auditor
+    /// reads, and the table a compliance mapping cites rule by rule.
+    /// Read-only and static: no database, no state. Prose by default;
+    /// `--json` for the structured form.
+    Controls(InspectGuaranteesArgs),
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
@@ -657,6 +665,9 @@ mod tests {
             Inspect::Outbox(args) => args.db.database_url,
             Inspect::Derived(_) => {
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
+            }
+            Inspect::Controls(_) => {
+                panic!("inspect controls is static; it takes no database URL")
             }
             Inspect::Predicates(_) => {
                 panic!("inspect predicates does not take a database URL")

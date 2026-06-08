@@ -107,6 +107,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         Inspect::Derived(args) => inspect_derived(args).await,
         Inspect::Predicates(args) => inspect_predicates(args),
         Inspect::Guarantees(args) => inspect_guarantees(args),
+        Inspect::Controls(args) => inspect_controls(args),
     }
 }
 
@@ -226,6 +227,21 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
 fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> {
     let (program, _source, _name) = parse_or_exit(&args.file)?;
     print_json(&program.predicates)
+}
+
+/// Show a parsed programme's control matrix: per-transformation
+/// preconditions plus the invariant guarantees. Static and read-only -
+/// no database. Prose by default; `--json` emits the structured form.
+fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
+    let (program, _source, _name) = parse_or_exit(&args.file)?;
+    validate_or_exit(&program);
+    let matrix = morpholog_core::controls(&program);
+    if args.json {
+        print_json(&matrix)
+    } else {
+        println!("{}", morpholog_core::render_controls(&matrix));
+        Ok(())
+    }
 }
 
 /// Show what a parsed programme makes impossible: its guarantees, one per
