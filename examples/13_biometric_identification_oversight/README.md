@@ -40,7 +40,7 @@ published; article numbers are from the final regulation, not the draft):
 | Art. 12(3)(b) | Record the reference database checked | `reference_db` on `UseStarted` |
 | Art. 12(3)(c) | Record the input data for which the search led to a match | `input_ref` on `MatchRecorded` |
 | Art. 12(3)(d) | Record the identity of the natural persons who verified the results | `MatchVerified(match, verifier, verified_at)` - the verifier is the proposing actor, recorded in the claim and the audit row |
-| Art. 14(5) | No action or decision on an identification unless separately verified by at least two natural persons | The `decide_on_identification` gate and the `decision_rests_on_two_distinct_verifiers` invariant - two verification records with distinct verifiers, or the decision cannot commit |
+| Art. 14(5) | No action or decision on an identification unless separately verified by at least two natural persons | The `decide_on_identification` gate and the `decision_rests_on_two_distinct_prior_verifications` invariant - two verification records with distinct verifiers, **both at or before the decision**, or the decision cannot commit |
 | Art. 26(2) | Deployers assign oversight to natural persons with competence, training and authority | `OversightAssigned`, granted and revoked by `assign_oversight` / `revoke_oversight`; consulted as a gate at each verification |
 | Art. 19(1), 26(6) | Providers and deployers keep logs at least six months | No machinery needed: the substrate never deletes, so any retention minimum is trivially exceeded |
 | Art. 86(1) | An affected person may demand a clear and meaningful explanation of the decision | One as-of lookup: the decision, its match, the input reference, both verifier identities, the version in service, and the oversight assignments in force - all at the decision's transition |
@@ -60,17 +60,25 @@ proposal the runtime refuses, with the reason named:
 3. **The same overseer verifying twice is one voice, not two.** The second
    verification is itself refused; the two-person rule cannot be satisfied
    single-handedly.
-4. **A revoked overseer cannot verify** - and the decision they helped verify
+4. **A decision cannot be dated before the verifications it rests on.** Two
+   verification records existing by the time someone files the decision is not
+   the statute's "verification before action" - both must *precede* the
+   decision instant, or it is refused. The subtlest gap, and exactly the kind
+   admission law closes that a dashboard reports on too late.
+5. **A revoked overseer cannot verify** - and the decision they helped verify
    last month stands untouched. Whether a decision was allowed is settled
    when it is made. As-of replay shows the authority held then.
-5. **A use period cannot be closed earlier than a match it already
+6. **A use period cannot be closed earlier than a match it already
    produced.** Backdating the end of a use to exclude an awkward match is not
    forbidden by policy; it is uncommittable.
 
-Note who proposes `record_match`: the AI system itself, as the actor. A
-machine actor passes the same gates as a human one - which is the point. The
-thing producing candidates does not have to be trusted, because admissibility
-is enforced outside it.
+Note who proposes `record_match`: the AI system itself, as the actor, and
+`require actor = system` enforces it - a match attributed to this system
+genuinely originated from it, not from an analyst typing one in. A machine
+actor passes the same gates as a human one, and here its identity is part of
+what makes the record admissible. The thing producing candidates does not have
+to be trusted to behave; it only gets to *propose*, and admissibility - down
+to who proposed - is enforced outside it.
 
 There is deliberately no clock in the model. Every timestamp is supplied by
 the proposer and judged by the gates; nothing reads "now" from the machine it

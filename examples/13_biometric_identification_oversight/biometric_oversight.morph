@@ -98,16 +98,20 @@ invariant one_verification_per_verifier_per_match:
     MatchVerified(m, p, a) and MatchVerified(m, p, b) implies a = b
 
 -- Article 14(5), as a permanent property of the record: every
--- decision rests on at least two verifications by distinct people.
--- The unbound names v1 and v2 ask the runtime to find witnesses -
--- two verification records whose verifiers differ. This is safe as
--- an invariant (not just a gate) because verification records are
--- append-only in this model: nothing retracts them, so a decision
--- admitted under two verifications keeps them forever. The
--- *authority* check lives in the gates below, never here - so
+-- decision rests on at least two verifications by distinct people,
+-- both of which happened at or before the decision. The "before"
+-- half is load-bearing: the statute requires verification *before*
+-- action, not merely that two verification records exist by the time
+-- someone files the decision. The unbound names v1 and v2 ask the
+-- runtime to find witnesses - two verification records whose
+-- verifiers differ and whose instants precede the decision. This is
+-- safe as an invariant (not just a gate) because verification
+-- records are append-only in this model: nothing retracts them, so a
+-- decision admitted under two prior verifications keeps them forever.
+-- The *authority* check lives in the gates below, never here - so
 -- revoking an overseer never reaches back into history.
-invariant decision_rests_on_two_distinct_verifiers:
-    IdentificationDecision(d, m, _, _, _) implies (MatchVerified(m, v1, _) and MatchVerified(m, v2, _) and v1 != v2)
+invariant decision_rests_on_two_distinct_prior_verifications:
+    IdentificationDecision(d, m, _, decided_at, _) implies (MatchVerified(m, v1, t1) and MatchVerified(m, v2, t2) and v1 != v2 and t1 at_or_before decided_at and t2 at_or_before decided_at)
 
 -- One decision per match. A second decision on the same
 -- identification would be a competing account of what was done.
@@ -155,14 +159,19 @@ transformation start_use(use, system, version, reference_db, started_at):
     require not UseStarted(use, _, _, _, _)
     admit UseStarted(use, system, version, reference_db, started_at)
 
--- The AI system's raw output enters the record. Note who proposes
--- this: the embedding system itself, as the actor. A machine actor
--- passes through the same gates as a human one - the runtime does
--- not care whose hand is on the action, only whether the record is
--- admissible. What it admits is a candidate with no standing; no
--- decision can rest on it yet.
+-- The AI system's raw output enters the record - and only the
+-- deployed system's own identity may put it there. `require actor =
+-- system` binds the proposer to the system bound from the use: a
+-- match attributed to this system genuinely originated from it, not
+-- from an analyst typing one in. A machine actor passes through the
+-- same gates as a human one - the runtime does not care whose hand
+-- is on the action, only whether the record is admissible - and here
+-- the actor's identity is itself part of what makes it admissible.
+-- What it admits is a candidate with no standing; no decision can
+-- rest on it yet.
 transformation record_match(match, use, input_ref, candidate, matched_at):
     bind UseStarted(use, system, version, _, started_at)
+    require actor = system
     require started_at at_or_before matched_at
     require not UseEnded(use, _)
     require not MatchRecorded(match, _, _, _, _)
@@ -188,17 +197,21 @@ transformation verify_match(match, verified_at):
     require matched_at at_or_before verified_at
     admit MatchVerified(match, actor, verified_at)
 
--- The decision. Two distinct verifications or nothing - and the
--- decider must themselves hold live oversight: acting on an
--- identification is the most consequential step in the room, and
--- Article 26(2)'s competence-and-authority requirement reaches it.
--- When this is refused, the explanation names what is missing in the
--- statute's own terms: a verification by a second, distinct person.
+-- The decision. Two distinct verifications that both precede it, or
+-- nothing - and the decider must themselves hold live oversight:
+-- acting on an identification is the most consequential step in the
+-- room, and Article 26(2)'s competence-and-authority requirement
+-- reaches it. The `at_or_before decided_at` conjuncts are the
+-- statute's "before action" made literal: a decision cannot be
+-- stamped earlier than the verifications it claims to rest on. When
+-- this is refused, the explanation names what is missing in the
+-- statute's own terms: a prior verification by a second, distinct
+-- person.
 transformation decide_on_identification(decision, match, outcome, decided_at):
     bind MatchRecorded(match, use, _, _, _)
     bind UseStarted(use, system, _, _, _)
     require OversightAssigned(actor, system)
-    require (MatchVerified(match, v1, _) and MatchVerified(match, v2, _) and v1 != v2)
+    require (MatchVerified(match, v1, t1) and MatchVerified(match, v2, t2) and v1 != v2 and t1 at_or_before decided_at and t2 at_or_before decided_at)
     require not IdentificationDecision(_, match, _, _, _)
     admit IdentificationDecision(decision, match, outcome, decided_at, actor)
     emit IdentificationDecided(decision)

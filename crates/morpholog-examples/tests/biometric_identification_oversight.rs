@@ -315,6 +315,62 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
     );
 }
 
+// Article 14(5)'s "before action", made literal: a decision cannot
+// be stamped earlier than the second verification it rests on.
+#[test]
+fn decision_dated_before_the_second_verification_is_refused() {
+    let state = match_awaiting_verification();
+    let state = must_accept_as(
+        &bio::verify_match(),
+        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        "anna",
+        state,
+        &invariants(),
+    );
+    let state = must_accept_as(
+        &bio::verify_match(),
+        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
+        "ben",
+        state,
+        &invariants(),
+    );
+    // Both verifications exist, but the decision is back-dated to
+    // 10:10 - after anna, before ben. Two records is not enough; both
+    // must precede the decision.
+    must_reject_as(
+        &bio::decide_on_identification(),
+        vec![
+            subj("decision_1"),
+            subj("match_1"),
+            subj("confirmed_identification"),
+            ts("2026-10-12T10:10:00Z"),
+        ],
+        "anna",
+        &state,
+    );
+}
+
+// The machine actor is load-bearing: only the deployed system's own
+// identity may put its output on the record.
+#[test]
+fn a_match_cannot_be_recorded_under_the_wrong_actor() {
+    let state = match_awaiting_verification();
+    // An analyst - not the camera system - tries to add a match to
+    // the same use. Refused: the actor is not the system.
+    must_reject_as(
+        &bio::record_match(),
+        vec![
+            subj("match_forged"),
+            subj("use_1"),
+            subj("frame_9999"),
+            subj("candidate_x"),
+            ts("2026-10-12T09:45:00Z"),
+        ],
+        "rogue_analyst",
+        &state,
+    );
+}
+
 // Beat 5: the record cannot be shortened to exclude its own matches.
 #[test]
 fn use_cannot_be_closed_before_a_match_it_already_produced() {
