@@ -185,5 +185,14 @@ jobs:
       # No threshold gating - the summary is a visibility tool, not
       # a merge gate, so a coverage dip is a review prompt rather
       # than a hard fail.
+      #
+      # `--threads=1` on the linker caps rust-lld's internal parallel
+      # section: linking the coverage-instrumented binaries (debuginfo
+      # + instrumentation tables, ~20 test binaries) peaks memory hard
+      # enough that lld's parallelFor SIGBUSes on the runner. Serialising
+      # lld bounds peak memory at a modest link-time cost; the rest of
+      # the build stays parallel.
       - name: cargo llvm-cov
+        env:
+          RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
         run: cargo llvm-cov --workspace --locked --summary-only -- --test-threads=1
