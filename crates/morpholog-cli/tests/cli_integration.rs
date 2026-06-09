@@ -2084,3 +2084,19 @@ async fn batch_conflicts_with_trace() {
         "clap names the conflict: {stderr}"
     );
 }
+
+// Batch rows carry their own args; a top-level args flag would be
+// silently ignored, so clap refuses both codecs' flags with --batch.
+#[tokio::test]
+async fn batch_conflicts_with_both_args_flags() {
+    for flag in [["--args", "[]"], ["--args-named", "{}"]] {
+        let (status, _stdout, stderr) =
+            run_cli(&["run", &ledger_morph(), "--batch", "-", flag[0], flag[1]]);
+        assert!(!status.success(), "{} must conflict with --batch", flag[0]);
+        assert!(
+            stderr.contains("cannot be used with"),
+            "clap names the conflict for {}: {stderr}",
+            flag[0]
+        );
+    }
+}

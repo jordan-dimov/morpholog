@@ -555,7 +555,7 @@ pub(crate) struct RunArgs {
     /// those.
     #[arg(
         long,
-        conflicts_with = "args",
+        conflicts_with_all = ["args", "batch"],
         required_unless_present_any = ["args", "batch"]
     )]
     pub(crate) args_named: Option<String>,

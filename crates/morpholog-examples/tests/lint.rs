@@ -142,3 +142,24 @@ fn tests_common_all_programs() -> Vec<(String, morpholog_core::Program)> {
     assert!(!out.is_empty(), "found no example programmes");
     out
 }
+
+// A negated implication asserts no implication at all -
+// `not (A implies B)` is `A and not B` - so the lint must not read
+// one out of it.
+#[test]
+fn a_negated_implication_is_not_linted() {
+    let found = lints_of(
+        r#"
+program negated_implication
+
+predicate Decision(decision_id: Subject, doc: Subject)
+    append only
+predicate CurrentMandate(doc: Subject, mandate_id: Subject)
+    current pointer by (doc)
+
+invariant never_all_three:
+    not (Decision(d, doc) implies CurrentMandate(doc, _))
+"#,
+    );
+    assert!(found.is_empty(), "got {found:?}");
+}

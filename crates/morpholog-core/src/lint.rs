@@ -85,7 +85,7 @@ pub fn lints(program: &Program) -> Vec<Lint> {
     let mut out = Vec::new();
     for inv in &program.invariants {
         let mut implications = Vec::new();
-        collect_implications(&inv.body, &mut implications);
+        collect_implications(&inv.body, true, &mut implications);
         for (antecedent, consequent) in implications {
             let mut antecedent_refs = BTreeSet::new();
             positive_claims(
@@ -117,33 +117,38 @@ pub fn lints(program: &Program) -> Vec<Lint> {
     out
 }
 
-/// Every `Implies` node in the tree, at any depth. The lint reads each
-/// implication's two sides on its own; enclosing context (an outer
-/// `And`, a quantifier) does not change what the implication asks of
-/// admitted records.
-fn collect_implications<'a>(prop: &'a Prop, out: &mut Vec<(&'a Prop, &'a Prop)>) {
+/// Every `Implies` node the invariant actually ASSERTS - collected
+/// only at positive polarity, because a negated implication
+/// (`not (A implies B)` is `A and not B`) and an implication sitting
+/// in another implication's antecedent enforce nothing of the shape
+/// the lint reads. Enclosing `And`/`Or`/quantifiers preserve polarity;
+/// `Not` flips it; an `Implies` flips its own left side.
+fn collect_implications<'a>(prop: &'a Prop, positive: bool, out: &mut Vec<(&'a Prop, &'a Prop)>) {
     match prop {
         Prop::Implies { left, right } => {
-            out.push((left, right));
-            collect_implications(left, out);
-            collect_implications(right, out);
+            if positive {
+                out.push((left, right));
+            }
+            collect_implications(left, !positive, out);
+            collect_implications(right, positive, out);
         }
         Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => {}
         Prop::And(props) | Prop::Or(props) => {
             for p in props {
-                collect_implications(p, out);
+                collect_implications(p, positive, out);
             }
         }
         Prop::Xor(left, right) => {
-            collect_implications(left, out);
-            collect_implications(right, out);
+            collect_implications(left, positive, out);
+            collect_implications(right, positive, out);
         }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            collect_implications(p, out);
+        Prop::Not(p) => collect_implications(p, !positive, out),
+        Prop::Exists { body: p, .. } | Prop::Pre(p) => {
+            collect_implications(p, positive, out);
         }
         Prop::Forall { source, body, .. } => {
-            collect_implications(source, out);
-            collect_implications(body, out);
+            collect_implications(source, positive, out);
+            collect_implications(body, positive, out);
         }
         Prop::Eq(_, _) | Prop::Neq(_, _) | Prop::Compare { .. } => {}
     }
