@@ -1927,3 +1927,160 @@ async fn inspect_claims_named_errors_on_undeclared_requested_predicate() {
         "the error lists the declared vocabulary: {stderr}"
     );
 }
+
+// ============================================================
+// run --batch: rows in, a receipt per row, each its own commit.
+// ============================================================
+
+/// `run --batch` with NDJSON rows on a temp file. Returns
+/// (status, receipts-parsed-from-stdout, stderr).
+fn run_batch(rows: &str, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value>, String) {
+    let f = tempfile::NamedTempFile::new().expect("temp batch file");
+    std::fs::write(f.path(), rows).expect("write batch rows");
+    let path = f.path().to_str().expect("utf8 path").to_string();
+    let ledger = ledger_morph();
+    let mut args = vec!["run", ledger.as_str(), "--batch", path.as_str()];
+    args.extend_from_slice(extra);
+    let (status, stdout, stderr) = run_cli(&args);
+    let receipts = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("receipt is one JSON object per line"))
+        .collect();
+    (status, receipts, stderr)
+}
+
+fn ledger_row(transformation: &str, actor: &str, named: Value) -> String {
+    serde_json::json!({
+        "transformation": transformation,
+        "actor": actor,
+        "args_named": named,
+    })
+    .to_string()
+}
+
+// The batch contract in one run: commits, a blank line skipped, a
+// malformed row turned into an error receipt, a lawful rejection, and
+// a row AFTER the failures still committing - with exit 0, because
+// every row produced a receipt.
+#[tokio::test]
+async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
+    reset_db().await;
+    let rows = [
+        ledger_row(
+            "post_simple_entry",
+            "jordan",
+            serde_json::json!({
+                "entry_id": "b1", "posting_date": "d1", "period": "p1",
+                "debit_account": "cash", "credit_account": "rev", "amount": "100"
+            }),
+        ),
+        String::new(),
+        ledger_row("close_period", "maria", serde_json::json!({"period": "p1"})),
+        "this is not json".to_string(),
+        // Posting into the closed period: a lawful rejection.
+        ledger_row(
+            "post_simple_entry",
+            "jordan",
+            serde_json::json!({
+                "entry_id": "b2", "posting_date": "d2", "period": "p1",
+                "debit_account": "cash", "credit_account": "rev", "amount": "50"
+            }),
+        ),
+        // A later row still commits after the error and the rejection.
+        ledger_row(
+            "post_simple_entry",
+            "nina",
+            serde_json::json!({
+                "entry_id": "b3", "posting_date": "d3", "period": "p2",
+                "debit_account": "cash", "credit_account": "rev", "amount": "75"
+            }),
+        ),
+    ]
+    .join("\n");
+
+    let (status, receipts, stderr) = run_batch(&rows, &[]);
+    assert!(
+        status.success(),
+        "receipts for every row mean exit 0: {stderr}"
+    );
+    assert_eq!(receipts.len(), 5, "blank line yields no receipt");
+
+    let statuses: Vec<&str> = receipts
+        .iter()
+        .map(|r| r["status"].as_str().expect("status"))
+        .collect();
+    assert_eq!(
+        statuses,
+        vec!["committed", "committed", "error", "rejected", "committed"]
+    );
+    // `row` is the 1-based input line number, so receipts map back to
+    // the file even with blank lines skipped.
+    let rows_field: Vec<u64> = receipts
+        .iter()
+        .map(|r| r["row"].as_u64().expect("row"))
+        .collect();
+    assert_eq!(rows_field, vec![1, 3, 4, 5, 6]);
+    // Per-row actors land in the receipts (and so in the audit rows).
+    assert_eq!(receipts[1]["actor"]["value"], "maria");
+    assert_eq!(receipts[4]["actor"]["value"], "nina");
+    assert!(
+        stderr.contains("5 rows - 3 committed, 1 rejected, 1 errors"),
+        "summary on stderr: {stderr}"
+    );
+}
+
+// --explain-on-reject composes per row: the rejected row's receipt
+// carries the same structured explanation `explain --json` produces.
+#[tokio::test]
+async fn batch_rejected_rows_carry_explanations_when_asked() {
+    reset_db().await;
+    let rows = [
+        ledger_row("close_period", "maria", serde_json::json!({"period": "p9"})),
+        ledger_row(
+            "post_simple_entry",
+            "jordan",
+            serde_json::json!({
+                "entry_id": "x1", "posting_date": "d1", "period": "p9",
+                "debit_account": "cash", "credit_account": "rev", "amount": "10"
+            }),
+        ),
+    ]
+    .join("\n");
+    let (status, receipts, _stderr) = run_batch(&rows, &["--explain-on-reject"]);
+    assert!(status.success());
+    assert_eq!(receipts[1]["status"], "rejected");
+    assert!(
+        receipts[1]["explanation"].is_object(),
+        "the rejected row explains itself: {}",
+        receipts[1]
+    );
+    assert!(
+        receipts[0].get("explanation").is_none(),
+        "committed rows are unchanged"
+    );
+}
+
+// Operational failure - an unreadable batch path - is the non-zero
+// case, distinct from per-row outcomes.
+#[tokio::test]
+async fn batch_with_unreadable_input_exits_nonzero() {
+    let (status, _stdout, stderr) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "--batch",
+        "/nonexistent/rows.ndjson",
+    ]);
+    assert!(!status.success());
+    assert!(stderr.contains("failed to read batch rows"), "{stderr}");
+}
+
+// --trace is single-run diagnostics; clap refuses the combination.
+#[tokio::test]
+async fn batch_conflicts_with_trace() {
+    let (status, _stdout, stderr) = run_cli(&["run", &ledger_morph(), "--batch", "-", "--trace"]);
+    assert!(!status.success());
+    assert!(
+        stderr.contains("cannot be used with"),
+        "clap names the conflict: {stderr}"
+    );
+}

@@ -527,8 +527,10 @@ pub(crate) struct RunArgs {
     /// Path to a `.morph` source file containing the programme.
     pub(crate) file: PathBuf,
 
-    /// Transformation name within the parsed programme.
-    pub(crate) transformation: String,
+    /// Transformation name within the parsed programme. Omitted in
+    /// batch mode, where every row names its own.
+    #[arg(required_unless_present = "batch", conflicts_with = "batch")]
+    pub(crate) transformation: Option<String>,
 
     /// JSON array of arguments matching the transformation's parameter
     /// list. Each element is an `EvalValue` in the tagged form:
@@ -540,8 +542,8 @@ pub(crate) struct RunArgs {
     /// schema cannot describe unambiguously.
     #[arg(
         long,
-        conflicts_with = "args_named",
-        required_unless_present = "args_named"
+        conflicts_with_all = ["args_named", "batch"],
+        required_unless_present_any = ["args_named", "batch"]
     )]
     pub(crate) args: Option<String>,
 
@@ -551,21 +553,38 @@ pub(crate) struct RunArgs {
     /// types, and `null` all error). Refuses Polymorphic, Ambiguous,
     /// Unconstrained, and Collection parameters; use `--args` for
     /// those.
-    #[arg(long, conflicts_with = "args", required_unless_present = "args")]
+    #[arg(
+        long,
+        conflicts_with = "args",
+        required_unless_present_any = ["args", "batch"]
+    )]
     pub(crate) args_named: Option<String>,
 
     /// Subject identifying the actor under whose authority this
     /// transition is proposed. Wrapped as an `EvalValue::Subject` and
-    /// persisted to `morpholog.audit.actor`.
+    /// persisted to `morpholog.audit.actor`. Omitted in batch mode,
+    /// where every row carries its own.
+    #[arg(long, required_unless_present = "batch", conflicts_with = "batch")]
+    pub(crate) actor: Option<String>,
+
+    /// Batch mode: a path to NDJSON rows (`-` for stdin), one
+    /// transition per line as
+    /// `{"transformation": "...", "actor": "...", "args_named": {...}}`
+    /// (or `"args": [...]` in the tagged codec). Each row commits or
+    /// rolls back on its own - an import is explicitly NOT
+    /// all-or-nothing - and produces one NDJSON receipt on stdout in
+    /// row order. Rejections and malformed rows are receipts, not
+    /// process failures: the exit code is zero whenever every row was
+    /// processed, reserving non-zero for operational failure.
     #[arg(long)]
-    pub(crate) actor: String,
+    pub(crate) batch: Option<PathBuf>,
 
     #[command(flatten)]
     pub(crate) db: DatabaseArgs,
 
     /// When set, emit a structured per-statement trace alongside the
     /// outcome - the kernel's `propose_with_trace` shape on the wire.
-    #[arg(long, conflicts_with = "explain_on_reject")]
+    #[arg(long, conflicts_with_all = ["explain_on_reject", "batch"])]
     pub(crate) trace: bool,
 
     /// When set, a business rejection carries an `explanation` field:
@@ -969,10 +988,10 @@ mod tests {
             args.file,
             std::path::PathBuf::from("examples/03_double_entry_ledger/ledger.morph")
         );
-        assert_eq!(args.transformation, "post_simple_entry");
+        assert_eq!(args.transformation.as_deref(), Some("post_simple_entry"));
         assert_eq!(args.args.as_deref(), Some("[]"));
         assert!(args.args_named.is_none());
-        assert_eq!(args.actor, "jordan");
+        assert_eq!(args.actor.as_deref(), Some("jordan"));
         assert_eq!(args.db.database_url, "postgres:///morpholog_dev");
     }
 
@@ -1169,8 +1188,11 @@ mod tests {
             panic!("expected Run, got {:?}", cli.command);
         };
         assert!(args.trace, "expected trace flag to be set");
-        assert_eq!(args.transformation, "create_net_settlement");
-        assert_eq!(args.actor, "jordan");
+        assert_eq!(
+            args.transformation.as_deref(),
+            Some("create_net_settlement")
+        );
+        assert_eq!(args.actor.as_deref(), Some("jordan"));
     }
 
     /// Without `--trace`, `RunArgs.trace` defaults to false. The non-trace
