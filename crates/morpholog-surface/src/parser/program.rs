@@ -4,8 +4,8 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    ArgDecl, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateArgKind, PredicateDecl,
-    Program, Transformation, Unit, Var,
+    ArgDecl, Definition, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateArgKind,
+    PredicateDecl, Program, Transformation, Unit, Var,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -95,6 +95,11 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     );
     report_duplicates(
         &mut diagnostics,
+        "definition",
+        raw.definitions.iter().map(|(d, s)| (d.name.as_str(), s)),
+    );
+    report_duplicates(
+        &mut diagnostics,
         "invariant",
         raw.invariants.iter().map(|(i, s)| (i.name.as_str(), s)),
     );
@@ -152,15 +157,22 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         return Err(diagnostics);
     }
 
-    Ok(Program {
+    let mut program = Program {
         name: raw.name,
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
         intents: raw.intents.into_iter().map(|(d, _)| d).collect(),
-        definitions: Vec::new(),
+        definitions: raw.definitions.into_iter().map(|(d, _)| d).collect(),
         invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
         transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
-    })
+    };
+    // A call is spelled exactly like a claim reference; only the
+    // declaration table can tell them apart, and a reference may
+    // precede the definition it names, so resolution runs over the
+    // whole collected programme. Formatting a resolved call prints
+    // the same text back, so round-trip holds.
+    morpholog_core::resolve_defined_calls(&mut program);
+    Ok(program)
 }
 
 /// Report every name declared more than once in `items`: the
@@ -197,6 +209,7 @@ struct RawProgram {
     name: String,
     predicates: Vec<(PredicateDecl, Span)>,
     intents: Vec<(IntentDecl, Span)>,
+    definitions: Vec<(Definition, Span)>,
     invariants: Vec<(Invariant, Span)>,
     transformations: Vec<(Transformation, Span)>,
     derived_claims: Vec<(DerivedClaim, Span)>,
@@ -211,6 +224,7 @@ struct RawProgram {
 enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
     Intent(IntentDecl, Span),
+    Definition(Definition, Span),
     Invariant(Invariant, Span),
     Transformation(Transformation, Span),
     Derived(DerivedClaim, Span),
@@ -334,6 +348,42 @@ where
             )
         });
 
+    // definition_decl ::= "define" Ident "(" param-list ")" ":" body
+    // body            ::= Indent expression Dedent | expression
+    //
+    // A named, parameterised proposition. Params are bare identifiers
+    // like a transformation's (their kinds are inferred from the body);
+    // the body is one proposition in the invariant's inline-or-indented
+    // shape. Calls are claim-shaped references resolved by name after
+    // the whole programme is collected (a reference may precede the
+    // definition it names).
+    let definition_body = choice((
+        just(Token::Indent)
+            .ignore_then(expression_parser())
+            .then_ignore(just(Token::Dedent)),
+        expression_parser(),
+    ));
+    let definition_param_list = ident
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<String>>();
+    let definition_decl = just(Token::KwDefine)
+        .ignore_then(ident)
+        .then(definition_param_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then_ignore(just(Token::Colon))
+        .then(definition_body)
+        .map_with(|((name, parameters), body), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Definition(
+                Definition {
+                    name: name.into(),
+                    parameters: parameters.into_iter().map(Var::from).collect(),
+                    body,
+                },
+                span.start()..span.end(),
+            )
+        });
+
     // transformation_decl ::= "transformation" Ident "(" param-list ")" ":" Indent stmt+ Dedent
     //
     // Params are bare identifiers (no kinds); the IR stores them as
@@ -419,6 +469,7 @@ where
     let top_level_decl = choice((
         predicate_decl,
         intent_decl,
+        definition_decl,
         invariant_decl,
         transformation_decl,
         derived_decl,
@@ -432,6 +483,7 @@ where
         just(Token::KwPredicate)
             .ignored()
             .or(just(Token::KwIntent).ignored())
+            .or(just(Token::KwDefine).ignored())
             .or(just(Token::KwInvariant).ignored())
             .or(just(Token::KwTransformation).ignored())
             .or(just(Token::KwDerived).ignored())
@@ -447,6 +499,7 @@ where
         .map(|(name, decls)| {
             let mut predicates = Vec::new();
             let mut intents = Vec::new();
+            let mut definitions = Vec::new();
             let mut invariants = Vec::new();
             let mut transformations = Vec::new();
             let mut derived_claims = Vec::new();
@@ -454,6 +507,7 @@ where
                 match d {
                     TopLevelDecl::Predicate(p, s) => predicates.push((p, s)),
                     TopLevelDecl::Intent(i, s) => intents.push((i, s)),
+                    TopLevelDecl::Definition(d, s) => definitions.push((d, s)),
                     TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
                     TopLevelDecl::Transformation(t, s) => transformations.push((t, s)),
                     TopLevelDecl::Derived(d, s) => derived_claims.push((d, s)),
@@ -463,6 +517,7 @@ where
                 name,
                 predicates,
                 intents,
+                definitions,
                 invariants,
                 transformations,
                 derived_claims,

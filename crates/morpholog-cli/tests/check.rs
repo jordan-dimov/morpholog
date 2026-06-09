@@ -79,7 +79,7 @@ fn check_verbose_clean_program_prints_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let expected = format!(
-        "ok: {}\nprogram: demo\n  predicates: 1\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n",
+        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n",
         tmp.path().display()
     );
     assert_eq!(
