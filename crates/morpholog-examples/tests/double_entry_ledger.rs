@@ -31,6 +31,7 @@ fn simple_entry_balances_and_commits() {
         ],
         State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     assert_eq!(state.len(), 3, "1 JournalEntry + 2 JournalLine");
@@ -71,6 +72,7 @@ fn split_entry_balances_and_commits() {
         ],
         State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
@@ -119,6 +121,7 @@ fn unbalanced_entry_rejected_by_invariant() {
         ],
         &State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .expect("propose should not error");
 
@@ -141,6 +144,7 @@ fn closed_period_rejects_normal_posting() {
         vec![subj("p_2026_04")],
         State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     assert!(has_claim(
@@ -161,6 +165,7 @@ fn closed_period_rejects_normal_posting() {
         ],
         &after_close,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .expect("propose should not error");
 
@@ -177,6 +182,7 @@ fn double_close_rejected() {
         vec![subj("p_2026_04")],
         State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     let outcome = common::propose_with_test_actor(
@@ -184,6 +190,7 @@ fn double_close_rejected() {
         vec![subj("p_2026_04")],
         &after_close,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .expect("propose should not error");
 
@@ -208,6 +215,7 @@ fn restatement_into_closed_period_preserves_original() {
         ],
         State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     // 2. Close the period.
@@ -216,6 +224,7 @@ fn restatement_into_closed_period_preserves_original() {
         vec![subj("p_2026_04")],
         s1,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     // 3. Restate the entry with a corrected amount (101 instead of
@@ -234,6 +243,7 @@ fn restatement_into_closed_period_preserves_original() {
         ],
         s2,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     // Final state contains:
@@ -302,7 +312,7 @@ fn lone_journal_entry_without_lines_violates_invariant() {
         &[subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
     )]);
     let inv = double_entry_ledger::journal_entry_has_lines();
-    let holds = eval_invariant(&inv, &state, None).expect("evaluation should not error");
+    let holds = eval_invariant(&inv, &state, None, &[]).expect("evaluation should not error");
     assert!(
         !holds,
         "a JournalEntry with no matching JournalLine must violate journal_entry_has_lines"
@@ -329,6 +339,7 @@ fn cannot_restate_already_restated_entry() {
         ],
         State::default(),
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     let s2 = must_accept(
@@ -344,6 +355,7 @@ fn cannot_restate_already_restated_entry() {
         ],
         s1,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     );
 
     let outcome = common::propose_with_test_actor(
@@ -359,6 +371,7 @@ fn cannot_restate_already_restated_entry() {
         ],
         &s2,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .expect("propose should not error");
 

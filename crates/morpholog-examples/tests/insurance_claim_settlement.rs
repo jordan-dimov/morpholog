@@ -30,11 +30,17 @@ use common::{
     claim_instance, dec, dec_str, has_claim, must_accept, must_accept_as, propose_as,
     propose_with_test_actor, subj,
 };
-use morpholog_core::{ClaimInstance, Invariant, Outcome, State, enumerate_derived, eval_invariant};
+use morpholog_core::{
+    ClaimInstance, Definition, Invariant, Outcome, State, enumerate_derived, eval_invariant,
+};
 use morpholog_examples::insurance_claim_settlement;
 
 fn invariants() -> Vec<Invariant> {
     insurance_claim_settlement::all_invariants()
+}
+
+fn definitions() -> Vec<Definition> {
+    insurance_claim_settlement::definitions()
 }
 
 fn issue(state: State, policy_id: &str, aggregate_limit: i64) -> State {
@@ -43,6 +49,7 @@ fn issue(state: State, policy_id: &str, aggregate_limit: i64) -> State {
         vec![subj(policy_id), dec(aggregate_limit)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -52,6 +59,7 @@ fn report(state: State, claim_id: &str, policy_id: &str, claimed_amount: i64) ->
         vec![subj(claim_id), subj(policy_id), dec(claimed_amount)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -61,6 +69,7 @@ fn grant(state: State, actor: &str, limit: i64) -> State {
         vec![subj(actor), dec(limit)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -99,6 +108,7 @@ fn duplicate_policy_id_violates_uniqueness_invariant() {
         vec![subj("policy_001"), dec(50_000)],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { reason } = outcome else {
@@ -118,6 +128,7 @@ fn report_claim_without_policy_is_rejected_at_require() {
         vec![subj("claim_001"), subj("policy_001"), dec(20_000)],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { reason } = outcome else {
@@ -146,6 +157,7 @@ fn duplicate_claim_id_violates_uniqueness_invariant() {
         vec![subj("claim_001"), subj("policy_001"), dec(30_000)],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { reason } = outcome else {
@@ -176,6 +188,7 @@ fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
         "alex",
         pre,
         &invariants(),
+        &definitions(),
     );
     // The authorisation records who decided.
     assert!(has_claim(
@@ -231,7 +244,7 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         actor: Subject::from("alex"),
     };
     let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &invariants())
+        propose_with_trace(&t, &transition, &pre, &invariants(), &definitions())
     else {
         panic!("expected Completed");
     };
@@ -283,6 +296,7 @@ fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
         "alex",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { reason } = outcome else {
@@ -300,6 +314,7 @@ fn authorise_settlement_at_actor_boundary_admits() {
         "alex",
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -334,6 +349,7 @@ fn after_first_settlement(amount: i64) -> State {
         "alex",
         pre,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -347,6 +363,7 @@ fn second_settlement_under_remaining_aggregate_admits() {
         "alex",
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -371,6 +388,7 @@ fn second_settlement_at_aggregate_boundary_admits() {
         "alex",
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -406,7 +424,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
         actor: Subject::from("alex"),
     };
     let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &invariants())
+        propose_with_trace(&t, &transition, &pre, &invariants(), &definitions())
     else {
         panic!("expected Completed");
     };
@@ -462,6 +480,7 @@ fn aggregate_limit_scoped_per_policy() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     // policy_002 should still accept a fresh settlement up to its own limit.
     let s = report(s, "claim_002", "policy_002", 80_000);
@@ -471,6 +490,7 @@ fn aggregate_limit_scoped_per_policy() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -504,6 +524,7 @@ fn settlement_id_must_be_unique_across_payments() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     // Second settlement reusing settlement_001 against a different claim.
     let outcome = propose_as(
@@ -512,6 +533,7 @@ fn settlement_id_must_be_unique_across_payments() {
         "alex",
         &s,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { reason } = outcome else {
@@ -540,7 +562,7 @@ fn paid_without_authorised_violates_invariant() {
     );
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_authorised();
-    let holds = eval_invariant(&inv, &state, None).expect("eval should not error");
+    let holds = eval_invariant(&inv, &state, None, &[]).expect("eval should not error");
     assert!(
         !holds,
         "paid_implies_authorised should not hold when an orphan payment is admitted"
@@ -566,7 +588,7 @@ fn paid_without_headroom_violates_invariant() {
     );
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_headroom();
-    let holds = eval_invariant(&inv, &state, None).expect("eval should not error");
+    let holds = eval_invariant(&inv, &state, None, &[]).expect("eval should not error");
     assert!(
         !holds,
         "paid_implies_headroom should not hold when a payment exists with no PolicyHeadroom for that policy"
@@ -592,6 +614,7 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
@@ -599,6 +622,7 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     let s = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
@@ -606,10 +630,15 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
 
-    let rows = enumerate_derived(&insurance_claim_settlement::policy_limit_usage(), &s)
-        .expect("enumerate_derived should not error");
+    let rows = enumerate_derived(
+        &insurance_claim_settlement::policy_limit_usage(),
+        &s,
+        &insurance_claim_settlement::definitions(),
+    )
+    .expect("enumerate_derived should not error");
 
     // One row per distinct policy that has at least one payment.
     assert_eq!(rows.len(), 2, "expected one row per policy, got {rows:?}");
@@ -628,8 +657,12 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
 fn policy_limit_usage_empty_when_no_settlements_paid() {
     let s = issue(State::default(), "policy_001", 100_000);
     let s = report(s, "claim_001", "policy_001", 20_000);
-    let rows = enumerate_derived(&insurance_claim_settlement::policy_limit_usage(), &s)
-        .expect("enumerate_derived should not error");
+    let rows = enumerate_derived(
+        &insurance_claim_settlement::policy_limit_usage(),
+        &s,
+        &insurance_claim_settlement::definitions(),
+    )
+    .expect("enumerate_derived should not error");
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
 }
 
@@ -656,6 +689,7 @@ fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
         "alex",
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(
         has_claim(&post, "PolicyHeadroom", &[subj("policy_001"), dec(70_000)]),
@@ -770,6 +804,7 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
         "alex",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("kernel must not error");
 
@@ -896,8 +931,15 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
         ],
     );
 
-    let outcome = propose_as(&buggy, vec![dec(30_000)], "alex", &pre, &invariants())
-        .expect("kernel must not error");
+    let outcome = propose_as(
+        &buggy,
+        vec![dec(30_000)],
+        "alex",
+        &pre,
+        &invariants(),
+        &definitions(),
+    )
+    .expect("kernel must not error");
 
     match outcome {
         Outcome::Rejected { reason } => {
@@ -930,6 +972,7 @@ fn set_terms(state: State, policy_id: &str, deductible: i64, per_claim_limit: i6
         vec![subj(policy_id), dec(deductible), dec(per_claim_limit)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -948,6 +991,7 @@ fn settlement_capped_at_per_claim_limit() {
         "alex",
         &s,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(over, Outcome::Rejected { .. }));
@@ -958,6 +1002,7 @@ fn settlement_capped_at_per_claim_limit() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &ok,
@@ -981,6 +1026,7 @@ fn loss_below_deductible_yields_no_payout() {
         "alex",
         &s,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -1001,6 +1047,7 @@ fn settlement_pays_loss_net_of_deductible() {
         "alex",
         &s,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(over, Outcome::Rejected { .. }));
@@ -1011,6 +1058,7 @@ fn settlement_pays_loss_net_of_deductible() {
         "alex",
         s,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &ok,
@@ -1031,6 +1079,7 @@ fn nonsensical_coverage_terms_are_rejected() {
         vec![subj("p1"), dec(-1), dec(50_000)],
         &s,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(negative_deductible, Outcome::Rejected { .. }));
@@ -1040,6 +1089,7 @@ fn nonsensical_coverage_terms_are_rejected() {
         vec![subj("p1"), dec(1_000), dec(0)],
         &s,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(zero_limit, Outcome::Rejected { .. }));

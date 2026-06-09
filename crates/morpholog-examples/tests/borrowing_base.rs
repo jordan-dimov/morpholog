@@ -10,11 +10,15 @@
 mod common;
 
 use common::{claim_instance, dec, dec_str, has_claim, must_accept, propose_with_test_actor, subj};
-use morpholog_core::{Invariant, Outcome, State, enumerate_derived};
+use morpholog_core::{Definition, Invariant, Outcome, State, enumerate_derived};
 use morpholog_examples::borrowing_base;
 
 fn invariants() -> Vec<Invariant> {
     borrowing_base::all_invariants()
+}
+
+fn definitions() -> Vec<Definition> {
+    borrowing_base::definitions()
 }
 
 // Facility f1 at an 80% advance rate, with `collateral` of pledged value.
@@ -24,12 +28,14 @@ fn facility_with_collateral(collateral: i64) -> State {
         vec![subj("f1"), dec_str("0.8")],
         State::default(),
         &invariants(),
+        &definitions(),
     );
     must_accept(
         &borrowing_base::pledge_collateral(),
         vec![subj("f1"), subj("asset_1"), dec(collateral)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -43,6 +49,7 @@ fn draw_within_advance_limit_succeeds() {
         vec![subj("f1"), subj("draw_1"), dec(80)],
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -61,6 +68,7 @@ fn draw_over_advance_limit_is_rejected() {
         vec![subj("f1"), subj("draw_1"), dec(81)],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -76,12 +84,14 @@ fn cumulative_draws_respect_the_advance_limit() {
         vec![subj("f1"), subj("draw_1"), dec(50)],
         pre,
         &invariants(),
+        &definitions(),
     );
     let outcome = propose_with_test_actor(
         &borrowing_base::draw(),
         vec![subj("f1"), subj("draw_2"), dec(40)],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -97,9 +107,14 @@ fn facility_utilisation_reports_drawn_over_collateral() {
         vec![subj("f1"), subj("draw_1"), dec(60)],
         pre,
         &invariants(),
+        &definitions(),
     );
-    let rows = enumerate_derived(&borrowing_base::facility_utilisation(), &state)
-        .expect("enumerate_derived should not error");
+    let rows = enumerate_derived(
+        &borrowing_base::facility_utilisation(),
+        &state,
+        &borrowing_base::definitions(),
+    )
+    .expect("enumerate_derived should not error");
     assert!(
         rows.contains(&claim_instance(
             "FacilityUtilisation",
@@ -119,12 +134,14 @@ fn zero_value_collateral_pledge_is_rejected() {
         vec![subj("f1"), dec_str("0.8")],
         State::default(),
         &invariants(),
+        &definitions(),
     );
     let outcome = propose_with_test_actor(
         &borrowing_base::pledge_collateral(),
         vec![subj("f1"), subj("asset_1"), dec(0)],
         &state,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -140,6 +157,7 @@ fn negative_drawdown_is_rejected() {
         vec![subj("f1"), subj("draw_1"), dec(-10)],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -155,6 +173,7 @@ fn advance_rate_above_one_is_rejected() {
         vec![subj("f1"), dec_str("1.5")],
         &empty,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));

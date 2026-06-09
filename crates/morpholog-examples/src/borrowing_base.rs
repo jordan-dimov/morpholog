@@ -7,7 +7,7 @@
 
 use std::sync::LazyLock;
 
-use morpholog_core::{DerivedClaim, Invariant, Program, Transformation};
+use morpholog_core::{Definition, DerivedClaim, Invariant, Program, Transformation};
 
 static PROGRAM: LazyLock<Program> = LazyLock::new(|| {
     crate::parse_example(
@@ -22,6 +22,10 @@ pub fn program() -> Program {
 
 pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
+}
+
+pub fn definitions() -> Vec<Definition> {
+    PROGRAM.definitions.clone()
 }
 
 pub fn open_facility() -> Transformation {

@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::definitions::DefinitionIndex;
 use crate::derive::eval_invariant;
 use crate::eval::{
     EvalContext, EvalError, RenderedClaim, eval_value, find_failing_subexpr, find_matches,
@@ -21,8 +22,8 @@ use crate::eval::{
 };
 use crate::format;
 use crate::ir::{
-    Claim, Intent, Invariant, InvariantName, PredicateName, Stmt, Subject, Term, Transformation,
-    TransformationName, Var,
+    Claim, Definition, Intent, Invariant, InvariantName, PredicateName, Stmt, Subject, Term,
+    Transformation, TransformationName, Var,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
@@ -261,6 +262,7 @@ pub fn propose(
     transition: &Transition,
     pre_state: &State,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<Outcome, EvalError> {
     // Input validation (transformation-name / arg-count matching) lives
     // in `propose_inner` so both `propose` and `propose_with_trace` share
@@ -271,6 +273,7 @@ pub fn propose(
         transition,
         pre_state,
         invariants,
+        definitions,
         &mut TraceSink::Off,
     )
 }
@@ -287,11 +290,19 @@ pub fn propose_with_trace(
     transition: &Transition,
     pre_state: &State,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> TracedProposal {
     let mut entries: Vec<TraceEntry> = vec![];
     let result = {
         let mut sink = TraceSink::On(&mut entries);
-        propose_inner(transformation, transition, pre_state, invariants, &mut sink)
+        propose_inner(
+            transformation,
+            transition,
+            pre_state,
+            invariants,
+            definitions,
+            &mut sink,
+        )
     };
     match result {
         Ok(outcome) => TracedProposal::Completed {
@@ -313,6 +324,7 @@ pub(crate) fn propose_inner(
     transition: &Transition,
     pre_state: &State,
     invariants: &[Invariant],
+    definitions: &[Definition],
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
     if transformation.name != transition.transformation_name {
@@ -344,12 +356,14 @@ pub(crate) fn propose_inner(
     let mut emitted: Vec<IntentInstance> = vec![];
 
     let actor = Some(&transition.actor);
+    let definition_index = DefinitionIndex::new(definitions);
     for stmt in &transformation.body {
         match execute_stmt(
             stmt,
             pre_state,
             &mut bindings,
             actor,
+            definition_index,
             &mut asserted,
             &mut retracted,
             &mut emitted,
@@ -366,7 +380,7 @@ pub(crate) fn propose_inner(
         // Pass both pre_state and candidate. Invariants that contain
         // `Prop::Pre` flip into pre-state lookup for the wrapped
         // subtree; invariants that don't are unaffected.
-        let held = eval_invariant(inv, &candidate, Some(pre_state))?;
+        let held = eval_invariant(inv, &candidate, Some(pre_state), definitions)?;
         if trace.is_on() {
             trace.push(TraceEntry::InvariantCheck {
                 name: inv.name.clone(),
@@ -395,6 +409,7 @@ pub(crate) fn execute_stmt(
     pre_state: &State,
     bindings: &mut Bindings,
     actor: Option<&Subject>,
+    definitions: DefinitionIndex<'_>,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
@@ -406,7 +421,7 @@ pub(crate) fn execute_stmt(
             // scope. Passing `None` for pre_state is what makes
             // `Prop::Pre` inside a `require` surface as
             // `EvalError::PreStateUnavailable`.
-            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
                 // Render once; reused for both the reason string and the
@@ -444,7 +459,7 @@ pub(crate) fn execute_stmt(
             // the binding context with the returned match, not extend.
             // The expression is rendered once per branch and reused for
             // both the reason/error string and the trace entry.
-            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
                 0 => {
@@ -495,7 +510,7 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Let { name, value } => {
-            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let v = eval_value(value, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Let {
@@ -532,7 +547,7 @@ pub(crate) fn execute_stmt(
             // The matched claims are the same set the trace entry needs,
             // so compute them once (indexed by ground args, shared with
             // the read path) and only the trace push is conditional.
-            let ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let matched = matching_claims(predicate, args, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Retract {
@@ -548,7 +563,7 @@ pub(crate) fn execute_stmt(
             collection,
             body,
         } => {
-            let coll_ctx = EvalContext::new(pre_state, None, bindings, actor);
+            let coll_ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let coll_val = eval_value(collection, &coll_ctx)?;
             let EvalValue::Collection(items) = coll_val else {
                 return Err(EvalError::TypeMismatch("For expects a collection".into()));
@@ -577,6 +592,7 @@ pub(crate) fn execute_stmt(
                                 pre_state,
                                 bindings,
                                 actor,
+                                definitions,
                                 asserted,
                                 retracted,
                                 emitted,
@@ -631,7 +647,14 @@ pub(crate) fn execute_stmt(
                     bindings.insert(binding.clone(), item);
                     for inner in body {
                         match execute_stmt(
-                            inner, pre_state, bindings, actor, asserted, retracted, emitted,
+                            inner,
+                            pre_state,
+                            bindings,
+                            actor,
+                            definitions,
+                            asserted,
+                            retracted,
+                            emitted,
                             &mut off,
                         )? {
                             StmtOutcome::Continue => {}

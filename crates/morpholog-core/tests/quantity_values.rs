@@ -14,13 +14,20 @@ use morpholog_core::ir_builder::{
     qty, sum, term, transformation, var,
 };
 use morpholog_core::{
-    EvalError, EvalValue, Invariant, Outcome, Program, State, Transformation, ValidationError,
+    Definition, EvalError, EvalValue, Invariant, Outcome, Program, State, Transformation,
+    ValidationError,
 };
 use morpholog_test_support::{dur, must_accept, propose_with_test_actor, qty as q, subj};
 
 /// Propose and require a business rejection (not a kernel error).
-fn must_reject(t: &Transformation, args: Vec<EvalValue>, pre: State, invariants: &[Invariant]) {
-    let outcome = propose_with_test_actor(t, args, &pre, invariants)
+fn must_reject(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    pre: State,
+    invariants: &[Invariant],
+    definitions: &[Definition],
+) {
+    let outcome = propose_with_test_actor(t, args, &pre, invariants, definitions)
         .expect("proposal should evaluate cleanly");
     assert!(
         matches!(outcome, Outcome::Rejected { .. }),
@@ -36,9 +43,10 @@ fn must_error_naming(
     args: Vec<EvalValue>,
     pre: &State,
     invariants: &[Invariant],
+    definitions: &[Definition],
     fragments: &[&str],
 ) {
-    let err = propose_with_test_actor(t, args, pre, invariants)
+    let err = propose_with_test_actor(t, args, pre, invariants, definitions)
         .expect_err("expected a kernel evaluation error");
     let msg = format!("{err}");
     assert!(matches!(err, EvalError::TypeMismatch(_)), "got {err:?}");
@@ -185,12 +193,14 @@ fn cargo_loads_to_exactly_the_capacity_and_not_a_tonne_more() {
         vec![subj("v1"), subj("seed"), q("45000", "t")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     let state = must_accept(
         load,
         vec![subj("p1"), subj("v1"), q("30000", "t")],
         state,
         &p.invariants,
+        &p.definitions,
     );
     // Loading to the boundary is admissible: the comparison is exact.
     let state = must_accept(
@@ -198,6 +208,7 @@ fn cargo_loads_to_exactly_the_capacity_and_not_a_tonne_more() {
         vec![subj("p2"), subj("v1"), q("15000", "t")],
         state,
         &p.invariants,
+        &p.definitions,
     );
     // One more tonne breaches the capacity invariant.
     must_reject(
@@ -205,6 +216,7 @@ fn cargo_loads_to_exactly_the_capacity_and_not_a_tonne_more() {
         vec![subj("p3"), subj("v1"), q("1", "t")],
         state,
         &p.invariants,
+        &p.definitions,
     );
 }
 
@@ -219,12 +231,14 @@ fn settlement_caps_at_the_daily_amount_times_the_exact_days_of_excess() {
         vec![subj("v1"), subj("seed"), q("25000", "USD"), dur("PT132H")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     let state = must_accept(
         settle,
         vec![subj("s1"), subj("v1"), q("137500", "USD")],
         state,
         &p.invariants,
+        &p.definitions,
     );
     // A cent past the due figure is refused.
     must_reject(
@@ -232,6 +246,7 @@ fn settlement_caps_at_the_daily_amount_times_the_exact_days_of_excess() {
         vec![subj("s2"), subj("v1"), q("0.01", "USD")],
         state,
         &p.invariants,
+        &p.definitions,
     );
 }
 
@@ -246,12 +261,14 @@ fn mixed_unit_comparison_names_both_units() {
         vec![subj("v1"), subj("seed"), q("25000", "USD"), dur("PT24H")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     must_error_naming(
         p.transformation("settle").unwrap(),
         vec![subj("s1"), subj("v1"), q("5", "t")],
         &state,
         &p.invariants,
+        &p.definitions,
         &["Decimal[USD]", "Decimal[t]"],
     );
 }
@@ -269,6 +286,7 @@ fn unseeded_quantity_aggregate_errors_at_evaluation() {
         vec![subj("v1"), q("25000", "USD"), dur("PT24H")],
         &State::default(),
         &p.invariants,
+        &p.definitions,
         &["Decimal[USD]"],
     );
 }
@@ -369,11 +387,24 @@ fn same_unit_ratio_is_a_bare_decimal() {
         vec![q("1000", "USD")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     // Settling the whole due figure is a ratio of exactly 1: admissible.
-    let state = must_accept(settle, vec![q("1000", "USD")], state, &p.invariants);
+    let state = must_accept(
+        settle,
+        vec![q("1000", "USD")],
+        state,
+        &p.invariants,
+        &p.definitions,
+    );
     // A single settlement past the due figure breaches the ratio bound.
-    must_reject(settle, vec![q("1000.01", "USD")], state, &p.invariants);
+    must_reject(
+        settle,
+        vec![q("1000.01", "USD")],
+        state,
+        &p.invariants,
+        &p.definitions,
+    );
 }
 
 /// A bare decimal literal as a `Term` wrapped for value position.

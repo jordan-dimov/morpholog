@@ -29,9 +29,9 @@
 //!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{
-    ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, Intent, IntentDecl, Invariant, OrderedDomain,
-    PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term, Transformation, Value,
-    ValueExpr, Var,
+    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, Intent, IntentDecl, Invariant,
+    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term,
+    Transformation, Value, ValueExpr, Var,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -131,6 +131,16 @@ pub fn role(s: &str) -> Term {
 pub fn claim(predicate: &str, args: Vec<Term>) -> Prop {
     Prop::Claim {
         predicate: predicate.into(),
+        args,
+    }
+}
+
+/// Call to a named [`Definition`]. The call-shaped sibling of [`claim`]:
+/// args pair positionally with the definition's parameters, ground args
+/// filter, unbound variable args receive the body's projected bindings.
+pub fn defined(name: &str, args: Vec<Term>) -> Prop {
+    Prop::Defined {
+        name: name.into(),
         args,
     }
 }
@@ -481,6 +491,16 @@ pub fn transformation(name: &str, parameters: Vec<Var>, body: Vec<Stmt>) -> Tran
     }
 }
 
+/// Build a [`Definition`] - a named, parameterised proposition.
+/// Parameters come from [`params`]; call it with [`defined`].
+pub fn definition(name: &str, parameters: Vec<Var>, body: Prop) -> Definition {
+    Definition {
+        name: name.into(),
+        parameters,
+        body,
+    }
+}
+
 /// Builder for a [`Program`]. Set the non-empty sections and finish with
 /// `.build()`; omitted sections default to empty.
 #[must_use]
@@ -488,6 +508,7 @@ pub struct ProgramBuilder {
     name: String,
     predicates: Vec<PredicateDecl>,
     intents: Vec<IntentDecl>,
+    definitions: Vec<Definition>,
     invariants: Vec<Invariant>,
     transformations: Vec<Transformation>,
     derived_claims: Vec<DerivedClaim>,
@@ -501,6 +522,11 @@ impl ProgramBuilder {
 
     pub fn intents(mut self, v: Vec<IntentDecl>) -> Self {
         self.intents = v;
+        self
+    }
+
+    pub fn definitions(mut self, v: Vec<Definition>) -> Self {
+        self.definitions = v;
         self
     }
 
@@ -524,6 +550,7 @@ impl ProgramBuilder {
             name: self.name,
             predicates: self.predicates,
             intents: self.intents,
+            definitions: self.definitions,
             invariants: self.invariants,
             transformations: self.transformations,
             derived_claims: self.derived_claims,
@@ -537,6 +564,7 @@ pub fn program(name: &str) -> ProgramBuilder {
         name: name.to_string(),
         predicates: Vec::new(),
         intents: Vec::new(),
+        definitions: Vec::new(),
         invariants: Vec::new(),
         transformations: Vec::new(),
         derived_claims: Vec::new(),

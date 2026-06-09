@@ -64,6 +64,7 @@ async fn commit_simple_entry(pool: &PgPool, entry_id: &str) {
         &transformation,
         &transition,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();

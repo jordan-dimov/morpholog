@@ -7,7 +7,7 @@
 
 use std::sync::LazyLock;
 
-use morpholog_core::{Invariant, PredicateDecl, Program, Transformation};
+use morpholog_core::{Definition, Invariant, PredicateDecl, Program, Transformation};
 
 /// The purpose subject identifying bank debt-service-coverage usage.
 pub const BANK_DEBT_SERVICE: &str = "bank_debt_service";
@@ -32,6 +32,10 @@ pub fn all_predicates() -> Vec<PredicateDecl> {
 
 pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
+}
+
+pub fn definitions() -> Vec<Definition> {
+    PROGRAM.definitions.clone()
 }
 
 pub fn admit_independent_verification() -> Transformation {

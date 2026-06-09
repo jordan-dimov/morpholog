@@ -20,11 +20,15 @@
 mod common;
 
 use common::{dec, has_claim, must_accept, subj};
-use morpholog_core::{Invariant, Outcome, State};
+use morpholog_core::{Definition, Invariant, Outcome, State};
 use morpholog_examples::verified_revenue;
 
 fn invariants() -> Vec<Invariant> {
     verified_revenue::all_invariants()
+}
+
+fn definitions() -> Vec<Definition> {
+    verified_revenue::definitions()
 }
 
 fn asset() -> morpholog_core::EvalValue {
@@ -41,6 +45,7 @@ fn admit_iv(state: State, amount: i64, ver: &str) -> State {
         vec![asset(), period(), dec(amount), subj(ver)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -50,6 +55,7 @@ fn grant(state: State, ver: &str, purpose: &str, authority: &str, grant_id: &str
         vec![subj(ver), subj(purpose), subj(authority), subj(grant_id)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -69,6 +75,7 @@ fn admit_then_correct_preserves_history_and_moves_pointer() {
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
         &invariants(),
+        &definitions(),
     );
 
     // Both verifications in admitted state.
@@ -112,12 +119,14 @@ fn cannot_correct_already_superseded_verification() {
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
         &invariants(),
+        &definitions(),
     );
     let outcome = common::propose_with_test_actor(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(85), subj("ver_003"), subj("ver_001")],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -134,6 +143,7 @@ fn second_admission_against_existing_current_is_rejected() {
         vec![asset(), period(), dec(95), subj("ver_002")],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -200,7 +210,7 @@ fn decision_admits_only_with_matching_standing() {
         actor: Subject::from("test_actor"),
     };
     let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &invariants())
+        propose_with_trace(&t, &transition, &pre, &invariants(), &definitions())
     else {
         panic!("expected Completed");
     };
@@ -249,6 +259,7 @@ fn decision_admits_only_with_matching_standing() {
         ],
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -286,6 +297,7 @@ fn investor_standing_does_not_admit_bank_decision() {
         ],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -314,6 +326,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
         pre,
         &invariants(),
+        &definitions(),
     );
     let after_revoke = must_accept(
         &verified_revenue::revoke_standing(),
@@ -324,6 +337,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
         pre,
         &invariants(),
+        &definitions(),
     );
 
     // Historical decision survives.
@@ -366,6 +380,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
         &after_revoke,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -392,6 +407,7 @@ fn cannot_regrant_after_revocation() {
         ],
         pre,
         &invariants(),
+        &definitions(),
     );
     let outcome = common::propose_with_test_actor(
         &verified_revenue::grant_standing(),
@@ -403,6 +419,7 @@ fn cannot_regrant_after_revocation() {
         ],
         &after_revoke,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -425,6 +442,7 @@ fn cannot_grant_standing_on_nonexistent_verification() {
         ],
         &State::default(),
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -441,6 +459,7 @@ fn cannot_grant_standing_on_superseded_verification() {
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
         &invariants(),
+        &definitions(),
     );
 
     // Attempt to grant standing on the now-superseded ver_001.
@@ -454,6 +473,7 @@ fn cannot_grant_standing_on_superseded_verification() {
         ],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -469,6 +489,7 @@ fn cannot_grant_standing_on_superseded_verification() {
         ],
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -515,6 +536,7 @@ fn correction_retracts_standing_on_prior_verification() {
         ],
         pre,
         &invariants(),
+        &definitions(),
     );
 
     // Verifier corrects to 88. Both standings on ver_001 should be
@@ -524,6 +546,7 @@ fn correction_retracts_standing_on_prior_verification() {
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
         &invariants(),
+        &definitions(),
     );
 
     // Historical verification + decision still in state.
@@ -580,6 +603,7 @@ fn correction_retracts_standing_on_prior_verification() {
         ],
         &post,
         &invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -595,6 +619,7 @@ fn correction_retracts_standing_on_prior_verification() {
         ],
         post,
         &invariants(),
+        &definitions(),
     );
     let final_state = must_accept(
         &verified_revenue::admit_debt_service_revenue(),
@@ -607,6 +632,7 @@ fn correction_retracts_standing_on_prior_verification() {
         ],
         after_regrant,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &final_state,

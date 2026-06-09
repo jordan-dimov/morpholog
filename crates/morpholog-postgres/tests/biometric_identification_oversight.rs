@@ -48,9 +48,16 @@ async fn commit_as(
     args: Vec<morpholog_core::EvalValue>,
     actor: &str,
 ) -> Uuid {
-    let outcome = propose_pg_as(pool, t, args, actor, &bio::all_invariants())
-        .await
-        .expect("propose_against_pg should not error");
+    let outcome = propose_pg_as(
+        pool,
+        t,
+        args,
+        actor,
+        &bio::all_invariants(),
+        &bio::definitions(),
+    )
+    .await
+    .expect("propose_against_pg should not error");
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
         PgProposalOutcome::Rejected { reason } => {

@@ -7,7 +7,7 @@
 
 use std::sync::LazyLock;
 
-use morpholog_core::{Invariant, PredicateDecl, Program, Transformation};
+use morpholog_core::{Definition, Invariant, PredicateDecl, Program, Transformation};
 
 /// The investigator role-name that confers authority to propose
 /// `randomise_participant` transitions. Kept as a named constant so the
@@ -33,6 +33,10 @@ pub fn all_predicates() -> Vec<PredicateDecl> {
 
 pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
+}
+
+pub fn definitions() -> Vec<Definition> {
+    PROGRAM.definitions.clone()
 }
 
 pub fn consent_obtained_before_randomisation() -> Invariant {

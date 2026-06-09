@@ -29,6 +29,7 @@ pub mod ir_builder;
 pub mod analysis;
 mod check;
 mod controls;
+mod definitions;
 mod derive;
 mod eval;
 mod explain;
@@ -45,6 +46,7 @@ pub use analysis::{
     transformation_param_kinds, transformations_asserting,
 };
 pub use controls::{ControlMatrix, GateControl, TransformationControls, controls, render_controls};
+pub use definitions::resolve_defined_calls;
 pub use derive::{enumerate_derived, eval_invariant};
 pub use eval::{EvalError, RenderedClaim};
 pub use explain::{
@@ -53,10 +55,10 @@ pub use explain::{
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
-    ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, DerivedValue, Intent, IntentDecl, IntentName,
-    Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName,
-    Program, Prop, Stmt, Subject, Term, Transformation, TransformationName, Unit, Value, ValueExpr,
-    Var,
+    ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DerivedClaim, DerivedValue,
+    Intent, IntentDecl, IntentName, Invariant, InvariantName, OrderedDomain, PredicateArgKind,
+    PredicateDecl, PredicateName, Program, Prop, Stmt, Subject, Term, Transformation,
+    TransformationName, Unit, Value, ValueExpr, Var,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
@@ -150,7 +152,13 @@ mod tests {
 
     /// No-actor, no-pre EvalContext for standalone expression evaluation.
     fn ctx<'a>(state: &'a State, bindings: &'a Bindings) -> EvalContext<'a> {
-        EvalContext::new(state, None, bindings, None)
+        EvalContext::new(
+            state,
+            None,
+            bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        )
     }
 
     /// No-actor EvalContext with both pre and post states, for `Prop::Pre`
@@ -160,7 +168,13 @@ mod tests {
         pre: &'a State,
         bindings: &'a Bindings,
     ) -> EvalContext<'a> {
-        EvalContext::new(state, Some(pre), bindings, None)
+        EvalContext::new(
+            state,
+            Some(pre),
+            bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        )
     }
 
     #[test]
@@ -369,7 +383,7 @@ mod tests {
         ]);
 
         let mut got = BTreeSet::new();
-        predicates_referenced_by_prop(&prop, &mut got);
+        predicates_referenced_by_prop(&prop, &[], &mut got);
 
         let expected: BTreeSet<PredicateName> = [
             "P_implies_left",
@@ -432,7 +446,7 @@ mod tests {
         };
 
         let mut got = BTreeSet::new();
-        predicates_referenced_by_value(&expr, &mut got);
+        predicates_referenced_by_value(&expr, &[], &mut got);
 
         let expected: BTreeSet<PredicateName> =
             ["P_sum_body", "P_valueof_self", "P_valueof_default"]
@@ -469,7 +483,7 @@ mod tests {
         ];
         let mut got = BTreeSet::new();
         for stmt in &body {
-            predicates_read_by_stmt(stmt, &mut got);
+            predicates_read_by_stmt(stmt, &[], &mut got);
         }
         let expected: BTreeSet<PredicateName> =
             ["P_require", "P_bind", "P_let", "P_retract", "P_for_inner"]
@@ -483,7 +497,7 @@ mod tests {
         // Sanity: the broad walker DOES include P_assert.
         let mut broad = BTreeSet::new();
         for stmt in &body {
-            predicates_referenced_by_stmt(stmt, &mut broad);
+            predicates_referenced_by_stmt(stmt, &[], &mut broad);
         }
         assert!(
             broad.contains(&PredicateName::from("P_assert")),
@@ -1066,7 +1080,7 @@ mod tests {
             args: vec![],
             actor: Subject::from("test_actor"),
         };
-        propose(t, &transition, state, &[])
+        propose(t, &transition, state, &[], &[])
     }
 
     /// `bind_one` with a uniquely matching claim binds the variable
@@ -1270,7 +1284,7 @@ mod tests {
         };
         let Outcome::Accepted {
             asserted_claims, ..
-        } = propose(&t, &transition, &state, &[]).unwrap()
+        } = propose(&t, &transition, &state, &[], &[]).unwrap()
         else {
             panic!("expected Accepted");
         };
@@ -1315,7 +1329,7 @@ mod tests {
         };
         let Outcome::Accepted {
             asserted_claims, ..
-        } = propose(&t, &transition, &state, &[]).unwrap()
+        } = propose(&t, &transition, &state, &[], &[]).unwrap()
         else {
             panic!("expected Accepted");
         };
@@ -1578,7 +1592,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![EvalValue::Subject("p1".into())]);
         let TracedProposal::Completed { outcome, trace } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1616,7 +1630,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { outcome, trace } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1645,7 +1659,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { outcome, trace } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1680,7 +1694,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1727,7 +1741,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Errored { error, trace } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Errored");
         };
@@ -1766,7 +1780,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1816,7 +1830,7 @@ mod tests {
             ])],
         );
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1859,7 +1873,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { outcome, trace } =
-            propose_with_trace(&t, &transition, &state, &[inv])
+            propose_with_trace(&t, &transition, &state, &[inv], &[])
         else {
             panic!("expected Completed");
         };
@@ -1902,10 +1916,10 @@ mod tests {
             ],
         );
         let transition = trace_transition(&t, vec![]);
-        let outcome_a = propose(&t, &transition, &state, &[]).unwrap();
+        let outcome_a = propose(&t, &transition, &state, &[], &[]).unwrap();
         let TracedProposal::Completed {
             outcome: outcome_b, ..
-        } = propose_with_trace(&t, &transition, &state, &[])
+        } = propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1955,7 +1969,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -1998,7 +2012,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2035,7 +2049,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2076,7 +2090,7 @@ mod tests {
             ])],
         );
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2113,7 +2127,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2154,7 +2168,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2191,7 +2205,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2245,7 +2259,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2298,7 +2312,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2340,7 +2354,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2395,7 +2409,7 @@ mod tests {
             ])],
         );
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2424,7 +2438,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };
@@ -2469,7 +2483,7 @@ mod tests {
         );
         let transition = trace_transition(&t, vec![]);
         let TracedProposal::Completed { trace, .. } =
-            propose_with_trace(&t, &transition, &state, &[])
+            propose_with_trace(&t, &transition, &state, &[], &[])
         else {
             panic!("expected Completed");
         };

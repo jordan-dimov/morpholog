@@ -25,12 +25,17 @@ mod common;
 use common::{claim_instance, dec, has_claim, must_accept, must_accept_as, propose_as, subj};
 use morpholog_core::ir_builder::invariant;
 use morpholog_core::{
-    EvalError, EvalValue, Invariant, Outcome, Prop, State, Subject, Term, Value, eval_invariant,
+    Definition, EvalError, EvalValue, Invariant, Outcome, Prop, State, Subject, Term, Value,
+    eval_invariant,
 };
 use morpholog_examples::approval_controls;
 
 fn empty_invariants() -> Vec<Invariant> {
     approval_controls::all_invariants()
+}
+
+fn definitions() -> Vec<Definition> {
+    approval_controls::definitions()
 }
 
 fn grant_authority(state: State, actor: &str, doc_type: &str) -> State {
@@ -39,6 +44,7 @@ fn grant_authority(state: State, actor: &str, doc_type: &str) -> State {
         vec![subj(actor), subj(doc_type)],
         state,
         &empty_invariants(),
+        &definitions(),
     )
 }
 
@@ -48,6 +54,7 @@ fn grant_limit(state: State, actor: &str, doc_type: &str, limit: i64) -> State {
         vec![subj(actor), subj(doc_type), dec(limit)],
         state,
         &empty_invariants(),
+        &definitions(),
     )
 }
 
@@ -64,6 +71,7 @@ fn approve_without_authority_is_rejected_at_require() {
         "jordan",
         &pre,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { reason } = outcome else {
@@ -81,6 +89,7 @@ fn approve_with_authority_carries_proposing_actor_on_asserted_claim() {
         "jordan",
         pre,
         &empty_invariants(),
+        &definitions(),
     );
     assert!(
         has_claim(
@@ -104,6 +113,7 @@ fn approve_uses_proposing_actor_not_a_caller_parameter() {
         "alice",
         &pre,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     let Outcome::Rejected { .. } = outcome else {
@@ -120,12 +130,14 @@ fn revoked_authority_blocks_future_but_preserves_past() {
         "jordan",
         pre,
         &empty_invariants(),
+        &definitions(),
     );
     let after_revoke = must_accept(
         &approval_controls::revoke_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
         after_approval,
         &empty_invariants(),
+        &definitions(),
     );
 
     // History survives, future is blocked.
@@ -145,6 +157,7 @@ fn revoked_authority_blocks_future_but_preserves_past() {
         "jordan",
         &after_revoke,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -162,6 +175,7 @@ fn limit_approval_without_grant_is_rejected() {
         "jordan",
         &State::default(),
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -176,6 +190,7 @@ fn limit_approval_under_limit_commits_with_actor_and_amount() {
         "jordan",
         pre,
         &empty_invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -194,6 +209,7 @@ fn limit_approval_exactly_at_limit_commits() {
         "jordan",
         pre,
         &empty_invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -216,6 +232,7 @@ fn limit_approval_above_limit_is_rejected() {
         "jordan",
         &pre,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -233,6 +250,7 @@ fn limit_grant_is_per_actor_and_per_doc_type() {
         "alice",
         &pre,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -244,6 +262,7 @@ fn limit_grant_is_per_actor_and_per_doc_type() {
         "jordan",
         &pre,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -262,6 +281,7 @@ fn multiple_grants_take_the_satisfying_one() {
         "jordan",
         pre,
         &empty_invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -279,12 +299,14 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
         "jordan",
         pre,
         &empty_invariants(),
+        &definitions(),
     );
     let after_revoke = must_accept(
         &approval_controls::revoke_approval_limit(),
         vec![subj("jordan"), subj("invoice"), dec(1000)],
         after_approval,
         &empty_invariants(),
+        &definitions(),
     );
 
     // History survives, future blocked.
@@ -304,6 +326,7 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
         "jordan",
         &after_revoke,
         &empty_invariants(),
+        &definitions(),
     )
     .expect("propose should not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -337,6 +360,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         &transition,
         &pre,
         &empty_invariants(),
+        &definitions(),
     )
     .expect_err("non-decimal limit must surface as EvalError, not Rejected");
     match err {
@@ -363,7 +387,7 @@ fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
             args: vec![Term::Actor],
         },
     );
-    let err = eval_invariant(&inv, &State::default(), None).expect_err("must error");
+    let err = eval_invariant(&inv, &State::default(), None, &[]).expect_err("must error");
     assert!(matches!(err, EvalError::UnboundActor));
 }
 
@@ -380,7 +404,7 @@ fn term_actor_unbound_error_is_position_independent() {
             args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
         },
     );
-    let err = eval_invariant(&inv, &State::default(), None)
+    let err = eval_invariant(&inv, &State::default(), None, &[])
         .expect_err("Term::Actor outside transition scope must error regardless of arg order");
     assert!(matches!(err, EvalError::UnboundActor));
 }

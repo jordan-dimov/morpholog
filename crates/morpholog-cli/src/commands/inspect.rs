@@ -211,10 +211,10 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
 
     let pool = connect(&args.db.database_url).await?;
     let rows = match resolve_as_of(&pool, args.as_of).await? {
-        Some(tid) => list_derived_at(&pool, derived, tid)
+        Some(tid) => list_derived_at(&pool, derived, &program.definitions, tid)
             .await
             .context("list_derived_at failed")?,
-        None => list_derived(&pool, derived)
+        None => list_derived(&pool, derived, &program.definitions)
             .await
             .context("list_derived failed")?,
     };

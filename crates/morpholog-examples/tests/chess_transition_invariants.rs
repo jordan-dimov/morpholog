@@ -83,6 +83,7 @@ fn capturing_a_king_is_rejected() {
         vec![dec(1), dec(1), dec(1), dec(8), subj("black")],
         &pre,
         &program.invariants,
+        &program.definitions,
     )
     .expect("kernel must not error");
 
@@ -173,6 +174,7 @@ fn piece_count_drift_is_rejected() {
         vec![dec(2), dec(1), dec(3), dec(3), subj("black")],
         &state,
         &program.invariants,
+        &program.definitions,
     )
     .expect("kernel must not error");
 
@@ -242,6 +244,7 @@ fn dropping_the_piece_counter_is_rejected() {
         vec![subj("black")],
         &state,
         &program.invariants,
+        &program.definitions,
     )
     .expect("kernel must not error");
 
@@ -344,6 +347,7 @@ fn bishop_changing_square_color_is_rejected() {
         vec![dec(3), dec(1), dec(4), dec(3), subj("black")],
         &state,
         &program.invariants,
+        &program.definitions,
     )
     .expect("kernel must not error");
 
@@ -478,6 +482,7 @@ fn transition_invariant_catches_missing_move_count_bump() {
         vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
         &state,
         &program.invariants,
+        &program.definitions,
     )
     .expect("kernel must not error");
 
@@ -517,5 +522,5 @@ fn run_named(
     let t = program
         .transformation(transformation_name)
         .unwrap_or_else(|| panic!("transformation `{transformation_name}` not found"));
-    must_accept(t, args, state, &program.invariants)
+    must_accept(t, args, state, &program.invariants, &program.definitions)
 }

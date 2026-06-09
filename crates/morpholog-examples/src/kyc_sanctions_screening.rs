@@ -7,7 +7,7 @@
 
 use std::sync::LazyLock;
 
-use morpholog_core::{Invariant, PredicateDecl, Program};
+use morpholog_core::{Definition, Invariant, PredicateDecl, Program};
 
 // List-type and disposition constants - named so transformation bodies
 // (now in the `.morph` source) and tests cannot drift on spelling.
@@ -35,4 +35,8 @@ pub fn all_predicates() -> Vec<PredicateDecl> {
 
 pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
+}
+
+pub fn definitions() -> Vec<Definition> {
+    PROGRAM.definitions.clone()
 }

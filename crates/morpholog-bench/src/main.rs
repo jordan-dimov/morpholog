@@ -42,8 +42,8 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    EvalValue, Invariant, State, Subject, Transformation, Transition, enumerate_derived,
-    predicates_referenced_by_derived,
+    Definition, EvalValue, Invariant, State, Subject, Transformation, Transition,
+    enumerate_derived, predicates_referenced_by_derived,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
@@ -341,6 +341,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
         &transformation,
         &transition,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .context("propose_against_pg")?;
@@ -382,7 +383,7 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     // purely diagnostic and lets us see which layer dominates as N
     // and K grow.
     let derived = double_entry_ledger::trial_balance_row();
-    let footprint: Vec<String> = predicates_referenced_by_derived(&derived)
+    let footprint: Vec<String> = predicates_referenced_by_derived(&derived, &[])
         .into_iter()
         .map(|p| p.to_string())
         .collect();
@@ -404,7 +405,7 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     println!("  build_state:    {:>8} ms", t.elapsed().as_millis());
 
     let t = Instant::now();
-    let rows = enumerate_derived(&derived, &state).context("enumerate_derived")?;
+    let rows = enumerate_derived(&derived, &state, &[]).context("enumerate_derived")?;
     println!(
         "  enumerate:      {:>8} ms  ({} derived rows)",
         t.elapsed().as_millis(),
@@ -525,9 +526,14 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
     );
 
     let t = Instant::now();
-    let rows = list_derived_at(&pool, &double_entry_ledger::trial_balance_row(), target_tid)
-        .await
-        .context("list_derived_at")?;
+    let rows = list_derived_at(
+        &pool,
+        &double_entry_ledger::trial_balance_row(),
+        &double_entry_ledger::definitions(),
+        target_tid,
+    )
+    .await
+    .context("list_derived_at")?;
     println!(
         "  list_derived_at:{:>8} ms  ({} derived rows)",
         t.elapsed().as_millis(),
@@ -693,6 +699,7 @@ async fn contend_worker(
                 &transformation,
                 &transition,
                 &invariants,
+                &[],
                 max_retries,
                 &label,
                 &mut tally,
@@ -722,6 +729,7 @@ async fn contend_worker(
                 &transformation,
                 &transition,
                 &invariants,
+                &double_entry_ledger::definitions(),
                 max_retries,
                 &label,
                 &mut tally,
@@ -737,18 +745,20 @@ async fn contend_worker(
 /// `max_retries` (then counts as `failed`); any other error is drift,
 /// not contention, and propagates as `Err` so a real run and the smoke
 /// test fail loudly instead of banking it as an expected outcome.
+#[allow(clippy::too_many_arguments)]
 async fn one_op(
     pool: &PgPool,
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
+    definitions: &[Definition],
     max_retries: usize,
     label: &str,
     tally: &mut Tally,
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, transformation, transition, invariants).await {
+        match propose_against_pg(pool, transformation, transition, invariants, definitions).await {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());

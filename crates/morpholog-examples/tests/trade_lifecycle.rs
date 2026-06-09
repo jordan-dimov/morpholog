@@ -19,11 +19,15 @@ mod common;
 use common::{
     date, dec, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
 };
-use morpholog_core::{Invariant, Outcome, State};
+use morpholog_core::{Definition, Invariant, Outcome, State};
 use morpholog_examples::trade_lifecycle;
 
 fn invariants() -> Vec<Invariant> {
     trade_lifecycle::all_invariants()
+}
+
+fn definitions() -> Vec<Definition> {
+    trade_lifecycle::definitions()
 }
 
 // A power trade `t1`, captured for `qty` at a trader price of 50, terms
@@ -44,6 +48,7 @@ fn captured(qty: i64) -> State {
         ],
         State::default(),
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -53,6 +58,7 @@ fn grant(state: State, principal: &str, commodity: &str) -> State {
         vec![subj(principal), subj(commodity)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -70,6 +76,7 @@ fn confirm_as(state: State, actor: &str, opid: &str, price: i64) -> State {
         actor,
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -81,6 +88,7 @@ fn settle(state: State, qty: i64, sid: &str, opid: &str, eff: &str) -> State {
         vec![subj("t1"), dec(qty), subj(sid), subj(opid), date(eff)],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -128,6 +136,7 @@ fn duplicate_capture_is_rejected() {
         ],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -149,6 +158,7 @@ fn confirm_before_capture_is_rejected() {
         "mo",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -163,6 +173,7 @@ fn confirm_by_unauthorised_actor_is_rejected() {
         "rando",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -179,6 +190,7 @@ fn confirm_by_actor_authorised_for_a_different_commodity_is_rejected() {
         "mo_gas",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -213,6 +225,7 @@ fn second_confirmation_is_rejected() {
         "mo",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -241,6 +254,7 @@ fn amendment_admits_a_new_version_and_keeps_the_old() {
         "mo",
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -289,6 +303,7 @@ fn amending_an_unknown_version_is_rejected() {
         "mo",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -311,6 +326,7 @@ fn amending_an_already_amended_version_is_rejected() {
         "mo",
         grant(captured(100), "mo", "power"),
         &invariants(),
+        &definitions(),
     );
     let outcome = propose_as(
         &trade_lifecycle::amend_trade_terms(),
@@ -325,6 +341,7 @@ fn amending_an_already_amended_version_is_rejected() {
         "mo",
         &amended,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -349,6 +366,7 @@ fn two_versions_on_the_same_effective_date_are_rejected() {
         "mo",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {
@@ -379,6 +397,7 @@ fn reusing_a_version_id_for_a_different_record_is_rejected() {
         "mo",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {
@@ -405,6 +424,7 @@ fn correction_moves_the_pointer_and_preserves_history() {
         "mo",
         pre,
         &invariants(),
+        &definitions(),
     );
     // Both official price figures survive (append-only).
     assert!(has_claim(
@@ -451,6 +471,7 @@ fn correct_by_actor_authorised_for_a_different_commodity_is_rejected() {
         "mo_gas",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -476,6 +497,7 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     let outcome = propose_as(
         &trade_lifecycle::confirm_trade(),
@@ -483,6 +505,7 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
         "mo",
         &state,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -507,6 +530,7 @@ fn settle_before_confirmation_is_rejected() {
         ],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -545,6 +569,7 @@ fn settlement_over_the_effective_quantity_is_rejected() {
         ],
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -600,6 +625,7 @@ fn slices_summing_over_the_effective_quantity_are_rejected() {
         ],
         &first,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {
@@ -635,6 +661,7 @@ fn backdated_amendment_lifts_the_effective_cap() {
         ],
         &confirmed,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(
@@ -655,6 +682,7 @@ fn backdated_amendment_lifts_the_effective_cap() {
         "mo",
         confirmed,
         &invariants(),
+        &definitions(),
     );
 
     let after = settle(amended, 110, "s1", "op1", "2026-02-20");
@@ -695,6 +723,7 @@ fn settlement_under_prior_terms_remains_standing_after_amendment() {
         "mo",
         settled,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -741,6 +770,7 @@ fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
         ],
         &first,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(
@@ -789,6 +819,7 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
         vec![subj("t1"), subj("s1"), subj("op1"), date("2026-01-20")],
         &confirmed,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {
@@ -817,6 +848,7 @@ fn correction_after_settlement_leaves_the_settlement_standing() {
         "mo",
         settled,
         &invariants(),
+        &definitions(),
     );
 
     // The settlement still stands, still pointing at the price it relied on.
@@ -870,6 +902,7 @@ fn settlement_before_any_effective_terms_is_rejected() {
         ],
         &confirmed,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -909,6 +942,7 @@ fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
         ],
         &confirmed,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {
@@ -940,6 +974,7 @@ fn negative_terms_quantity_is_rejected() {
         "mo",
         &pre,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {
@@ -968,6 +1003,7 @@ fn negative_settlement_quantity_is_rejected() {
         ],
         &confirmed,
         &invariants(),
+        &definitions(),
     )
     .unwrap();
     match outcome {

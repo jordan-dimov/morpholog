@@ -269,6 +269,7 @@ pub fn format_prop_inline(p: &Prop) -> String {
     fn prop_primary(p: &Prop) -> String {
         match p {
             Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
+            Prop::Defined { name, args } => format_predicate_call(name.as_str(), args),
             // `pre(...)` is function-call-shape; no outer parens needed.
             Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
             _ => format!("({})", format_prop_inline(p)),
@@ -277,6 +278,9 @@ pub fn format_prop_inline(p: &Prop) -> String {
 
     match p {
         Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
+        // A definition call renders exactly like a claim reference; the
+        // parser re-resolves it by name, so round-trip holds.
+        Prop::Defined { name, args } => format_predicate_call(name.as_str(), args),
 
         // Comparators relate two value expressions.
         Prop::Eq(l, r) => format!("{} = {}", value_primary(l), value_primary(r)),

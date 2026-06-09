@@ -9,9 +9,10 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::definitions::DefinitionIndex;
 use crate::ir::{
-    ArgDecl, ArithOp, DerivedClaim, OrderedDomain, PredicateArgKind, PredicateName, Program, Prop,
-    Stmt, Term, TransformationName, ValueExpr, Var,
+    ArgDecl, ArithOp, Definition, DefinitionName, DerivedClaim, OrderedDomain, PredicateArgKind,
+    PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
 };
 use crate::validate::ValidatedProgram;
 
@@ -33,34 +34,68 @@ use crate::validate::ValidatedProgram;
 /// which can reference a predicate; it contributes nothing. Comparator
 /// operands are value expressions, walked by
 /// [`predicates_referenced_by_value`].
-pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<PredicateName>) {
+pub fn predicates_referenced_by_prop(
+    prop: &Prop,
+    definitions: &[Definition],
+    out: &mut BTreeSet<PredicateName>,
+) {
+    prop_refs(
+        prop,
+        DefinitionIndex::new(definitions),
+        &mut BTreeSet::new(),
+        out,
+    );
+}
+
+/// Recursive worker for [`predicates_referenced_by_prop`]. `seen`
+/// guards definition recursion: each definition body is walked once
+/// per top-level call, which both avoids rework and keeps the walk
+/// terminating on (invalid, cyclic) unvalidated IR.
+fn prop_refs(
+    prop: &Prop,
+    definitions: DefinitionIndex<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+    out: &mut BTreeSet<PredicateName>,
+) {
     match prop {
+        // A call reads whatever its definition's body reads -
+        // transitively, so the PG read path loads every predicate a
+        // gate consults through any chain of named conditions. Missing
+        // this recursion would be a silent wrong-answer bug: the kernel
+        // would evaluate the body against claims that were never loaded.
+        Prop::Defined { name, .. } => {
+            if seen.insert(name.clone())
+                && let Some(def) = definitions.get(name)
+            {
+                prop_refs(&def.body, definitions, seen, out);
+            }
+        }
         Prop::Claim { predicate, .. } => {
             out.insert(predicate.clone());
         }
         Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            predicates_referenced_by_prop(left, out);
-            predicates_referenced_by_prop(right, out);
+            prop_refs(left, definitions, seen, out);
+            prop_refs(right, definitions, seen, out);
         }
         Prop::And(props) | Prop::Or(props) => {
             for p in props {
-                predicates_referenced_by_prop(p, out);
+                prop_refs(p, definitions, seen, out);
             }
         }
         Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            predicates_referenced_by_prop(p, out);
+            prop_refs(p, definitions, seen, out);
         }
         Prop::Eq(l, r)
         | Prop::Neq(l, r)
         | Prop::Compare {
             left: l, right: r, ..
         } => {
-            predicates_referenced_by_value(l, out);
-            predicates_referenced_by_value(r, out);
+            value_refs(l, definitions, seen, out);
+            value_refs(r, definitions, seen, out);
         }
         Prop::Forall { source, body, .. } => {
-            predicates_referenced_by_prop(source, out);
-            predicates_referenced_by_prop(body, out);
+            prop_refs(source, definitions, seen, out);
+            prop_refs(body, definitions, seen, out);
         }
         Prop::In(_, _) => {
             // No predicate references; operates on Terms only.
@@ -76,22 +111,41 @@ pub fn predicates_referenced_by_prop(prop: &Prop, out: &mut BTreeSet<PredicateNa
 /// Exhaustive over `ValueExpr` for the same honesty reason as the
 /// proposition walker. `Term` takes only a `Term` and contributes
 /// nothing.
-pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<PredicateName>) {
+pub fn predicates_referenced_by_value(
+    expr: &ValueExpr,
+    definitions: &[Definition],
+    out: &mut BTreeSet<PredicateName>,
+) {
+    value_refs(
+        expr,
+        DefinitionIndex::new(definitions),
+        &mut BTreeSet::new(),
+        out,
+    );
+}
+
+/// Recursive worker for [`predicates_referenced_by_value`].
+fn value_refs(
+    expr: &ValueExpr,
+    definitions: DefinitionIndex<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+    out: &mut BTreeSet<PredicateName>,
+) {
     match expr {
         ValueExpr::ValueOf {
             predicate, default, ..
         } => {
             out.insert(predicate.clone());
             if let Some(d) = default {
-                predicates_referenced_by_value(d, out);
+                value_refs(d, definitions, seen, out);
             }
         }
         ValueExpr::Arith { left, right, .. } => {
-            predicates_referenced_by_value(left, out);
-            predicates_referenced_by_value(right, out);
+            value_refs(left, definitions, seen, out);
+            value_refs(right, definitions, seen, out);
         }
         ValueExpr::Sum { body, .. } => {
-            predicates_referenced_by_prop(body, out);
+            prop_refs(body, definitions, seen, out);
         }
         ValueExpr::Term(_) => {
             // No predicate references; operates on a Term only.
@@ -108,11 +162,14 @@ pub fn predicates_referenced_by_value(expr: &ValueExpr, out: &mut BTreeSet<Predi
 /// included: that names the OUTPUT predicate of the enumeration,
 /// which the kernel never reads from state. Including it would tell
 /// callers to load claims they have no use for.
-pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<PredicateName> {
+pub fn predicates_referenced_by_derived(
+    derived: &DerivedClaim,
+    definitions: &[Definition],
+) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
-    predicates_referenced_by_prop(&derived.domain, &mut out);
+    predicates_referenced_by_prop(&derived.domain, definitions, &mut out);
     for v in &derived.values {
-        predicates_referenced_by_value(&v.expr, &mut out);
+        predicates_referenced_by_value(&v.expr, definitions, &mut out);
     }
     out
 }
@@ -141,10 +198,14 @@ pub fn predicates_referenced_by_derived(derived: &DerivedClaim) -> BTreeSet<Pred
 ///
 /// `Stmt::LetNewSubject` contributes nothing - it mints a fresh
 /// subject identifier without consulting state.
-pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
+pub fn predicates_referenced_by_stmt(
+    stmt: &Stmt,
+    definitions: &[Definition],
+    out: &mut BTreeSet<PredicateName>,
+) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, out),
-        Stmt::Let { value, .. } => predicates_referenced_by_value(value, out),
+        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, definitions, out),
+        Stmt::Let { value, .. } => predicates_referenced_by_value(value, definitions, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(c) => {
             out.insert(c.predicate.clone());
@@ -155,9 +216,9 @@ pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateNa
         Stmt::For {
             collection, body, ..
         } => {
-            predicates_referenced_by_value(collection, out);
+            predicates_referenced_by_value(collection, definitions, out);
             for inner in body {
-                predicates_referenced_by_stmt(inner, out);
+                predicates_referenced_by_stmt(inner, definitions, out);
             }
         }
         Stmt::Emit(_) => {}
@@ -190,10 +251,14 @@ pub fn predicates_referenced_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateNa
 /// Exhaustive match for the same reason as
 /// `predicates_referenced_by_stmt`: a future `Stmt` variant must
 /// declare its read behaviour explicitly.
-pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
+pub fn predicates_read_by_stmt(
+    stmt: &Stmt,
+    definitions: &[Definition],
+    out: &mut BTreeSet<PredicateName>,
+) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, out),
-        Stmt::Let { value, .. } => predicates_referenced_by_value(value, out),
+        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, definitions, out),
+        Stmt::Let { value, .. } => predicates_referenced_by_value(value, definitions, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(_) => {
             // Write-only: the asserted claim is staged as output, not
@@ -208,9 +273,9 @@ pub fn predicates_read_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
         Stmt::For {
             collection, body, ..
         } => {
-            predicates_referenced_by_value(collection, out);
+            predicates_referenced_by_value(collection, definitions, out);
             for inner in body {
-                predicates_read_by_stmt(inner, out);
+                predicates_read_by_stmt(inner, definitions, out);
             }
         }
         Stmt::Emit(_) => {}
@@ -455,6 +520,13 @@ fn project(observations: BTreeSet<PredicateArgKind>) -> ParamKind {
 struct ParamCollector<'a> {
     predicates: HashMap<&'a str, &'a [ArgDecl]>,
     intents: HashMap<&'a str, &'a [ArgDecl]>,
+    /// Inferred kind-observation sets per definition parameter,
+    /// computed callees-first at construction (a definition's params
+    /// have no declared kinds; the body is the only kind source). A
+    /// call argument observes every kind in its parameter's set, so a
+    /// disjunctive body surfaces as `Ambiguous` rather than silently
+    /// committing to one kind.
+    definition_params: HashMap<String, Vec<BTreeSet<PredicateArgKind>>>,
     observations: HashMap<Var, BTreeSet<PredicateArgKind>>,
     /// Flow-sensitive equivalence-class membership per currently-live
     /// variable. Maintained as the walker advances: a `Let` or
@@ -486,12 +558,39 @@ impl<'a> ParamCollector<'a> {
             .iter()
             .map(|d| (d.name.as_str(), d.args.as_slice()))
             .collect();
-        Self {
+        let mut collector = Self {
             predicates,
             intents,
+            definition_params: HashMap::new(),
             observations: HashMap::new(),
             current_class: HashMap::new(),
+        };
+        // Pre-walk each definition body, callees before callers, and
+        // project its parameters' observation sets. On a cyclic graph
+        // (unvalidated IR; `validate` rejects it) the map stays empty
+        // and calls simply contribute no observations.
+        if let Ok(order) = crate::definitions::definition_topo_order(&program.definitions) {
+            for i in order {
+                let def = &program.definitions[i];
+                let mut sub = Self {
+                    predicates: collector.predicates.clone(),
+                    intents: collector.intents.clone(),
+                    definition_params: collector.definition_params.clone(),
+                    observations: HashMap::new(),
+                    current_class: HashMap::new(),
+                };
+                sub.walk_prop(&def.body);
+                let param_sets = def
+                    .parameters
+                    .iter()
+                    .map(|param| sub.observations.get(param).cloned().unwrap_or_default())
+                    .collect();
+                collector
+                    .definition_params
+                    .insert(def.name.to_string(), param_sets);
+            }
         }
+        collector
     }
 
     /// Observe `name` at `kind`. Inserts the kind into the
@@ -675,6 +774,17 @@ impl<'a> ParamCollector<'a> {
         match prop {
             Prop::Claim { predicate, args } => {
                 self.observe_claim_args(predicate.as_str(), args);
+            }
+            Prop::Defined { name, args } => {
+                if let Some(param_sets) = self.definition_params.get(name.as_str()).cloned() {
+                    for (arg, kinds) in args.iter().zip(param_sets) {
+                        if let Term::Var(v) = arg {
+                            for kind in kinds {
+                                self.observe(v, kind);
+                            }
+                        }
+                    }
+                }
             }
             Prop::And(items) | Prop::Or(items) => {
                 for item in items {

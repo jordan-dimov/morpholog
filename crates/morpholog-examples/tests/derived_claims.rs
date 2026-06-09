@@ -58,6 +58,7 @@ fn post(
         ],
         state,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
 }
 
@@ -86,7 +87,7 @@ fn trial_balance_over_simple_ledger_enumerates_one_row_per_account() {
     let state = small_ledger_state();
     let trial_balance = double_entry_ledger::trial_balance_row();
     let rows =
-        enumerate_derived(&trial_balance, &state).expect("enumerate_derived should not error");
+        enumerate_derived(&trial_balance, &state, &[]).expect("enumerate_derived should not error");
 
     assert_eq!(rows.len(), 3, "one row per distinct account");
 
@@ -109,8 +110,8 @@ fn trial_balance_returns_deterministic_order() {
     let state = small_ledger_state();
     let trial_balance = double_entry_ledger::trial_balance_row();
 
-    let a = enumerate_derived(&trial_balance, &state).unwrap();
-    let b = enumerate_derived(&trial_balance, &state).unwrap();
+    let a = enumerate_derived(&trial_balance, &state, &[]).unwrap();
+    let b = enumerate_derived(&trial_balance, &state, &[]).unwrap();
 
     // Two back-to-back evaluations must return rows in the same order.
     // The ordering is contracted as deterministic; the specific order
@@ -152,8 +153,12 @@ fn derived_claims_do_not_pollute_admitted_state() {
     let state = small_ledger_state();
     let snapshot = state.clone();
 
-    let _rows = enumerate_derived(&double_entry_ledger::trial_balance_row(), &state)
-        .expect("enumerate_derived should not error");
+    let _rows = enumerate_derived(
+        &double_entry_ledger::trial_balance_row(),
+        &state,
+        &double_entry_ledger::definitions(),
+    )
+    .expect("enumerate_derived should not error");
 
     assert_eq!(
         state, snapshot,
@@ -172,7 +177,12 @@ fn derived_claims_do_not_pollute_admitted_state() {
 #[test]
 fn enumerate_derived_on_empty_state_is_empty() {
     let empty = State::default();
-    let rows = enumerate_derived(&double_entry_ledger::trial_balance_row(), &empty).unwrap();
+    let rows = enumerate_derived(
+        &double_entry_ledger::trial_balance_row(),
+        &empty,
+        &double_entry_ledger::definitions(),
+    )
+    .unwrap();
     assert!(
         rows.is_empty(),
         "empty state means empty domain means no derived rows"
@@ -210,7 +220,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         },
     };
 
-    let rows = enumerate_derived(&derived_decimal_ok, &state).unwrap();
+    let rows = enumerate_derived(&derived_decimal_ok, &state, &[]).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].args[1], EvalValue::Decimal(Decimal::new(70, 0)));
 
@@ -236,7 +246,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
         },
     };
 
-    let err = enumerate_derived(&derived_type_error, &state).unwrap_err();
+    let err = enumerate_derived(&derived_type_error, &state, &[]).unwrap_err();
     let msg = format!("{err}");
     assert!(
         msg.contains("no arithmetic rule for decimal Sub subject"),
@@ -255,7 +265,7 @@ fn predicates_referenced_by_trial_balance_derived_excludes_unused_predicates() {
     use std::collections::BTreeSet;
 
     let derived = double_entry_ledger::trial_balance_row();
-    let footprint = predicates_referenced_by_derived(&derived);
+    let footprint = predicates_referenced_by_derived(&derived, &[]);
     let expected: BTreeSet<PredicateName> = ["JournalLine"]
         .iter()
         .map(|s| PredicateName::from(*s))

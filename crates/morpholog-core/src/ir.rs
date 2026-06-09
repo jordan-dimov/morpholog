@@ -148,6 +148,18 @@ opaque_id! {
 }
 
 opaque_id! {
+    /// An opaque definition name - the identifier of a declared
+    /// [`Definition`] (a named, parameterised proposition), and the name a
+    /// [`Prop::Defined`] call resolves against. Distinct at the type level
+    /// from a predicate name, although the two share the reference
+    /// namespace in body position (a claim-shaped reference resolves to
+    /// exactly one of them; [`Program::validate`] enforces the
+    /// disjointness). Ordered: cycle detection and diagnostics sort
+    /// definition names for deterministic output.
+    ord DefinitionName
+}
+
+opaque_id! {
     /// An opaque unit symbol on a quantity - `USD`, `t`, `MWh`. A unit in
     /// Morpholog is a contractual label on an exact decimal, not a physical
     /// dimension: the kernel enforces that arithmetic and comparison only
@@ -193,6 +205,19 @@ pub struct Invariant {
 pub enum Prop {
     Claim {
         predicate: PredicateName,
+        args: Vec<Term>,
+    },
+    /// A call to a named [`Definition`]: claim-shaped on the surface
+    /// (`name(args)`), resolved against the programme's definitions.
+    /// Relational substitution with projection: the body evaluates under
+    /// a fresh context carrying only the parameters (ground arguments
+    /// pre-bind theirs; unbound ones act as generators), and each body
+    /// match projects parameter values back onto the argument terms.
+    /// Yields each distinct argument-binding witness once - internal
+    /// multiplicity is not observable, so a call composes in `Sum`
+    /// bodies without internal witnesses double-counting.
+    Defined {
+        name: DefinitionName,
         args: Vec<Term>,
     },
     Implies {
@@ -592,6 +617,37 @@ pub struct Transformation {
     pub body: Vec<Stmt>,
 }
 
+/// A named, parameterised proposition: a reusable condition declared once
+/// and called from invariant bodies, transformation gates, derived-claim
+/// domains, and other definitions. Body grammar, not a third first-class
+/// construct: a definition never changes state and carries no standing -
+/// it only names a [`Prop`] so the rules that use it read as the business
+/// speaks.
+///
+/// A call site is a [`Prop::Defined`] node whose `args` pair positionally
+/// with `parameters`. Evaluation is relational substitution with
+/// projection: the body is evaluated under a fresh binding context
+/// carrying only the parameters (ground call arguments pre-bind their
+/// parameter; unbound ones leave it free, acting as a generator), and
+/// each body match projects the parameter values back onto the call's
+/// argument terms. The body cannot see the caller's other bindings, and
+/// the caller never sees the body's internal names - a call binds exactly
+/// its argument variables, like a claim match.
+///
+/// Bodies are context-free in v0: `Term::Actor` and `Prop::Pre` inside a
+/// definition body are validation errors, so a definition means the same
+/// thing in a gate as in an invariant. (`actor` is passed as an ordinary
+/// call argument where a gate needs it; a *call* wrapped in `pre(...)`
+/// works, because the context swap applies to the body's evaluation.)
+/// Definitions may call other definitions; cycles are a validation error,
+/// and every parameter must be bound by the body so projection is total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Definition {
+    pub name: DefinitionName,
+    pub parameters: Vec<Var>,
+    pub body: Prop,
+}
+
 /// A governed domain model: a named set of predicate and intent
 /// vocabularies, invariants, transformations, and derived claims,
 /// packaged so the runtime, CLI, and external callers can refer to it as
@@ -615,6 +671,12 @@ pub struct Program {
     /// name is a validation error, not a silent route-to-nowhere.
     /// Separate namespace from predicates.
     pub intents: Vec<IntentDecl>,
+    /// Named, parameterised propositions (see [`Definition`]). Shares the
+    /// claim-shaped reference namespace with `predicates` - a body
+    /// reference `name(args)` resolves to a predicate or a definition,
+    /// never both - so a definition name colliding with a predicate name
+    /// is a validation error.
+    pub definitions: Vec<Definition>,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,
     pub derived_claims: Vec<DerivedClaim>,
@@ -640,6 +702,13 @@ impl Program {
         self.derived_claims
             .iter()
             .find(|d| d.predicate.as_str() == name)
+    }
+
+    /// Look up a definition by name. Returns `None` if no definition
+    /// in the program has that name. Symmetric with the other lookup
+    /// methods.
+    pub fn definition(&self, name: &str) -> Option<&Definition> {
+        self.definitions.iter().find(|d| d.name == name)
     }
 
     /// Look up a predicate declaration by name. Returns `None` if no

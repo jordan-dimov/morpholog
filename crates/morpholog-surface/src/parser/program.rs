@@ -156,6 +156,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         name: raw.name,
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
         intents: raw.intents.into_iter().map(|(d, _)| d).collect(),
+        definitions: Vec::new(),
         invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
         transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),

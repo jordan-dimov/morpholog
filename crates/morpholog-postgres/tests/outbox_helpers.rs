@@ -46,6 +46,7 @@ async fn reset_db(pool: &PgPool) {
 /// held.
 async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
     let invariants = double_entry_ledger::all_invariants();
+    let definitions = double_entry_ledger::definitions();
     let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
@@ -58,6 +59,7 @@ async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
             dec(100),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .unwrap();
@@ -256,6 +258,7 @@ async fn record_compensation_links_compensation_to_failed_row() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -316,6 +319,7 @@ async fn record_compensation_errors_on_double_record() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -346,6 +350,7 @@ async fn record_compensation_errors_on_double_record() {
             dec(50),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
