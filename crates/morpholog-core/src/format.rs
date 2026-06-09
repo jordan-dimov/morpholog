@@ -145,7 +145,7 @@ pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
 /// Render a [`Definition`] in the invariant block shape:
 /// `define name(params):` with the body indented.
 pub fn format_definition(def: &Definition) -> String {
-    let params: Vec<String> = def.parameters.iter().map(|p| p.to_string()).collect();
+    let params: Vec<String> = def.parameters.iter().map(ToString::to_string).collect();
     let mut out = String::new();
     out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
     out.push_str(&indent(1));
