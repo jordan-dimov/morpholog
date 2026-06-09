@@ -29,9 +29,9 @@
 //!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{
-    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, Intent, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Subject, Term,
-    Transformation, Value, ValueExpr, Var,
+    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, Discipline, Intent, IntentDecl,
+    Invariant, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop,
+    Stmt, Subject, Term, Transformation, Value, ValueExpr, Var,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -396,6 +396,7 @@ pub fn params(names: &[&str]) -> Vec<Var> {
 pub struct PredicateDeclBuilder {
     name: String,
     args: Vec<ArgDecl>,
+    disciplines: Vec<Discipline>,
 }
 
 impl PredicateDeclBuilder {
@@ -451,10 +452,17 @@ impl PredicateDeclBuilder {
         self.arg(name, PredicateArgKind::Any)
     }
 
+    /// Attach declared disciplines; see [`Discipline`].
+    pub fn disciplines(mut self, disciplines: Vec<Discipline>) -> Self {
+        self.disciplines = disciplines;
+        self
+    }
+
     pub fn build(self) -> PredicateDecl {
         PredicateDecl {
             name: self.name.into(),
             args: self.args,
+            disciplines: self.disciplines,
         }
     }
 }
@@ -465,6 +473,7 @@ pub fn predicate(name: &str) -> PredicateDeclBuilder {
     PredicateDeclBuilder {
         name: name.to_string(),
         args: Vec::new(),
+        disciplines: Vec::new(),
     }
 }
 
@@ -479,6 +488,7 @@ pub fn invariant(name: &str, body: Prop) -> Invariant {
         name: name.into(),
         version: 1,
         body,
+        origin: InvariantOrigin::Authored,
     }
 }
 

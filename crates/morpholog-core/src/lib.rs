@@ -31,6 +31,7 @@ mod check;
 mod controls;
 mod definitions;
 mod derive;
+mod disciplines;
 mod eval;
 mod explain;
 mod guarantees;
@@ -48,6 +49,7 @@ pub use analysis::{
 pub use controls::{ControlMatrix, GateControl, TransformationControls, controls, render_controls};
 pub use definitions::resolve_defined_calls;
 pub use derive::{enumerate_derived, eval_invariant};
+pub use disciplines::lower_disciplines;
 pub use eval::{EvalError, RenderedClaim};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
@@ -56,9 +58,9 @@ pub use explain::{
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
     ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DerivedClaim, DerivedValue,
-    Intent, IntentDecl, IntentName, Invariant, InvariantName, OrderedDomain, PredicateArgKind,
-    PredicateDecl, PredicateName, Program, Prop, Stmt, Subject, Term, Transformation,
-    TransformationName, Unit, Value, ValueExpr, Var,
+    Discipline, Intent, IntentDecl, IntentName, Invariant, InvariantName, InvariantOrigin,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Subject,
+    Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
 };
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,

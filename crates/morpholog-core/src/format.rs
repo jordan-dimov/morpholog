@@ -20,8 +20,9 @@
 //! degrades the rendering.
 
 use crate::{
-    ArithOp, Claim, CompareOp, Definition, DerivedClaim, Intent, Invariant, OrderedDomain,
-    PredicateDecl, Program, Prop, Stmt, Term, Transformation, Value, ValueExpr, Var,
+    ArithOp, Claim, CompareOp, Definition, DerivedClaim, Discipline, Intent, Invariant,
+    InvariantOrigin, OrderedDomain, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
+    Value, ValueExpr, Var,
 };
 
 /// The surface token for an ordered comparison. The single source of
@@ -103,6 +104,12 @@ pub fn format_program(p: &Program) -> String {
     }
 
     for inv in &p.invariants {
+        // Discipline-generated invariants are implied by the
+        // declaration clauses rendered above; printing them too would
+        // duplicate them on reparse (lowering regenerates them).
+        if inv.origin == InvariantOrigin::Discipline {
+            continue;
+        }
         out.push('\n');
         out.push_str(&format_invariant(inv));
     }
@@ -128,7 +135,20 @@ pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
         .iter()
         .map(|a| format!("{}: {}", a.name, a.kind))
         .collect();
-    format!("predicate {}({})\n", decl.name, args.join(", "))
+    let mut out = format!("predicate {}({})\n", decl.name, args.join(", "));
+    for discipline in &decl.disciplines {
+        out.push_str(&indent(1));
+        out.push_str(&match discipline {
+            Discipline::UniqueBy { fields } => format!("unique by ({})", fields.join(", ")),
+            Discipline::AppendOnly => "append only".to_string(),
+            Discipline::CurrentPointerBy { fields } => {
+                format!("current pointer by ({})", fields.join(", "))
+            }
+            Discipline::SupersededVia { lineage } => format!("superseded via {lineage}"),
+        });
+        out.push('\n');
+    }
+    out
 }
 
 /// Render a single [`crate::IntentDecl`] as one line:

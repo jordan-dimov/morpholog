@@ -4,8 +4,8 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    ArgDecl, Definition, DerivedClaim, DerivedValue, IntentDecl, Invariant, PredicateArgKind,
-    PredicateDecl, Program, Transformation, Unit, Var,
+    ArgDecl, Definition, DerivedClaim, DerivedValue, Discipline, IntentDecl, Invariant,
+    InvariantOrigin, PredicateArgKind, PredicateDecl, Program, Transformation, Unit, Var,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -172,6 +172,12 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     // whole collected programme. Formatting a resolved call prints
     // the same text back, so round-trip holds.
     morpholog_core::resolve_defined_calls(&mut program);
+    // Declared disciplines materialise as generated invariants here,
+    // for the same reason resolution runs here: the whole programme is
+    // in hand, and everything downstream (propose, scoped loading,
+    // audit, guarantees, explain) then sees them with no caller
+    // changes. The formatter omits them; reparsing regenerates them.
+    morpholog_core::lower_disciplines(&mut program);
     Ok(program)
 }
 
@@ -274,7 +280,63 @@ where
         .allow_trailing()
         .collect::<Vec<ArgDecl>>();
 
-    // predicate_decl ::= "predicate" Ident "(" arg_list? ")"
+    // discipline_clause ::= "unique" "by" "(" ident,+ ")"
+    //                      | "append" "only"
+    //                      | "current" "pointer" "by" "(" ident,+ ")"
+    //                      | "superseded" "via" Ident
+    //
+    // Every clause word is a contextual identifier (the `before` /
+    // `duration` precedent), so none is reserved and all stay usable
+    // as variable names. Clauses follow the arg list inline or on
+    // indented continuation lines (one layout block; several clauses
+    // may share it). No ambiguity with the next declaration, which
+    // always opens with a reserved keyword.
+    let kw_unique = select! { Token::Ident(s) if s == "unique" => () };
+    let kw_by = select! { Token::Ident(s) if s == "by" => () };
+    let kw_append = select! { Token::Ident(s) if s == "append" => () };
+    let kw_only = select! { Token::Ident(s) if s == "only" => () };
+    let kw_current = select! { Token::Ident(s) if s == "current" => () };
+    let kw_pointer = select! { Token::Ident(s) if s == "pointer" => () };
+    let kw_superseded = select! { Token::Ident(s) if s == "superseded" => () };
+    let kw_via = select! { Token::Ident(s) if s == "via" => () };
+    let field_list = ident
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .at_least(1)
+        .collect::<Vec<String>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+    let discipline_clause = choice((
+        kw_unique
+            .ignore_then(kw_by)
+            .ignore_then(field_list.clone())
+            .map(|fields| Discipline::UniqueBy { fields }),
+        kw_append.ignore_then(kw_only).to(Discipline::AppendOnly),
+        kw_current
+            .ignore_then(kw_pointer)
+            .ignore_then(kw_by)
+            .ignore_then(field_list)
+            .map(|fields| Discipline::CurrentPointerBy { fields }),
+        kw_superseded
+            .ignore_then(kw_via)
+            .ignore_then(ident)
+            .map(|lineage| Discipline::SupersededVia {
+                lineage: lineage.into(),
+            }),
+    ));
+    let discipline_seq = discipline_clause
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<Discipline>>();
+    let disciplines = choice((
+        just(Token::Indent)
+            .ignore_then(discipline_seq.clone())
+            .then_ignore(just(Token::Dedent)),
+        discipline_seq,
+    ))
+    .or_not()
+    .map(Option::unwrap_or_default);
+
+    // predicate_decl ::= "predicate" Ident "(" arg_list? ")" discipline_clause*
     let predicate_decl = just(Token::KwPredicate)
         .ignore_then(ident)
         .then(
@@ -282,12 +344,14 @@ where
                 .clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .map_with(|(name, args), e| {
+        .then(disciplines)
+        .map_with(|((name, args), disciplines), e| {
             let span: SimpleSpan = e.span();
             TopLevelDecl::Predicate(
                 PredicateDecl {
                     name: name.into(),
                     args,
+                    disciplines,
                 },
                 span.start()..span.end(),
             )
@@ -343,6 +407,7 @@ where
                     name: name.into(),
                     version: 1,
                     body,
+                    origin: InvariantOrigin::Authored,
                 },
                 span.start()..span.end(),
             )
