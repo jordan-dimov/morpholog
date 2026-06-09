@@ -302,3 +302,66 @@ fn check_all_worked_examples_are_well_formed() {
         );
     }
 }
+
+const LINT_TRIP: &str = r#"
+program trip
+
+predicate Decision(decision_id: Subject, doc: Subject)
+    append only
+predicate CurrentMandate(doc: Subject, mandate_id: Subject)
+    current pointer by (doc)
+
+invariant decisions_need_live_mandate:
+    Decision(d, doc) implies CurrentMandate(doc, _)
+"#;
+
+// A lint finding is advisory by default: hint on stderr, exit 0, and
+// stdout stays silent so the empty-stdout script contract holds.
+#[test]
+fn check_prints_a_hint_and_passes_without_strict() {
+    let f = temp_morph(LINT_TRIP);
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .output()
+        .expect("spawn morpholog");
+    assert!(out.status.success(), "lints alone must not fail the check");
+    assert!(out.stdout.is_empty(), "stdout stays silent");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.starts_with("hint: ") && stderr.contains("decisions_need_live_mandate"),
+        "got: {stderr}"
+    );
+}
+
+// --strict promotes the same finding to an error and a failing exit.
+#[test]
+fn check_strict_promotes_the_hint_to_an_error() {
+    let f = temp_morph(LINT_TRIP);
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .arg("--strict")
+        .output()
+        .expect("spawn morpholog");
+    assert!(!out.status.success(), "--strict fails on a finding");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.starts_with("error: ") && stderr.contains("belongs in the admitting"),
+        "got: {stderr}"
+    );
+}
+
+// A lint-clean programme is identical under --strict.
+#[test]
+fn check_strict_on_a_clean_program_exits_zero() {
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(repo_root().join("examples/02_verified_revenue/verified_revenue.morph"))
+        .arg("--strict")
+        .output()
+        .expect("spawn morpholog");
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(out.stderr.is_empty());
+}

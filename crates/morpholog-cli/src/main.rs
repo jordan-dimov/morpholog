@@ -472,6 +472,14 @@ pub(crate) struct CheckArgs {
     /// and the count of each declaration kind.
     #[arg(short, long)]
     pub(crate) verbose: bool,
+
+    /// Promote lint hints to errors: a finding that prints as
+    /// `hint: ...` by default fails the check under `--strict`.
+    /// Hints flag shapes with a deliberate reading (the
+    /// gate-vs-invariant lint, for one), so the default keeps them
+    /// advisory.
+    #[arg(long)]
+    pub(crate) strict: bool,
 }
 
 /// Arguments for `schema`. A `.morph` source file plus exactly one of:

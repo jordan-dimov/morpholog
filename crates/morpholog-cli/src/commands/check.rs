@@ -12,10 +12,13 @@ use std::path::Path;
 /// - Validation failure: render validation errors as plain
 ///   `error: <message>` lines (the kernel's `ValidationError`
 ///   carries no source span), exit 1.
-/// - Both clean: print nothing and exit 0, or print a one-screen
-///   summary under `--verbose`. Scripts rely on the silent default;
-///   the summary is for a human who wants confirmation of what was
-///   just validated.
+/// - Both clean: lints run next. A finding prints to stderr as
+///   `hint: ...` and the check still passes - lints flag shapes with
+///   a deliberate reading. Under `--strict` the same finding prints
+///   as `error: ...` and the check fails.
+/// - Fully clean: print nothing and exit 0, or print a one-screen
+///   summary under `--verbose`. Scripts rely on the silent stdout
+///   default; hints go to stderr, so that contract holds either way.
 pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     let (program, _source, _source_name) = parse_or_exit(&args.file)?;
 
@@ -26,6 +29,17 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
             eprintln!("error: {err}");
         }
         std::process::exit(1);
+    }
+
+    let lints = morpholog_core::lints(&program);
+    if !lints.is_empty() {
+        let label = if args.strict { "error" } else { "hint" };
+        for lint in &lints {
+            eprintln!("{label}: {lint}");
+        }
+        if args.strict {
+            std::process::exit(1);
+        }
     }
 
     if args.verbose {
