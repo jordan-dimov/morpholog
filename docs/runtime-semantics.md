@@ -286,6 +286,16 @@ must arrive bound at every call; the static check enforces it with the
 same unbound-name error the runtime would raise. A parameter the body
 never references is refused outright - it could never be given a value
 by the body, so it is either dead weight or a guaranteed runtime error.
+Parameter names are duplicate-free: each is one binding slot in the
+call frame.
+
+**Definitions are proposition-valued only.** A call answers "does this
+condition hold?" and hands values out solely by binding its arguments -
+the trade lifecycle's `terms_in_force_on(trade, d, qty)` returns the
+governing quantity *through* `qty`. `value Pred(args)` reads claims,
+never definitions, and a definition can never be an `admit` / `retract`
+/ `emit` target; naming one in any of those positions is a dedicated
+category error, not an undeclared-predicate report.
 
 **Bodies are context-free.** `actor` and `pre(...)` inside a definition
 body are validation errors, so a definition means the same thing in a

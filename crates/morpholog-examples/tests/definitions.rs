@@ -399,8 +399,62 @@ define item_exists(x, unused_day):
     assert!(
         rendered
             .iter()
-            .any(|m| m.contains("`unused_day`") && m.contains("not constrained")),
+            .any(|m| m.contains("`unused_day`") && m.contains("not referenced")),
         "got {rendered:?}"
+    );
+}
+
+#[test]
+fn a_duplicate_parameter_is_refused() {
+    let errors = validation_errors(
+        r#"
+program dup_param
+
+predicate Pair(x: Subject, y: Subject)
+
+define paired(x, x):
+    Pair(x, x)
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::DuplicateParameter { .. })),
+        "got {errors:?}"
+    );
+}
+
+// Definitions are proposition-valued only: `admit` (like `retract` and
+// `value`) needs a predicate, and naming a definition there is a
+// category error with its own guidance, not a misleading
+// undeclared-predicate report.
+#[test]
+fn admitting_a_definition_is_a_category_error_with_guidance() {
+    let errors = validation_errors(
+        r#"
+program admit_a_condition
+
+predicate Item(x: Subject)
+
+define item_exists(x):
+    Item(x)
+
+transformation record(x):
+    admit item_exists(x)
+"#,
+    );
+    let rendered: Vec<String> = errors.iter().map(ToString::to_string).collect();
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::UnresolvedDefinitionCall { .. })),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|m| m.contains("where a predicate is required")),
+        "the message names the category error: {rendered:?}"
     );
 }
 

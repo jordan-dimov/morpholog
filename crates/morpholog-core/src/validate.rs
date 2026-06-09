@@ -211,19 +211,33 @@ pub enum ValidationError {
     /// named proposition expanded at evaluation; a cycle would never
     /// terminate. `names` carries one cycle's members in sorted order.
     DefinitionCycle { names: Vec<String> },
-    /// A `Prop::Claim` references a name that is declared as a
-    /// definition. The parser resolves claim-shaped references against
-    /// the definitions table; hand-built IR must construct
-    /// `Prop::Defined` (via `ir_builder::defined`) or run
+    /// A reference names a definition where a predicate is required:
+    /// a hand-built `Prop::Claim` that skipped resolution, or an
+    /// `admit` / `retract` / `value` target. A definition names a
+    /// condition - it is proposition-valued only, so it can be called
+    /// in rule bodies but never changes state and never serves as a
+    /// value lookup; hand-built IR constructs body calls as
+    /// `Prop::Defined` (via `ir_builder::defined`) or runs
     /// [`crate::resolve_defined_calls`] before validating.
     UnresolvedDefinitionCall {
         name: String,
         context: ValidationContext,
     },
-    /// A definition parameter does not appear in the definition body in
-    /// any binding-capable position, so a call could never give it a
-    /// value and projection would be partial.
-    ParameterNotBound {
+    /// A definition parameter is never referenced by the definition
+    /// body. Such a parameter is dead weight at best; at worst a call
+    /// passing an unbound variable for it is a guaranteed runtime
+    /// error, since nothing could ever give it a value. (A parameter
+    /// the body *uses* without binding is fine - it is a use-only
+    /// parameter, required bound at every call site.)
+    ParameterNotReferenced {
+        definition: String,
+        parameter: String,
+    },
+    /// A definition declares the same parameter name twice. Each
+    /// parameter is one binding slot in the call frame; a duplicate
+    /// would let the later argument silently overwrite the earlier
+    /// one during frame construction.
+    DuplicateParameter {
         definition: String,
         parameter: String,
     },
@@ -350,18 +364,28 @@ impl std::fmt::Display for ValidationError {
             ),
             ValidationError::UnresolvedDefinitionCall { name, context } => write!(
                 f,
-                "`{name}` is a definition but is referenced as a claim in {context}; \
-                 construct the call as `Prop::Defined` (the parser does this; \
-                 hand-built IR uses `ir_builder::defined` or `resolve_defined_calls`)"
+                "`{name}` names a definition where a predicate is required, in \
+                 {context}; a definition is a condition - callable in rule \
+                 bodies, never an `admit`/`retract`/`emit` target or a `value` \
+                 lookup (hand-built body calls use `ir_builder::defined` or \
+                 `resolve_defined_calls`)"
             ),
-            ValidationError::ParameterNotBound {
+            ValidationError::ParameterNotReferenced {
                 definition,
                 parameter,
             } => write!(
                 f,
                 "parameter `{parameter}` of definition `{definition}` is not \
-                 constrained by the definition body; remove it or reference it \
+                 referenced by the definition body; remove it or reference it \
                  in a condition"
+            ),
+            ValidationError::DuplicateParameter {
+                definition,
+                parameter,
+            } => write!(
+                f,
+                "definition `{definition}` declares parameter `{parameter}` \
+                 more than once; each parameter is one binding slot"
             ),
             ValidationError::PreNotAvailable { context } => write!(
                 f,
@@ -705,6 +729,29 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
             vocabulary: VocabularyKind::Definition,
             name: name.to_string(),
         });
+    }
+
+    // Each definition's parameter list must be duplicate-free: a
+    // parameter is one binding slot in the call frame, so a repeated
+    // name would let the later argument silently overwrite the
+    // earlier one.
+    for def in &p.definitions {
+        let mut seen_params = HashMap::<&str, usize>::new();
+        for param in &def.parameters {
+            *seen_params.entry(param.as_str()).or_insert(0) += 1;
+        }
+        let mut dup_params: Vec<&str> = seen_params
+            .iter()
+            .filter(|(_, count)| **count > 1)
+            .map(|(name, _)| *name)
+            .collect();
+        dup_params.sort_unstable();
+        for parameter in dup_params {
+            errors.push(ValidationError::DuplicateParameter {
+                definition: def.name.to_string(),
+                parameter: parameter.to_string(),
+            });
+        }
     }
 
     // Definitions and predicates share the claim-shaped reference

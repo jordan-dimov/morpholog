@@ -298,7 +298,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         cx.walk_prop(&def.body, &mut scope);
         for param in &def.parameters {
             if !occurs_in_prop(param, &def.body) {
-                cx.errors.push(ValidationError::ParameterNotBound {
+                cx.errors.push(ValidationError::ParameterNotReferenced {
                     definition: def.name.to_string(),
                     parameter: param.to_string(),
                 });
@@ -1114,11 +1114,22 @@ impl CheckCtx<'_> {
         };
         let Some(decl_args) = decl_args else {
             let context = self.context.clone();
-            self.errors.push(ValidationError::Undeclared {
-                vocabulary,
-                name: name.into(),
-                context,
-            });
+            // A predicate-position reference that names a definition is
+            // a category error with its own guidance (definitions are
+            // proposition-valued; admit/retract/value need a claim),
+            // not an undeclared name.
+            if vocabulary == VocabularyKind::Predicate && self.definitions.contains_key(name) {
+                self.errors.push(ValidationError::UnresolvedDefinitionCall {
+                    name: name.into(),
+                    context,
+                });
+            } else {
+                self.errors.push(ValidationError::Undeclared {
+                    vocabulary,
+                    name: name.into(),
+                    context,
+                });
+            }
             return;
         };
         if decl_args.len() != args.len() {

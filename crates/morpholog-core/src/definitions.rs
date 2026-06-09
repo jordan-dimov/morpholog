@@ -20,8 +20,9 @@ use crate::ir::{Definition, DefinitionName, Program, Prop, Stmt, ValueExpr};
 /// calls with `ir_builder::defined` and skips it.
 ///
 /// Only proposition positions resolve. `admit` / `retract` / `emit`
-/// targets stay claim-shaped: a definition never changes state, so a
-/// definition name there is an undeclared-predicate error, not a call.
+/// targets and `value` lookups stay claim-shaped: a definition is
+/// proposition-valued only, so a definition name there surfaces the
+/// dedicated unresolved-call error with its own guidance.
 pub fn resolve_defined_calls(program: &mut Program) {
     let names: BTreeSet<String> = program
         .definitions

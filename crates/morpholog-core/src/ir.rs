@@ -639,8 +639,11 @@ pub struct Transformation {
 /// thing in a gate as in an invariant. (`actor` is passed as an ordinary
 /// call argument where a gate needs it; a *call* wrapped in `pre(...)`
 /// works, because the context swap applies to the body's evaluation.)
-/// Definitions may call other definitions; cycles are a validation error,
-/// and every parameter must be bound by the body so projection is total.
+/// Definitions may call other definitions; cycles are a validation
+/// error. A parameter the body binds is generator-capable (a call may
+/// pass an unbound variable there); a parameter the body only uses
+/// must arrive bound at every call; a parameter the body never
+/// references is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     pub name: DefinitionName,
