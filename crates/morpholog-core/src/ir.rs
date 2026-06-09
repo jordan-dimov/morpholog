@@ -704,13 +704,6 @@ impl Program {
             .find(|d| d.predicate.as_str() == name)
     }
 
-    /// Look up a definition by name. Returns `None` if no definition
-    /// in the program has that name. Symmetric with the other lookup
-    /// methods.
-    pub fn definition(&self, name: &str) -> Option<&Definition> {
-        self.definitions.iter().find(|d| d.name == name)
-    }
-
     /// Look up a predicate declaration by name. Returns `None` if no
     /// declaration in the program has that name. Symmetric with the
     /// other lookup methods.
