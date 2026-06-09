@@ -163,6 +163,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 |---|---|---|
 | `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" above). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
 | `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" above). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
 | `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
 | `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. The decimal domain admits two flavours: bare decimals, and unit-tagged quantities of the SAME unit (a `Decimal[U]` IS a decimal, under a contract label the comparison must respect - `Decimal[USD]` against `Decimal[t]` is refused by name). The domain is carried explicitly, so there is no operator overloading by operand kind. |
@@ -321,6 +322,64 @@ the audit row's `invariants_checked` list under-describes by itself.
 The programme hash (`morpholog hash`) is what names the full rules in
 force, definitions included; a definition edit is a rules change.
 
+## Claim disciplines: declared properties of claim shapes
+
+A discipline is a modelling commitment a predicate declaration carries
+on its face, written as clauses after the argument list. Disciplines
+are deliberately boring, deterministic, generated, visible, and few -
+properties of claim shapes, never a back door for arbitrary rule
+templates. Four clauses exist:
+
+- **`unique by (fields)`** - the named fields determine the whole
+  claim: any two claims agreeing on the keys agree on every field
+  (full agreement, the SQL-UNIQUE reading; partial agreement is
+  deliberately not offered). Several clauses may coexist on one
+  predicate. Lowered to a generated invariant per clause.
+- **`append only`** - no transformation may `retract` this predicate.
+  Enforced statically: retraction only happens through a `retract`
+  statement, so the authoring-time ban is complete and costs nothing
+  at runtime. Ordinary programmes correct append-only claims by
+  supersession or exception claims, never retraction; there is no
+  escape hatch.
+- **`current pointer by (fields)`** - this predicate is a retractable
+  current-pointer (the doctrine's middle class, beside append-only
+  content and append-only lineage). Lowers exactly a `unique by`
+  invariant - the pointer singleton - and records the class as
+  metadata. A pointer cannot also be `append only` (it must retract to
+  move); the contradiction is refused.
+- **`superseded via L`** - names the lineage predicate carrying this
+  pointer's supersession history; only meaningful with, and required
+  to accompany, `current pointer by`. `L` must have exactly two
+  arguments in the `(successor, prior)` convention. The lowering
+  generates **no-fork only** - `unique by` the prior (second) field,
+  so one prior has at most one direct successor - and marks `L`
+  append-only. It does NOT claim well-formed lineage: joins (two
+  priors sharing a successor) and cycles are not prevented; a model
+  needing those guarantees writes its own invariants.
+
+**Lowering is materialised and runs at parse** (beside definition-call
+resolution; hand-built IR runs `lower_disciplines` explicitly, and
+validation fails loudly if a declared discipline's generated invariant
+is absent). Generated invariants are ordinary [`Invariant`]s with
+`origin: Discipline`, placed **before** the authored invariants - a
+discipline is a precondition of sense for the other rules, so a
+proposal violating both is refused with the root cause named. They are
+enforced, scoped, audited, and rendered exactly like authored rules;
+`guarantees` carries a `from` provenance ("predicate
+CurrentOfficialPrice, current pointer by (trade)") so a generated name
+in a rejection or audit row traces to its declaration in one hop. The
+formatter renders the clauses and omits the generated invariants
+(reparsing regenerates them deterministically, so round-trip holds);
+the programme hash therefore covers the declarations and the
+invariants they imply. Generated names are stable and boring -
+`{snake(Predicate)}_unique_by_{fields}` - because they appear in
+rejection reasons and `invariants_checked`.
+
+A keyless global singleton ("exactly one MoveCount claim") is not
+expressible as a discipline - `unique by` with every field as a key is
+refused as vacuous (claims are a set; two identical claims are already
+one claim), and no worked example has forced the keyless form.
+
 ## Invariants: state vs transition, and `pre(...)`
 
 An invariant is by default a predicate over the candidate (post) state - the world after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry" or "at most one piece per square." `Prop::Pre(inner)` opts a wrapped subtree into pre-transition evaluation, so a single invariant can relate pre and post values:
@@ -364,7 +423,9 @@ The check is one traversal of every invariant, transformation, and derived-claim
 
 5. **Actor context**: `Term::Actor` referenced in an invariant or derived-claim body - where no proposing transition is in scope - is flagged (the kernel would raise `UnboundActor`). Authority checks belong in a `require`, not an invariant.
 
-6. **Definitions**: the reference graph must be acyclic (checked before anything walks through calls); a definition may not share a name with a predicate; `actor` and `pre(...)` inside a body are refused (bodies are context-free); every parameter must be referenced by the body; call arity must match; a call argument for a use-only parameter must arrive bound; and the depth guard charges each call its callee's expanded depth, computed callees-first. Parameter kinds are inferred from the body (callees-first) and call arguments check against them, so a kind mistake at a call site reports like any claim-argument mismatch.
+6. **Disciplines**: clause fields must exist on the predicate; a key set covering every field (or none) is vacuous; duplicate clauses are refused; `append only` + `current pointer by` is a contradiction; a `superseded via` lineage must be a declared two-argument non-pointer predicate and must accompany `current pointer by`; no transformation may `retract` an append-only predicate (declared, or lineage of a `superseded via`) - checked through nested `for` bodies; and every discipline that lowers must find its generated invariant present (hand-built IR that skipped `lower_disciplines` fails loudly).
+
+7. **Definitions**: the reference graph must be acyclic (checked before anything walks through calls); a definition may not share a name with a predicate; `actor` and `pre(...)` inside a body are refused (bodies are context-free); every parameter must be referenced by the body; call arity must match; a call argument for a use-only parameter must arrive bound; and the depth guard charges each call its callee's expanded depth, computed callees-first. Parameter kinds are inferred from the body (callees-first) and call arguments check against them, so a kind mistake at a call site reports like any claim-argument mismatch.
 
 The kind and binding-flow walks share the require/bind_one/let/for quartet's export rules over one scoped environment, so a `require` body's refinements and bindings stay local while `bind_one` and `let` flow forward; `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local, and the value term must resolve to Decimal; `ValueOf`'s wildcard slot determines its result kind and its optional default must agree. `Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable": a variable seen first in an `Any` slot stays open, and a later specific use refines it. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
 

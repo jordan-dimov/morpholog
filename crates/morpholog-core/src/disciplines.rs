@@ -196,6 +196,60 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
     out
 }
 
+/// Generated-invariant-name -> the declaration clause that implied it,
+/// rendered for the legibility surfaces ("predicate CurrentFigure,
+/// current pointer by (owner)") - so a rejection naming a generated
+/// invariant traces back to its declaration in one hop.
+pub(crate) fn discipline_provenance(
+    program: &Program,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for decl in &program.predicates {
+        for discipline in &decl.disciplines {
+            match discipline {
+                Discipline::UniqueBy { fields } => {
+                    if unique_invariant(decl, fields).is_some() {
+                        out.insert(
+                            unique_invariant_name(&decl.name, fields),
+                            format!("predicate {}, unique by ({})", decl.name, fields.join(", ")),
+                        );
+                    }
+                }
+                Discipline::CurrentPointerBy { fields } => {
+                    if unique_invariant(decl, fields).is_some() {
+                        out.insert(
+                            unique_invariant_name(&decl.name, fields),
+                            format!(
+                                "predicate {}, current pointer by ({})",
+                                decl.name,
+                                fields.join(", ")
+                            ),
+                        );
+                    }
+                }
+                Discipline::AppendOnly => {}
+                Discipline::SupersededVia { lineage } => {
+                    let Some(lineage_decl) = program.predicates.iter().find(|l| l.name == *lineage)
+                    else {
+                        continue;
+                    };
+                    if lineage_decl.args.len() != 2 {
+                        continue;
+                    }
+                    let prior = vec![lineage_decl.args[1].name.clone()];
+                    if unique_invariant(lineage_decl, &prior).is_some() {
+                        out.insert(
+                            unique_invariant_name(&lineage_decl.name, &prior),
+                            format!("predicate {}, superseded via {}", decl.name, lineage),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The predicates no transformation may retract: those declared
 /// `append only`, plus every lineage predicate named by a
 /// `superseded via` (lineage is the doctrine's append-only third
