@@ -69,6 +69,8 @@ Prop                             -- a proposition: searches a state, yields bind
                                     witnesses (zero, one, or many) - relational, not
                                     boolean. Evaluated by find_matches.
   Claim(predicate, args)         -- match a claim
+  Defined(name, args)            -- call a named Definition (see below); claim-shaped,
+                                    resolved by name against Program.definitions
   And | Or | Not | Implies       -- boolean composition
   Xor(Prop, Prop)                -- exactly-one; lowers to (a or b) and not (a and b)
   Exists | Forall                -- bounded quantification
@@ -88,6 +90,11 @@ ValueExpr                        -- a value expression: computes exactly one val
   ValueOf { predicate, args, default }  -- unique-lookup value extraction
                                     (the two sorts are mutually recursive: a Compare
                                     operand is a ValueExpr, a Sum body is a Prop)
+
+Definition
+  name
+  parameters                     -- named bindings, kinds inferred from the body
+  body                           -- a Prop over the parameters only (context-free)
 
 Invariant
   name
@@ -156,6 +163,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 |---|---|---|
 | `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" above). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
 | `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
 | `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. The decimal domain admits two flavours: bare decimals, and unit-tagged quantities of the SAME unit (a `Decimal[U]` IS a decimal, under a contract label the comparison must respect - `Decimal[USD]` against `Decimal[t]` is refused by name). The domain is carried explicitly, so there is no operator overloading by operand kind. |
 | `on_or_before` `before` `on_or_after` `after` (infix) | `Prop::Compare { op, domain: Date }` | Distinct keywords (not overloaded `<=`) for civil-date comparison; `on_or_*` are inclusive, `before`/`after` strict. Reads as business prose and aligns with the `[from, to]` inclusive-window doctrine. `before`/`after` are matched contextually (comparator position only), so they remain usable as variable names. Operands are type-checked as `EvalValue::Date`; using them on decimals surfaces as a runtime `TypeMismatch`. |
@@ -241,6 +249,78 @@ is admissible: `limit` is bound by the `Claim` match and consumed by the `Le` co
 
 **The actor is asserted, not authenticated.** A `Transition` carries the actor as an `EvalValue::Subject`, and the runtime gates that asserted actor against whatever authority claims a `require` consults. It does **not** verify that the caller *is* that subject - authentication is the deployment's job, performed before `propose` is reached (the boundary that mints a `Transition` is where a session, token, or signature is checked). A `require` is the wrong place to reintroduce that: it has no host functions and no I/O, so cryptographic verification cannot and should not live inside one. Morpholog answers "is this actor permitted to do this, given admitted state?"; it trusts that the actor identity handed to it has already been established.
 
+## Definitions: named propositions
+
+A `Definition` is a named, parameterised `Prop`, declared with `define
+name(params): body` and called from invariant bodies, `require`/`bind`
+gates, derived-claim domains, `Sum` bodies, and other definitions. It is
+body grammar, not a third first-class construct: a definition never
+changes state and carries no standing of its own - it gives a recurring
+condition the name the business uses for it, so a validity window, a
+lifecycle phase, or a statutory requirement is written once and read
+everywhere by name. The call is spelled exactly like a claim reference;
+the parser resolves it against the declared definitions once the whole
+programme is collected, which is why a definition name may never
+collide with a predicate name.
+
+**Evaluation is relational substitution with projection.** A call
+builds a frame carrying only the parameters: a ground argument (a
+literal, `actor`, or a bound variable) pre-binds its parameter; an
+unbound variable or wildcard leaves it free, so the body acts as a
+generator for that position. The body evaluates under that frame alone
+- it cannot see the caller's other bindings, and the caller never sees
+the body's internal names. Each body match projects its parameter
+values back onto the call's arguments, extending the caller's bindings
+exactly as a claim match would. Projection deduplicates: a call yields
+each distinct argument-binding witness once, so internal multiplicity
+(two different internal witnesses for the same projected arguments) is
+not observable and cannot double-count inside a `sum`. A call binds
+its argument variables; binding flow at the call site follows the
+claim-match rules.
+
+**Parameters divide by what the body does with them.** A parameter the
+body binds (it appears in a claim-match position) is generator-capable:
+a call may pass an unbound variable there and receive the value. A
+parameter the body only *uses* (a window date consumed by a comparator)
+must arrive bound at every call; the static check enforces it with the
+same unbound-name error the runtime would raise. A parameter the body
+never references is refused outright - it could never be given a value
+by the body, so it is either dead weight or a guaranteed runtime error.
+Parameter names are duplicate-free: each is one binding slot in the
+call frame.
+
+**Definitions are proposition-valued only.** A call answers "does this
+condition hold?" and hands values out solely by binding its arguments -
+the trade lifecycle's `terms_in_force_on(trade, d, qty)` returns the
+governing quantity *through* `qty`. `value Pred(args)` reads claims,
+never definitions, and a definition can never be an `admit` / `retract`
+/ `emit` target; naming one in any of those positions is a dedicated
+category error, not an undeclared-predicate report.
+
+**Bodies are context-free.** `actor` and `pre(...)` inside a definition
+body are validation errors, so a definition means the same thing in a
+gate as in an invariant. The actor is passed as an ordinary call
+argument where a gate needs it (`investigator_delegated_on(actor, ...)`),
+resolving against the proposing transition at the call site; a call
+*wrapped* in `pre(...)` works, because the context swap applies to the
+body's evaluation. Definitions may call definitions; cycles are a
+validation error, and the nesting-depth guard charges each call its
+callee's expanded depth, so a chain of shallow definitions cannot
+smuggle an over-deep body past the budget.
+
+**Diagnostics keep both levels.** A failing call renders as the named
+condition first and the responsible body conjunct second (`inside
+two_distinct_prior_verifications(...): MatchVerified(...)`), and the
+explanation engine's missing-claims walk descends through the body
+under the call's frame - a gate factored into named conditions reports
+the same directly-missing claims its inline form would.
+
+**Audit honesty.** Editing a definition changes the meaning of every
+invariant that calls it without changing the invariant's own text, so
+the audit row's `invariants_checked` list under-describes by itself.
+The programme hash (`morpholog hash`) is what names the full rules in
+force, definitions included; a definition edit is a rules change.
+
 ## Invariants: state vs transition, and `pre(...)`
 
 An invariant is by default a predicate over the candidate (post) state - the world after the proposed transformation has staged its assertions and retractions. That covers structural rules like "balanced posted entry" or "at most one piece per square." `Prop::Pre(inner)` opts a wrapped subtree into pre-transition evaluation, so a single invariant can relate pre and post values:
@@ -283,6 +363,8 @@ The check is one traversal of every invariant, transformation, and derived-claim
 4. **Shape**: enforced by the type system, not the checker. The two-sort IR (`Prop` searches state; `ValueExpr` computes a value) makes a value expression at a predicate position - or the reverse - unrepresentable, so neither the parser nor `ir_builder` can construct it. The former static shape check and the `NotPredicate` / `NotValue` kernel errors are gone; the evaluators are total over their sorts.
 
 5. **Actor context**: `Term::Actor` referenced in an invariant or derived-claim body - where no proposing transition is in scope - is flagged (the kernel would raise `UnboundActor`). Authority checks belong in a `require`, not an invariant.
+
+6. **Definitions**: the reference graph must be acyclic (checked before anything walks through calls); a definition may not share a name with a predicate; `actor` and `pre(...)` inside a body are refused (bodies are context-free); every parameter must be referenced by the body; call arity must match; a call argument for a use-only parameter must arrive bound; and the depth guard charges each call its callee's expanded depth, computed callees-first. Parameter kinds are inferred from the body (callees-first) and call arguments check against them, so a kind mistake at a call site reports like any claim-argument mismatch.
 
 The kind and binding-flow walks share the require/bind_one/let/for quartet's export rules over one scoped environment, so a `require` body's refinements and bindings stay local while `bind_one` and `let` flow forward; `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local, and the value term must resolve to Decimal; `ValueOf`'s wildcard slot determines its result kind and its optional default must agree. `Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable": a variable seen first in an `Any` slot stays open, and a later specific use refines it. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
 

@@ -7,7 +7,7 @@
 
 use std::sync::LazyLock;
 
-use morpholog_core::{Invariant, PredicateDecl, Program};
+use morpholog_core::{Definition, Invariant, PredicateDecl, Program};
 
 static PROGRAM: LazyLock<Program> = LazyLock::new(|| {
     crate::parse_example(
@@ -26,4 +26,8 @@ pub fn all_predicates() -> Vec<PredicateDecl> {
 
 pub fn all_invariants() -> Vec<Invariant> {
     PROGRAM.invariants.clone()
+}
+
+pub fn definitions() -> Vec<Definition> {
+    PROGRAM.definitions.clone()
 }

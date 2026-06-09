@@ -43,8 +43,8 @@
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State, Subject,
-    Transformation, Transition, propose,
+    ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
+    Subject, Transformation, Transition, propose,
 };
 use rust_decimal::Decimal;
 
@@ -173,9 +173,10 @@ pub fn propose_with_test_actor(
     args: Vec<EvalValue>,
     pre: &State,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<Outcome, EvalError> {
     let transition = test_transition(t, args);
-    propose(t, &transition, pre, invariants)
+    propose(t, &transition, pre, invariants, definitions)
 }
 
 /// [`propose`] with a caller-supplied actor. Used by authority tests
@@ -186,13 +187,14 @@ pub fn propose_as(
     actor: impl Into<Subject>,
     pre: &State,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<Outcome, EvalError> {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args,
         actor: actor.into(),
     };
-    propose(t, &transition, pre, invariants)
+    propose(t, &transition, pre, invariants, definitions)
 }
 
 /// Propose with [`test_actor`] and require the outcome to be
@@ -204,9 +206,11 @@ pub fn must_accept(
     args: Vec<EvalValue>,
     pre: State,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> State {
     let transition = test_transition(t, args);
-    match propose(t, &transition, &pre, invariants).expect("propose should not error") {
+    match propose(t, &transition, &pre, invariants, definitions).expect("propose should not error")
+    {
         Outcome::Accepted {
             candidate_state, ..
         } => candidate_state,
@@ -227,13 +231,15 @@ pub fn must_accept_as(
     actor: impl Into<Subject>,
     pre: State,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> State {
     let transition = Transition {
         transformation_name: t.name.clone(),
         args,
         actor: actor.into(),
     };
-    match propose(t, &transition, &pre, invariants).expect("propose should not error") {
+    match propose(t, &transition, &pre, invariants, definitions).expect("propose should not error")
+    {
         Outcome::Accepted {
             candidate_state, ..
         } => candidate_state,

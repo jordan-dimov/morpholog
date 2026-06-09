@@ -53,6 +53,7 @@ async fn reset_db(pool: &PgPool) {
 /// the resulting outbox row's `intent_id`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     let invariants = double_entry_ledger::all_invariants();
+    let definitions = double_entry_ledger::definitions();
     let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
@@ -65,6 +66,7 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
             dec(100),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .unwrap();
@@ -125,6 +127,7 @@ async fn commit_compensation_transformation(pool: &PgPool, suffix: &str) -> Uuid
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();

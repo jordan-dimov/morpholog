@@ -55,6 +55,7 @@ async fn stdout_deliverer_marks_row_delivered_via_drain() {
         &transformation,
         &transition,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();

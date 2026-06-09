@@ -57,10 +57,15 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     };
 
     if args.trace {
-        let traced =
-            propose_against_pg_with_trace(&pool, transformation, &transition, &program.invariants)
-                .await
-                .context("propose_against_pg_with_trace failed")?;
+        let traced = propose_against_pg_with_trace(
+            &pool,
+            transformation,
+            &transition,
+            &program.invariants,
+            &program.definitions,
+        )
+        .await
+        .context("propose_against_pg_with_trace failed")?;
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
                 print_json(&serde_json::json!({
@@ -93,6 +98,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
             transformation,
             &transition,
             &program.invariants,
+            &program.definitions,
         )
         .await
         .context("propose_against_pg_with_rejection_state failed")?;
@@ -109,9 +115,15 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
             _ => print_json(&outcome)?,
         }
     } else {
-        let outcome = propose_against_pg(&pool, transformation, &transition, &program.invariants)
-            .await
-            .context("propose_against_pg failed")?;
+        let outcome = propose_against_pg(
+            &pool,
+            transformation,
+            &transition,
+            &program.invariants,
+            &program.definitions,
+        )
+        .await
+        .context("propose_against_pg failed")?;
         print_json(&outcome)?;
         if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
             std::process::exit(1);

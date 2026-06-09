@@ -159,6 +159,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The hosted runner's free disk cannot hold the instrumented
+      # workspace beside the preinstalled toolchains this job never
+      # touches; the test-binary count tipped it into "No space left
+      # on device". Clearing the unused toolchains buys ~25 GB.
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+
       - name: Install stable toolchain with llvm-tools
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -188,11 +195,17 @@ jobs:
       #
       # `--threads=1` on the linker caps rust-lld's internal parallel
       # section: linking the coverage-instrumented binaries (debuginfo
-      # + instrumentation tables, ~20 test binaries) peaks memory hard
+      # + instrumentation tables, one per test binary) peaks memory hard
       # enough that lld's parallelFor SIGBUSes on the runner. Serialising
       # lld bounds peak memory at a modest link-time cost; the rest of
       # the build stays parallel.
+      #
+      # `debuginfo=line-tables-only` bounds the disk the same build
+      # writes: full DWARF dominates instrumented binary size, while
+      # coverage mapping lives in its own section and keeps line-level
+      # reporting intact - the summary is unchanged, the target
+      # directory shrinks by gigabytes.
       - name: cargo llvm-cov
         env:
-          RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
+          RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
         run: cargo llvm-cov --workspace --locked --summary-only -- --test-threads=1

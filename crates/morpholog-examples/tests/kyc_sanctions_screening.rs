@@ -29,7 +29,7 @@ fn run(program: &Program, name: &str, args: Vec<EvalValue>, state: State) -> Sta
     let t = program
         .transformation(name)
         .unwrap_or_else(|| panic!("transformation `{name}` not found"));
-    must_accept(t, args, state, &program.invariants)
+    must_accept(t, args, state, &program.invariants, &program.definitions)
 }
 
 fn try_run(
@@ -41,7 +41,7 @@ fn try_run(
     let t = program
         .transformation(name)
         .unwrap_or_else(|| panic!("transformation `{name}` not found"));
-    propose_with_test_actor(t, args, state, &program.invariants)
+    propose_with_test_actor(t, args, state, &program.invariants, &program.definitions)
 }
 
 /// Register the customer and clear screenings against both sanctions
@@ -554,6 +554,7 @@ fn adjudicated_marker_without_a_disposition_is_rejected() {
         vec![subj("scr_sanctions_1")],
         &state,
         &program.invariants,
+        &program.definitions,
     )
     .expect("kernel must not error");
     match outcome {

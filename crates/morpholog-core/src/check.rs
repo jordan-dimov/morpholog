@@ -200,6 +200,10 @@ enum RefMode {
 struct CheckCtx<'a> {
     predicates: HashMap<&'a str, &'a PredicateDecl>,
     intents: HashMap<&'a str, &'a crate::IntentDecl>,
+    definitions: HashMap<&'a str, &'a crate::Definition>,
+    /// Inferred call signature per definition, computed callees-first
+    /// before any caller body is walked.
+    definition_sigs: HashMap<String, DefinitionSig>,
     context: ValidationContext,
     errors: Vec<ValidationError>,
 }
@@ -209,6 +213,17 @@ struct CheckCtx<'a> {
 /// programme passes. Traversal order is invariants, then
 /// transformations, then derived claims, so merged diagnostics
 /// come out in a predictable shape.
+/// Inferred call signature of a definition: the per-parameter kind the
+/// body observes, plus whether the body itself binds the parameter. A
+/// body-bound parameter is generator-capable - a call argument may
+/// arrive unbound and receive its value from the body's matches. A
+/// parameter the body only *uses* (a window date in a comparator, say)
+/// must arrive bound at every call, exactly as the runtime requires.
+struct DefinitionSig {
+    param_kinds: Vec<InferredKind>,
+    generator: Vec<bool>,
+}
+
 pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
     let mut cx = CheckCtx {
         predicates: program
@@ -221,6 +236,12 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             .iter()
             .map(|d| (d.name.as_str(), d))
             .collect(),
+        definitions: program
+            .definitions
+            .iter()
+            .map(|d| (d.name.as_str(), d))
+            .collect(),
+        definition_sigs: HashMap::new(),
         // Reassigned per top-level item below; this placeholder is
         // never the context of an emitted error.
         context: ValidationContext::Invariant {
@@ -228,6 +249,74 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         },
         errors: Vec::new(),
     };
+
+    // Definitions first, callees before callers, so every call site
+    // below checks against an already-inferred signature. The order is
+    // total because `validate_program` has already rejected cycles;
+    // the `unwrap_or_default` is the defensive no-op for direct calls
+    // on cyclic IR.
+    let definition_order =
+        crate::definitions::definition_topo_order(&program.definitions).unwrap_or_default();
+    for i in definition_order {
+        let def = &program.definitions[i];
+        cx.context = ValidationContext::Definition {
+            name: def.name.to_string(),
+        };
+        // Bodies are context-free: no `actor` (pass it as a call
+        // argument) and no `pre(...)` (wrap the call instead), so a
+        // definition means the same thing in a gate as in an invariant.
+        if prop_mentions_actor(&def.body) {
+            let context = cx.context.clone();
+            cx.errors
+                .push(ValidationError::ActorNotAvailable { context });
+        }
+        if prop_mentions_pre(&def.body) {
+            let context = cx.context.clone();
+            cx.errors.push(ValidationError::PreNotAvailable { context });
+        }
+        // Classification walk: which parameters does the body itself
+        // bind? Parameters start unbound and the probe's errors are
+        // discarded - it asks one question, and the runtime-faithful
+        // binding flow of the ordinary walk answers it.
+        let mut probe = Scope::new();
+        let kept = std::mem::take(&mut cx.errors);
+        cx.walk_prop(&def.body, &mut probe);
+        cx.errors = kept;
+        let generator: Vec<bool> = def
+            .parameters
+            .iter()
+            .map(|p| probe.bound.is_bound(p))
+            .collect();
+        // Real walk: parameters arrive bound and untyped, like
+        // transformation parameters, so kinds refine on use and the
+        // body's own problems report once.
+        let mut scope = Scope::new();
+        for param in &def.parameters {
+            scope.bound.bind(param);
+            let _ = scope.kinds.observe(param, InferredKind::UnknownOrAny);
+        }
+        cx.walk_prop(&def.body, &mut scope);
+        for param in &def.parameters {
+            if !occurs_in_prop(param, &def.body) {
+                cx.errors.push(ValidationError::ParameterNotReferenced {
+                    definition: def.name.to_string(),
+                    parameter: param.to_string(),
+                });
+            }
+        }
+        let param_kinds = def
+            .parameters
+            .iter()
+            .map(|p| scope.kinds.lookup(p))
+            .collect();
+        cx.definition_sigs.insert(
+            def.name.to_string(),
+            DefinitionSig {
+                param_kinds,
+                generator,
+            },
+        );
+    }
 
     for inv in &program.invariants {
         cx.context = ValidationContext::Invariant {
@@ -342,7 +431,22 @@ impl CheckCtx<'_> {
     fn walk_prop(&mut self, prop: &Prop, scope: &mut Scope) {
         match prop {
             Prop::Claim { predicate, args } => {
-                self.check_predicate_ref(predicate.as_str(), args, RefMode::Match, scope);
+                // A claim-shaped node naming a definition means the
+                // resolution pass was skipped (hand-built IR): fail
+                // loudly with guidance instead of an Undeclared that
+                // would mislead.
+                if self.definitions.contains_key(predicate.as_str()) {
+                    let context = self.context.clone();
+                    self.errors.push(ValidationError::UnresolvedDefinitionCall {
+                        name: predicate.to_string(),
+                        context,
+                    });
+                } else {
+                    self.check_predicate_ref(predicate.as_str(), args, RefMode::Match, scope);
+                }
+            }
+            Prop::Defined { name, args } => {
+                self.check_defined_call(name.as_str(), args, scope);
             }
             Prop::And(items) => {
                 // Conjuncts thread the scope forward: each branch
@@ -904,6 +1008,83 @@ impl CheckCtx<'_> {
         self.check_reference(VocabularyKind::Predicate, predicate, args, mode, scope);
     }
 
+    /// Check a definition call: declared, right arity, then each
+    /// argument against the inferred signature. A generator-capable
+    /// parameter binds an unbound variable argument (like a claim
+    /// match); a use-only parameter demands its argument already
+    /// bound - the same distinction the runtime frame enforces.
+    fn check_defined_call(&mut self, name: &str, args: &[Term], scope: &mut Scope) {
+        let Some(def) = self.definitions.get(name).copied() else {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::Undeclared {
+                vocabulary: VocabularyKind::Definition,
+                name: name.into(),
+                context,
+            });
+            return;
+        };
+        if def.parameters.len() != args.len() {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::ArityMismatch {
+                vocabulary: VocabularyKind::Definition,
+                name: name.into(),
+                expected: def.parameters.len(),
+                actual: args.len(),
+                context,
+            });
+        }
+        // Absent only when the topo pre-pass was skipped on cyclic IR,
+        // which `validate_program` rejects before reaching here.
+        let Some(sig) = self.definition_sigs.get(name) else {
+            return;
+        };
+        let param_kinds = sig.param_kinds.clone();
+        let generator = sig.generator.clone();
+        let n = args.len().min(param_kinds.len());
+        for (position, arg) in args.iter().take(n).enumerate() {
+            let expected = param_kinds[position].clone();
+            match arg {
+                Term::Var(var_name) => {
+                    if generator[position] {
+                        scope.bound.bind(var_name);
+                    } else {
+                        self.use_var(scope, var_name);
+                    }
+                    self.observe_or_report(scope, var_name, expected);
+                }
+                Term::Wildcard => {
+                    if !generator[position] {
+                        // The body never binds this parameter, and a
+                        // wildcard argument supplies nothing - the
+                        // same unbound-name failure the runtime
+                        // reports for this call.
+                        let context = self.context.clone();
+                        self.errors.push(ValidationError::UnboundVariable {
+                            variable: def.parameters[position].to_string(),
+                            context,
+                        });
+                    }
+                }
+                other => {
+                    if let (InferredKind::Known(expected_kind), InferredKind::Known(actual_kind)) =
+                        (expected, term_kind(other))
+                        && !kinds_compatible(&expected_kind, &actual_kind)
+                    {
+                        let context = self.context.clone();
+                        self.errors.push(ValidationError::ArgKindMismatch {
+                            vocabulary: VocabularyKind::Definition,
+                            name: name.into(),
+                            position,
+                            expected: expected_kind,
+                            actual: actual_kind,
+                            context,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     /// Same, against the intent vocabulary; powers `Stmt::Emit`.
     fn check_intent_ref(&mut self, intent: &str, args: &[Term], mode: RefMode, scope: &mut Scope) {
         self.check_reference(VocabularyKind::Intent, intent, args, mode, scope);
@@ -924,14 +1105,31 @@ impl CheckCtx<'_> {
         let decl_args = match vocabulary {
             VocabularyKind::Predicate => self.predicates.get(name).copied().map(|d| &d.args),
             VocabularyKind::Intent => self.intents.get(name).copied().map(|d| &d.args),
+            // Defined calls never route through here: a definition's
+            // parameters are inferred, not declared as kinded args, so the
+            // `Prop::Defined` walk checks them directly. If this arm is ever
+            // reached the reference surfaces as Undeclared - loudly wrong
+            // rather than silently passed.
+            VocabularyKind::Definition => None,
         };
         let Some(decl_args) = decl_args else {
             let context = self.context.clone();
-            self.errors.push(ValidationError::Undeclared {
-                vocabulary,
-                name: name.into(),
-                context,
-            });
+            // A predicate-position reference that names a definition is
+            // a category error with its own guidance (definitions are
+            // proposition-valued; admit/retract/value need a claim),
+            // not an undeclared name.
+            if vocabulary == VocabularyKind::Predicate && self.definitions.contains_key(name) {
+                self.errors.push(ValidationError::UnresolvedDefinitionCall {
+                    name: name.into(),
+                    context,
+                });
+            } else {
+                self.errors.push(ValidationError::Undeclared {
+                    vocabulary,
+                    name: name.into(),
+                    context,
+                });
+            }
             return;
         };
         if decl_args.len() != args.len() {
@@ -1110,7 +1308,7 @@ fn is_actor(t: &Term) -> bool {
 /// Crosses into [`value_mentions_actor`] for comparator operands.
 fn prop_mentions_actor(prop: &Prop) -> bool {
     match prop {
-        Prop::Claim { args, .. } => args.iter().any(is_actor),
+        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.iter().any(is_actor),
         Prop::In(a, b) => is_actor(a) || is_actor(b),
         Prop::And(items) | Prop::Or(items) => items.iter().any(prop_mentions_actor),
         Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => prop_mentions_actor(p),
@@ -1138,6 +1336,84 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
         ValueExpr::Sum { value, body } => is_actor(value) || prop_mentions_actor(body),
         ValueExpr::Arith { left, right, .. } => {
             value_mentions_actor(left) || value_mentions_actor(right)
+        }
+    }
+}
+
+/// Whether a proposition contains `Prop::Pre` anywhere in its tree.
+/// Used to ban `pre(...)` inside definition bodies (bodies are
+/// context-free; a call wrapped in `pre(...)` at the use site covers
+/// the legitimate cases). A call's body is scanned at its own
+/// declaration, so `Defined` contributes nothing here.
+fn prop_mentions_pre(prop: &Prop) -> bool {
+    match prop {
+        Prop::Pre(_) => true,
+        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => false,
+        Prop::And(items) | Prop::Or(items) => items.iter().any(prop_mentions_pre),
+        Prop::Not(p) | Prop::Exists { body: p, .. } => prop_mentions_pre(p),
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            prop_mentions_pre(left) || prop_mentions_pre(right)
+        }
+        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
+            value_mentions_pre(left) || value_mentions_pre(right)
+        }
+        Prop::Forall { source, body, .. } => prop_mentions_pre(source) || prop_mentions_pre(body),
+    }
+}
+
+/// Value-sort companion to [`prop_mentions_pre`].
+fn value_mentions_pre(expr: &ValueExpr) -> bool {
+    match expr {
+        ValueExpr::Term(_) => false,
+        ValueExpr::ValueOf { default, .. } => {
+            default.as_ref().is_some_and(|d| value_mentions_pre(d))
+        }
+        ValueExpr::Sum { body, .. } => prop_mentions_pre(body),
+        ValueExpr::Arith { left, right, .. } => {
+            value_mentions_pre(left) || value_mentions_pre(right)
+        }
+    }
+}
+
+/// Whether `name` occurs in any term position of the proposition.
+/// Used to flag a definition parameter the body never references:
+/// such a parameter can never be given a value by the body, so a
+/// call with an unbound argument for it is a guaranteed runtime
+/// error, and a ground argument is dead weight.
+fn occurs_in_prop(name: &Var, prop: &Prop) -> bool {
+    let is_name = |t: &Term| matches!(t, Term::Var(v) if v == name);
+    match prop {
+        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.iter().any(is_name),
+        Prop::In(a, b) => is_name(a) || is_name(b),
+        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| occurs_in_prop(name, p)),
+        Prop::Not(p) | Prop::Pre(p) => occurs_in_prop(name, p),
+        // A quantifier binder shadows the name for its body.
+        Prop::Exists { binding, body } => binding != name && occurs_in_prop(name, body),
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            occurs_in_prop(name, left) || occurs_in_prop(name, right)
+        }
+        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
+            occurs_in_value(name, left) || occurs_in_value(name, right)
+        }
+        Prop::Forall {
+            binding,
+            source,
+            body,
+        } => occurs_in_prop(name, source) || (binding != name && occurs_in_prop(name, body)),
+    }
+}
+
+/// Value-sort companion to [`occurs_in_prop`].
+fn occurs_in_value(name: &Var, expr: &ValueExpr) -> bool {
+    let is_name = |t: &Term| matches!(t, Term::Var(v) if v == name);
+    match expr {
+        ValueExpr::Term(t) => is_name(t),
+        ValueExpr::ValueOf { args, default, .. } => {
+            args.iter().any(is_name) || default.as_ref().is_some_and(|d| occurs_in_value(name, d))
+        }
+        ValueExpr::Sum { value, body } => is_name(value) || occurs_in_prop(name, body),
+        ValueExpr::Arith { left, right, .. } => {
+            occurs_in_value(name, left) || occurs_in_value(name, right)
         }
     }
 }

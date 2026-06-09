@@ -12,15 +12,21 @@
 mod common;
 
 use common::{dur, must_accept, propose_with_test_actor, qty, subj, ts};
-use morpholog_core::{EvalValue, Invariant, Outcome, State, Transformation, enumerate_derived};
+use morpholog_core::{
+    Definition, EvalValue, Invariant, Outcome, State, Transformation, enumerate_derived,
+};
 use morpholog_examples::laytime_demurrage as lay;
 
 fn invariants() -> Vec<Invariant> {
     lay::all_invariants()
 }
 
+fn definitions() -> Vec<Definition> {
+    lay::definitions()
+}
+
 fn must_reject(t: &Transformation, args: Vec<EvalValue>, pre: &State) {
-    let outcome = propose_with_test_actor(t, args, pre, &invariants())
+    let outcome = propose_with_test_actor(t, args, pre, &invariants(), &definitions())
         .expect("proposal should evaluate cleanly");
     assert!(
         matches!(outcome, Outcome::Rejected { .. }),
@@ -37,23 +43,26 @@ fn commenced_voyage() -> State {
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::tender_nor(),
         vec![subj("nor1"), subj("v1"), ts("2026-10-24T14:00:00Z")],
         state,
         &invariants(),
+        &definitions(),
     );
     must_accept(
         &lay::commence_laytime(),
         vec![subj("v1"), subj("seed1")],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
 fn excess_for(state: &State) -> EvalValue {
-    let rows = enumerate_derived(&lay::time_on_demurrage(), state).unwrap();
+    let rows = enumerate_derived(&lay::time_on_demurrage(), state, &lay::definitions()).unwrap();
     assert_eq!(rows.len(), 1, "one voyage, one row: {rows:?}");
     // Row shape: (voyage, allowed, excess) - the allowance shown
     // beside the time that ran past it.
@@ -88,6 +97,7 @@ fn intervals_accumulate_and_demurrage_is_the_excess_past_the_allowance() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::record_counting_interval(),
@@ -99,12 +109,14 @@ fn intervals_accumulate_and_demurrage_is_the_excess_past_the_allowance() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::complete_cargo_ops(),
         vec![subj("v1"), ts("2026-10-27T06:00:00Z")],
         state,
         &invariants(),
+        &definitions(),
     );
     assert_eq!(excess_for(&state), dur("PT10H"));
 }
@@ -122,6 +134,7 @@ fn a_voyage_inside_its_allowance_shows_zero_demurrage_not_negative() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     // Twelve hours counted against forty-eight allowed: the max floor
     // reports zero, never a negative span.
@@ -137,12 +150,14 @@ fn counting_cannot_be_recorded_before_the_clock_starts() {
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::tender_nor(),
         vec![subj("nor1"), subj("v1"), ts("2026-10-24T14:00:00Z")],
         state,
         &invariants(),
+        &definitions(),
     );
     must_reject(
         &lay::record_counting_interval(),
@@ -219,8 +234,9 @@ fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
         &invariants(),
+        &definitions(),
     );
-    let rows = enumerate_derived(&lay::time_on_demurrage(), &state)
+    let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions())
         .expect("pre-commencement inspection must not error");
     assert!(rows.is_empty(), "no clock, no row: {rows:?}");
 }
@@ -237,22 +253,25 @@ fn two_voyages_enumerate_deterministically() {
         vec![subj("v2"), subj("mv_borealis"), subj("sines"), dur("PT24H")],
         state,
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::tender_nor(),
         vec![subj("nor2"), subj("v2"), ts("2026-11-01T08:00:00Z")],
         state,
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::commence_laytime(),
         vec![subj("v2"), subj("seed2")],
         state,
         &invariants(),
+        &definitions(),
     );
-    let rows = enumerate_derived(&lay::time_on_demurrage(), &state).unwrap();
+    let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
     assert_eq!(rows.len(), 2, "two commenced voyages, two rows");
-    let again = enumerate_derived(&lay::time_on_demurrage(), &state).unwrap();
+    let again = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
     assert_eq!(rows, again, "enumeration order is deterministic");
     let voyages: Vec<_> = rows.iter().map(|r| r.args[0].clone()).collect();
     assert!(
@@ -273,18 +292,21 @@ fn cargo_book_caps_at_the_declared_capacity() {
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::declare_capacity(),
         vec![subj("v1"), subj("seed_parcel"), qty("45000", "t")],
         state,
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::load_parcel(),
         vec![subj("p1"), subj("v1"), qty("30000", "t")],
         state,
         &invariants(),
+        &definitions(),
     );
     // To the boundary: the comparison is exact, tonnes against tonnes.
     let state = must_accept(
@@ -292,6 +314,7 @@ fn cargo_book_caps_at_the_declared_capacity() {
         vec![subj("p2"), subj("v1"), qty("15000", "t")],
         state,
         &invariants(),
+        &definitions(),
     );
     // One more tonne does not fit.
     must_reject(
@@ -318,18 +341,21 @@ fn voyage_on_demurrage() -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     let state = must_accept(
         &lay::agree_demurrage_rate(),
         vec![subj("v1"), subj("seed_settlement"), qty("25000", "USD")],
         state,
         &invariants(),
+        &definitions(),
     );
     must_accept(
         &lay::complete_cargo_ops(),
         vec![subj("v1"), ts("2026-11-01T08:00:00Z")],
         state,
         &invariants(),
+        &definitions(),
     )
 }
 
@@ -338,7 +364,7 @@ fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
     let state = voyage_on_demurrage();
     // The derived figure prices the delay before anything is paid:
     // row shape (voyage, allowed, daily, due).
-    let rows = enumerate_derived(&lay::demurrage_due(), &state).unwrap();
+    let rows = enumerate_derived(&lay::demurrage_due(), &state, &lay::definitions()).unwrap();
     assert_eq!(rows.len(), 1, "one voyage on demurrage: {rows:?}");
     assert_eq!(rows[0].args[3], qty("137500.00", "USD"));
 
@@ -348,6 +374,7 @@ fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
         vec![subj("s1"), subj("v1"), qty("137500.00", "USD")],
         state,
         &invariants(),
+        &definitions(),
     );
     // A cent past what the delay is worth is refused.
     must_reject(
@@ -365,6 +392,7 @@ fn tonnes_offered_as_dollars_do_not_evaluate_let_alone_commit() {
         vec![subj("s1"), subj("v1"), qty("5", "t")],
         &state,
         &invariants(),
+        &definitions(),
     )
     .expect_err("a tonne is not a dollar: kernel error, not rejection");
     let msg = format!("{err}");
@@ -380,7 +408,7 @@ fn demurrage_due_has_no_row_before_the_rate_is_agreed() {
     // the clock) exists, the question "what is owed?" has no row
     // rather than a wrong answer.
     let state = commenced_voyage();
-    let rows = enumerate_derived(&lay::demurrage_due(), &state).unwrap();
+    let rows = enumerate_derived(&lay::demurrage_due(), &state, &lay::definitions()).unwrap();
     assert!(rows.is_empty(), "no rate agreed yet: {rows:?}");
 }
 
@@ -397,6 +425,7 @@ fn settlement_before_the_rate_is_agreed_is_refused() {
         vec![subj("v1"), ts("2026-10-25T08:00:00Z")],
         state,
         &invariants(),
+        &definitions(),
     );
     must_reject(
         &lay::settle_demurrage(),

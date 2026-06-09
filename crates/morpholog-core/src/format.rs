@@ -20,8 +20,8 @@
 //! degrades the rendering.
 
 use crate::{
-    ArithOp, Claim, CompareOp, DerivedClaim, Intent, Invariant, OrderedDomain, PredicateDecl,
-    Program, Prop, Stmt, Term, Transformation, Value, ValueExpr, Var,
+    ArithOp, Claim, CompareOp, Definition, DerivedClaim, Intent, Invariant, OrderedDomain,
+    PredicateDecl, Program, Prop, Stmt, Term, Transformation, Value, ValueExpr, Var,
 };
 
 /// The surface token for an ordered comparison. The single source of
@@ -97,6 +97,11 @@ pub fn format_program(p: &Program) -> String {
         }
     }
 
+    for def in &p.definitions {
+        out.push('\n');
+        out.push_str(&format_definition(def));
+    }
+
     for inv in &p.invariants {
         out.push('\n');
         out.push_str(&format_invariant(inv));
@@ -135,6 +140,18 @@ pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
         .map(|a| format!("{}: {}", a.name, a.kind))
         .collect();
     format!("intent {}({})\n", decl.name, args.join(", "))
+}
+
+/// Render a [`Definition`] in the invariant block shape:
+/// `define name(params):` with the body indented.
+pub fn format_definition(def: &Definition) -> String {
+    let params: Vec<String> = def.parameters.iter().map(ToString::to_string).collect();
+    let mut out = String::new();
+    out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
+    out.push_str(&indent(1));
+    out.push_str(&format_prop_inline(&def.body));
+    out.push('\n');
+    out
 }
 
 pub fn format_invariant(inv: &Invariant) -> String {
@@ -269,6 +286,7 @@ pub fn format_prop_inline(p: &Prop) -> String {
     fn prop_primary(p: &Prop) -> String {
         match p {
             Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
+            Prop::Defined { name, args } => format_predicate_call(name.as_str(), args),
             // `pre(...)` is function-call-shape; no outer parens needed.
             Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
             _ => format!("({})", format_prop_inline(p)),
@@ -277,6 +295,9 @@ pub fn format_prop_inline(p: &Prop) -> String {
 
     match p {
         Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
+        // A definition call renders exactly like a claim reference; the
+        // parser re-resolves it by name, so round-trip holds.
+        Prop::Defined { name, args } => format_predicate_call(name.as_str(), args),
 
         // Comparators relate two value expressions.
         Prop::Eq(l, r) => format!("{} = {}", value_primary(l), value_primary(r)),

@@ -30,6 +30,20 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
         })
         .collect();
 
+    // Definition bodies are projected as rendered strings like
+    // invariant bodies; parameters are bare names.
+    let definitions_payload: Vec<serde_json::Value> = program
+        .definitions
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "name": &d.name,
+                "parameters": &d.parameters,
+                "body": morpholog_core::format::format_prop_inline(&d.body),
+            })
+        })
+        .collect();
+
     // Transformation bodies are projected as rendered strings for the
     // same reason as invariant bodies: `Stmt`, `Prop`, and `ValueExpr`
     // don't yet derive `Serialize`.
@@ -78,6 +92,7 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
     let payload = serde_json::json!({
         "name": program.name,
         "predicates": program.predicates,
+        "definitions": definitions_payload,
         "invariants": invariants_payload,
         "transformations": transformations_payload,
         "derived_claims": derived_payload,

@@ -260,24 +260,28 @@ fn revoking_accreditation_blocks_new_issuance_but_preserves_history() {
         vec![subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::verify_measurement(),
         vec![subj("m1"), dec(100)],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::attest_measurement(),
         vec![subj("m1"), subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::issue_credit(),
         vec![subj("c1"), subj("m1"), subj("acme_verifier"), subj("acct1")],
         s,
         &inv,
+        &cc::definitions(),
     );
     // A second measurement, attested while the verifier is still accredited.
     let s = must_accept(
@@ -285,12 +289,14 @@ fn revoking_accreditation_blocks_new_issuance_but_preserves_history() {
         vec![subj("m2"), dec(50)],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::attest_measurement(),
         vec![subj("m2"), subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
 
     // Revoke the accreditation.
@@ -299,6 +305,7 @@ fn revoking_accreditation_blocks_new_issuance_but_preserves_history() {
         vec![subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
 
     // History survives: the already-issued credit keeps its standing.
@@ -334,30 +341,35 @@ fn issue_transfer_retire_commit_in_sequence() {
         vec![subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::verify_measurement(),
         vec![subj("m1"), dec(100)],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::attest_measurement(),
         vec![subj("m1"), subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::issue_credit(),
         vec![subj("c1"), subj("m1"), subj("acme_verifier"), subj("acct1")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::transfer_credit(),
         vec![subj("c1"), subj("acct1"), subj("acct2")],
         s,
         &inv,
+        &cc::definitions(),
     );
     assert!(has_claim(&s, "HeldBy", &[subj("c1"), subj("acct2")]));
     assert!(!has_claim(&s, "HeldBy", &[subj("c1"), subj("acct1")]));
@@ -367,6 +379,7 @@ fn issue_transfer_retire_commit_in_sequence() {
         vec![subj("c1"), subj("acct2")],
         s,
         &inv,
+        &cc::definitions(),
     );
     assert!(has_claim(&s, "Retired", &[subj("c1"), subj("acct2")]));
     // Terminal: no custody remains after retirement.
@@ -388,30 +401,35 @@ fn state_with_one_retired_credit(quantity: i64) -> State {
         vec![subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::verify_measurement(),
         vec![subj("m1"), dec(quantity)],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::attest_measurement(),
         vec![subj("m1"), subj("acme_verifier")],
         s,
         &inv,
+        &cc::definitions(),
     );
     let s = must_accept(
         &cc::issue_credit(),
         vec![subj("c1"), subj("m1"), subj("acme_verifier"), subj("acct1")],
         s,
         &inv,
+        &cc::definitions(),
     );
     must_accept(
         &cc::retire_credit(),
         vec![subj("c1"), subj("acct1")],
         s,
         &inv,
+        &cc::definitions(),
     )
 }
 
@@ -421,6 +439,7 @@ fn with_obligation(state: State, quantity: i64, due_on: &str) -> State {
         vec![subj("o1"), subj("acct1"), dec(quantity), date(due_on)],
         state,
         &cc::all_invariants(),
+        &cc::definitions(),
     )
 }
 
@@ -433,6 +452,7 @@ fn discharge_succeeds_once_enough_is_retired() {
         vec![subj("o1"), date("2026-06-01")],
         s,
         &cc::all_invariants(),
+        &cc::definitions(),
     );
     assert!(has_claim(&s, "ObligationSatisfied", &[subj("o1")]));
 }
@@ -486,6 +506,7 @@ fn sweep_records_a_breach_past_due_and_under_target() {
         vec![subj("o1"), date("2027-01-01")],
         s,
         &cc::all_invariants(),
+        &cc::definitions(),
     );
     assert!(has_claim(&s, "ObligationBreached", &[subj("o1")]));
 }
@@ -516,6 +537,7 @@ fn sweep_does_not_breach_a_satisfied_obligation() {
         vec![subj("o1"), date("2026-06-01")],
         s,
         &cc::all_invariants(),
+        &cc::definitions(),
     );
     // Past due, but already satisfied: the not-satisfied gate blocks the
     // sweep, so the two outcomes never coexist.

@@ -39,10 +39,11 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
 /// declaration kind, echoing the file path the caller passed.
 fn summary(program: &Program, file: &Path) -> String {
     format!(
-        "ok: {}\nprogram: {}\n  predicates: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
+        "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),
         program.name,
         program.predicates.len(),
+        program.definitions.len(),
         program.invariants.len(),
         program.transformations.len(),
         program.intents.len(),
@@ -61,7 +62,7 @@ mod tests {
         let s = summary(&p, Path::new("demo.morph"));
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n"
         );
     }
 }

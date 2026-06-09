@@ -71,6 +71,7 @@ async fn commit_post_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -130,6 +131,7 @@ fn balanced_reversal_spec(suffix: &str) -> CompensationSpec {
     CompensationSpec {
         transformation: double_entry_ledger::post_simple_entry(),
         invariants: double_entry_ledger::all_invariants(),
+        definitions: double_entry_ledger::definitions(),
         args_from_row: Box::new(move |_row: &OutboxRow| {
             vec![
                 subj(&format!("reversal_{suffix}")),
@@ -155,6 +157,7 @@ fn unbalanced_compensation_spec(suffix: &str) -> CompensationSpec {
     CompensationSpec {
         transformation: double_entry_ledger::post_split_entry(),
         invariants: double_entry_ledger::all_invariants(),
+        definitions: double_entry_ledger::definitions(),
         args_from_row: Box::new(move |_row: &OutboxRow| {
             // Debit 100, but two credits totalling only 95 -
             // balanced_posted_entry will reject.

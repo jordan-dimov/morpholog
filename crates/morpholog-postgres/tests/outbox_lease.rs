@@ -48,6 +48,7 @@ async fn reset_db(pool: &PgPool) {
 /// `status='pending'`, no lease held, no `next_attempt_at`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     let invariants = double_entry_ledger::all_invariants();
+    let definitions = double_entry_ledger::definitions();
     let outcome = common::propose_pg_with_test_actor(
         pool,
         &double_entry_ledger::post_simple_entry(),
@@ -60,6 +61,7 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
             dec(100),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .unwrap();

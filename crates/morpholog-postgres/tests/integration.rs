@@ -111,6 +111,7 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -196,6 +197,7 @@ async fn propose_against_pg_does_not_load_unreferenced_predicates() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg should commit despite noise claims");
@@ -269,6 +271,7 @@ async fn require_failure_writes_nothing() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -313,6 +316,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg_with_trace should not error");
@@ -372,6 +376,7 @@ async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("PG-layer call should not error; kernel error is in KernelErrored variant");
@@ -443,6 +448,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg_with_trace should not error");
@@ -487,6 +493,7 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -565,6 +572,7 @@ async fn retraction_deletes_targeted_row_and_preserves_others() {
         &retract_marker_transformation(),
         vec![subj("y")],
         &[],
+        &[],
     )
     .await
     .expect("propose_against_pg should not error");
@@ -620,6 +628,7 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
         &settlement_netting::create_net_settlement(),
         netting_args(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -728,6 +737,7 @@ async fn verified_revenue_full_chain_through_pg() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let invariants = verified_revenue::all_invariants();
+    let definitions = verified_revenue::definitions();
     let bank = subj(verified_revenue::BANK_DEBT_SERVICE);
     let investor = subj(verified_revenue::INVESTOR_REPORTING);
 
@@ -738,6 +748,7 @@ async fn verified_revenue_full_chain_through_pg() {
         &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(91), subj("ver_001")],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 1 propose_against_pg should not error");
@@ -754,6 +765,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("grant_bank_001"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 2 propose_against_pg should not error");
@@ -771,6 +783,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("ver_001"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 3 propose_against_pg should not error");
@@ -788,6 +801,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("grant_inv_001"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 4 propose_against_pg should not error");
@@ -805,6 +819,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("ver_001"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 5 propose_against_pg should not error");
@@ -819,6 +834,7 @@ async fn verified_revenue_full_chain_through_pg() {
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 6 propose_against_pg should not error");
@@ -937,6 +953,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("ver_002"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 7 propose_against_pg should not error");
@@ -969,6 +986,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("grant_bank_002"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 8 propose_against_pg should not error");
@@ -985,6 +1003,7 @@ async fn verified_revenue_full_chain_through_pg() {
             subj("ver_002"),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 8b propose_against_pg should not error");
@@ -1039,6 +1058,7 @@ async fn double_entry_full_chain_through_pg() {
 
     let invariants = double_entry_ledger::all_invariants();
 
+    let definitions = double_entry_ledger::definitions();
     // 1. Post a simple entry: cash debit 100, revenue credit 100.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -1052,6 +1072,7 @@ async fn double_entry_full_chain_through_pg() {
             dec(100),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 1 propose_against_pg should not error");
@@ -1076,6 +1097,7 @@ async fn double_entry_full_chain_through_pg() {
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 2 propose_against_pg should not error");
@@ -1105,6 +1127,7 @@ async fn double_entry_full_chain_through_pg() {
             dec(101),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("step 3 propose_against_pg should not error");
@@ -1231,6 +1254,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -1272,6 +1296,7 @@ async fn list_claims_returns_admitted_claims_in_stable_order() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -1315,6 +1340,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -1323,6 +1349,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -1391,6 +1418,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -1399,6 +1427,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -1438,6 +1467,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
     let invariants = double_entry_ledger::all_invariants();
 
+    let definitions = double_entry_ledger::definitions();
     // Entry 1: cash debit 100, revenue credit 100.
     common::propose_pg_with_test_actor(
         &pool,
@@ -1451,6 +1481,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
             dec(100),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("entry 1 should commit");
@@ -1469,13 +1500,18 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
             dec(50),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("entry 2 should commit");
 
-    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
-        .await
-        .expect("list_derived should not error");
+    let rows = list_derived(
+        &pool,
+        &double_entry_ledger::trial_balance_row(),
+        &double_entry_ledger::definitions(),
+    )
+    .await
+    .expect("list_derived should not error");
 
     // Two accounts -> two rows. Structural Subject ordering sorts
     // `account_cash` before `account_revenue`, so the order is stable.
@@ -1513,9 +1549,13 @@ async fn list_derived_on_empty_state_returns_no_rows() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
-        .await
-        .expect("list_derived against an empty state should not error");
+    let rows = list_derived(
+        &pool,
+        &double_entry_ledger::trial_balance_row(),
+        &double_entry_ledger::definitions(),
+    )
+    .await
+    .expect("list_derived against an empty state should not error");
     assert!(
         rows.is_empty(),
         "empty domain produces no derived rows, got {rows:?}"
@@ -1538,6 +1578,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
 
     // Real ledger fixture: 1 entry, 2 journal lines.
     let invariants = double_entry_ledger::all_invariants();
+    let definitions = double_entry_ledger::definitions();
     common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
@@ -1550,6 +1591,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
             dec(100),
         ],
         &invariants,
+        &definitions,
     )
     .await
     .expect("entry should commit");
@@ -1580,9 +1622,13 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
         total_claims.len()
     );
 
-    let rows = list_derived(&pool, &double_entry_ledger::trial_balance_row())
-        .await
-        .expect("list_derived under noise should not error");
+    let rows = list_derived(
+        &pool,
+        &double_entry_ledger::trial_balance_row(),
+        &double_entry_ledger::definitions(),
+    )
+    .await
+    .expect("list_derived under noise should not error");
 
     // One cash/revenue entry yields exactly two rows; the noise must
     // not change that.
@@ -1618,6 +1664,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
             dec(100),
         ],
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -1671,6 +1718,7 @@ async fn audit_row_records_actor() {
         &transformation,
         &transition,
         &double_entry_ledger::all_invariants(),
+        &double_entry_ledger::definitions(),
     )
     .await
     .expect("propose_against_pg should not error");
@@ -1767,9 +1815,10 @@ async fn duplicate_intent_in_one_transformation_surfaces_named_error() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let err = common::propose_pg_with_test_actor(&pool, &double_emit_transformation(), vec![], &[])
-        .await
-        .expect_err("two identical intents must collide on the idempotency key");
+    let err =
+        common::propose_pg_with_test_actor(&pool, &double_emit_transformation(), vec![], &[], &[])
+            .await
+            .expect_err("two identical intents must collide on the idempotency key");
 
     assert!(
         matches!(err, PgError::DuplicateIntent),
@@ -1800,6 +1849,7 @@ async fn approval_controls_full_chain_through_pg() {
 
     let invariants = approval_controls::all_invariants();
 
+    let definitions = approval_controls::definitions();
     // ---------- Unconditional authority ----------
 
     // 1. jordan is granted unconditional authority for vendor onboarding.
@@ -1808,6 +1858,7 @@ async fn approval_controls_full_chain_through_pg() {
         &approval_controls::grant_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
         &invariants,
+        &definitions,
     )
     .await
     .expect("grant_approval_authority should not error");
@@ -1820,6 +1871,7 @@ async fn approval_controls_full_chain_through_pg() {
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "jordan",
         &invariants,
+        &definitions,
     )
     .await
     .expect("approve_document should not error");
@@ -1859,6 +1911,7 @@ async fn approval_controls_full_chain_through_pg() {
         vec![subj("doc_002"), subj("vendor_onboarding")],
         "alice",
         &invariants,
+        &definitions,
     )
     .await
     .expect("propose should not error");
@@ -1882,6 +1935,7 @@ async fn approval_controls_full_chain_through_pg() {
         &approval_controls::grant_approval_limit(),
         vec![subj("jordan"), subj("invoice"), dec(1000)],
         &invariants,
+        &definitions,
     )
     .await
     .expect("grant_approval_limit should not error");
@@ -1896,6 +1950,7 @@ async fn approval_controls_full_chain_through_pg() {
         vec![subj("inv_001"), subj("invoice"), dec(750)],
         "jordan",
         &invariants,
+        &definitions,
     )
     .await
     .expect("approve_within_limit should not error");
@@ -1947,6 +2002,7 @@ async fn approval_controls_full_chain_through_pg() {
         vec![subj("inv_over"), subj("invoice"), dec(2000)],
         "jordan",
         &invariants,
+        &definitions,
     )
     .await
     .expect("propose should not error");
@@ -1985,6 +2041,7 @@ async fn approval_controls_full_chain_through_pg() {
         &approval_controls::revoke_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
         &invariants,
+        &definitions,
     )
     .await
     .expect("revoke should not error");
@@ -2023,12 +2080,14 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
 
     let invariants = insurance_claim_settlement::all_invariants();
 
+    let definitions = insurance_claim_settlement::definitions();
     // 1. Issue a £100k aggregate policy.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
         &insurance_claim_settlement::issue_policy(),
         vec![subj("policy_001"), dec(100_000)],
         &invariants,
+        &definitions,
     )
     .await
     .expect("issue_policy should not error");
@@ -2040,6 +2099,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         &insurance_claim_settlement::grant_settlement_authority(),
         vec![subj("alex"), dec(100_000)],
         &invariants,
+        &definitions,
     )
     .await
     .expect("grant_settlement_authority should not error");
@@ -2052,6 +2112,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
             &insurance_claim_settlement::report_claim(),
             vec![subj(claim_id), subj("policy_001"), dec(amount)],
             &invariants,
+            &definitions,
         )
         .await
         .expect("report_claim should not error");
@@ -2066,6 +2127,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
         "alex",
         &invariants,
+        &definitions,
     )
     .await
     .expect("first authorise_settlement should not error");
@@ -2150,6 +2212,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         vec![subj("claim_002"), subj("settlement_002"), dec(40_000)],
         "alex",
         &invariants,
+        &definitions,
     )
     .await
     .expect("boundary-fill authorise_settlement should not error");
@@ -2170,6 +2233,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         &insurance_claim_settlement::report_claim(),
         vec![subj("claim_003"), subj("policy_001"), dec(30_000)],
         &invariants,
+        &definitions,
     )
     .await
     .expect("report_claim 003 should not error");
@@ -2183,6 +2247,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
         vec![subj("claim_003"), subj("settlement_003"), dec(30_000)],
         "alex",
         &invariants,
+        &definitions,
     )
     .await
     .expect("over-cap propose should not error");
@@ -2199,9 +2264,13 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     );
 
     // 8. Derived `PolicyLimitUsage` matches the cumulative paid.
-    let usage_rows = list_derived(&pool, &insurance_claim_settlement::policy_limit_usage())
-        .await
-        .unwrap();
+    let usage_rows = list_derived(
+        &pool,
+        &insurance_claim_settlement::policy_limit_usage(),
+        &insurance_claim_settlement::definitions(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         usage_rows.len(),
         1,
@@ -2238,6 +2307,7 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
         &pool,
         &settlement_netting::create_net_settlement(),
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .await
     .expect("load_scoped_state should not error");

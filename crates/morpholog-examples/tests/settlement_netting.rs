@@ -136,7 +136,7 @@ fn netting_state(amount: i64) -> State {
 fn net_amount_equals_lines_holds_when_amount_matches() {
     let state = netting_state(100);
     let inv = settlement_netting::net_amount_equals_lines();
-    let result = eval_invariant(&inv, &state, None).expect("evaluation should not error");
+    let result = eval_invariant(&inv, &state, None, &[]).expect("evaluation should not error");
     assert!(result, "invariant should hold for amount = 60 + 40 = 100");
 }
 
@@ -144,7 +144,7 @@ fn net_amount_equals_lines_holds_when_amount_matches() {
 fn net_amount_equals_lines_fails_when_amount_mismatches() {
     let state = netting_state(101);
     let inv = settlement_netting::net_amount_equals_lines();
-    let result = eval_invariant(&inv, &state, None).expect("evaluation should not error");
+    let result = eval_invariant(&inv, &state, None, &[]).expect("evaluation should not error");
     assert!(
         !result,
         "invariant should fail for amount = 101 vs lines = 100"
@@ -189,6 +189,7 @@ fn propose_accepts_well_formed_netting() {
         netting_args(),
         &pre,
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .expect("propose should not error");
 
@@ -236,9 +237,13 @@ fn propose_rejects_when_line_already_netted() {
         args: netting_args(),
         actor: Subject::from("test_actor"),
     };
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &settlement_netting::all_invariants())
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &pre,
+        &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(
@@ -288,6 +293,7 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
         netting_args(),
         &pre,
         &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
     )
     .expect("propose should not error");
 
@@ -315,8 +321,14 @@ fn propose_rejects_transition_name_mismatch() {
         actor: common::test_actor(),
     };
 
-    let err = propose(&t, &transition, &pre, &settlement_netting::all_invariants())
-        .expect_err("name mismatch should be an EvalError, not Rejected");
+    let err = propose(
+        &t,
+        &transition,
+        &pre,
+        &settlement_netting::all_invariants(),
+        &settlement_netting::definitions(),
+    )
+    .expect_err("name mismatch should be an EvalError, not Rejected");
 
     match err {
         EvalError::TypeMismatch(msg) => {

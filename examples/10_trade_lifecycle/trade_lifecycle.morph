@@ -108,6 +108,22 @@ intent OfficialPriceCorrected(trade: Subject, new_official_price_id: Subject, pr
 intent TradeSettlementRequested(settlement_id: Subject, trade: Subject, settled_qty: Decimal)
 
 
+-- "The terms in force on a date", given its name. A trade's terms come
+-- in versions, each effective from its own date; the one in force on a
+-- date `d` is the version with the latest effective date that is on or
+-- before `d` - selected by saying no other version effective by `d` has
+-- a later effective date. Which version is in force is decided by
+-- effective dates alone, never by the amendment chain - the chain
+-- (`TradeTermsSupersedes`) is audit lineage, not the semantic timeline.
+-- Naming the condition lets the cap below ask for "the quantity the
+-- terms in force on `d` allow" in one breath: `qty` comes back out of
+-- the call, carrying that version's quantity.
+define terms_in_force_on(trade, d, qty):
+    TradeTerms(trade, _, qty, _, ef)
+    and ef on_or_before d
+    and not (exists later_ef: TradeTerms(trade, _, _, _, later_ef) and later_ef on_or_before d and later_ef after ef)
+
+
 -- The rules that must always hold. Any change that would leave the
 -- world violating one of these is rejected outright. Read `implies` as
 -- "whenever the left is true, the right must be too".
@@ -178,19 +194,14 @@ invariant trade_terms_chain_no_fork:
 -- axis. A trade settles in slices, each effective on a business date. For
 -- each settlement effective date `d`, the total quantity settled
 -- effective on or before `d` must not exceed the quantity the terms in
--- force on `d` allow. "The terms in force on `d`" is the version with the
--- latest effective date that is on or before `d` - selected by saying no
--- other version effective by `d` has a later effective date. Backdating
--- an amendment to a higher quantity (effective on or before `d`) lifts
--- the cap governing the slices effective on `d`, so a slice that was over
--- the old quantity but within the new one becomes admissible. The
--- comparison is inclusive. Which version is "in force on `d`" is decided
--- by effective dates alone, never by the amendment chain - the chain
--- (`TradeTermsSupersedes`) is audit lineage, not the semantic timeline.
+-- force on `d` allow - and "the terms in force on `d`" is the named
+-- condition declared above, which hands back that version's quantity as
+-- `qty`. Backdating an amendment to a higher quantity (effective on or
+-- before `d`) lifts the cap governing the slices effective on `d`, so a
+-- slice that was over the old quantity but within the new one becomes
+-- admissible. The comparison is inclusive.
 invariant settled_within_effective_terms:
-    (TradeSettled(trade, _, _, _, d)
-     and TradeTerms(trade, _, qty, _, ef) and ef on_or_before d
-     and not (exists later_ef: TradeTerms(trade, _, _, _, later_ef) and later_ef on_or_before d and later_ef after ef))
+    (TradeSettled(trade, _, _, _, d) and terms_in_force_on(trade, d, qty))
     implies sum(s | TradeSettled(trade, s, _, _, sd) and sd on_or_before d) <= qty
 
 -- Every settled date has terms effective by it. Without this, a slice

@@ -26,13 +26,17 @@
 mod common;
 
 use common::{claim_instance, date, has_claim, must_accept, must_accept_as, propose_as, subj};
-use morpholog_core::{EvalValue, Invariant, Outcome, State, eval_invariant};
+use morpholog_core::{Definition, EvalValue, Invariant, Outcome, State, eval_invariant};
 use morpholog_examples::clinical_trial_enrolment::{
     self as cte, ROLE_RANDOMISE_PARTICIPANT, all_invariants,
 };
 
 fn invariants() -> Vec<Invariant> {
     all_invariants()
+}
+
+fn definitions() -> Vec<Definition> {
+    morpholog_examples::clinical_trial_enrolment::definitions()
 }
 
 /// Build a state with the full happy-path setup for randomising
@@ -100,6 +104,7 @@ fn happy_path_state(s: &Setup) -> State {
         vec![subj(s.trial)],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::approve_protocol_version(),
@@ -113,6 +118,7 @@ fn happy_path_state(s: &Setup) -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::approve_consent_form_version(),
@@ -126,6 +132,7 @@ fn happy_path_state(s: &Setup) -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::delegate_investigator(),
@@ -138,12 +145,14 @@ fn happy_path_state(s: &Setup) -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::screen_participant(),
         vec![subj(s.participant), subj(s.trial), date("2026-03-07")],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::record_consent(),
@@ -156,6 +165,7 @@ fn happy_path_state(s: &Setup) -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::record_eligibility_criterion(),
@@ -166,6 +176,7 @@ fn happy_path_state(s: &Setup) -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::record_eligibility_assessment(),
@@ -178,6 +189,7 @@ fn happy_path_state(s: &Setup) -> State {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state
 }
@@ -205,6 +217,7 @@ fn happy_path_admits_randomisation() {
         s.investigator,
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(
         has_claim(
@@ -241,6 +254,7 @@ fn boundary_equality_admits_at_protocol_end() {
         s.investigator,
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -268,6 +282,7 @@ fn boundary_equality_admits_at_assessment_expiry() {
         s.investigator,
         pre,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -298,6 +313,7 @@ fn expired_consent_form_rejects() {
         s.investigator,
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -335,7 +351,7 @@ fn consent_after_randomisation_violates_the_invariant() {
         ),
     ]);
     assert!(
-        !eval_invariant(&inv, &randomised_before_consent, None).unwrap(),
+        !eval_invariant(&inv, &randomised_before_consent, None, &definitions()).unwrap(),
         "randomisation before consent must violate the invariant",
     );
 
@@ -362,7 +378,7 @@ fn consent_after_randomisation_violates_the_invariant() {
             ],
         ),
     ]);
-    assert!(eval_invariant(&inv, &consent_first, None).unwrap());
+    assert!(eval_invariant(&inv, &consent_first, None, &definitions()).unwrap());
 }
 
 #[test]
@@ -377,6 +393,7 @@ fn expired_eligibility_assessment_rejects() {
         s.investigator,
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -394,6 +411,7 @@ fn expired_delegation_rejects() {
         s.investigator,
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -411,6 +429,7 @@ fn expired_protocol_window_rejects() {
         s.investigator,
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -428,6 +447,7 @@ fn open_important_protocol_deviation_rejects() {
         s.investigator,
         pre,
         &invariants(),
+        &definitions(),
     );
     let outcome = propose_as(
         &cte::randomise_participant(),
@@ -435,6 +455,7 @@ fn open_important_protocol_deviation_rejects() {
         s.investigator,
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -459,6 +480,7 @@ fn failed_eligibility_assessment_rejects() {
         s.investigator,
         &pre,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -483,6 +505,7 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
         s.investigator,
         pre,
         &invariants(),
+        &definitions(),
     );
     let post_amend = must_accept(
         &cte::approve_protocol_version(),
@@ -496,6 +519,7 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
         ],
         post_randomise,
         &invariants(),
+        &definitions(),
     );
     // The earlier admission survives the amendment.
     assert!(has_claim(
@@ -546,6 +570,7 @@ fn later_randomisation_must_use_active_protocol_version() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::record_eligibility_criterion(),
@@ -556,6 +581,7 @@ fn later_randomisation_must_use_active_protocol_version() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::record_consent(),
@@ -568,6 +594,7 @@ fn later_randomisation_must_use_active_protocol_version() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     state = must_accept(
         &cte::record_eligibility_assessment(),
@@ -580,6 +607,7 @@ fn later_randomisation_must_use_active_protocol_version() {
         ],
         state,
         &invariants(),
+        &definitions(),
     );
     // Attempt under proto_v1 on 2026-04-15: protocol window has
     // closed, must reject.
@@ -594,6 +622,7 @@ fn later_randomisation_must_use_active_protocol_version() {
         s.investigator,
         &state,
         &invariants(),
+        &definitions(),
     )
     .expect("propose must not error");
     assert!(
@@ -612,6 +641,7 @@ fn later_randomisation_must_use_active_protocol_version() {
         s.investigator,
         state,
         &invariants(),
+        &definitions(),
     );
     assert!(has_claim(
         &post,

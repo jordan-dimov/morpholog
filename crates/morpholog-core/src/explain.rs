@@ -154,7 +154,13 @@ pub fn explain(program: &Program, transition: &Transition, pre_state: &State) ->
         };
     };
 
-    let traced = propose_with_trace(transformation, transition, pre_state, &program.invariants);
+    let traced = propose_with_trace(
+        transformation,
+        transition,
+        pre_state,
+        &program.invariants,
+        &program.definitions,
+    );
     let verdict = match traced {
         TracedProposal::Errored { error, .. } => {
             Verdict::Rejected(Rejection::Error(ErrorRejection {

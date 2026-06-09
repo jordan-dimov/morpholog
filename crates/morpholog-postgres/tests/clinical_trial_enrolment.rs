@@ -45,9 +45,10 @@ async fn reset_db(pool: &PgPool) {
 /// returning the next test step's pre-state implicitly (PG holds
 /// state in tables; no value returned). Panics on rejection.
 async fn commit(pool: &PgPool, t: &morpholog_core::Transformation, args: Vec<EvalValue>) -> Uuid {
-    let outcome = common::propose_pg_with_test_actor(pool, t, args, &all_invariants())
-        .await
-        .expect("propose_against_pg should not error");
+    let outcome =
+        common::propose_pg_with_test_actor(pool, t, args, &all_invariants(), &cte::definitions())
+            .await
+            .expect("propose_against_pg should not error");
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
         PgProposalOutcome::Rejected { reason } => {
@@ -155,6 +156,7 @@ async fn randomise_participant_happy_path_through_pg() {
         ],
         investigator,
         &all_invariants(),
+        &cte::definitions(),
     )
     .await
     .expect("propose_against_pg must not error");

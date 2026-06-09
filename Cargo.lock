@@ -1128,6 +1128,7 @@ dependencies = [
  "jiff",
  "morpholog-core",
  "morpholog-examples",
+ "morpholog-surface",
  "morpholog-test-support",
  "rust_decimal",
  "serde",

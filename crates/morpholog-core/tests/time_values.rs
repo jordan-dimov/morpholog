@@ -15,12 +15,20 @@ use morpholog_core::ir_builder::{
     add, and, assert_, bind_one, claim, duration, duration_le, implies, invariant, let_, params,
     predicate, program, sub, sum, term, timestamp_le, transformation, var,
 };
-use morpholog_core::{EvalError, Invariant, Program, State, Transformation, ValidationError};
+use morpholog_core::{
+    Definition, EvalError, Invariant, Program, State, Transformation, ValidationError,
+};
 use morpholog_test_support::{dur, must_accept, propose_with_test_actor, subj, ts};
 
 /// Propose and require a business rejection (not a kernel error).
-fn must_reject(t: &Transformation, args: Vec<EvalValue>, pre: State, invariants: &[Invariant]) {
-    let outcome = propose_with_test_actor(t, args, &pre, invariants)
+fn must_reject(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    pre: State,
+    invariants: &[Invariant],
+    definitions: &[Definition],
+) {
+    let outcome = propose_with_test_actor(t, args, &pre, invariants, definitions)
         .expect("proposal should evaluate cleanly");
     assert!(
         matches!(outcome, Outcome::Rejected { .. }),
@@ -148,12 +156,14 @@ fn commencement_is_the_notice_instant_shifted_by_the_turn_time() {
         vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     let state = must_accept(
         p.transformation("commence_after_turn").unwrap(),
         vec![subj("v1")],
         state,
         &p.invariants,
+        &p.definitions,
     );
     assert!(
         state.claims().iter().any(|c| {
@@ -172,6 +182,7 @@ fn commencement_before_the_notice_violates_the_ordering_invariant() {
         vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     // At the notice instant exactly: at_or_before is inclusive.
     let state = must_accept(
@@ -179,6 +190,7 @@ fn commencement_before_the_notice_violates_the_ordering_invariant() {
         vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
         state.clone(),
         &p.invariants,
+        &p.definitions,
     );
     let _ = state;
 
@@ -187,12 +199,14 @@ fn commencement_before_the_notice_violates_the_ordering_invariant() {
         vec![subj("v2"), ts("2026-10-24T14:00:00Z")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     must_reject(
         p.transformation("commence_at").unwrap(),
         vec![subj("v2"), ts("2026-10-24T13:59:59Z")],
         state,
         &p.invariants,
+        &p.definitions,
     );
 }
 
@@ -204,12 +218,14 @@ fn counting_intervals_accumulate_against_the_allowance() {
         vec![subj("v1"), subj("seed"), dur("PT6H")],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     let state = must_accept(
         p.transformation("record_interval").unwrap(),
         vec![subj("i1"), subj("v1"), dur("PT3H")],
         state,
         &p.invariants,
+        &p.definitions,
     );
     // PT3H + PT2H30M = PT5H30M, inside the PT6H allowance.
     let state = must_accept(
@@ -217,6 +233,7 @@ fn counting_intervals_accumulate_against_the_allowance() {
         vec![subj("i2"), subj("v1"), dur("PT2H30M")],
         state,
         &p.invariants,
+        &p.definitions,
     );
     // One more hour would make PT6H30M: the candidate state breaks the
     // invariant, so the whole proposal is refused.
@@ -225,6 +242,7 @@ fn counting_intervals_accumulate_against_the_allowance() {
         vec![subj("i3"), subj("v1"), dur("PT1H")],
         state,
         &p.invariants,
+        &p.definitions,
     );
 }
 
@@ -240,6 +258,7 @@ fn the_gap_between_two_instants_is_a_duration() {
         ],
         State::default(),
         &p.invariants,
+        &p.definitions,
     );
     assert!(
         state
@@ -273,6 +292,7 @@ fn unseeded_duration_aggregate_errors_at_evaluation() {
         vec![subj("v1"), dur("PT6H")],
         &State::default(),
         &p.invariants,
+        &p.definitions,
     )
     .expect_err("empty duration aggregate must surface a kernel error");
     assert!(
@@ -368,8 +388,10 @@ fn a_parameter_used_only_in_time_arithmetic_infers_its_forced_kind() {
                 vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
                 State::default(),
                 &[],
+                &[],
             )
         },
+        &[],
         &[],
     );
     assert!(
@@ -421,6 +443,7 @@ fn the_remaining_matrix_arms_evaluate() {
         vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
         State::default(),
         &[],
+        &[],
     );
     assert!(
         state
@@ -435,6 +458,7 @@ fn the_remaining_matrix_arms_evaluate() {
         p.transformation("cap_below").unwrap(),
         vec![subj("v1"), dur("PT5H"), dur("PT3H")],
         State::default(),
+        &[],
         &[],
     );
     assert!(
@@ -469,6 +493,7 @@ fn a_reversed_instant_difference_is_a_negative_span() {
             ts("2026-10-24T12:00:00Z"),
         ],
         State::default(),
+        &[],
         &[],
     );
     assert!(

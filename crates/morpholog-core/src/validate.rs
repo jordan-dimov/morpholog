@@ -12,7 +12,7 @@
 //! collects every error rather than failing on the first; a migration
 //! that adds declarations should see the full work list at once.
 
-use crate::ir::{PredicateArgKind, Program, Prop, Stmt, ValueExpr};
+use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, ValueExpr};
 use std::collections::HashMap;
 
 /// Proof-of-validity handle: a reference to a [`Program`] that has
@@ -65,6 +65,7 @@ impl<'a> ValidatedProgram<'a> {
 pub enum VocabularyKind {
     Predicate,
     Intent,
+    Definition,
 }
 
 impl std::fmt::Display for VocabularyKind {
@@ -72,6 +73,7 @@ impl std::fmt::Display for VocabularyKind {
         match self {
             VocabularyKind::Predicate => write!(f, "predicate"),
             VocabularyKind::Intent => write!(f, "intent"),
+            VocabularyKind::Definition => write!(f, "definition"),
         }
     }
 }
@@ -84,6 +86,7 @@ pub enum ValidationContext {
     Invariant { name: String },
     Transformation { name: String },
     DerivedClaim { predicate: String },
+    Definition { name: String },
 }
 
 /// A single failure surfaced by [`Program::validate`]. The validator
@@ -198,6 +201,52 @@ pub enum ValidationError {
         variable: String,
         context: ValidationContext,
     },
+    /// A definition shares a name with a predicate. The two vocabularies
+    /// share the claim-shaped reference namespace in body position - a
+    /// reference `name(args)` resolves to exactly one of them - so a
+    /// collision would let adding a definition silently change what
+    /// existing text means.
+    DefinitionNameCollision { name: String },
+    /// Definitions reference each other in a cycle. A definition is a
+    /// named proposition expanded at evaluation; a cycle would never
+    /// terminate. `names` carries one cycle's members in sorted order.
+    DefinitionCycle { names: Vec<String> },
+    /// A reference names a definition where a predicate is required:
+    /// a hand-built `Prop::Claim` that skipped resolution, or an
+    /// `admit` / `retract` / `value` target. A definition names a
+    /// condition - it is proposition-valued only, so it can be called
+    /// in rule bodies but never changes state and never serves as a
+    /// value lookup; hand-built IR constructs body calls as
+    /// `Prop::Defined` (via `ir_builder::defined`) or runs
+    /// [`crate::resolve_defined_calls`] before validating.
+    UnresolvedDefinitionCall {
+        name: String,
+        context: ValidationContext,
+    },
+    /// A definition parameter is never referenced by the definition
+    /// body. Such a parameter is dead weight at best; at worst a call
+    /// passing an unbound variable for it is a guaranteed runtime
+    /// error, since nothing could ever give it a value. (A parameter
+    /// the body *uses* without binding is fine - it is a use-only
+    /// parameter, required bound at every call site.)
+    ParameterNotReferenced {
+        definition: String,
+        parameter: String,
+    },
+    /// A definition declares the same parameter name twice. Each
+    /// parameter is one binding slot in the call frame; a duplicate
+    /// would let the later argument silently overwrite the earlier
+    /// one during frame construction.
+    DuplicateParameter {
+        definition: String,
+        parameter: String,
+    },
+    /// `pre(...)` was used inside a definition body. Definitions are
+    /// context-free so a call means the same thing in a gate as in an
+    /// invariant; a body that read pre-state would break that. Wrap the
+    /// *call* in `pre(...)` instead - the context swap applies to the
+    /// body's evaluation.
+    PreNotAvailable { context: ValidationContext },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -208,6 +257,7 @@ impl std::fmt::Display for ValidationContext {
             ValidationContext::DerivedClaim { predicate } => {
                 write!(f, "derived claim `{predicate}`")
             }
+            ValidationContext::Definition { name } => write!(f, "definition `{name}`"),
         }
     }
 }
@@ -300,6 +350,49 @@ impl std::fmt::Display for ValidationError {
                 "variable `{variable}` is used in {context} but nothing binds it; \
                  a `require` match does not export its bindings to later statements"
             ),
+            ValidationError::DefinitionNameCollision { name } => write!(
+                f,
+                "definition `{name}` collides with predicate `{name}`; the two share \
+                 the reference namespace in rule bodies, so a reference could mean \
+                 either - rename one"
+            ),
+            ValidationError::DefinitionCycle { names } => write!(
+                f,
+                "definitions reference each other in a cycle ({}); a definition \
+                 must expand to claims and conditions, never back to itself",
+                names.join(", ")
+            ),
+            ValidationError::UnresolvedDefinitionCall { name, context } => write!(
+                f,
+                "`{name}` names a definition where a predicate is required, in \
+                 {context}; a definition is a condition - callable in rule \
+                 bodies, never an `admit`/`retract`/`emit` target or a `value` \
+                 lookup (hand-built body calls use `ir_builder::defined` or \
+                 `resolve_defined_calls`)"
+            ),
+            ValidationError::ParameterNotReferenced {
+                definition,
+                parameter,
+            } => write!(
+                f,
+                "parameter `{parameter}` of definition `{definition}` is not \
+                 referenced by the definition body; remove it or reference it \
+                 in a condition"
+            ),
+            ValidationError::DuplicateParameter {
+                definition,
+                parameter,
+            } => write!(
+                f,
+                "definition `{definition}` declares parameter `{parameter}` \
+                 more than once; each parameter is one binding slot"
+            ),
+            ValidationError::PreNotAvailable { context } => write!(
+                f,
+                "pre(...) is used in {context}, but definitions are context-free \
+                 and carry no pre-state; wrap the call in pre(...) at the use \
+                 site instead"
+            ),
         }
     }
 }
@@ -323,7 +416,41 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     // a body deep enough to overflow that walk has to be rejected
     // before it runs. A programme this malformed gets the depth errors
     // alone, not a fuller work list - there is nothing useful to add.
-    let depth_errors = collect_depth_errors(p);
+    // The definition reference graph must be acyclic before anything
+    // walks through calls: the depth budget charges a call its callee's
+    // expanded depth, and evaluation would recurse forever on a cycle.
+    // A cyclic programme gets the cycle (and duplicate) errors alone -
+    // nothing else is well-defined until the graph is sound.
+    let order = match crate::definitions::definition_topo_order(&p.definitions) {
+        Ok(order) => order,
+        Err(names) => {
+            let mut errors = collect_duplicate_decl_errors(p);
+            errors.push(ValidationError::DefinitionCycle { names });
+            return Err(errors);
+        }
+    };
+
+    // Expanded depth per definition, callees before callers, so a chain
+    // of definitions cannot multiply nesting past the budget while each
+    // body looks shallow. A body that itself exceeds the budget errors
+    // here and gets no entry; the short-circuit below keeps later walks
+    // off it.
+    let mut definition_depths: HashMap<DefinitionName, usize> = HashMap::new();
+    let mut depth_errors = Vec::new();
+    for i in order {
+        let def = &p.definitions[i];
+        match prop_depth_capped(&def.body, MAX_EXPR_DEPTH, &definition_depths) {
+            Some(d) => {
+                definition_depths.insert(def.name.clone(), d);
+            }
+            None => depth_errors.push(ValidationError::NestingTooDeep {
+                context: ValidationContext::Definition {
+                    name: def.name.to_string(),
+                },
+            }),
+        }
+    }
+    depth_errors.extend(collect_depth_errors(p, &definition_depths));
     if !depth_errors.is_empty() {
         return Err(depth_errors);
     }
@@ -334,6 +461,67 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     } else {
         Err(errors)
     }
+}
+
+/// Exact nesting depth of `prop` (at least 1), with definition calls
+/// charged at their callee's expanded depth, or `None` once the depth
+/// exceeds `budget`. Bails the instant the budget runs out, so its own
+/// recursion is bounded by the budget it enforces.
+fn prop_depth_capped(
+    prop: &Prop,
+    budget: usize,
+    depths: &HashMap<DefinitionName, usize>,
+) -> Option<usize> {
+    let inner = budget.checked_sub(1)?;
+    let below = match prop {
+        Prop::Claim { .. } | Prop::In(_, _) => 0,
+        // A call expands to its callee's body. An unknown name charges
+        // nothing here - the dangling reference is the check pass's
+        // error, not a depth question.
+        Prop::Defined { name, .. } => depths.get(name).copied().unwrap_or(0),
+        Prop::And(items) | Prop::Or(items) => items.iter().try_fold(0usize, |acc, p| {
+            Some(acc.max(prop_depth_capped(p, inner, depths)?))
+        })?,
+        Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => {
+            prop_depth_capped(p, inner, depths)?
+        }
+        Prop::Implies { left, right } => {
+            prop_depth_capped(left, inner, depths)?.max(prop_depth_capped(right, inner, depths)?)
+        }
+        Prop::Xor(left, right) => {
+            prop_depth_capped(&crate::eval::lower_xor(left, right), inner, depths)?
+        }
+        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
+            value_depth_capped(left, inner, depths)?.max(value_depth_capped(right, inner, depths)?)
+        }
+        Prop::Forall { source, body, .. } => {
+            prop_depth_capped(source, inner, depths)?.max(prop_depth_capped(body, inner, depths)?)
+        }
+    };
+    let total = below + 1;
+    (total <= budget).then_some(total)
+}
+
+/// Value-sort companion to [`prop_depth_capped`].
+fn value_depth_capped(
+    expr: &ValueExpr,
+    budget: usize,
+    depths: &HashMap<DefinitionName, usize>,
+) -> Option<usize> {
+    let inner = budget.checked_sub(1)?;
+    let below = match expr {
+        ValueExpr::Term(_) => 0,
+        ValueExpr::Arith { left, right, .. } => {
+            value_depth_capped(left, inner, depths)?.max(value_depth_capped(right, inner, depths)?)
+        }
+        ValueExpr::Sum { body, .. } => prop_depth_capped(body, inner, depths)?,
+        ValueExpr::ValueOf { default, .. } => match default.as_deref() {
+            Some(d) => value_depth_capped(d, inner, depths)?,
+            None => 0,
+        },
+    };
+    let total = below + 1;
+    (total <= budget).then_some(total)
 }
 
 /// Maximum expression / nested-statement depth accepted by
@@ -350,10 +538,13 @@ pub(crate) const MAX_EXPR_DEPTH: usize = 256;
 /// nests past [`MAX_EXPR_DEPTH`]: invariant bodies, transformation
 /// statement bodies (expressions and nested `for`s), and derived-claim
 /// domains and value expressions.
-fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
+fn collect_depth_errors(
+    p: &Program,
+    depths: &HashMap<DefinitionName, usize>,
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for inv in &p.invariants {
-        if prop_exceeds_depth(&inv.body, MAX_EXPR_DEPTH) {
+        if prop_exceeds_depth(&inv.body, MAX_EXPR_DEPTH, depths) {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Invariant {
                     name: inv.name.to_string(),
@@ -362,7 +553,10 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
     for t in &p.transformations {
-        if t.body.iter().any(|s| stmt_exceeds_depth(s, MAX_EXPR_DEPTH)) {
+        if t.body
+            .iter()
+            .any(|s| stmt_exceeds_depth(s, MAX_EXPR_DEPTH, depths))
+        {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Transformation {
                     name: t.name.to_string(),
@@ -371,10 +565,10 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
     for d in &p.derived_claims {
-        let too_deep = prop_exceeds_depth(&d.domain, MAX_EXPR_DEPTH)
+        let too_deep = prop_exceeds_depth(&d.domain, MAX_EXPR_DEPTH, depths)
             || d.values
                 .iter()
-                .any(|v| value_exceeds_depth(&v.expr, MAX_EXPR_DEPTH));
+                .any(|v| value_exceeds_depth(&v.expr, MAX_EXPR_DEPTH, depths));
         if too_deep {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::DerivedClaim {
@@ -391,29 +585,38 @@ fn collect_depth_errors(p: &Program) -> Vec<ValidationError> {
 /// recursion is bounded by `budget` - it cannot overflow on the very
 /// input it exists to reject. Crosses into [`value_exceeds_depth`] for
 /// comparator operands, since the sorts are mutually recursive.
-fn prop_exceeds_depth(prop: &Prop, budget: usize) -> bool {
+fn prop_exceeds_depth(prop: &Prop, budget: usize, depths: &HashMap<DefinitionName, usize>) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
     };
     match prop {
         Prop::Claim { .. } | Prop::In(_, _) => false,
-        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| prop_exceeds_depth(p, budget)),
+        // A call expands to its callee's body, so it charges the
+        // callee's expanded depth (computed callees-first in
+        // `validate_program`); an unknown name charges nothing, the
+        // dangling reference being the check pass's error.
+        Prop::Defined { name, .. } => depths.get(name).copied().unwrap_or(0) > budget,
+        Prop::And(items) | Prop::Or(items) => {
+            items.iter().any(|p| prop_exceeds_depth(p, budget, depths))
+        }
         Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
-            prop_exceeds_depth(inner, budget)
+            prop_exceeds_depth(inner, budget, depths)
         }
         Prop::Implies { left, right } => {
-            prop_exceeds_depth(left, budget) || prop_exceeds_depth(right, budget)
+            prop_exceeds_depth(left, budget, depths) || prop_exceeds_depth(right, budget, depths)
         }
         // Xor is evaluated by lowering to `(a or b) and not (a and b)`,
         // which nests deeper than the one binary node. Measure that
         // lowered shape - the same definition eval uses - so a deep xor
         // chain cannot pass the depth guard and then overflow eval.
-        Prop::Xor(left, right) => prop_exceeds_depth(&crate::eval::lower_xor(left, right), budget),
+        Prop::Xor(left, right) => {
+            prop_exceeds_depth(&crate::eval::lower_xor(left, right), budget, depths)
+        }
         Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            value_exceeds_depth(left, budget) || value_exceeds_depth(right, budget)
+            value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
         }
         Prop::Forall { source, body, .. } => {
-            prop_exceeds_depth(source, budget) || prop_exceeds_depth(body, budget)
+            prop_exceeds_depth(source, budget, depths) || prop_exceeds_depth(body, budget, depths)
         }
     }
 }
@@ -421,40 +624,44 @@ fn prop_exceeds_depth(prop: &Prop, budget: usize) -> bool {
 /// True if `expr` nests deeper than `budget` levels. The value-sort
 /// companion to [`prop_exceeds_depth`]; the two recurse into each other
 /// (`Sum`'s body is a `Prop`).
-fn value_exceeds_depth(expr: &ValueExpr, budget: usize) -> bool {
+fn value_exceeds_depth(
+    expr: &ValueExpr,
+    budget: usize,
+    depths: &HashMap<DefinitionName, usize>,
+) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
     };
     match expr {
         ValueExpr::Term(_) => false,
         ValueExpr::Arith { left, right, .. } => {
-            value_exceeds_depth(left, budget) || value_exceeds_depth(right, budget)
+            value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
         }
-        ValueExpr::Sum { body, .. } => prop_exceeds_depth(body, budget),
+        ValueExpr::Sum { body, .. } => prop_exceeds_depth(body, budget, depths),
         ValueExpr::ValueOf { default, .. } => default
             .as_deref()
-            .is_some_and(|d| value_exceeds_depth(d, budget)),
+            .is_some_and(|d| value_exceeds_depth(d, budget, depths)),
     }
 }
 
 /// True if `stmt` nests deeper than `budget` levels, counting both its
 /// expression bodies and nested `for` statements. Same bailing
 /// discipline as [`prop_exceeds_depth`].
-fn stmt_exceeds_depth(stmt: &Stmt, budget: usize) -> bool {
+fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionName, usize>) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
     };
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => prop_exceeds_depth(p, budget),
-        Stmt::Let { value, .. } => value_exceeds_depth(value, budget),
+        Stmt::Require(p) | Stmt::BindOne(p) => prop_exceeds_depth(p, budget, depths),
+        Stmt::Let { value, .. } => value_exceeds_depth(value, budget, depths),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {
             false
         }
         Stmt::For {
             collection, body, ..
         } => {
-            value_exceeds_depth(collection, budget)
-                || body.iter().any(|s| stmt_exceeds_depth(s, budget))
+            value_exceeds_depth(collection, budget, depths)
+                || body.iter().any(|s| stmt_exceeds_depth(s, budget, depths))
         }
     }
 }
@@ -502,6 +709,65 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     for name in dup_intents {
         errors.push(ValidationError::DuplicateDecl {
             vocabulary: VocabularyKind::Intent,
+            name: name.to_string(),
+        });
+    }
+
+    // Same duplicate check for definitions.
+    let mut seen_definitions = HashMap::<&str, usize>::new();
+    for decl in &p.definitions {
+        *seen_definitions.entry(decl.name.as_str()).or_insert(0) += 1;
+    }
+    let mut dup_definitions: Vec<&str> = seen_definitions
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(name, _)| *name)
+        .collect();
+    dup_definitions.sort_unstable();
+    for name in dup_definitions {
+        errors.push(ValidationError::DuplicateDecl {
+            vocabulary: VocabularyKind::Definition,
+            name: name.to_string(),
+        });
+    }
+
+    // Each definition's parameter list must be duplicate-free: a
+    // parameter is one binding slot in the call frame, so a repeated
+    // name would let the later argument silently overwrite the
+    // earlier one.
+    for def in &p.definitions {
+        let mut seen_params = HashMap::<&str, usize>::new();
+        for param in &def.parameters {
+            *seen_params.entry(param.as_str()).or_insert(0) += 1;
+        }
+        let mut dup_params: Vec<&str> = seen_params
+            .iter()
+            .filter(|(_, count)| **count > 1)
+            .map(|(name, _)| *name)
+            .collect();
+        dup_params.sort_unstable();
+        for parameter in dup_params {
+            errors.push(ValidationError::DuplicateParameter {
+                definition: def.name.to_string(),
+                parameter: parameter.to_string(),
+            });
+        }
+    }
+
+    // Definitions and predicates share the claim-shaped reference
+    // namespace (`name(args)` in a body resolves to exactly one of
+    // them), so a name in both vocabularies is a collision, not two
+    // independent declarations.
+    let mut collisions: Vec<&str> = p
+        .definitions
+        .iter()
+        .filter(|d| p.predicates.iter().any(|pr| pr.name.as_str() == d.name))
+        .map(|d| d.name.as_str())
+        .collect();
+    collisions.sort_unstable();
+    collisions.dedup();
+    for name in collisions {
+        errors.push(ValidationError::DefinitionNameCollision {
             name: name.to_string(),
         });
     }

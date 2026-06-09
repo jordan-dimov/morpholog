@@ -12,8 +12,9 @@
 
 use std::collections::BTreeSet;
 
+use crate::definitions::DefinitionIndex;
 use crate::eval::{EvalContext, EvalError, eval_value, find_matches};
-use crate::ir::{DerivedClaim, Invariant};
+use crate::ir::{Definition, DerivedClaim, Invariant};
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
@@ -27,17 +28,27 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 /// Invariants that do not contain [`crate::Prop::Pre`] behave identically
 /// in both modes. Invariants that *do* reach for `Pre` in a `None`
 /// context surface [`EvalError::PreStateUnavailable`].
+/// `definitions` is the programme's definitions vocabulary, for
+/// resolving `Prop::Defined` calls in the body; pass `&[]` for a
+/// programme without definitions.
 pub fn eval_invariant(
     inv: &Invariant,
     state: &State,
     pre_state: Option<&State>,
+    definitions: &[Definition],
 ) -> Result<bool, EvalError> {
     let bindings = Bindings::new();
     // Invariants evaluate against admitted state with no actor in
     // scope. `Term::Actor` inside an invariant body surfaces as
     // `EvalError::UnboundActor`, enforcing the doctrine that authority
     // checks live in `require`, not in invariants.
-    let ctx = EvalContext::new(state, pre_state, &bindings, None);
+    let ctx = EvalContext::new(
+        state,
+        pre_state,
+        &bindings,
+        None,
+        DefinitionIndex::new(definitions),
+    );
     let matches = find_matches(&inv.body, &ctx)?;
     Ok(!matches.is_empty())
 }
@@ -67,6 +78,7 @@ pub fn eval_invariant(
 pub fn enumerate_derived(
     derived: &DerivedClaim,
     state: &State,
+    definitions: &[Definition],
 ) -> Result<Vec<ClaimInstance>, EvalError> {
     // Derived claims, like invariants in non-proposal contexts, evaluate
     // against admitted state with no transition in scope. `Term::Actor`
@@ -74,7 +86,8 @@ pub fn enumerate_derived(
     // `Prop::Pre` surfaces as `EvalError::PreStateUnavailable` (derived
     // claims are a function of one state).
     let empty_bindings = Bindings::new();
-    let domain_ctx = EvalContext::new(state, None, &empty_bindings, None);
+    let index = DefinitionIndex::new(definitions);
+    let domain_ctx = EvalContext::new(state, None, &empty_bindings, None, index);
     let raw_bindings = find_matches(&derived.domain, &domain_ctx)?;
 
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
@@ -99,7 +112,7 @@ pub fn enumerate_derived(
             per_key.insert(key.clone(), v.0.clone());
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
-        let value_ctx = EvalContext::new(state, None, &per_key, None);
+        let value_ctx = EvalContext::new(state, None, &per_key, None, index);
         for value_def in &derived.values {
             let v = eval_value(&value_def.expr, &value_ctx)?;
             args.push(v);

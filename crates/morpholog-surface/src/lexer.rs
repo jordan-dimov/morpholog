@@ -88,6 +88,7 @@ pub enum Token {
     /// `derived` declaration keyword. Heads a derived-claim block:
     /// `derived Name(keys): Indent over <expr> value <name> = <expr>+ Dedent`.
     KwDerived,
+    KwDefine,
     /// `over` keyword for the derived-claim domain expression.
     KwOver,
     // Derived-claim bodies use `value <name> = <expr>` clauses, reusing
@@ -263,6 +264,7 @@ impl fmt::Display for Token {
             Token::KwEmit => write!(f, "`emit`"),
             Token::KwFor => write!(f, "`for`"),
             Token::KwDerived => write!(f, "`derived`"),
+            Token::KwDefine => write!(f, "`define`"),
             Token::KwOver => write!(f, "`over`"),
             Token::KwOnOrBefore => write!(f, "`on_or_before`"),
             Token::KwOnOrAfter => write!(f, "`on_or_after`"),
@@ -351,6 +353,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "emit" => Token::KwEmit,
         "for" => Token::KwFor,
         "derived" => Token::KwDerived,
+        "define" => Token::KwDefine,
         "over" => Token::KwOver,
         // Civil-date <= comparator
         "on_or_before" => Token::KwOnOrBefore,

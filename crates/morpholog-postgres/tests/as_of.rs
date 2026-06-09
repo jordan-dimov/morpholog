@@ -63,6 +63,7 @@ fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
 /// `transition_id`s in order. Used by most of the tests below.
 async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let invariants = double_entry_ledger::all_invariants();
+    let definitions = double_entry_ledger::definitions();
     let period = subj("p_as_of");
 
     let tid1 = expect_committed(
@@ -78,6 +79,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
                 dec(100),
             ],
             &invariants,
+            &definitions,
         )
         .await
         .unwrap(),
@@ -96,6 +98,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
                 dec(200),
             ],
             &invariants,
+            &definitions,
         )
         .await
         .unwrap(),
@@ -115,6 +118,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
                 dec(150),
             ],
             &invariants,
+            &definitions,
         )
         .await
         .unwrap(),
@@ -263,12 +267,26 @@ async fn list_derived_at_recovers_historical_trial_balance() {
     let trial_balance = double_entry_ledger::trial_balance_row();
 
     // At tid1: only entry_001 with amount 100. Cash 100, revenue -100.
-    let at_tid1 = list_derived_at(&pool, &trial_balance, tid1).await.unwrap();
+    let at_tid1 = list_derived_at(
+        &pool,
+        &trial_balance,
+        &double_entry_ledger::definitions(),
+        tid1,
+    )
+    .await
+    .unwrap();
     assert_balance(&at_tid1, "account_cash", 100);
     assert_balance(&at_tid1, "account_revenue", -100);
 
     // At tid2: entry_001 (100) + entry_002 (200). Cash 300, revenue -300.
-    let at_tid2 = list_derived_at(&pool, &trial_balance, tid2).await.unwrap();
+    let at_tid2 = list_derived_at(
+        &pool,
+        &trial_balance,
+        &double_entry_ledger::definitions(),
+        tid2,
+    )
+    .await
+    .unwrap();
     assert_balance(&at_tid2, "account_cash", 300);
     assert_balance(&at_tid2, "account_revenue", -300);
 }
@@ -283,8 +301,17 @@ async fn list_derived_at_at_latest_equals_list_derived() {
     let (_tid1, _tid2, tid3) = three_step_ledger(&pool).await;
 
     let trial_balance = double_entry_ledger::trial_balance_row();
-    let at_tid3 = list_derived_at(&pool, &trial_balance, tid3).await.unwrap();
-    let current = list_derived(&pool, &trial_balance).await.unwrap();
+    let at_tid3 = list_derived_at(
+        &pool,
+        &trial_balance,
+        &double_entry_ledger::definitions(),
+        tid3,
+    )
+    .await
+    .unwrap();
+    let current = list_derived(&pool, &trial_balance, &double_entry_ledger::definitions())
+        .await
+        .unwrap();
 
     assert_eq!(
         at_tid3, current,
@@ -304,7 +331,14 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let (_tid1, _tid2, tid3) = three_step_ledger(&pool).await;
 
     let trial_balance = double_entry_ledger::trial_balance_row();
-    let baseline = list_derived_at(&pool, &trial_balance, tid3).await.unwrap();
+    let baseline = list_derived_at(
+        &pool,
+        &trial_balance,
+        &double_entry_ledger::definitions(),
+        tid3,
+    )
+    .await
+    .unwrap();
 
     // Commit an unrelated transformation (verified_revenue's
     // admit_independent_verification). This adds an
@@ -312,6 +346,7 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     // which the trial-balance derived references. Capture the new
     // tid; ask for the trial balance as of THIS tid.
     let invariants = verified_revenue::all_invariants();
+    let definitions = verified_revenue::definitions();
     let new_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
@@ -323,14 +358,20 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
                 subj("noise_ver"),
             ],
             &invariants,
+            &definitions,
         )
         .await
         .unwrap(),
     );
 
-    let after_noise = list_derived_at(&pool, &trial_balance, new_tid)
-        .await
-        .unwrap();
+    let after_noise = list_derived_at(
+        &pool,
+        &trial_balance,
+        &double_entry_ledger::definitions(),
+        new_tid,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         baseline, after_noise,
         "an unrelated transformation must not change the trial balance, \
@@ -379,7 +420,14 @@ async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() 
     // accidentally loaded everything, or accidentally skipped
     // JournalLines), the trial balance would be wrong.
     let trial_balance = double_entry_ledger::trial_balance_row();
-    let rows = list_derived_at(&pool, &trial_balance, tid3).await.unwrap();
+    let rows = list_derived_at(
+        &pool,
+        &trial_balance,
+        &double_entry_ledger::definitions(),
+        tid3,
+    )
+    .await
+    .unwrap();
     // Current state: entry_001 (100) + entry_002 (200) + entry_001_v2 (150) = 450 on cash.
     assert_balance(&rows, "account_cash", 450);
     assert_balance(&rows, "account_revenue", -450);
@@ -416,6 +464,8 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     reset_db(&pool).await;
 
     let invariants = verified_revenue::all_invariants();
+
+    let definitions = verified_revenue::definitions();
     let asset = subj("asset_a");
     let period = subj("p_2026_04");
 
@@ -426,6 +476,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
             &verified_revenue::admit_independent_verification(),
             vec![asset.clone(), period.clone(), dec(92), subj("ver_001")],
             &invariants,
+            &definitions,
         )
         .await
         .unwrap(),
@@ -440,6 +491,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
             &verified_revenue::correct_independent_verification(),
             vec![asset, period, dec(91), subj("ver_002"), subj("ver_001")],
             &invariants,
+            &definitions,
         )
         .await
         .unwrap(),

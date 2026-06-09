@@ -10,10 +10,10 @@ pub mod testing;
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{
-    ClaimInstance, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant, InvariantName,
-    Outcome, PredicateName, State, Subject, TraceEntry, TracedProposal, Transformation,
-    TransformationName, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
-    propose_with_trace,
+    ClaimInstance, Definition, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant,
+    InvariantName, Outcome, PredicateName, State, Subject, TraceEntry, TracedProposal,
+    Transformation, TransformationName, Transition, enumerate_derived,
+    predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -135,14 +135,20 @@ pub async fn propose_against_pg(
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<PgProposalOutcome, PgError> {
     // The rejection-state variant is the primitive: it is this function
     // plus a free hand-off (the scoped state is moved, never cloned,
     // and only on rejection), so the SERIALIZABLE-setup ritual lives
     // in one fewer place.
-    let (outcome, _) =
-        propose_against_pg_with_rejection_state(pool, transformation, transition, invariants)
-            .await?;
+    let (outcome, _) = propose_against_pg_with_rejection_state(
+        pool,
+        transformation,
+        transition,
+        invariants,
+        definitions,
+    )
+    .await?;
     Ok(outcome)
 }
 
@@ -159,6 +165,7 @@ pub async fn propose_against_pg_with_rejection_state(
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<(PgProposalOutcome, Option<State>), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
@@ -166,9 +173,9 @@ pub async fn propose_against_pg_with_rejection_state(
         .await
         .map_err(classify)?;
 
-    let scope = compute_load_scope(transformation, invariants);
+    let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
-    let outcome = propose(transformation, transition, &state, invariants)?;
+    let outcome = propose(transformation, transition, &state, invariants, definitions)?;
     let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
     let pg_outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
     Ok((pg_outcome, rejection_state))
@@ -222,6 +229,7 @@ pub async fn propose_against_pg_with_trace(
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<PgTracedOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
@@ -229,9 +237,9 @@ pub async fn propose_against_pg_with_trace(
         .await
         .map_err(classify)?;
 
-    let scope = compute_load_scope(transformation, invariants);
+    let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
-    let traced = propose_with_trace(transformation, transition, &state, invariants);
+    let traced = propose_with_trace(transformation, transition, &state, invariants, definitions);
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome =
@@ -390,13 +398,14 @@ async fn load_state(
 fn compute_load_scope(
     transformation: &Transformation,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Vec<PredicateName> {
     let mut scope = std::collections::BTreeSet::new();
     for stmt in &transformation.body {
-        morpholog_core::predicates_read_by_stmt(stmt, &mut scope);
+        morpholog_core::predicates_read_by_stmt(stmt, definitions, &mut scope);
     }
     for inv in invariants {
-        morpholog_core::predicates_referenced_by_prop(&inv.body, &mut scope);
+        morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut scope);
     }
     scope.into_iter().collect()
 }
@@ -721,8 +730,9 @@ pub async fn load_scoped_state(
     pool: &PgPool,
     transformation: &Transformation,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<State, PgError> {
-    let scope: Vec<String> = compute_load_scope(transformation, invariants)
+    let scope: Vec<String> = compute_load_scope(transformation, invariants, definitions)
         .into_iter()
         .map(|p| p.to_string())
         .collect();
@@ -1524,14 +1534,15 @@ pub async fn mark_compensation_failed(
 pub async fn list_derived(
     pool: &PgPool,
     derived: &DerivedClaim,
+    definitions: &[Definition],
 ) -> Result<Vec<ClaimInstance>, PgError> {
-    let footprint: Vec<String> = predicates_referenced_by_derived(derived)
+    let footprint: Vec<String> = predicates_referenced_by_derived(derived, definitions)
         .into_iter()
         .map(|p| p.to_string())
         .collect();
     let claims = list_claims_for_predicates(pool, &footprint).await?;
     let state = State::from_claims(claims);
-    let rows = enumerate_derived(derived, &state)?;
+    let rows = enumerate_derived(derived, &state, definitions)?;
     Ok(rows)
 }
 
@@ -1862,14 +1873,15 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
 pub async fn list_derived_at(
     pool: &PgPool,
     derived: &DerivedClaim,
+    definitions: &[Definition],
     transition_id: Uuid,
 ) -> Result<Vec<ClaimInstance>, PgError> {
-    let footprint: Vec<String> = predicates_referenced_by_derived(derived)
+    let footprint: Vec<String> = predicates_referenced_by_derived(derived, definitions)
         .into_iter()
         .map(|p| p.to_string())
         .collect();
     let state = reconstruct_state_at_for_predicates(pool, transition_id, &footprint).await?;
-    let rows = enumerate_derived(derived, &state)?;
+    let rows = enumerate_derived(derived, &state, definitions)?;
     Ok(rows)
 }
 
@@ -2099,6 +2111,10 @@ pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Se
 pub struct CompensationSpec {
     pub transformation: Transformation,
     pub invariants: Vec<Invariant>,
+    /// The programme's definitions, threaded into the compensating
+    /// proposal exactly as into any other; empty when the model
+    /// declares none.
+    pub definitions: Vec<Definition>,
     pub args_from_row: CompensationArgsFromRow,
 }
 
@@ -2251,6 +2267,7 @@ where
                 &spec.transformation,
                 &compensation_transition,
                 &spec.invariants,
+                &spec.definitions,
             )
             .await?;
             match outcome {

@@ -10,7 +10,7 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{EvalValue, Invariant, Subject, Transformation, Transition};
+use morpholog_core::{Definition, EvalValue, Invariant, Subject, Transformation, Transition};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, PgTracedOutcome, propose_against_pg,
     propose_against_pg_with_trace,
@@ -37,9 +37,10 @@ pub async fn propose_pg_with_test_actor(
     transformation: &Transformation,
     args: Vec<EvalValue>,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg(pool, transformation, &transition, invariants).await
+    propose_against_pg(pool, transformation, &transition, invariants, definitions).await
 }
 
 /// `propose_pg_with_test_actor` plus structured trace. Wraps the
@@ -50,9 +51,10 @@ pub async fn propose_pg_with_trace_using_test_actor(
     transformation: &Transformation,
     args: Vec<EvalValue>,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<PgTracedOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg_with_trace(pool, transformation, &transition, invariants).await
+    propose_against_pg_with_trace(pool, transformation, &transition, invariants, definitions).await
 }
 
 /// Variant that lets the caller supply an explicit actor. Used by
@@ -64,11 +66,12 @@ pub async fn propose_pg_as(
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,
     invariants: &[Invariant],
+    definitions: &[Definition],
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args,
         actor: actor.into(),
     };
-    propose_against_pg(pool, transformation, &transition, invariants).await
+    propose_against_pg(pool, transformation, &transition, invariants, definitions).await
 }

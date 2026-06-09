@@ -68,8 +68,8 @@ pub fn controls(program: &Program) -> ControlMatrix {
                 .body
                 .iter()
                 .filter_map(|stmt| match stmt {
-                    Stmt::Require(prop) => Some(gate("require", prop)),
-                    Stmt::BindOne(prop) => Some(gate("bind", prop)),
+                    Stmt::Require(prop) => Some(gate("require", prop, &program.definitions)),
+                    Stmt::BindOne(prop) => Some(gate("bind", prop, &program.definitions)),
                     _ => None,
                 })
                 .collect(),
@@ -82,9 +82,9 @@ pub fn controls(program: &Program) -> ControlMatrix {
     }
 }
 
-fn gate(form: &str, prop: &crate::ir::Prop) -> GateControl {
+fn gate(form: &str, prop: &crate::ir::Prop, definitions: &[crate::ir::Definition]) -> GateControl {
     let mut consults = std::collections::BTreeSet::new();
-    predicates_referenced_by_prop(prop, &mut consults);
+    predicates_referenced_by_prop(prop, definitions, &mut consults);
     GateControl {
         form: form.to_string(),
         condition: format::format_prop_inline(prop),

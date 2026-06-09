@@ -19,8 +19,10 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+use crate::definitions::DefinitionIndex;
 use crate::ir::{
-    ArithOp, CompareOp, OrderedDomain, PredicateName, Prop, Subject, Term, Value, ValueExpr,
+    ArithOp, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop, Subject,
+    Term, Value, ValueExpr,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
@@ -61,6 +63,13 @@ pub enum EvalError {
     /// proposal is rejected (or the derived read errors). Gates avoid this
     /// by cross-multiplying with `Mul`.
     DivisionByZero,
+    /// A `Prop::Defined` call named a definition the evaluation context
+    /// does not carry. Unlike an unmatched predicate (which lawfully
+    /// matches nothing), a call without its definition is a programme
+    /// integrity error: there is no body to expand. `Program::validate`
+    /// catches this at authoring time; the runtime error is the backstop
+    /// for unvalidated IR.
+    UnknownDefinition(String),
 }
 
 impl std::fmt::Display for EvalError {
@@ -83,6 +92,11 @@ impl std::fmt::Display for EvalError {
                 "Prop::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
             ),
             EvalError::DivisionByZero => write!(f, "division by zero"),
+            EvalError::UnknownDefinition(name) => write!(
+                f,
+                "call to definition `{name}` but the evaluation context carries \
+                 no such definition; validate the programme before proposing"
+            ),
         }
     }
 }
@@ -107,6 +121,8 @@ pub(crate) struct EvalContext<'a> {
     /// The proposing transition's actor; `None` in one-state contexts.
     /// `Term::Actor` reached with `actor: None` surfaces `UnboundActor`.
     pub(crate) actor: Option<&'a Subject>,
+    /// The programme's definitions, for resolving `Prop::Defined` calls.
+    pub(crate) definitions: DefinitionIndex<'a>,
 }
 
 impl<'a> EvalContext<'a> {
@@ -115,24 +131,21 @@ impl<'a> EvalContext<'a> {
         pre_state: Option<&'a State>,
         bindings: &'a Bindings,
         actor: Option<&'a Subject>,
+        definitions: DefinitionIndex<'a>,
     ) -> Self {
         Self {
             state,
             pre_state,
             bindings,
             actor,
+            definitions,
         }
     }
 
     /// Swap in extended bindings; used when descending into a
     /// conjunct, an `Implies` right side, or a quantifier body.
     pub(crate) fn with_bindings(&self, bindings: &'a Bindings) -> Self {
-        Self {
-            state: self.state,
-            pre_state: self.pre_state,
-            bindings,
-            actor: self.actor,
-        }
+        Self { bindings, ..*self }
     }
 
     /// Enter a `Prop::Pre` subtree: state becomes the previous
@@ -142,9 +155,23 @@ impl<'a> EvalContext<'a> {
         Some(Self {
             state: self.pre_state?,
             pre_state: None,
-            bindings: self.bindings,
-            actor: self.actor,
+            ..*self
         })
+    }
+
+    /// Enter a definition body: a fresh frame carrying only the call's
+    /// parameter bindings, with no pre-state and no actor. Bodies are
+    /// context-free by doctrine; the statically-banned `pre(...)` and
+    /// `actor` surface their usual context errors here if unvalidated
+    /// IR carries them.
+    fn enter_definition(&self, frame: &'a Bindings) -> Self {
+        Self {
+            state: self.state,
+            pre_state: None,
+            bindings: frame,
+            actor: None,
+            definitions: self.definitions,
+        }
     }
 }
 
@@ -240,9 +267,108 @@ pub(crate) fn lower_xor(left: &Prop, right: &Prop) -> Prop {
     ])
 }
 
+/// Build a definition call's frame: the bindings the body evaluates
+/// under. Only the parameters appear - a ground argument (a literal,
+/// `actor`, or a bound variable) pre-binds its parameter; an unbound
+/// variable or wildcard leaves it free, so the body acts as a generator
+/// for that position. The caller's other bindings never enter the frame:
+/// a definition body cannot capture surrounding scope.
+///
+/// This is the one place a call's argument-to-parameter translation is
+/// computed; the evaluator, the failure walk, and the missing-claims
+/// walk all build their body context from it.
+fn definition_call_frame(
+    def: &Definition,
+    args: &[Term],
+    ctx: &EvalContext<'_>,
+) -> Result<Bindings, EvalError> {
+    if args.len() != def.parameters.len() {
+        return Err(EvalError::TypeMismatch(format!(
+            "definition {} takes {} argument(s) but the call passes {}",
+            def.name,
+            def.parameters.len(),
+            args.len()
+        )));
+    }
+    let mut frame = Bindings::new();
+    for (param, arg) in def.parameters.iter().zip(args) {
+        match arg {
+            Term::Wildcard => {}
+            Term::Var(v) => {
+                if let Some(value) = ctx.bindings.get(v) {
+                    frame.insert(param.clone(), value.clone());
+                }
+            }
+            // Literals and `actor` resolve at the call site: the actor
+            // stays a caller-context concern, never visible to the body
+            // as anything but an ordinary subject value.
+            other => {
+                frame.insert(param.clone(), resolve_term(other, ctx.bindings, ctx.actor)?);
+            }
+        }
+    }
+    Ok(frame)
+}
+
+/// Evaluate a call to a named definition: relational substitution with
+/// projection. The body runs under the call frame (see
+/// [`definition_call_frame`]); each body match projects its parameter
+/// values back onto the call's argument terms, extending the caller's
+/// bindings. Projection deduplicates - a call yields each distinct
+/// argument-binding witness once, so internal multiplicity (two
+/// different internal witnesses for the same projected arguments) is
+/// not observable and cannot double-count inside a `Sum`.
+fn find_defined_matches(
+    name: &DefinitionName,
+    args: &[Term],
+    ctx: &EvalContext<'_>,
+) -> Result<Vec<Bindings>, EvalError> {
+    let def = ctx
+        .definitions
+        .get(name)
+        .ok_or_else(|| EvalError::UnknownDefinition(name.to_string()))?;
+    let frame = definition_call_frame(def, args, ctx)?;
+    let body_matches = find_matches(&def.body, &ctx.enter_definition(&frame))?;
+
+    let mut out: Vec<Bindings> = Vec::new();
+    for m in body_matches {
+        let mut extended = ctx.bindings.clone();
+        let mut admit = true;
+        for (param, arg) in def.parameters.iter().zip(args) {
+            // Validation guarantees the body binds every parameter; for
+            // unvalidated IR the absence surfaces as the same error the
+            // kernel raises for any unbound name.
+            let Some(value) = m.get(param) else {
+                return Err(EvalError::UnboundVariable(param.to_string()));
+            };
+            if let Term::Var(v) = arg {
+                match extended.get(v) {
+                    // A pre-bound variable already agrees (the frame
+                    // pinned it); a repeated unbound variable in the call
+                    // (`f(x, x)`) must project consistently or the match
+                    // is discarded.
+                    Some(prev) if prev != value => {
+                        admit = false;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => {
+                        extended.insert(v.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        if admit && !out.contains(&extended) {
+            out.push(extended);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
     match p {
         Prop::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
+        Prop::Defined { name, args } => find_defined_matches(name, args, ctx),
         Prop::And(props) => find_conjunction(props, ctx),
         Prop::Or(props) => find_disjunction(props, ctx),
         Prop::Xor(left, right) => find_matches(&lower_xor(left, right), ctx),
@@ -1102,6 +1228,23 @@ pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option
             }
             None
         }
+        // A failing call drills into the definition body under the
+        // call's frame, and the rendering keeps both levels: the named
+        // business condition first, the responsible body conjunct
+        // second. Body conjuncts render with parameter names (binding
+        // values are not substituted in v0, matching `Forall`).
+        Prop::Defined { name, args } => {
+            let def = ctx.definitions.get(name)?;
+            let frame = definition_call_frame(def, args, ctx).ok()?;
+            let body_ctx = ctx.enter_definition(&frame);
+            let inner = find_failing_subexpr(&def.body, &body_ctx)
+                .unwrap_or_else(|| crate::format::format_prop_inline(&def.body));
+            Some(format!(
+                "inside {}: {}",
+                crate::format::format_prop_inline(prop),
+                inner
+            ))
+        }
         // No useful drill-down for these:
         Prop::Not(_)
         | Prop::Or(_)
@@ -1165,6 +1308,19 @@ pub(crate) fn unsatisfied_positive_claims(
             Ok(m) if m.is_empty() => vec![render_claim(prop, ctx)],
             _ => vec![],
         },
+        // A failing call descends into the body under the call's frame,
+        // so a gate factored into a named condition reports the same
+        // directly-missing claims its inline form would - with ground
+        // call arguments resolved into the rendering.
+        Prop::Defined { name, args } => {
+            let Some(def) = ctx.definitions.get(name) else {
+                return vec![];
+            };
+            let Ok(frame) = definition_call_frame(def, args, ctx) else {
+                return vec![];
+            };
+            unsatisfied_positive_claims(&def.body, &ctx.enter_definition(&frame))
+        }
         Prop::And(conjuncts) => {
             let mut current: Vec<Bindings> = vec![ctx.bindings.clone()];
             for c in conjuncts {
@@ -1179,13 +1335,16 @@ pub(crate) fn unsatisfied_positive_claims(
                 }
                 if next.is_empty() {
                     // `c` killed the chain. Report it only when it is
-                    // itself a positive claim; a comparator/`not`/etc.
-                    // failure has no directly-missing claim in v0.
+                    // itself a positive claim or a defined call (which
+                    // descends); a comparator/`not`/etc. failure has no
+                    // directly-missing claim in v0.
                     let failing_bindings = current.first().unwrap_or(ctx.bindings);
-                    if matches!(c, Prop::Claim { .. }) {
-                        return vec![render_claim(c, &ctx.with_bindings(failing_bindings))];
-                    }
-                    return vec![];
+                    let fctx = ctx.with_bindings(failing_bindings);
+                    return match c {
+                        Prop::Claim { .. } => vec![render_claim(c, &fctx)],
+                        Prop::Defined { .. } => unsatisfied_positive_claims(c, &fctx),
+                        _ => vec![],
+                    };
                 }
                 current = next;
             }
@@ -1258,7 +1417,13 @@ mod tests {
     fn eval_lit(e: &ValueExpr) -> Result<EvalValue, EvalError> {
         let state = State::default();
         let bindings = Bindings::new();
-        let ctx = EvalContext::new(&state, None, &bindings, None);
+        let ctx = EvalContext::new(
+            &state,
+            None,
+            &bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        );
         eval_value(e, &ctx)
     }
 
@@ -1369,7 +1534,13 @@ mod tests {
         actor: Option<&Subject>,
     ) -> Result<EvalValue, EvalError> {
         let bindings = Bindings::new();
-        let ctx = EvalContext::new(state, None, &bindings, actor);
+        let ctx = EvalContext::new(
+            state,
+            None,
+            &bindings,
+            actor,
+            crate::definitions::DefinitionIndex::new(&[]),
+        );
         eval_value(e, &ctx)
     }
 
@@ -1460,7 +1631,13 @@ mod tests {
 
     fn matched_for(state: &State, args: Vec<Term>) -> Vec<ClaimInstance> {
         let bindings = Bindings::new();
-        let ctx = EvalContext::new(state, None, &bindings, None);
+        let ctx = EvalContext::new(
+            state,
+            None,
+            &bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        );
         matching_claims(&"Price".into(), &args, &ctx).expect("matching_claims")
     }
 
@@ -1499,7 +1676,13 @@ mod tests {
         // is an error, not a silent no-match.
         let state = price_state(&[("t1", 100)]);
         let bindings = Bindings::new();
-        let ctx = EvalContext::new(&state, None, &bindings, None);
+        let ctx = EvalContext::new(
+            &state,
+            None,
+            &bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        );
         assert_eq!(
             matching_claims(&"Price".into(), &[Term::Actor, wildcard()], &ctx),
             Err(EvalError::UnboundActor),
