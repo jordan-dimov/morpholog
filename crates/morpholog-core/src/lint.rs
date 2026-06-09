@@ -213,9 +213,11 @@ fn positive_claims(
     }
 }
 
-/// Value-sort companion: a `value Pred(...)` lookup or a `sum` body
-/// inside a comparison still *requires* those claims to be readable,
-/// so they count at the enclosing polarity.
+/// Value-sort companion. A defaultless `value Pred(...)` lookup
+/// *requires* a claim to be readable, so it counts at the enclosing
+/// polarity; one with a `default` tolerates absence and contributes
+/// only what its default expression carries. `sum` bodies tolerate
+/// zero matches, so they contribute nothing.
 fn positive_value_claims(expr: &ValueExpr, positive: bool, out: &mut BTreeSet<PredicateName>) {
     match expr {
         ValueExpr::Term(_) => {}

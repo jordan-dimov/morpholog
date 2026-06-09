@@ -158,14 +158,44 @@ struct BatchRow {
     args_named: Option<serde_json::Value>,
 }
 
+/// Whether a row's failure belongs to the row or to the run. The
+/// distinction IS the exit-code contract: a `Row` failure (malformed
+/// JSON, unknown transformation, undecodable args, a serialization
+/// conflict or kernel error on that row's data) becomes an error
+/// receipt and the batch continues; an `Operational` failure (a dead
+/// connection, a schema mismatch) aborts the batch with a non-zero
+/// exit, because pretending the remaining rows were processed would
+/// make infrastructure failure look like successful import.
+enum BatchRowError {
+    Row(anyhow::Error),
+    Operational(anyhow::Error),
+}
+
+/// Classify a proposal-path error. `SerializationFailure` is the
+/// documented per-row outcome (the caller re-submits that row;
+/// retries stay the caller's), and a kernel error or colliding intent
+/// is that row's data speaking - everything else is infrastructure.
+fn classify_pg_error(err: morpholog_postgres::PgError) -> BatchRowError {
+    use morpholog_postgres::PgError;
+    match &err {
+        PgError::SerializationFailure | PgError::Kernel(_) | PgError::DuplicateIntent => {
+            BatchRowError::Row(anyhow::Error::new(err).context("propose_against_pg failed"))
+        }
+        _ => {
+            BatchRowError::Operational(anyhow::Error::new(err).context("propose_against_pg failed"))
+        }
+    }
+}
+
 /// Batch mode: one receipt per row, in row order, each row its own
 /// SERIALIZABLE commit - an import is explicitly NOT all-or-nothing.
 /// A malformed row (bad JSON, unknown transformation, undecodable
 /// args) gets an error receipt and processing continues; rejections
 /// are lawful outcomes. The exit code is zero whenever every row was
 /// processed; non-zero is reserved for operational failure (unreadable
-/// input, a broken connection). `row` is the 1-based line number in
-/// the input; blank lines are skipped without receipts.
+/// input, a broken connection - see [`BatchRowError`]). `row` is the
+/// 1-based line number in the input; blank lines are skipped without
+/// receipts.
 async fn run_batch(
     args: &RunArgs,
     program: &morpholog_core::Program,
@@ -203,15 +233,24 @@ async fn run_batch(
                 }
                 envelope
             }
-            // A per-row failure is a receipt, never a process failure:
-            // the rows after it still run.
-            Err(reason) => {
+            // A row-level failure is a receipt, never a process
+            // failure: the rows after it still run.
+            Err(BatchRowError::Row(reason)) => {
                 errored += 1;
                 serde_json::json!({
                     "row": row,
                     "status": "error",
                     "error": format!("{reason:#}"),
                 })
+            }
+            // Infrastructure failure aborts: the summary names how far
+            // the batch got, and the exit code tells the truth.
+            Err(BatchRowError::Operational(reason)) => {
+                eprintln!(
+                    "batch aborted at row {row}: {committed} committed, \
+                     {rejected} rejected, {errored} errors before the failure"
+                );
+                return Err(reason.context(format!("operational failure at row {row}")));
             }
         };
         println!("{}", serde_json::to_string(&receipt)?);
@@ -231,9 +270,12 @@ async fn batch_row_outcome(
     validated: &morpholog_core::ValidatedProgram<'_>,
     pool: &morpholog_postgres::PgPool,
     line: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let row: BatchRow = serde_json::from_str(line).context("malformed batch row")?;
-    let transformation = lookup_transformation(program, &row.transformation, &args.file)?;
+) -> Result<serde_json::Value, BatchRowError> {
+    let row: BatchRow = serde_json::from_str(line)
+        .context("malformed batch row")
+        .map_err(BatchRowError::Row)?;
+    let transformation = lookup_transformation(program, &row.transformation, &args.file)
+        .map_err(BatchRowError::Row)?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
         (Some(t), None) => {
@@ -244,9 +286,14 @@ async fn batch_row_outcome(
             named = n.to_string();
             CliArgs::Named(&named)
         }
-        _ => anyhow::bail!("a batch row carries exactly one of `args` and `args_named`"),
+        _ => {
+            return Err(BatchRowError::Row(anyhow::anyhow!(
+                "a batch row carries exactly one of `args` and `args_named`"
+            )));
+        }
     };
-    let eval_args = decode_args(validated, transformation, &args.file, codec_input)?;
+    let eval_args = decode_args(validated, transformation, &args.file, codec_input)
+        .map_err(BatchRowError::Row)?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
@@ -262,7 +309,7 @@ async fn batch_row_outcome(
             &program.definitions,
         )
         .await
-        .context("propose_against_pg failed")?;
+        .map_err(classify_pg_error)?;
         if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
             let explanation = explain(program, &transition, &state);
             return Ok(serde_json::json!({
@@ -271,7 +318,9 @@ async fn batch_row_outcome(
                 "explanation": explanation,
             }));
         }
-        Ok(serde_json::to_value(&outcome)?)
+        serde_json::to_value(&outcome)
+            .context("serialising the receipt")
+            .map_err(BatchRowError::Operational)
     } else {
         let outcome = propose_against_pg(
             pool,
@@ -281,7 +330,9 @@ async fn batch_row_outcome(
             &program.definitions,
         )
         .await
-        .context("propose_against_pg failed")?;
-        Ok(serde_json::to_value(&outcome)?)
+        .map_err(classify_pg_error)?;
+        serde_json::to_value(&outcome)
+            .context("serialising the receipt")
+            .map_err(BatchRowError::Operational)
     }
 }
