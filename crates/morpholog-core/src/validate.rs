@@ -280,6 +280,14 @@ pub enum ValidationError {
         predicate: String,
         context: ValidationContext,
     },
+    /// A discipline that lowers to a generated invariant has no such
+    /// invariant in the programme: the IR was hand-built and
+    /// `lower_disciplines` was never run (the parser runs it), so the
+    /// declared commitment would be silently unenforced.
+    DisciplineNotLowered {
+        predicate: String,
+        invariant: String,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -469,6 +477,16 @@ impl std::fmt::Display for ValidationError {
                 "{context} retracts `{predicate}`, which is append only; \
                  corrections are admitted as supersessions or exception \
                  claims, never by retracting the record"
+            ),
+            ValidationError::DisciplineNotLowered {
+                predicate,
+                invariant,
+            } => write!(
+                f,
+                "a discipline on `{predicate}` implies the generated invariant \
+                 `{invariant}`, which this programme does not carry; run \
+                 `lower_disciplines` before validating (the parser does this) \
+                 so the declared commitment is actually enforced"
             ),
         }
     }
@@ -937,6 +955,18 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                     }
                 }
             }
+        }
+    }
+
+    for (predicate, invariant) in crate::disciplines::expected_generated_invariants(p) {
+        let lowered = p.invariants.iter().any(|inv| {
+            inv.name.as_str() == invariant && inv.origin == crate::ir::InvariantOrigin::Discipline
+        });
+        if !lowered {
+            errors.push(ValidationError::DisciplineNotLowered {
+                predicate: predicate.to_string(),
+                invariant,
+            });
         }
     }
 

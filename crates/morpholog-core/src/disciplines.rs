@@ -156,6 +156,46 @@ fn unique_invariant(decl: &PredicateDecl, fields: &[String]) -> Option<Invariant
     })
 }
 
+/// Every (predicate, generated-invariant-name) pair the programme's
+/// disciplines imply, for clauses that lower soundly. The validator
+/// checks each is present with Discipline origin, so hand-built IR
+/// that skipped `lower_disciplines` fails loudly instead of carrying
+/// silently unenforced commitments. Derived from the same clause walk
+/// as the lowering, so the expectation and the generation cannot
+/// drift.
+pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(PredicateName, String)> {
+    let mut out = Vec::new();
+    for decl in &program.predicates {
+        for discipline in &decl.disciplines {
+            match discipline {
+                Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
+                    if unique_invariant(decl, fields).is_some() {
+                        out.push((decl.name.clone(), unique_invariant_name(&decl.name, fields)));
+                    }
+                }
+                Discipline::AppendOnly => {}
+                Discipline::SupersededVia { lineage } => {
+                    let Some(lineage_decl) = program.predicates.iter().find(|p| p.name == *lineage)
+                    else {
+                        continue;
+                    };
+                    if lineage_decl.args.len() != 2 {
+                        continue;
+                    }
+                    let prior = vec![lineage_decl.args[1].name.clone()];
+                    if unique_invariant(lineage_decl, &prior).is_some() {
+                        out.push((
+                            lineage_decl.name.clone(),
+                            unique_invariant_name(&lineage_decl.name, &prior),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The predicates no transformation may retract: those declared
 /// `append only`, plus every lineage predicate named by a
 /// `superseded via` (lineage is the doctrine's append-only third
