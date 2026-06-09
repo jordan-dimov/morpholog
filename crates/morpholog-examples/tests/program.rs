@@ -65,10 +65,13 @@ fn verified_revenue_program_has_expected_shape() {
     assert!(p.invariant("admissibility_has_provenance").is_some());
     assert!(p.invariant("admissibility_excludes_revocation").is_some());
     assert!(
-        p.invariant("at_most_one_current_verification_per_asset_period")
+        p.invariant("current_verification_unique_by_asset_period")
             .is_some()
     );
-    assert!(p.invariant("at_most_one_direct_successor").is_some());
+    assert!(
+        p.invariant("supersedes_unique_by_prior_verification_id")
+            .is_some()
+    );
 }
 
 #[test]
@@ -85,7 +88,7 @@ fn double_entry_ledger_program_has_expected_shape() {
 
     assert!(p.invariant("balanced_posted_entry").is_some());
     assert!(p.invariant("journal_entry_has_lines").is_some());
-    assert!(p.invariant("at_most_one_direct_successor").is_some());
+    assert!(p.invariant("supersedes_unique_by_prior_entry_id").is_some());
 }
 
 #[test]
@@ -103,19 +106,16 @@ fn insurance_claim_settlement_program_has_expected_shape() {
 
     assert!(p.invariant("paid_implies_authorised").is_some());
     assert!(p.invariant("paid_implies_headroom").is_some());
-    assert!(p.invariant("at_most_one_policy_per_id").is_some());
-    assert!(p.invariant("at_most_one_claim_report_per_id").is_some());
-    assert!(p.invariant("at_most_one_headroom_per_policy").is_some());
+    assert!(p.invariant("policy_unique_by_policy_id").is_some());
+    assert!(p.invariant("claim_reported_unique_by_claim_id").is_some());
+    assert!(p.invariant("policy_headroom_unique_by_policy_id").is_some());
     assert!(
-        p.invariant("settlement_id_uniquely_identifies_payment")
+        p.invariant("settlement_paid_unique_by_settlement_id")
             .is_some()
     );
     assert!(p.invariant("headroom_consumed_by_payment").is_some());
     assert!(p.invariant("settlement_within_eligible_payout").is_some());
-    assert!(
-        p.invariant("at_most_one_coverage_terms_per_policy")
-            .is_some()
-    );
+    assert!(p.invariant("coverage_terms_unique_by_policy_id").is_some());
     assert!(p.invariant("coverage_terms_within_range").is_some());
 }
 
@@ -149,15 +149,15 @@ fn clinical_trial_enrolment_program_has_expected_shape() {
 
     // Structural-uniqueness invariants.
     assert!(
-        p.invariant("at_most_one_protocol_window_per_version")
+        p.invariant("protocol_version_unique_by_trial_id_protocol_version")
             .is_some()
     );
     assert!(
-        p.invariant("at_most_one_consent_window_per_version")
+        p.invariant("consent_form_version_unique_by_trial_id_consent_form_version")
             .is_some()
     );
     assert!(
-        p.invariant("participant_randomised_once_per_trial")
+        p.invariant("participant_randomised_unique_by_participant_id_trial_id")
             .is_some()
     );
 }

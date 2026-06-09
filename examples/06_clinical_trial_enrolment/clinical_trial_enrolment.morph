@@ -62,9 +62,14 @@ program clinical_trial_enrolment
 -- randomisation record itself. The dates on a version or assessment are
 -- its validity window: the period over which that thing is in force.
 predicate Trial(trial_id: Subject)
+-- One validity window per version - declared on the predicate, so
+-- the past cannot be quietly re-windowed (the worry the old
+-- hand-written invariant carried).
 predicate ProtocolVersion(trial_id: Subject, protocol_version: Subject, effective_from: Date, effective_to: Date)
+    unique by (trial_id, protocol_version)
 predicate ProtocolApprovedBy(protocol_version: Subject, ethics_committee: Subject, approval_id: Subject)
 predicate ConsentFormVersion(trial_id: Subject, consent_form_version: Subject, effective_from: Date, effective_to: Date)
+    unique by (trial_id, consent_form_version)
 predicate ConsentFormApprovedBy(consent_form_version: Subject, ethics_committee: Subject, approval_id: Subject)
 predicate ParticipantScreened(participant_id: Subject, trial_id: Subject, screened_on: Date)
 predicate InformedConsentObtained(participant_id: Subject, trial_id: Subject, consent_form_version: Subject, consented_on: Date, obtained_by: Subject)
@@ -72,7 +77,11 @@ predicate EligibilityCriterion(protocol_version: Subject, criterion_id: Subject,
 predicate EligibilityAssessment(participant_id: Subject, criterion_id: Subject, result: Subject, assessed_on: Date, expires_on: Date)
 predicate DelegatedInvestigator(investigator: Subject, trial_id: Subject, role: Subject, effective_from: Date, effective_to: Date)
 predicate ImportantProtocolDeviationOpen(participant_id: Subject, trial_id: Subject, deviation_id: Subject)
+-- A participant is randomised at most once in a trial: the pair
+-- determines the whole record, which catches the "accidentally
+-- enrolled twice" error without making the windows eternal.
 predicate ParticipantRandomised(participant_id: Subject, trial_id: Subject, protocol_version: Subject, randomised_on: Date, randomised_by: Subject)
+    unique by (participant_id, trial_id)
 
 -- Intents are messages the system sends to the outside world once a
 -- change commits - "a trial opened", "a participant was randomised".
@@ -136,25 +145,6 @@ define eligibility_current_on(participant, version, d):
 
 -- The rules that must always hold. If any change would leave the world
 -- violating one of these, the whole change is rejected at commit.
-
--- A protocol version can have only one validity window. If the same
--- protocol version were allowed two different "from/to" windows, you
--- could quietly change after the fact whether an earlier enrolment fell
--- inside it. Pinning one window per version keeps the past honest.
-invariant at_most_one_protocol_window_per_version:
-    ProtocolVersion(trial, version, from_a, to_a) and ProtocolVersion(trial, version, from_b, to_b) implies (from_a = from_b and to_a = to_b)
-
--- Same rule for consent form versions: one validity window per version.
-invariant at_most_one_consent_window_per_version:
-    ConsentFormVersion(trial, version, from_a, to_a) and ConsentFormVersion(trial, version, from_b, to_b) implies (from_a = from_b and to_a = to_b)
-
--- A participant is randomised at most once in a given trial. Two
--- randomisation records for the same person in the same trial must
--- agree on every detail - same protocol version, same date, same
--- enrolling doctor. This catches the "accidentally enrolled twice"
--- error without making the validity windows themselves eternal.
-invariant participant_randomised_once_per_trial:
-    ParticipantRandomised(p, trial, proto_a, date_a, actor_a) and ParticipantRandomised(p, trial, proto_b, date_b, actor_b) implies (proto_a = proto_b and date_a = date_b and actor_a = actor_b)
 
 -- Consent must come before randomisation. For every randomised
 -- participant there must be a recorded consent whose signing date is

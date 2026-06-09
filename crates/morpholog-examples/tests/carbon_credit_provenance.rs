@@ -148,7 +148,7 @@ fn issue_with_unaccredited_verifier_names_the_missing_accreditation() {
 // ============================================================
 
 #[test]
-fn second_credit_for_the_same_measurement_violates_no_double_issuance() {
+fn second_credit_for_the_same_measurement_violates_issued_unique_by_measurement() {
     let state = State::from_claims(vec![
         claim_instance("Accredited", &[subj("acme_verifier")]),
         claim_instance("VerifiedMeasurement", &[subj("m1"), dec(100)]),
@@ -169,7 +169,7 @@ fn second_credit_for_the_same_measurement_violates_no_double_issuance() {
             explanation.verdict
         );
     };
-    assert_eq!(inv.name, "no_double_issuance");
+    assert_eq!(inv.name, "issued_unique_by_measurement");
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn reissuing_one_credit_against_a_second_measurement_is_an_invariant_rejection()
             explanation.verdict
         );
     };
-    assert_eq!(inv.name, "credit_backed_by_one_measurement");
+    assert_eq!(inv.name, "issued_unique_by_credit");
 }
 
 // ============================================================

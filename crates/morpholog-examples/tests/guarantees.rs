@@ -52,8 +52,8 @@ fn an_implies_invariant_has_no_mechanical_forbidden_state() {
     let gs = guarantees(&cc::program());
     let double = gs
         .iter()
-        .find(|g| g.invariant == "no_double_issuance")
-        .expect("carbon declares no_double_issuance");
+        .find(|g| g.invariant == "issued_unique_by_measurement")
+        .expect("carbon declares issued_unique_by_measurement");
     // An implies-shaped guarantee carries its rule, not a forbids clause.
     assert!(double.forbids.is_none());
     assert!(double.rule.contains("implies"));

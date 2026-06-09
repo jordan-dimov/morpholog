@@ -115,8 +115,8 @@ fn duplicate_policy_id_violates_uniqueness_invariant() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("at_most_one_policy_per_id"),
-        "expected at_most_one_policy_per_id invariant violation, got: {reason}"
+        reason.contains("policy_unique_by_policy_id"),
+        "expected policy_unique_by_policy_id invariant violation, got: {reason}"
     );
 }
 
@@ -164,8 +164,8 @@ fn duplicate_claim_id_violates_uniqueness_invariant() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("at_most_one_claim_report_per_id"),
-        "expected at_most_one_claim_report_per_id invariant violation, got: {reason}"
+        reason.contains("claim_reported_unique_by_claim_id"),
+        "expected claim_reported_unique_by_claim_id invariant violation, got: {reason}"
     );
 }
 
@@ -540,7 +540,7 @@ fn settlement_id_must_be_unique_across_payments() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("settlement_id_uniquely_identifies_payment"),
+        reason.contains("settlement_paid_unique_by_settlement_id"),
         "expected settlement-id uniqueness invariant violation, got: {reason}"
     );
 }

@@ -34,8 +34,8 @@ pub fn definitions() -> Vec<Definition> {
     PROGRAM.definitions.clone()
 }
 
-pub fn no_double_issuance() -> Invariant {
-    crate::invariant(&PROGRAM, "no_double_issuance")
+pub fn issued_unique_by_measurement() -> Invariant {
+    crate::invariant(&PROGRAM, "issued_unique_by_measurement")
 }
 
 pub fn grant_accreditation() -> Transformation {

@@ -204,7 +204,7 @@ fn an_interval_ending_before_it_begins_is_refused() {
 }
 
 #[test]
-fn the_clock_starts_once_per_voyage() {
+fn the_laytime_commenced_unique_by_voyage_per_voyage() {
     let state = commenced_voyage();
     must_reject(
         &lay::commence_laytime(),

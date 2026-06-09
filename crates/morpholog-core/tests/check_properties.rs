@@ -227,7 +227,11 @@ fn arb_decl_args() -> impl Strategy<Value = Vec<ArgDecl>> {
 }
 
 fn arb_pred_decl() -> impl Strategy<Value = PredicateDecl> {
-    (arb_pred_name(), arb_decl_args()).prop_map(|(name, args)| PredicateDecl { name, args })
+    (arb_pred_name(), arb_decl_args()).prop_map(|(name, args)| PredicateDecl {
+        name,
+        args,
+        disciplines: Vec::new(),
+    })
 }
 
 fn arb_intent_decl() -> impl Strategy<Value = IntentDecl> {

@@ -44,7 +44,11 @@ program double_entry_ledger
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
 predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
 predicate PeriodClosed(period: Subject)
+-- Restatement lineage: append only, and a clean chain - an entry is
+-- superseded by at most one successor, declared on the predicate.
 predicate Supersedes(new_entry_id: Subject, prior_entry_id: Subject)
+    unique by (prior_entry_id)
+    append only
 predicate TrialBalanceRow(account: Subject, balance: Decimal)
 
 -- Intents are messages the system sends to the outside world after a
@@ -68,11 +72,6 @@ invariant balanced_posted_entry:
 -- have at least one line.
 invariant journal_entry_has_lines:
     JournalEntry(entry, _, _) implies JournalLine(entry, _, _, _)
-
--- A correction history must stay a clean chain, not a fork: an entry
--- can be superseded by at most one successor.
-invariant at_most_one_direct_successor:
-    Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
 -- The only ways state may change. A transformation proposes a set of

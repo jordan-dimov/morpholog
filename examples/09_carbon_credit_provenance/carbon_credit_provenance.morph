@@ -59,50 +59,41 @@ program carbon_credit_provenance
 -- the verifier attests the admitted measurement claim as a whole,
 -- including its quantity.
 predicate Accredited(verifier: Subject)
+-- A measurement is verified to one quantity, not several - declared
+-- on the predicate, which also keeps the amount a credit inherits
+-- at issuance unambiguous.
 predicate VerifiedMeasurement(measurement: Subject, quantity: Decimal)
+    unique by (measurement)
 predicate Attestation(measurement: Subject, verifier: Subject)
+-- Two declared uniqueness commitments carry the no-double-counting
+-- doctrine: at most one credit per measurement (two credits backed
+-- by one measurement is the canonical double-counting failure), and
+-- one measurement per credit - so credits and measurements line up
+-- one to one.
 predicate Issued(credit: Subject, measurement: Subject, quantity: Decimal)
+    unique by (measurement)
+    unique by (credit)
+-- Custody is a retractable pointer: a credit is in one place at a
+-- time, and a transfer moves the pointer.
 predicate HeldBy(credit: Subject, account: Subject)
+    current pointer by (credit)
 predicate Retired(credit: Subject, account: Subject)
 -- A compliance obligation: `account` must retire `quantity` tonnes of
 -- credits by `due_on`. Its outcome is recorded as satisfied or breached.
+-- An obligation has one set of terms; the discharge and sweep
+-- transformations rely on the lookup being unambiguous.
 predicate Obligation(obligation: Subject, account: Subject, quantity: Decimal, due_on: Date)
+    unique by (obligation)
 predicate ObligationSatisfied(obligation: Subject)
 predicate ObligationBreached(obligation: Subject)
 
 -- The states this model makes impossible, forever.
-
--- A measurement is verified to one quantity, not several. This also
--- keeps the amount a credit inherits at issuance unambiguous.
-invariant at_most_one_verified_quantity_per_measurement:
-    VerifiedMeasurement(m, q1) and VerifiedMeasurement(m, q2) implies q1 = q2
-
--- No double counting: at most one credit may be issued against any one
--- measurement. Two distinct credits backed by the same measurement is the
--- canonical double-counting failure - and it cannot be committed.
-invariant no_double_issuance:
-    Issued(c1, m, q1) and Issued(c2, m, q2) implies c1 = c2
-
--- The converse: a credit is backed by exactly one measurement, and so
--- carries one quantity. With the rule above, credits and measurements
--- line up one to one.
-invariant credit_backed_by_one_measurement:
-    Issued(c, m1, q1) and Issued(c, m2, q2) implies (m1 = m2 and q1 = q2)
-
--- A credit is in one place at a time.
-invariant single_custody:
-    HeldBy(credit, a1) and HeldBy(credit, a2) implies a1 = a2
 
 -- Retirement is terminal: no credit is ever both retired and held.
 -- Retiring a credit retracts its custody, so a retired credit can never
 -- be transferred or retired again.
 invariant retirement_terminal:
     not (Retired(credit, ra) and HeldBy(credit, ha))
-
--- An obligation has at most one set of terms. Pins the lookup the
--- discharge and sweep transformations rely on.
-invariant at_most_one_obligation_per_id:
-    Obligation(o, a1, q1, d1) and Obligation(o, a2, q2, d2) implies (a1 = a2 and q1 = q2 and d1 = d2)
 
 -- An obligation is never both satisfied and breached at once.
 invariant obligation_not_both_satisfied_and_breached:

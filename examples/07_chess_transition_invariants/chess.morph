@@ -50,7 +50,10 @@ program chess_transition_invariants
 -- plus three counters that track the game as a whole: how many moves
 -- have been played, how many pieces remain on the board, and whose turn
 -- it is.
+-- One piece per square, declared on the predicate: the coordinates
+-- determine the occupant.
 predicate PieceAt(file: Decimal, rank: Decimal, piece_type: Subject, color: Subject)
+    unique by (file, rank)
 predicate MoveCount(n: Decimal)
 predicate PieceCount(n: Decimal)
 predicate CurrentTurn(color: Subject)
@@ -66,11 +69,6 @@ intent PieceCaptured(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, ds
 -- looking at one snapshot; none needs to know what the board looked
 -- like a move ago.
 
--- A square holds at most one piece. If two claims put a piece on the
--- same square - the same file and rank - they must be describing the
--- very same piece.
-invariant at_most_one_piece_per_square:
-  (PieceAt(f, r, t_a, c_a) and PieceAt(f, r, t_b, c_b)) implies ((t_a = t_b) and (c_a = c_b))
 
 -- Exactly one king of each colour - always. `sum(1 | PieceAt(_, _,
 -- #king, #white))` counts how many white-king claims are on the board

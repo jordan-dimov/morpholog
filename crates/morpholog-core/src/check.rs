@@ -1544,6 +1544,7 @@ mod tests {
     fn pdecl(name: &str, args: &[(&str, PredicateArgKind)]) -> crate::ir::PredicateDecl {
         crate::ir::PredicateDecl {
             name: name.into(),
+            disciplines: Vec::new(),
             args: args
                 .iter()
                 .map(|(n, k)| ArgDecl {

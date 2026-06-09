@@ -247,6 +247,47 @@ pub enum ValidationError {
     /// *call* in `pre(...)` instead - the context swap applies to the
     /// body's evaluation.
     PreNotAvailable { context: ValidationContext },
+    /// A discipline clause names a field its predicate does not have.
+    DisciplineUnknownField { predicate: String, field: String },
+    /// A `unique by` / `current pointer by` clause whose key set leaves
+    /// nothing to determine: zero fields, or every field a key (claims
+    /// are a set - two identical claims are already one claim).
+    DisciplineVacuousKeys { predicate: String },
+    /// The same discipline clause declared twice on one predicate.
+    DisciplineDuplicateClause { predicate: String },
+    /// `append only` and `current pointer by` on the same predicate: a
+    /// current pointer must be retractable to move, which is the exact
+    /// opposite commitment.
+    DisciplinePointerCannotBeAppendOnly { predicate: String },
+    /// A `superseded via` clause whose lineage predicate cannot carry
+    /// the supersession chain: undeclared, not exactly two arguments
+    /// in the `(successor, prior)` convention, or itself declared a
+    /// current pointer.
+    DisciplineLineageUnfit {
+        pointer: String,
+        lineage: String,
+        reason: String,
+    },
+    /// `superseded via` on a predicate that is not declared a current
+    /// pointer: supersession history is the pointer's history, so the
+    /// clause would be a dangling doctrine phrase anywhere else.
+    DisciplineSupersededWithoutPointer { predicate: String },
+    /// A transformation retracts a predicate that is append-only
+    /// (declared, or the lineage of a `superseded via`). Ordinary
+    /// programmes correct append-only claims by supersession or
+    /// exception claims, never retraction.
+    RetractsAppendOnly {
+        predicate: String,
+        context: ValidationContext,
+    },
+    /// A discipline that lowers to a generated invariant has no such
+    /// invariant in the programme: the IR was hand-built and
+    /// `lower_disciplines` was never run (the parser runs it), so the
+    /// declared commitment would be silently unenforced.
+    DisciplineNotLowered {
+        predicate: String,
+        invariant: String,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -393,6 +434,60 @@ impl std::fmt::Display for ValidationError {
                  and carry no pre-state; wrap the call in pre(...) at the use \
                  site instead"
             ),
+            ValidationError::DisciplineUnknownField { predicate, field } => write!(
+                f,
+                "a discipline on predicate `{predicate}` names field `{field}`, \
+                 which the declaration does not have"
+            ),
+            ValidationError::DisciplineVacuousKeys { predicate } => write!(
+                f,
+                "a uniqueness discipline on `{predicate}` needs at least one key \
+                 field and at least one field for the keys to determine; keying \
+                 every field adds nothing, because claims are a set and two \
+                 identical claims are already one claim"
+            ),
+            ValidationError::DisciplineDuplicateClause { predicate } => write!(
+                f,
+                "predicate `{predicate}` declares the same discipline clause twice"
+            ),
+            ValidationError::DisciplinePointerCannotBeAppendOnly { predicate } => write!(
+                f,
+                "`{predicate}` is declared both `append only` and `current \
+                 pointer`; a pointer must be retractable to move, which is the \
+                 opposite commitment - drop one"
+            ),
+            ValidationError::DisciplineLineageUnfit {
+                pointer,
+                lineage,
+                reason,
+            } => write!(
+                f,
+                "`superseded via {lineage}` on `{pointer}`: {reason} (a lineage \
+                 predicate has exactly two arguments, successor then prior, and \
+                 is not itself a pointer)"
+            ),
+            ValidationError::DisciplineSupersededWithoutPointer { predicate } => write!(
+                f,
+                "`superseded via` on `{predicate}`, which is not declared \
+                 `current pointer by (...)`; supersession history is the \
+                 pointer's history - declare the pointer, or drop the clause"
+            ),
+            ValidationError::RetractsAppendOnly { predicate, context } => write!(
+                f,
+                "{context} retracts `{predicate}`, which is append only; \
+                 corrections are admitted as supersessions or exception \
+                 claims, never by retracting the record"
+            ),
+            ValidationError::DisciplineNotLowered {
+                predicate,
+                invariant,
+            } => write!(
+                f,
+                "a discipline on `{predicate}` implies the generated invariant \
+                 `{invariant}`, which this programme does not carry; run \
+                 `lower_disciplines` before validating (the parser does this) \
+                 so the declared commitment is actually enforced"
+            ),
         }
     }
 }
@@ -425,6 +520,7 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
         Ok(order) => order,
         Err(names) => {
             let mut errors = collect_duplicate_decl_errors(p);
+            errors.extend(collect_discipline_errors(p));
             errors.push(ValidationError::DefinitionCycle { names });
             return Err(errors);
         }
@@ -455,6 +551,7 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
         return Err(depth_errors);
     }
     let mut errors = collect_duplicate_decl_errors(p);
+    errors.extend(collect_discipline_errors(p));
     errors.extend(crate::check::check_program(p));
     if errors.is_empty() {
         Ok(())
@@ -773,6 +870,168 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     }
 
     errors
+}
+
+/// Name-level checks for declared disciplines, plus the static ban on
+/// retracting append-only predicates. Lowering (`lower_disciplines`)
+/// skips any clause flagged here; this pass owns the diagnostics.
+fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
+    use crate::ir::Discipline;
+
+    let mut errors = Vec::new();
+    for decl in &p.predicates {
+        // Duplicate detection compares clauses under a canonical key:
+        // a uniqueness key is a SET, so `unique by (a, b)` and
+        // `unique by (b, a)` are the same commitment (full agreement
+        // does not depend on field order) and declaring both would
+        // generate two same-meaning invariants under different names.
+        let canonical = |d: &Discipline| match d {
+            Discipline::UniqueBy { fields } => {
+                let mut fields = fields.clone();
+                fields.sort_unstable();
+                Discipline::UniqueBy { fields }
+            }
+            Discipline::CurrentPointerBy { fields } => {
+                let mut fields = fields.clone();
+                fields.sort_unstable();
+                Discipline::CurrentPointerBy { fields }
+            }
+            other => other.clone(),
+        };
+        let canonical_clauses: Vec<Discipline> = decl.disciplines.iter().map(canonical).collect();
+        for (i, d) in canonical_clauses.iter().enumerate() {
+            if canonical_clauses[..i].contains(d) {
+                errors.push(ValidationError::DisciplineDuplicateClause {
+                    predicate: decl.name.to_string(),
+                });
+            }
+        }
+        let is_pointer = decl
+            .disciplines
+            .iter()
+            .any(|d| matches!(d, Discipline::CurrentPointerBy { .. }));
+        let is_append_only = decl
+            .disciplines
+            .iter()
+            .any(|d| matches!(d, Discipline::AppendOnly));
+        let has_superseded = decl
+            .disciplines
+            .iter()
+            .any(|d| matches!(d, Discipline::SupersededVia { .. }));
+        if is_pointer && is_append_only {
+            errors.push(ValidationError::DisciplinePointerCannotBeAppendOnly {
+                predicate: decl.name.to_string(),
+            });
+        }
+        if has_superseded && !is_pointer {
+            errors.push(ValidationError::DisciplineSupersededWithoutPointer {
+                predicate: decl.name.to_string(),
+            });
+        }
+        for d in &decl.disciplines {
+            match d {
+                Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
+                    let mut all_known = true;
+                    for field in fields {
+                        if !decl.args.iter().any(|a| a.name == *field) {
+                            all_known = false;
+                            errors.push(ValidationError::DisciplineUnknownField {
+                                predicate: decl.name.to_string(),
+                                field: field.clone(),
+                            });
+                        }
+                    }
+                    let keys_everything =
+                        all_known && decl.args.iter().all(|a| fields.contains(&a.name));
+                    if fields.is_empty() || keys_everything {
+                        errors.push(ValidationError::DisciplineVacuousKeys {
+                            predicate: decl.name.to_string(),
+                        });
+                    }
+                }
+                Discipline::AppendOnly => {}
+                Discipline::SupersededVia { lineage } => {
+                    let reason = match p.predicates.iter().find(|l| l.name == *lineage) {
+                        None => Some("it is not a declared predicate".to_string()),
+                        Some(l) if l.args.len() != 2 => {
+                            Some(format!("it has {} argument(s)", l.args.len()))
+                        }
+                        Some(l)
+                            if l.disciplines
+                                .iter()
+                                .any(|d| matches!(d, Discipline::CurrentPointerBy { .. })) =>
+                        {
+                            Some("it is itself a current pointer".to_string())
+                        }
+                        Some(_) => None,
+                    };
+                    if let Some(reason) = reason {
+                        errors.push(ValidationError::DisciplineLineageUnfit {
+                            pointer: decl.name.to_string(),
+                            lineage: lineage.to_string(),
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for (predicate, invariant) in crate::disciplines::expected_generated_invariants(p) {
+        let lowered = p.invariants.iter().any(|inv| {
+            inv.name.as_str() == invariant && inv.origin == crate::ir::InvariantOrigin::Discipline
+        });
+        if !lowered {
+            errors.push(ValidationError::DisciplineNotLowered {
+                predicate: predicate.to_string(),
+                invariant,
+            });
+        }
+    }
+
+    let append_only = crate::disciplines::append_only_predicates(p);
+    if !append_only.is_empty() {
+        for t in &p.transformations {
+            let context = ValidationContext::Transformation {
+                name: t.name.to_string(),
+            };
+            for stmt in &t.body {
+                collect_retract_bans(stmt, &append_only, &context, &mut errors);
+            }
+        }
+    }
+    errors
+}
+
+/// Recursive worker for the append-only retract ban: a `retract` of a
+/// protected predicate anywhere in a body, including nested `for`s.
+fn collect_retract_bans(
+    stmt: &Stmt,
+    append_only: &std::collections::BTreeSet<crate::ir::PredicateName>,
+    context: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    match stmt {
+        Stmt::Retract { predicate, .. } => {
+            if append_only.contains(predicate) {
+                errors.push(ValidationError::RetractsAppendOnly {
+                    predicate: predicate.to_string(),
+                    context: context.clone(),
+                });
+            }
+        }
+        Stmt::For { body, .. } => {
+            for inner in body {
+                collect_retract_bans(inner, append_only, context, errors);
+            }
+        }
+        Stmt::Require(_)
+        | Stmt::BindOne(_)
+        | Stmt::Let { .. }
+        | Stmt::LetNewSubject { .. }
+        | Stmt::Assert(_)
+        | Stmt::Emit(_) => {}
+    }
 }
 
 #[cfg(test)]

@@ -203,3 +203,17 @@ What is deliberately left open, pending the worked example that forces the shape
 - **Result schema generation (a `morpholog schema --result` mode).** The outcome envelope is uniform across transformations, so a documented spec covers it. Auto-generation waits for a real consumer that needs to discriminate dynamically.
 
 The discipline is the same as the rest of Morpholog: ship the contract that an example forces, leave the rest open.
+
+## Disciplines on the manifest (additive)
+
+A predicate declaration may carry claim disciplines (`unique by`,
+`append only`, `current pointer by`, `superseded via`; see
+[`runtime-semantics.md`](runtime-semantics.md)). They appear in
+`schema --all` and `inspect predicates` as an additional `disciplines`
+array on the predicate object, serialised only when present - a
+programme without disciplines produces byte-identical output to
+before the field existed, so existing consumers are unaffected. The
+field is informative for embedders (the enforcement happens inside
+Morpholog, as generated invariants and authoring-time checks); a
+client that surfaces it should treat unknown discipline tags as
+opaque.

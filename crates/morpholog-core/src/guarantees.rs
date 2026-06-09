@@ -34,12 +34,20 @@ pub struct Guarantee {
     /// `implies`, a comparator); the `rule` still carries the guarantee.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forbids: Option<String>,
+    /// For a discipline-generated invariant, the declaration clause
+    /// that implied it ("predicate CurrentFigure, current pointer by
+    /// (owner)") - so the generated name in a rejection or audit row
+    /// traces back to its source in one hop. `None` for authored
+    /// invariants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// Derive the guarantees a programme makes from its declared invariants,
 /// in declaration order. Pure and mechanical: one [`Guarantee`] per
 /// invariant.
 pub fn guarantees(program: &Program) -> Vec<Guarantee> {
+    let provenance = crate::disciplines::discipline_provenance(program);
     program
         .invariants
         .iter()
@@ -52,6 +60,7 @@ pub fn guarantees(program: &Program) -> Vec<Guarantee> {
                 Prop::Not(inner) => Some(format::format_prop_inline(inner)),
                 _ => None,
             },
+            from: provenance.get(inv.name.as_str()).cloned(),
         })
         .collect()
 }
@@ -69,6 +78,9 @@ pub fn render_guarantees(program_name: &str, guarantees: &[Guarantee]) -> String
         out.push_str(&format!("\n  {}\n    rule: {}\n", g.invariant, g.rule));
         if let Some(forbids) = &g.forbids {
             out.push_str(&format!("    forbids: {forbids}\n"));
+        }
+        if let Some(from) = &g.from {
+            out.push_str(&format!("    from: {from}\n"));
         }
     }
     // No trailing newline; callers add their own.

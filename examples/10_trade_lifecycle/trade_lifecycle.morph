@@ -80,16 +80,55 @@ program trade_lifecycle
 -- `TradeSettled` records one settlement slice - its quantity, the
 -- official price id it relied on, and the business date it is effective
 -- on (not the date it was recorded).
+-- The trade id identifies one captured trade - declared on the
+-- predicate, so the structural uniqueness behind the trade's identity
+-- is a commitment the declaration itself carries.
 predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject)
+    unique by (trade)
+-- Two uniqueness commitments on the terms record. The version id
+-- identifies one record outright (version ids carry the amendment
+-- lineage, so they must be unambiguous). And one trade has at most one
+-- version per effective date - in the strong form: the date determines
+-- the whole version. (The earlier hand-written rule pinned only the
+-- version id on a tied date; under the declared discipline a tie would
+-- have to agree on every field, which two distinct amendments cannot -
+-- so an amendment must take a distinct effective date, exactly as the
+-- latest-effective lookup below relies on. A same-date *correction*
+-- would need a supersession tiebreak, the way the official price does;
+-- that is a separate move.)
 predicate TradeTerms(trade: Subject, version_id: Subject, quantity: Decimal, delivery_period: Subject, effective_from: Date)
+    unique by (version_id)
+    unique by (trade, effective_from)
+-- Amendment lineage: append only (history is never rewritten), and a
+-- clean chain - one prior version has at most one direct successor,
+-- so the history can never fork.
 predicate TradeTermsSupersedes(new_version_id: Subject, prior_version_id: Subject)
+    unique by (prior_version_id)
+    append only
 predicate CapturedPrice(trade: Subject, price: Decimal)
 predicate MayConfirm(principal: Subject, commodity: Subject)
 predicate TradeConfirmed(trade: Subject, counterparty: Subject, confirmation_id: Subject, confirmed_by: Subject)
+-- The official price figures are the restatement pattern's immutable
+-- half: each id names one figure, and no transformation may retract
+-- one - corrections move the pointer below and record lineage,
+-- leaving every prior figure standing.
 predicate OfficialPrice(trade: Subject, price: Decimal, official_price_id: Subject)
+    unique by (official_price_id)
+    append only
+-- The retractable half: the pointer naming which figure is in force.
+-- Declaring it a current pointer gives the singleton rule (one price
+-- in force per trade); naming its lineage gives the no-fork rule on
+-- the supersession chain and makes the chain itself append only.
 predicate CurrentOfficialPrice(trade: Subject, official_price_id: Subject)
+    current pointer by (trade)
+    superseded via OfficialPriceSupersedes
 predicate OfficialPriceSupersedes(new_official_price_id: Subject, prior_official_price_id: Subject)
+-- A settlement id names one settlement slice. The settle gate already
+-- refuses to reuse an id on the ordinary path; the declared
+-- uniqueness is the backstop for any other path, keeping the
+-- cumulative cap honest.
 predicate TradeSettled(trade: Subject, settled_qty: Decimal, settlement_id: Subject, official_price_id: Subject, effective_on: Date)
+    unique by (settlement_id)
 -- The read-side projection (defined by the `derived` block at the foot of
 -- the file): one row per terms version, keyed by its identity and
 -- effective date, carrying the quantity in force from that date.
@@ -133,62 +172,21 @@ define terms_in_force_on(trade, d, qty):
 invariant current_official_price_has_a_figure:
     CurrentOfficialPrice(trade, official_price_id) implies OfficialPrice(trade, _, official_price_id)
 
--- There is exactly one official price in force at a time for a trade.
-invariant at_most_one_current_official_price:
-    CurrentOfficialPrice(trade, a) and CurrentOfficialPrice(trade, b) implies a = b
-
--- An official price id identifies one figure: two OfficialPrice claims
--- sharing the id must agree on the trade and the price.
-invariant official_price_id_identifies_one_figure:
-    OfficialPrice(trade_a, price_a, opid) and OfficialPrice(trade_b, price_b, opid) implies (trade_a = trade_b and price_a = price_b)
-
 -- An official price always belongs to a trade that was actually
 -- captured.
 invariant official_price_has_captured_trade:
     OfficialPrice(trade, _, _) implies TradeCaptured(trade, _, _)
-
--- The price-correction history stays a clean chain, never a fork: an
--- official price figure can be superseded by at most one direct
--- successor.
-invariant official_price_chain_no_fork:
-    OfficialPriceSupersedes(new_a, old) and OfficialPriceSupersedes(new_b, old) implies new_a = new_b
-
--- A trade id identifies one captured trade: two TradeCaptured claims
--- sharing the id must agree on commodity and direction. This pins the
--- structural uniqueness behind the trade's identity.
-invariant at_most_one_capture_per_trade:
-    TradeCaptured(trade, commodity_a, direction_a) and TradeCaptured(trade, commodity_b, direction_b) implies (commodity_a = commodity_b and direction_a = direction_b)
 
 -- Every terms version belongs to a trade that was actually captured -
 -- the same provenance discipline the official price obeys.
 invariant terms_belong_to_captured_trade:
     TradeTerms(trade, _, _, _, _) implies TradeCaptured(trade, _, _)
 
--- A terms version id identifies one terms record: two TradeTerms claims
--- sharing the version id must agree on every field. Version ids carry
--- the amendment lineage, so they must be unambiguous.
-invariant terms_version_id_identifies_one_record:
-    TradeTerms(trade_a, v, qty_a, period_a, ef_a) and TradeTerms(trade_b, v, qty_b, period_b, ef_b) implies (trade_a = trade_b and qty_a = qty_b and period_a = period_b and ef_a = ef_b)
-
 -- A terms quantity is a positive figure. A trade for zero or a negative
 -- quantity is not a trade; forbidding it keeps the effective cap, which
 -- sums signed quantities, honest about what it is bounding.
 invariant trade_terms_quantity_is_positive:
     TradeTerms(_, _, qty, _, _) implies qty > 0
-
--- At most one terms version per effective date for a trade. Two versions
--- tied on the same effective date would make "the quantity effective on
--- that date" ambiguous, and the latest-effective lookup below relies on
--- it being a single number - so an amendment must take a distinct
--- effective date. (A same-date *correction* would need a supersession
--- tiebreak, the way the official price does; that is a separate move.)
-invariant one_terms_version_per_effective_date:
-    TradeTerms(trade, v_a, _, _, ef) and TradeTerms(trade, v_b, _, _, ef) implies v_a = v_b
-
--- The terms-amendment history stays a clean chain, never a fork: a terms
--- version can be superseded by at most one direct successor.
-invariant trade_terms_chain_no_fork:
-    TradeTermsSupersedes(new_a, old) and TradeTermsSupersedes(new_b, old) implies new_a = new_b
 
 -- The quantitative rule at the heart of settlement, now on the effective
 -- axis. A trade settles in slices, each effective on a business date. For
@@ -212,13 +210,6 @@ invariant settled_within_effective_terms:
 -- other path, so the effective cap is never vacuous for a real slice.
 invariant settled_date_has_effective_terms:
     TradeSettled(trade, _, _, _, d) implies (exists ef: TradeTerms(trade, _, _, _, ef) and ef on_or_before d)
-
--- A settlement id names one settlement slice: two TradeSettled claims
--- sharing the id must agree on every field. The settle gate already
--- refuses to reuse an id by the ordinary path; this is the backstop for
--- any other path, keeping the cumulative sum above honest.
-invariant settlement_id_identifies_one_settlement:
-    TradeSettled(trade_a, qty_a, sid, opid_a, eff_a) and TradeSettled(trade_b, qty_b, sid, opid_b, eff_b) implies (trade_a = trade_b and qty_a = qty_b and opid_a = opid_b and eff_a = eff_b)
 
 -- A settled quantity is a positive figure. A "slice" of zero or a
 -- negative amount is not a settlement; forbidding it stops a negative

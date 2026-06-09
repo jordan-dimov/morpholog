@@ -88,6 +88,12 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # The same rust-lld memory cap the coverage job carries: linking
+      # the workspace's test binaries peaks hard enough that lld's
+      # parallelFor intermittently SIGBUSes on the hosted runner (it
+      # took out a pg-17 run while pg-18 sailed through). Serialising
+      # lld bounds peak memory at a modest link-time cost.
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
 
     steps:
       - uses: actions/checkout@v5

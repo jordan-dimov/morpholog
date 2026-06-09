@@ -351,7 +351,7 @@ fn amending_an_already_amended_version_is_rejected() {
 fn two_versions_on_the_same_effective_date_are_rejected() {
     // Amendments must take distinct effective dates: a second version
     // effective 2026-01-15 (tv1's date) violates
-    // one_terms_version_per_effective_date.
+    // trade_terms_unique_by_trade_effective_from.
     let pre = grant(captured(100), "mo", "power");
     let outcome = propose_as(
         &trade_lifecycle::amend_trade_terms(),
@@ -371,7 +371,7 @@ fn two_versions_on_the_same_effective_date_are_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("one_terms_version_per_effective_date"),
+            reason.contains("trade_terms_unique_by_trade_effective_from"),
             "expected the per-effective-date uniqueness invariant, got: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("two versions on one effective date must be rejected"),
@@ -382,7 +382,7 @@ fn two_versions_on_the_same_effective_date_are_rejected() {
 fn reusing_a_version_id_for_a_different_record_is_rejected() {
     // tv1 already names (t1, 100, cal26, 2026-01-15). Amending with tv1 as
     // the *new* version id would make tv1 name a second, conflicting record
-    // - terms_version_id_identifies_one_record refuses it.
+    // - trade_terms_unique_by_version_id refuses it.
     let pre = grant(captured(100), "mo", "power");
     let outcome = propose_as(
         &trade_lifecycle::amend_trade_terms(),
@@ -402,7 +402,7 @@ fn reusing_a_version_id_for_a_different_record_is_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("terms_version_id_identifies_one_record"),
+            reason.contains("trade_terms_unique_by_version_id"),
             "expected the version-id uniqueness invariant, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -481,7 +481,7 @@ fn correct_by_actor_authorised_for_a_different_commodity_is_rejected() {
 fn reusing_an_official_price_id_across_figures_is_rejected() {
     // `op1` names trade `t1`'s official price. A different trade may not
     // reuse `op1` for its own figure - an official price id identifies one
-    // figure (official_price_id_identifies_one_figure).
+    // figure (official_price_unique_by_official_price_id).
     let mut state = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     state = must_accept(
         &trade_lifecycle::capture_trade(),
@@ -783,7 +783,7 @@ fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
 fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
     // The path the settle gate cannot see: a single transformation
     // admitting two TradeSettled with the same id but different quantities.
-    // settlement_id_identifies_one_settlement is the backstop that refuses
+    // trade_settled_unique_by_settlement_id is the backstop that refuses
     // it, keeping the cumulative sum honest against hand-constructed state.
     use morpholog_core::ir_builder;
 
@@ -824,7 +824,7 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("settlement_id_identifies_one_settlement"),
+            reason.contains("trade_settled_unique_by_settlement_id"),
             "expected the id-uniqueness invariant to reject conflicting tuples, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
