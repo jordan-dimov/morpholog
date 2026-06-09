@@ -110,7 +110,7 @@ fn admit_then_correct_preserves_history_and_moves_pointer() {
 
 #[test]
 fn cannot_correct_already_superseded_verification() {
-    // The at_most_one_direct_successor invariant + the require in
+    // The supersedes_unique_by_prior_verification_id invariant + the require in
     // correct_independent_verification together prevent parallel
     // restatement chains.
     let pre = admit_iv(State::default(), 91, "ver_001");

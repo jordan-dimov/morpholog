@@ -48,13 +48,36 @@ program biometric_identification_oversight
 -- reference database checked, the match the search produced, the
 -- humans who verified it, and the decision that followed.
 predicate DeployedSystem(system: Subject, deployer: Subject)
+-- One service window per version - declared on the predicate: two
+-- windows would mean two competing answers to "was this version
+-- assessed when it ran?".
 predicate VersionInService(system: Subject, version: Subject, in_service_from: Timestamp, in_service_to: Timestamp)
+    unique by (system, version)
 predicate OversightAssigned(person: Subject, system: Subject)
 predicate UseStarted(use: Subject, system: Subject, version: Subject, reference_db: Subject, started_at: Timestamp)
 predicate UseEnded(use: Subject, ended_at: Timestamp)
+    unique by (use)
+-- The statutory records are append only, and the model now SAYS so:
+-- no transformation can retract a recorded match, a verification, or
+-- a decision. The runtime refuses the retract statement at authoring
+-- time, so the permanence the two-person rule below leans on is a
+-- declared, machine-checked commitment - not a comment.
 predicate MatchRecorded(match: Subject, use: Subject, input_ref: Subject, candidate: Subject, matched_at: Timestamp)
+    append only
+-- One verification record per verifier per match: the same person
+-- confirming twice is one voice, not two - without this, the
+-- two-person rule could be satisfied by one enthusiastic colleague.
 predicate MatchVerified(match: Subject, verifier: Subject, verified_at: Timestamp)
+    unique by (match, verifier)
+    append only
+-- One decision per match, in the strong form: the match determines
+-- the whole decision record - id, outcome, moment, decider. (The
+-- earlier hand-written rule pinned only the id; an id carrying two
+-- outcomes is a state no record should hold, so declaring the
+-- discipline deliberately strengthens the model.)
 predicate IdentificationDecision(decision: Subject, match: Subject, outcome: Subject, decided_at: Timestamp, decided_by: Subject)
+    unique by (match)
+    append only
 
 -- Article 12(3)(a) asks for the period of each use - start and end
 -- date and time. Derived, never stored: the period is computed from
@@ -85,11 +108,6 @@ define two_distinct_prior_verifications(match, moment):
 -- The bookkeeping truths. If any change would leave the record
 -- violating one of these, the whole change is rejected.
 
--- One service window per version. Two windows would mean two
--- competing answers to "was this version assessed when it ran?".
-invariant one_window_per_version:
-    VersionInService(s, v, fa, ta) and VersionInService(s, v, fb, tb) implies (fa = fb and ta = tb)
-
 -- A match belongs inside its use: never before the use started.
 invariant match_after_use_start:
     MatchRecorded(m, u, _, _, at) implies (UseStarted(u, _, _, _, started) and started at_or_before at)
@@ -102,16 +120,6 @@ invariant match_after_use_start:
 invariant use_cannot_end_before_its_matches:
     MatchRecorded(m, u, _, _, at) and UseEnded(u, ended) implies at at_or_before ended
 
-invariant use_ends_once:
-    UseEnded(u, a) and UseEnded(u, b) implies a = b
-
--- One verification record per verifier per match. The same person
--- confirming twice is one voice, not two; without this, the
--- two-person rule below could be satisfied by one enthusiastic
--- colleague.
-invariant one_verification_per_verifier_per_match:
-    MatchVerified(m, p, a) and MatchVerified(m, p, b) implies a = b
-
 -- Article 14(5), as a permanent property of the record: every
 -- decision rests on at least two verifications by distinct people,
 -- both of which happened at or before the decision. The "before"
@@ -119,18 +127,14 @@ invariant one_verification_per_verifier_per_match:
 -- action, not merely that two verification records exist by the time
 -- someone files the decision. The condition itself is declared once
 -- above; this rule holds it over all admitted state, forever. That is
--- safe as an invariant (not just a gate) because verification
--- records are append-only in this model: nothing retracts them, so a
--- decision admitted under two prior verifications keeps them forever.
--- The *authority* check lives in the gates below, never here - so
+-- safe as an invariant (not just a gate) because verification records
+-- are DECLARED append only on the predicate itself: the runtime
+-- refuses any transformation that would retract one, so a decision
+-- admitted under two prior verifications keeps them forever. The
+-- *authority* check lives in the gates below, never here - so
 -- revoking an overseer never reaches back into history.
 invariant decision_rests_on_two_distinct_prior_verifications:
     IdentificationDecision(d, m, _, decided_at, _) implies two_distinct_prior_verifications(m, decided_at)
-
--- One decision per match. A second decision on the same
--- identification would be a competing account of what was done.
-invariant one_decision_per_match:
-    IdentificationDecision(a, m, _, _, _) and IdentificationDecision(b, m, _, _, _) implies a = b
 
 -- The only ways the record may change. Gates police the moment of
 -- each action; the records then stand on their own.

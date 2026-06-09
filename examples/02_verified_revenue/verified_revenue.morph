@@ -58,18 +58,28 @@
 program verified_revenue
 
 -- The vocabulary. Each `predicate` names a kind of claim this world can
--- hold. Some are append-only records (the figures, the grants, the
--- revocations, the decisions) - history is never rewritten. Others are
--- retractable pointers that move as the world changes (which figure is
--- current, which permissions are live).
+-- hold, and now SAYS which kind it is. Some are append-only records
+-- (the figures, the grants, the revocations, the decisions) - history
+-- is never rewritten, and `append only` makes the runtime refuse any
+-- transformation that would try. Others are retractable pointers that
+-- move as the world changes; `current pointer by` declares the
+-- singleton ("one figure in force per asset and period") and
+-- `superseded via` names the lineage chain, which can then never fork.
 predicate IndependentlyVerifiedRevenue(asset: Subject, period: Subject, amount: Decimal, verification_id: Subject)
+    append only
 predicate CurrentVerification(asset: Subject, period: Subject, verification_id: Subject)
+    current pointer by (asset, period)
+    superseded via Supersedes
 predicate Supersedes(new_verification_id: Subject, prior_verification_id: Subject)
 predicate StandingGrantedBy(verification_id: Subject, purpose: Subject, authority: Subject, grant_id: Subject)
+    append only
 predicate AdmissibleFor(verification_id: Subject, purpose: Subject)
 predicate StandingRevoked(verification_id: Subject, purpose: Subject, revocation_id: Subject)
+    append only
 predicate DebtServiceRevenue(asset: Subject, period: Subject, amount: Decimal, decision_id: Subject, verification_id: Subject)
+    append only
 predicate InvestorReportedRevenue(asset: Subject, period: Subject, amount: Decimal, report_id: Subject, verification_id: Subject)
+    append only
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits - a figure was verified, a figure was corrected, a
@@ -100,19 +110,6 @@ invariant admissibility_has_provenance:
 -- must be gone.
 invariant admissibility_excludes_revocation:
     AdmissibleFor(v, p) implies not (exists r: StandingRevoked(v, p, r))
-
-
--- There is exactly one figure in force at a time for a given asset and
--- period. The "current" pointer is a singleton: two different current
--- verifications for the same asset and period cannot coexist.
-invariant at_most_one_current_verification_per_asset_period:
-    CurrentVerification(asset, period, a) and CurrentVerification(asset, period, b) implies a = b
-
-
--- The correction history stays a clean chain, never a fork: a figure can
--- be superseded by at most one direct successor.
-invariant at_most_one_direct_successor:
-    Supersedes(new_a, old) and Supersedes(new_b, old) implies new_a = new_b
 
 
 

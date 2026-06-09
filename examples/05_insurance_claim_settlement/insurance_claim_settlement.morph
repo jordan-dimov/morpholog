@@ -58,17 +58,27 @@ program insurance_claim_settlement
 -- are the durable record: what was reported, who authorised what, and
 -- what was paid. `PolicyLimitUsage` is a read-only reporting view (see
 -- the bottom of the file).
+-- The uniqueness each unique-lookup gate depends on is declared on
+-- the predicates themselves: one policy per id, one report per claim
+-- id, one headroom counter per policy, one payment per settlement id,
+-- one set of coverage terms per policy. The runtime enforces each as
+-- a generated invariant you can read in `inspect guarantees`.
 predicate Policy(policy_id: Subject, aggregate_limit: Decimal)
+    unique by (policy_id)
 predicate ClaimReported(claim_id: Subject, policy_id: Subject, claimed_amount: Decimal)
+    unique by (claim_id)
 predicate SettlementAuthority(actor: Subject, limit: Decimal)
 predicate SettlementAuthorised(claim_id: Subject, settlement_id: Subject, amount: Decimal, actor: Subject)
 predicate SettlementPaid(policy_id: Subject, claim_id: Subject, settlement_id: Subject, amount: Decimal)
+    unique by (settlement_id)
 predicate PolicyHeadroom(policy_id: Subject, remaining: Decimal)
+    unique by (policy_id)
 predicate PolicyLimitUsage(policy_id: Subject, used: Decimal)
 -- An optional per-claim layer that sits inside the aggregate cap: a
 -- deductible the insured bears, and a per-claim limit. When set, a claim
 -- pays the loss above the deductible, capped at the per-claim limit.
 predicate CoverageTerms(policy_id: Subject, deductible: Decimal, per_claim_limit: Decimal)
+    unique by (policy_id)
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits - a policy was issued, a claim reported, a payment
@@ -97,26 +107,6 @@ invariant paid_implies_authorised:
 invariant paid_implies_headroom:
     SettlementPaid(p, _, _, _) implies (exists r: PolicyHeadroom(p, r))
 
--- A policy id identifies one policy: two Policy claims sharing the id
--- must agree on every field. Pins the structural uniqueness the
--- unique-lookup gates depend on.
-invariant at_most_one_policy_per_id:
-    Policy(policy, a) and Policy(policy, b) implies a = b
-
--- The same for a reported claim: one claim id, one set of terms.
-invariant at_most_one_claim_report_per_id:
-    ClaimReported(c, policy_a, amount_a) and ClaimReported(c, policy_b, amount_b) implies (policy_a = policy_b and amount_a = amount_b)
-
--- A policy has at most one headroom counter at a time. Two competing
--- values would mean two different answers to "how much is left?".
-invariant at_most_one_headroom_per_policy:
-    PolicyHeadroom(policy, a) and PolicyHeadroom(policy, b) implies a = b
-
--- A settlement id identifies one payment: two SettlementPaid claims
--- sharing the settlement id must agree on policy, claim, and amount.
-invariant settlement_id_uniquely_identifies_payment:
-    SettlementPaid(policy_a, claim_a, s, amount_a) and SettlementPaid(policy_b, claim_b, s, amount_b) implies (policy_a = policy_b and claim_a = claim_b and amount_a = amount_b)
-
 -- The conservation law. This is the rule that compares the policy's
 -- state *before* a transaction to its state after: the headroom must go
 -- down by exactly the total of the payments newly admitted in that same
@@ -143,11 +133,6 @@ invariant settlement_within_eligible_payout:
     and ClaimReported(claim_id, policy_id, loss)
     and CoverageTerms(policy_id, deductible, per_claim_limit)
     implies amount <= min(per_claim_limit, max(0, loss - deductible))
-
--- A policy has at most one set of coverage terms; two competing sets
--- would make the eligible-payout rule ambiguous.
-invariant at_most_one_coverage_terms_per_policy:
-    CoverageTerms(p, ded_a, lim_a) and CoverageTerms(p, ded_b, lim_b) implies (ded_a = ded_b and lim_a = lim_b)
 
 -- Coverage terms must make business sense: a deductible is non-negative
 -- (zero means no deductible), and a per-claim limit is strictly positive

@@ -41,7 +41,7 @@ fn program_has_expected_invariant_set() {
     assert_eq!(
         names,
         vec![
-            "at_most_one_piece_per_square",
+            "piece_at_unique_by_file_rank",
             "exactly_one_white_king",
             "exactly_one_black_king",
             "bishops_on_opposite_square_colors",

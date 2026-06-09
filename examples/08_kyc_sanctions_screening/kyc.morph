@@ -46,7 +46,12 @@ program kyc_sanctions_screening
 predicate Customer(customer_id: Subject)
 predicate Screening(screening_id: Subject, customer: Subject, list_type: Subject, requested_on: Date)
 predicate ScreeningResult(screening_id: Subject, disposition: Subject, completed_on: Date, expires_on: Date)
+-- The retractable pointer naming which screening counts right now,
+-- one per customer and list: a fresh screening takes over as
+-- current and the old pointer is removed, so there is never any
+-- doubt about which result is in force.
 predicate CurrentScreening(customer: Subject, list_type: Subject, screening_id: Subject)
+    current pointer by (customer, list_type)
 predicate MatchUnderReview(screening_id: Subject, raised_on: Date)
 predicate MatchAdjudicated(screening_id: Subject)
 predicate OnboardedCustomer(customer: Subject, onboarded_on: Date)
@@ -67,13 +72,6 @@ intent CustomerRejected(customer: Subject, reason: Subject)
 
 -- The rules that must always hold. If any change would leave the world
 -- violating one of these, the whole change is rejected at commit.
-
--- For each customer and each list, only one screening can be the
--- "current" one at a time. When a fresh screening arrives it takes over
--- as current and the old pointer is removed, so there is never any doubt
--- about which result counts right now.
-invariant at_most_one_current_screening_per_customer_and_list_type:
-    (CurrentScreening(c, t, s_a) and CurrentScreening(c, t, s_b)) implies (s_a = s_b)
 
 -- An onboarded customer must have a current sanctions screening that
 -- came back clean (or was cleared by an analyst after review) and that

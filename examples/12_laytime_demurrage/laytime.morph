@@ -70,8 +70,17 @@ program laytime_demurrage
 -- running clock, and each stretch of time that counted against the
 -- allowance.
 predicate VoyageFixture(voyage: Subject, vessel: Subject, port: Subject, allowed: Duration)
+-- One notice per voyage, in the strong form: the voyage determines
+-- the whole tender record. THIS MODEL treats a Notice of Readiness
+-- as a single tender event (real chartering can involve re-tender
+-- after rejection; that stage is not modelled here), so a second
+-- NOR - even the same id at a different instant - is refused.
 predicate NorTendered(nor: Subject, voyage: Subject, tendered_at: Timestamp)
+    unique by (voyage)
+-- The clock starts once: the voyage determines the commencement
+-- instant.
 predicate LaytimeCommenced(voyage: Subject, commenced_at: Timestamp)
+    unique by (voyage)
 predicate CountingInterval(interval: Subject, voyage: Subject, from: Timestamp, to: Timestamp, len: Duration)
 predicate CargoOpsCompleted(voyage: Subject, completed_at: Timestamp)
 
@@ -117,17 +126,6 @@ invariant interval_length_is_its_span:
 -- transformation cannot break.)
 invariant counted_time_follows_commencement:
     CountingInterval(i, v, f, t, len) implies (LaytimeCommenced(v, c) and c at_or_before f)
-
--- The clock starts once per voyage. Two commencements would mean two
--- competing readings of every interval that follows.
-invariant clock_starts_once:
-    LaytimeCommenced(v, a) and LaytimeCommenced(v, b) implies a = b
-
--- One notice per voyage in this simplified model. (Real charterparties
--- argue about re-tendered notices; that argument arrives with the
--- Statement-of-Facts corrections in this example's next stage.)
-invariant one_notice_per_voyage:
-    NorTendered(a, v, _) and NorTendered(b, v, _) implies a = b
 
 -- The cargo never exceeds what the vessel can carry. Tonnes against
 -- tonnes: the comparison is only possible because both sides carry

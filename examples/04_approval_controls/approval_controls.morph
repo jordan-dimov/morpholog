@@ -46,9 +46,15 @@ program approval_controls
 -- never retracted). Note the `actor` slot: the recorded approval
 -- stamps in who did the approving.
 predicate MayApprove(actor: Subject, doc_type: Subject)
+-- Approval records are append only - they are never retracted, and
+-- now the model SAYS so: revoking authority stops future approvals
+-- (the gate consults live authority), while every approval already
+-- granted stays in the record, machine-guaranteed.
 predicate Approval(doc_id: Subject, doc_type: Subject, actor: Subject)
+    append only
 predicate ApprovalLimit(actor: Subject, doc_type: Subject, limit: Decimal)
 predicate LimitedApproval(doc_id: Subject, doc_type: Subject, amount: Decimal, actor: Subject)
+    append only
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits - "authority was granted", "a document was approved".

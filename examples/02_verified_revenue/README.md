@@ -43,8 +43,8 @@ Content claims (figures, grants, revocations, decisions) are append-only. Pointe
 | --- | --- |
 | `admissibility_has_provenance` | Every active `AdmissibleFor(v, p)` must be backed by some `StandingGrantedBy(v, p, _, _)`. |
 | `admissibility_excludes_revocation` | `AdmissibleFor(v, p)` cannot coexist with any `StandingRevoked(v, p, _)`. |
-| `at_most_one_current_verification_per_asset_period` | The singleton pointer property. |
-| `at_most_one_direct_successor` | A verification is superseded by at most one direct successor; parallel chains are forbidden. |
+| `current_verification_unique_by_asset_period` (from `current pointer by (asset, period)`) | The singleton pointer property. |
+| `supersedes_unique_by_prior_verification_id` (from `superseded via Supersedes`) | A verification is superseded by at most one direct successor; parallel chains are forbidden. |
 
 **No invariant ties decision claims to live `AdmissibleFor`.** Decisions are gated at admission via `require`; once admitted, locked in. An invariant tying them to live standing would force either rejecting revocation (because historical decisions would break the rule) or cascade-retracting those decisions (which destroys the record). Neither matches the business. This is the require-vs-invariant lesson running through every example in the project.
 

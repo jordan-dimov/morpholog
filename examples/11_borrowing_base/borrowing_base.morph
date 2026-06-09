@@ -45,7 +45,10 @@ program borrowing_base
 -- The vocabulary. `Facility` carries the advance rate, set when the
 -- facility opens. `EligibleCollateral` is one pledged asset and its
 -- value. `Drawdown` is one advance of money against the facility.
+-- One facility per id: the id determines the advance rate, so the
+-- advance-limit rule below always reads one unambiguous rate.
 predicate Facility(facility: Subject, advance_rate: Decimal)
+    unique by (facility)
 predicate EligibleCollateral(facility: Subject, asset: Subject, collateral_value: Decimal)
 predicate Drawdown(facility: Subject, draw_id: Subject, amount: Decimal)
 -- A read-only reporting view (see the derived claim at the bottom of the
@@ -65,12 +68,6 @@ intent DrawdownRequested(facility: Subject, draw_id: Subject, amount: Decimal)
 -- violating one of these is rejected outright. Read `implies` as
 -- "whenever the left is true, the right must be too".
 
--- A facility id identifies one facility: two Facility claims sharing the
--- id must agree on the advance rate. Pins the structural uniqueness that
--- lets "this facility's advance rate" below be a single well-defined
--- number rather than an ambiguous one.
-invariant at_most_one_facility_per_id:
-    Facility(f, rate_a) and Facility(f, rate_b) implies rate_a = rate_b
 
 -- The values have to make business sense, and keeping them sane is what
 -- lets the rules below mean what they say. An advance rate is a fraction

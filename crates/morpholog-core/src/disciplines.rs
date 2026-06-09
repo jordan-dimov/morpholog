@@ -62,14 +62,22 @@ pub fn lower_disciplines(program: &mut Program) {
             }
         }
     }
-    for inv in generated {
-        let already = program
-            .invariants
-            .iter()
-            .any(|existing| existing.name == inv.name && existing.origin == inv.origin);
-        if !already {
-            program.invariants.push(inv);
-        }
+    // Generated invariants go FIRST: a discipline is a precondition of
+    // sense for the authored rules (uniqueness is what makes lookups
+    // and aggregates well-defined), so when a proposal violates both,
+    // the rejection names the root cause, not a knock-on.
+    let mut fresh: Vec<Invariant> = generated
+        .into_iter()
+        .filter(|inv| {
+            !program
+                .invariants
+                .iter()
+                .any(|existing| existing.name == inv.name && existing.origin == inv.origin)
+        })
+        .collect();
+    if !fresh.is_empty() {
+        fresh.append(&mut program.invariants);
+        program.invariants = fresh;
     }
 }
 
