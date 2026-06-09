@@ -17,12 +17,20 @@
 -- that was valid that day?* That should be one lookup, not a forensic
 -- dig across four separate archives.
 --
--- Most of the rules below are validity-window checks. We write each one
--- as two halves joined with `and`: the window's start is on-or-before
--- the action date, and the action date is on-or-before the window's end.
--- Read `x on_or_before y` simply as "the date x falls on or before the
--- date y". Both ends are inclusive, so a document valid "through 31
--- March" is still valid on 31 March itself.
+-- Most of the rules below are validity-window checks: the window's
+-- start is on-or-before the action date, and the action date is
+-- on-or-before the window's end. Read `x on_or_before y` simply as "the
+-- date x falls on or before the date y". Both ends are inclusive, so a
+-- document valid "through 31 March" is still valid on 31 March itself.
+--
+-- Rather than spelling that two-line pattern out inside every rule, we
+-- give each check its business name once, with `define`. A `define` is
+-- a named condition: it changes nothing about what is checked - the
+-- runtime expands the name into the very same claims and comparisons -
+-- but the rules that use it now read the way the trial speaks: "the
+-- protocol was in force that day", "consent was obtained by that day".
+-- And when an enrolment is refused, the refusal can name the condition
+-- that failed, not just the line inside it.
 --
 -- Here is how Morpholog thinks about all this. It does not store
 -- "facts" - it stores *claims* it has agreed to admit because they obey
@@ -83,6 +91,49 @@ intent ImportantProtocolDeviationOpened(participant_id: Subject, trial_id: Subje
 intent ParticipantRandomised(participant_id: Subject)
 
 
+-- The named conditions. Each one is a piece of evidence "holding" on a
+-- given day, written once and called by name from the gate and the
+-- rules below. The names in parentheses are the condition's inputs;
+-- anything else the condition mentions (the window's own start and end,
+-- the lab result's details) stays internal to it.
+
+-- A protocol version is in force on a day when its window covers the
+-- day and an ethics committee has approved it.
+define protocol_in_force_on(trial, version, d):
+    ProtocolVersion(trial, version, opens, closes)
+    and opens on_or_before d
+    and d on_or_before closes
+    and ProtocolApprovedBy(version, _, _)
+
+-- Same shape for the consent form: window covers the day, ethics
+-- approval exists.
+define consent_form_in_force_on(trial, version, d):
+    ConsentFormVersion(trial, version, opens, closes)
+    and opens on_or_before d
+    and d on_or_before closes
+    and ConsentFormApprovedBy(version, _, _)
+
+-- The participant's own signature on that consent form, given on or
+-- before the day. "Obtained by" as in "obtained by that date".
+define consent_obtained_by(participant, trial, version, d):
+    InformedConsentObtained(participant, trial, version, signed_on, _)
+    and signed_on on_or_before d
+
+-- The doctor's delegated authority for a role covers the day.
+define investigator_delegated_on(person, trial, role, d):
+    DelegatedInvestigator(person, trial, role, opens, closes)
+    and opens on_or_before d
+    and d on_or_before closes
+
+-- The protocol's eligibility criterion has a matching lab result that
+-- was taken by the day and has not expired by it.
+define eligibility_current_on(participant, version, d):
+    EligibilityCriterion(version, criterion, required_result)
+    and EligibilityAssessment(participant, criterion, required_result, assessed_on, expires_on)
+    and assessed_on on_or_before d
+    and d on_or_before expires_on
+
+
 -- The rules that must always hold. If any change would leave the world
 -- violating one of these, the whole change is rejected at commit.
 
@@ -111,9 +162,13 @@ invariant participant_randomised_once_per_trial:
 -- had not yet agreed. This one IS an invariant rather than a one-time
 -- gate: even if a later correction moves a randomisation to a new date,
 -- the consent must still cover that new date. The order "consented,
--- then randomised" must hold over all admitted state, forever.
+-- then randomised" must hold over all admitted state, forever. It is
+-- the same condition the enrolment gate checks, called by the same
+-- name - written once, enforced in both places. (The `_` says: any
+-- consent form version will do here; the gate is the stricter check
+-- that ties the version to one that was in force.)
 invariant consent_obtained_before_randomisation:
-    ParticipantRandomised(p, t, _, randomised_on, _) implies (exists consented_on: InformedConsentObtained(p, t, _, consented_on, _) and consented_on on_or_before randomised_on)
+    ParticipantRandomised(p, t, _, randomised_on, _) implies consent_obtained_by(p, t, _, randomised_on)
 
 
 
@@ -224,30 +279,20 @@ transformation randomise_participant(
     protocol_version,
     randomised_on
 ):
-    -- Every condition below is part of one big gate, joined with `and`.
-    -- Each validity window appears as two lines: the window opens on or
-    -- before the randomisation date, and the randomisation date is on or
-    -- before the window closes. All of it must hold, or the enrolment is
-    -- turned away.
+    -- One gate, one named condition per piece of evidence. Each must
+    -- hold on the randomisation date, or the enrolment is turned away.
+    -- Note how the consent line picks out WHICH consent form version
+    -- the signature is for, and the next line demands the signature on
+    -- exactly that version - the conditions chain, left to right. The
+    -- enrolling doctor (`actor` - whoever proposes this change) is
+    -- handed to the delegation check like any other input.
     require (
         Trial(trial_id)
-        and ProtocolVersion(trial_id, protocol_version, protocol_from, protocol_to)
-        and protocol_from on_or_before randomised_on
-        and randomised_on on_or_before protocol_to
-        and ProtocolApprovedBy(protocol_version, _, _)
-        and ConsentFormVersion(trial_id, consent_form_version, consent_from, consent_to)
-        and consent_from on_or_before randomised_on
-        and randomised_on on_or_before consent_to
-        and ConsentFormApprovedBy(consent_form_version, _, _)
-        and InformedConsentObtained(participant_id, trial_id, consent_form_version, consented_on, _)
-        and consented_on on_or_before randomised_on
-        and DelegatedInvestigator(actor, trial_id, #randomise_participant, del_from, del_to)
-        and del_from on_or_before randomised_on
-        and randomised_on on_or_before del_to
-        and EligibilityCriterion(protocol_version, criterion_id, required_result)
-        and EligibilityAssessment(participant_id, criterion_id, required_result, assessed_on, expires_on)
-        and assessed_on on_or_before randomised_on
-        and randomised_on on_or_before expires_on
+        and protocol_in_force_on(trial_id, protocol_version, randomised_on)
+        and consent_form_in_force_on(trial_id, consent_form_version, randomised_on)
+        and consent_obtained_by(participant_id, trial_id, consent_form_version, randomised_on)
+        and investigator_delegated_on(actor, trial_id, #randomise_participant, randomised_on)
+        and eligibility_current_on(participant_id, protocol_version, randomised_on)
         and not ImportantProtocolDeviationOpen(participant_id, trial_id, _)
     )
 

@@ -67,6 +67,21 @@ predicate UsePeriod(use: Subject, started_at: Timestamp, ended_at: Timestamp, le
 intent MatchAwaitingVerification(match: Subject)
 intent IdentificationDecided(decision: Subject)
 
+-- The statute's central condition, given its name once. Article 14(5)
+-- demands verification by at least two distinct people *before* any
+-- action is taken on a match. The unbound names v1 and v2 ask the
+-- runtime to find witnesses - two verification records whose verifiers
+-- differ and whose instants precede the moment in question. The gate
+-- that admits a decision and the permanent rule over the record both
+-- call this by name, so the two can never quietly drift apart - and a
+-- refusal names the condition in the statute's own terms.
+define two_distinct_prior_verifications(match, moment):
+    MatchVerified(match, v1, t1)
+    and MatchVerified(match, v2, t2)
+    and v1 != v2
+    and t1 at_or_before moment
+    and t2 at_or_before moment
+
 -- The bookkeeping truths. If any change would leave the record
 -- violating one of these, the whole change is rejected.
 
@@ -102,16 +117,15 @@ invariant one_verification_per_verifier_per_match:
 -- both of which happened at or before the decision. The "before"
 -- half is load-bearing: the statute requires verification *before*
 -- action, not merely that two verification records exist by the time
--- someone files the decision. The unbound names v1 and v2 ask the
--- runtime to find witnesses - two verification records whose
--- verifiers differ and whose instants precede the decision. This is
+-- someone files the decision. The condition itself is declared once
+-- above; this rule holds it over all admitted state, forever. That is
 -- safe as an invariant (not just a gate) because verification
 -- records are append-only in this model: nothing retracts them, so a
 -- decision admitted under two prior verifications keeps them forever.
 -- The *authority* check lives in the gates below, never here - so
 -- revoking an overseer never reaches back into history.
 invariant decision_rests_on_two_distinct_prior_verifications:
-    IdentificationDecision(d, m, _, decided_at, _) implies (MatchVerified(m, v1, t1) and MatchVerified(m, v2, t2) and v1 != v2 and t1 at_or_before decided_at and t2 at_or_before decided_at)
+    IdentificationDecision(d, m, _, decided_at, _) implies two_distinct_prior_verifications(m, decided_at)
 
 -- One decision per match. A second decision on the same
 -- identification would be a competing account of what was done.
@@ -201,17 +215,17 @@ transformation verify_match(match, verified_at):
 -- nothing - and the decider must themselves hold live oversight:
 -- acting on an identification is the most consequential step in the
 -- room, and Article 26(2)'s competence-and-authority requirement
--- reaches it. The `at_or_before decided_at` conjuncts are the
--- statute's "before action" made literal: a decision cannot be
--- stamped earlier than the verifications it claims to rest on. When
--- this is refused, the explanation names what is missing in the
--- statute's own terms: a prior verification by a second, distinct
--- person.
+-- reaches it. The gate calls the named condition declared above -
+-- the same one the permanent rule enforces - so the moment of
+-- admission and the standing record can never disagree about what
+-- "verified by two people first" means. When this is refused, the
+-- explanation names the condition and the missing verification in
+-- the statute's own terms.
 transformation decide_on_identification(decision, match, outcome, decided_at):
     bind MatchRecorded(match, use, _, _, _)
     bind UseStarted(use, system, _, _, _)
     require OversightAssigned(actor, system)
-    require (MatchVerified(match, v1, t1) and MatchVerified(match, v2, t2) and v1 != v2 and t1 at_or_before decided_at and t2 at_or_before decided_at)
+    require two_distinct_prior_verifications(match, decided_at)
     require not IdentificationDecision(_, match, _, _, _)
     admit IdentificationDecision(decision, match, outcome, decided_at, actor)
     emit IdentificationDecided(decision)

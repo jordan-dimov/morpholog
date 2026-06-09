@@ -193,10 +193,12 @@ fn decision_with_one_verification_is_refused() {
 
 // The PR's headline, pinned: a refused decision explains itself in
 // the statute's own terms. With no verification yet on record, asking
-// why the decision is refused names the verification gate AND the
+// why the decision is refused names the verification condition by its
+// declared name AND - descending through that definition's body - the
 // directly-missing MatchVerified claim, with `verify_match` as the
-// transformation that supplies it - the missing-evidence checklist an
-// auditor (or an agent retrying) can act on.
+// transformation that supplies it. Both levels: the named business
+// condition, and the concrete missing evidence an auditor (or an
+// agent retrying) can act on.
 #[test]
 fn the_refused_decision_explains_itself_in_the_statutes_terms() {
     let state = match_awaiting_verification();
@@ -216,8 +218,8 @@ fn the_refused_decision_explains_itself_in_the_statutes_terms() {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
     };
     assert!(
-        gate.gate.contains("MatchVerified"),
-        "the failing gate names the verification rule: {}",
+        gate.gate.contains("two_distinct_prior_verifications"),
+        "the failing gate names the statute's condition by name: {}",
         gate.gate
     );
     assert!(
@@ -263,7 +265,7 @@ fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
     };
-    assert!(gate.gate.contains("MatchVerified"));
+    assert!(gate.gate.contains("two_distinct_prior_verifications"));
     assert!(
         gate.directly_missing_claims.is_empty(),
         "distinctness failure surfaces no missing claim in v0: {:?}",
