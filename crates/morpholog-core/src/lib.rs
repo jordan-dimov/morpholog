@@ -36,6 +36,7 @@ mod eval;
 mod explain;
 mod guarantees;
 mod ir;
+mod lint;
 mod propose;
 pub mod schema;
 mod state;
@@ -62,6 +63,7 @@ pub use ir::{
     OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Subject,
     Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
 };
+pub use lint::{Lint, lints};
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
     Transition, propose, propose_with_trace,

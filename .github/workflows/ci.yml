@@ -88,12 +88,14 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      # The same rust-lld memory cap the coverage job carries: linking
-      # the workspace's test binaries peaks hard enough that lld's
-      # parallelFor intermittently SIGBUSes on the hosted runner (it
-      # took out a pg-17 run while pg-18 sailed through). Serialising
-      # lld bounds peak memory at a modest link-time cost.
-      RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
+      # The same rust-lld memory bounds the coverage job carries.
+      # Serialising lld caps each link's internal parallelism, but
+      # cargo still links several test binaries concurrently, and with
+      # full debuginfo the combined peak still intermittently SIGBUSes
+      # the hosted runner (it has taken out pg-17 and pg-18 runs on
+      # different days). line-tables-only cuts each link's footprint
+      # several-fold while test backtraces keep file/line info.
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
 
     steps:
       - uses: actions/checkout@v5

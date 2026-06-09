@@ -217,3 +217,33 @@ field is informative for embedders (the enforcement happens inside
 Morpholog, as generated invariants and authoring-time checks); a
 client that surfaces it should treat unknown discipline tags as
 opaque.
+
+## Batch runs (`run --batch`)
+
+`morpholog run <file.morph> --batch <rows.ndjson>` (`-` reads stdin)
+admits many governed transitions in one invocation. One JSON object
+per line:
+
+```json
+{"transformation": "post_simple_entry", "actor": "jordan", "args_named": {"entry_id": "e1", "...": "..."}}
+```
+
+`args` (the tagged codec) may replace `args_named`; exactly one per
+row, decoded by the same codecs as the flags. Each row commits or
+rolls back on its own - an import is explicitly NOT all-or-nothing -
+and produces one NDJSON receipt on stdout in input order: the
+single-run envelope above plus `"row"`, the 1-based input line number
+(blank lines skip silently, so receipts map back to the file). A
+malformed row (bad JSON, unknown transformation, undecodable args)
+yields `{"row": N, "status": "error", "error": "..."}` and processing
+continues. `--explain-on-reject` composes per row, exactly as in
+single runs. A summary line lands on stderr.
+
+**Exit code contract - deliberately different from single `run`.**
+Single `run` exits 1 on a rejection; a batch exits 0 whenever every
+row was processed, because partial admission is an import's normal
+outcome - the receipts are the result, not the exit code. Non-zero is
+reserved for operational failure: unreadable input, a programme that
+fails validation, a broken connection. A serialization conflict
+(SQLSTATE 40001) surfaces in that row's error receipt; retries stay
+the caller's, per the runtime doctrine.
