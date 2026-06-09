@@ -79,3 +79,40 @@ fn a_declared_discipline_without_its_lowering_fails_validation() {
     lower_disciplines(&mut lowered);
     lowered.validate().expect("the lowered programme validates");
 }
+
+// A duplicate clause is a validation error - but even before
+// validation runs, the lowering itself never lets the invalid shape
+// leak into generated IR: one clause's worth of invariants, not two.
+#[test]
+fn a_duplicate_clause_lowers_once_even_on_the_invalid_programme() {
+    let mut p = program("doubled")
+        .predicates(vec![
+            predicate("Figure")
+                .subject("figure_id")
+                .subject("owner")
+                .disciplines(vec![
+                    Discipline::UniqueBy {
+                        fields: vec!["figure_id".to_string()],
+                    },
+                    Discipline::UniqueBy {
+                        fields: vec!["figure_id".to_string()],
+                    },
+                ])
+                .build(),
+        ])
+        .build();
+    lower_disciplines(&mut p);
+    let generated: Vec<_> = p
+        .invariants
+        .iter()
+        .filter(|i| i.origin == InvariantOrigin::Discipline)
+        .collect();
+    assert_eq!(generated.len(), 1, "the duplicate clause lowers once");
+    let errors = p.validate().expect_err("the duplicate clause still errors");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::DisciplineDuplicateClause { .. })),
+        "got {errors:?}"
+    );
+}

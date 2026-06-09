@@ -65,16 +65,22 @@ pub fn lower_disciplines(program: &mut Program) {
     // Generated invariants go FIRST: a discipline is a precondition of
     // sense for the authored rules (uniqueness is what makes lookups
     // and aggregates well-defined), so when a proposal violates both,
-    // the rejection names the root cause, not a knock-on.
-    let mut fresh: Vec<Invariant> = generated
-        .into_iter()
-        .filter(|inv| {
-            !program
-                .invariants
-                .iter()
-                .any(|existing| existing.name == inv.name && existing.origin == inv.origin)
-        })
-        .collect();
+    // the rejection names the root cause, not a knock-on. Dedupe both
+    // against the programme (idempotence across calls) and within this
+    // pass (a duplicate clause still gets its validation error, but
+    // the generated IR never carries the duplicate) - invalid input
+    // shapes must not leak into generated IR.
+    let mut fresh: Vec<Invariant> = Vec::new();
+    for inv in generated {
+        let already = program
+            .invariants
+            .iter()
+            .chain(fresh.iter())
+            .any(|existing| existing.name == inv.name && existing.origin == inv.origin);
+        if !already {
+            fresh.push(inv);
+        }
+    }
     if !fresh.is_empty() {
         fresh.append(&mut program.invariants);
         program.invariants = fresh;

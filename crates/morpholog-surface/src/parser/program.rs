@@ -1,5 +1,9 @@
-//! Programme-level parsing: top-level header + predicate and
-//! invariant declarations.
+//! Programme-level parsing: the `program` header plus every top-level
+//! declaration - predicates (with their discipline clauses), intents,
+//! definitions, invariants, transformations, and derived claims, freely
+//! interleaved. After collection: duplicate-name diagnostics with spans
+//! for both sites, definition-call resolution, and discipline lowering,
+//! so the returned [`Program`] is the complete, enforceable IR.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
