@@ -242,10 +242,14 @@ pub(crate) fn definition_topo_order(definitions: &[Definition]) -> Result<Vec<us
                         stack.push((callee, 0));
                     }
                     // A grey callee is on the current path: a cycle. The
-                    // grey set on the stack is the cycle's neighbourhood;
-                    // report its names sorted for determinism.
+                    // cycle's members are the stack's sub-path from that
+                    // callee back to the top - NOT the whole grey stack,
+                    // whose lower entries merely *reach* the cycle and
+                    // would mislead the diagnostic. Names sorted for
+                    // determinism.
                     Mark::Grey => {
-                        let mut names: Vec<String> = stack
+                        let cycle_start = stack.iter().position(|&(i, _)| i == callee).unwrap_or(0);
+                        let mut names: Vec<String> = stack[cycle_start..]
                             .iter()
                             .map(|&(i, _)| definitions[i].name.to_string())
                             .collect();

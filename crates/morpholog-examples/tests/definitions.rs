@@ -318,6 +318,40 @@ define odd_step(x):
     );
 }
 
+// The cycle diagnostic names the cycle's members only - an entry
+// definition that merely *reaches* the cycle is not blamed for it.
+#[test]
+fn the_cycle_diagnostic_excludes_a_caller_that_only_reaches_the_cycle() {
+    let errors = validation_errors(
+        r#"
+program reaches_a_cycle
+
+predicate Thing(x: Subject)
+
+define entry(x):
+    ping(x)
+
+define ping(x):
+    pong(x)
+
+define pong(x):
+    ping(x)
+"#,
+    );
+    let cycle = errors
+        .iter()
+        .find_map(|e| match e {
+            ValidationError::DefinitionCycle { names } => Some(names.clone()),
+            _ => None,
+        })
+        .expect("a cycle is reported");
+    assert_eq!(
+        cycle,
+        vec!["ping".to_string(), "pong".to_string()],
+        "only the cycle's members are named, not `entry`"
+    );
+}
+
 #[test]
 fn a_definition_sharing_a_predicate_name_is_refused() {
     let errors = validation_errors(

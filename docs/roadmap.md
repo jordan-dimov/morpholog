@@ -22,9 +22,9 @@ The compute-zone interface for non-Rust integrations is in place, and it is a pi
 
 The CLI is split by subcommand under `crates/morpholog-cli/src/commands/`. Adding a new subcommand is "add a file there, add a `Command` variant, add one dispatch arm in `main`."
 
-## The three arcs
+## The arcs
 
-The forward picture is three arcs over one IR, each a different reading of the same semantic truth the kernel already evaluates and renders. None changes the constitution; each deepens what the existing thesis delivers. The forcing discipline holds throughout: kernel and surface primitives still arrive with the example that forces them; the arcs name the direction, not a backlog.
+The forward picture is a set of arcs over one IR - the language arc, the kernel arc, and the verification arc - each a different reading of the same semantic truth the kernel already evaluates and renders. None changes the constitution; each deepens what the existing thesis delivers. The forcing discipline holds throughout: kernel and surface primitives still arrive with the example that forces them; the arcs name the direction, not a backlog.
 
 **The language arc - doctrine into declarations.** `define` (landed) is the first rung: doctrine that lived in prose became something the language carries. The next rung is **claim disciplines**: the append-only / retractable-pointer / lineage trichotomy and the structural-uniqueness guarantee, today hand-written as boilerplate invariants and fifty-line comment preambles, declared on the predicate (`unique by`, append-only, current-pointer-with-supersession) and lowered to the same invariants - making the gate-vs-invariant doctrine machine-checkable (an invariant conditioning an append-only record on a retractable claim's presence is the revocation-rewrites-history bug, nameable at check time). The worked examples have already repeated each candidate discipline well past the forcing threshold; the design discussion is the next step, not more evidence. **Parametric patterns** (predicate-parameterised rule templates - restatement, standing, the cross-example idioms as artifacts) are the rung after, awaiting the disciplines' proof.
 
