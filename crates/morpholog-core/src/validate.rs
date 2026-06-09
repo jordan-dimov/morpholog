@@ -880,8 +880,27 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
 
     let mut errors = Vec::new();
     for decl in &p.predicates {
-        for (i, d) in decl.disciplines.iter().enumerate() {
-            if decl.disciplines[..i].contains(d) {
+        // Duplicate detection compares clauses under a canonical key:
+        // a uniqueness key is a SET, so `unique by (a, b)` and
+        // `unique by (b, a)` are the same commitment (full agreement
+        // does not depend on field order) and declaring both would
+        // generate two same-meaning invariants under different names.
+        let canonical = |d: &Discipline| match d {
+            Discipline::UniqueBy { fields } => {
+                let mut fields = fields.clone();
+                fields.sort_unstable();
+                Discipline::UniqueBy { fields }
+            }
+            Discipline::CurrentPointerBy { fields } => {
+                let mut fields = fields.clone();
+                fields.sort_unstable();
+                Discipline::CurrentPointerBy { fields }
+            }
+            other => other.clone(),
+        };
+        let canonical_clauses: Vec<Discipline> = decl.disciplines.iter().map(canonical).collect();
+        for (i, d) in canonical_clauses.iter().enumerate() {
+            if canonical_clauses[..i].contains(d) {
                 errors.push(ValidationError::DisciplineDuplicateClause {
                     predicate: decl.name.to_string(),
                 });

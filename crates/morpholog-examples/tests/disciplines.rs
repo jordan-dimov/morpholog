@@ -305,6 +305,28 @@ predicate Item(id: Subject, label: Subject)
     );
 }
 
+// The duplicate check compares key SETS: reordering the fields does
+// not make a different commitment, and letting both through would
+// generate two same-meaning invariants under different names.
+#[test]
+fn a_reordered_duplicate_clause_is_still_a_duplicate() {
+    let errors = validation_errors(
+        r#"
+program reordered
+
+predicate Span(id: Subject, opens: Date, closes: Date)
+    unique by (id, opens)
+    unique by (opens, id)
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::DisciplineDuplicateClause { .. })),
+        "got {errors:?}"
+    );
+}
+
 #[test]
 fn a_pointer_cannot_be_append_only() {
     let errors = validation_errors(
