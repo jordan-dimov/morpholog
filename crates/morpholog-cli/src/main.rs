@@ -480,6 +480,13 @@ pub(crate) struct CheckArgs {
     /// advisory.
     #[arg(long)]
     pub(crate) strict: bool,
+
+    /// Emit every finding - parse errors, validation errors, lints -
+    /// as one JSON object on stdout, each with byte offsets and
+    /// 1-based line/column where the finding has a source location.
+    /// Exit semantics are unchanged.
+    #[arg(long, conflicts_with = "verbose")]
+    pub(crate) json: bool,
 }
 
 /// Arguments for `schema`. A `.morph` source file plus exactly one of:

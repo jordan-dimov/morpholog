@@ -30,12 +30,12 @@ pub(crate) fn canonical_hash(program: &Program) -> String {
 }
 
 pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
-    let (program, _source, _source_name) = parse_or_exit(&args.file)?;
+    let parsed = parse_or_exit(&args.file)?;
     // Validation is the gate, not an input: only a valid programme
     // gets an authoritative hash.
-    validate_or_exit(&program);
+    validate_or_exit(&parsed);
     print_json(&serde_json::json!({
-        "program": program.name,
-        "hash": canonical_hash(&program),
+        "program": parsed.program.name,
+        "hash": canonical_hash(&parsed.program),
     }))
 }

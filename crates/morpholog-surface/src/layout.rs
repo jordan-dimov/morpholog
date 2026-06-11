@@ -138,9 +138,16 @@ pub fn apply_layout(
                 indent_stack.push(new_indent);
                 out.push((Token::Indent, span.start..span.start));
             } else if new_indent < current {
+                // A Dedent sits at the END of the block it closes,
+                // not at the start of the token that revealed it:
+                // the gap between the two may hold blank lines and
+                // comments, and a declaration's span ends with the
+                // Dedent it consumes - anchoring here keeps that
+                // span on the declaration's own last token instead
+                // of overshooting to just before the next one.
                 while indent_stack.last().copied().unwrap_or(0) > new_indent {
                     indent_stack.pop();
-                    out.push((Token::Dedent, span.start..span.start));
+                    out.push((Token::Dedent, prev_end..prev_end));
                 }
                 if indent_stack.last().copied().unwrap_or(0) != new_indent {
                     diagnostics.push(Diagnostic::error(

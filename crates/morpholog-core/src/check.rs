@@ -332,9 +332,6 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
     }
 
     for transformation in &program.transformations {
-        cx.context = ValidationContext::Transformation {
-            name: transformation.name.to_string(),
-        };
         let mut scope = Scope::new();
         // Parameters arrive bound and untyped: bound so later uses
         // are available, untyped so their kind refines on use. The
@@ -343,7 +340,14 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             scope.bound.bind(param);
             let _ = scope.kinds.observe(param, InferredKind::UnknownOrAny);
         }
-        for stmt in &transformation.body {
+        // The context carries the statement index, so a finding lands
+        // on the statement it was made in, not just the body. A
+        // finding inside a nested `for` keeps the top-level index.
+        for (index, stmt) in transformation.body.iter().enumerate() {
+            cx.context = ValidationContext::Transformation {
+                name: transformation.name.to_string(),
+                statement: Some(index),
+            };
             cx.walk_stmt(stmt, &mut scope);
         }
     }

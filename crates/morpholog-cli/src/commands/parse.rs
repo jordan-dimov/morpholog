@@ -13,7 +13,7 @@ use crate::commands::{parse_or_exit, print_json};
 /// types pick up `Serialize`, this can collapse to a direct
 /// `print_json(&program)` call.
 pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
-    let (program, _source, _source_name) = parse_or_exit(&args.file)?;
+    let program = parse_or_exit(&args.file)?.program;
 
     // Invariant bodies are projected as rendered strings because
     // `Prop` doesn't derive `Serialize`. Predicate declarations carry

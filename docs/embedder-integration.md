@@ -147,11 +147,33 @@ The traced and untraced envelopes are intentionally asymmetric; the embedder sho
 
 Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, database error).
 
+On a single-run rejection whose reason names an invariant declared in the source, stderr carries a courtesy line locating the rule (`rule at <file>:<line>:<col> (<name>)`). It is for the human at the terminal, not the integration: parse stdout only. Batch mode never prints it - receipts are the whole contract there.
+
 ### `morpholog explain --json`
 
 Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate that failed, the directly-missing claims, or the violated invariant. Without `--json` the same structure renders as claim-shaped prose.
 
 Read-only. Exit code is always zero on a parsed-and-validated programme, whether the verdict is admissible or rejected; explaining is answering a question, not taking an action. Only operational failures exit non-zero.
+
+### `morpholog check --json`
+
+The authoring gate's machine-readable shape, for an embedder (or its authoring AI) that wants findings as data rather than rendered carets. Stdout is one object:
+
+```json
+{
+  "file": "model.morph",
+  "diagnostics": [
+    {
+      "severity": "error",
+      "message": "undeclared predicate `Ghost` referenced in invariant `cap`",
+      "start": 412, "end": 447,
+      "line": 19, "column": 1
+    }
+  ]
+}
+```
+
+One entry per finding - parse errors, validation errors, and lints uniformly - with `severity` either `"error"` or `"hint"`. `start`/`end` are byte offsets into the file, `line`/`column` 1-based; a finding with no source anchor (one against a generated discipline invariant, say) carries only `severity` and `message`. A clean programme emits an empty `diagnostics` array. Exit semantics match the plain form: `0` when nothing failed, `1` on any error, and `--strict` promotes hints to errors (in the JSON too). Without `--json`, the same findings render as ariadne caret blocks on stderr and stdout stays script-silent.
 
 ### `morpholog init`
 
