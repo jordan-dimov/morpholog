@@ -729,8 +729,8 @@ The gate refusals each trace to a `require` line you can point at in
 
 ## Say the rules on the declarations
 
-You hand-wrote two invariants in this guide, and that was the right way to
-learn them - you now know exactly what each one means. But look at what they
+The invariants you hand-wrote in this guide were the right way to learn them -
+you now know exactly what each one means. But look at what they
 *are*: "one current figure per asset and period" is a uniqueness rule, and
 "the correction chain never forks" is a property of the supersession chain.
 Rules of that shape are so common that Morpholog lets you declare them on the
@@ -748,7 +748,7 @@ Those clauses say, in order: revenue figures are permanent records - nothing
 may ever retract one (corrections supersede, as you built); `CurrentFigure`
 is a *pointer* - at most one per asset and period, and retractable, because
 pointers must move; and its history lives in `Supersedes`, whose chain may
-never fork. With these three lines in place, both hand-written invariants
+never fork. With these clauses in place, the hand-written invariants
 could be deleted: the runtime generates the same rules from the declarations
 (run `morpholog inspect guarantees` and you will see them listed, each with a
 `from:` line naming the clause it came from). The `append only` clause goes
