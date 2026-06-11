@@ -143,6 +143,70 @@ jobs:
       - name: test (bench smoke, serial)
         run: cargo test -p morpholog-bench --all-targets --locked -- --test-threads=1
 
+  python-client:
+    name: python client (3.10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: python-client
+
+      # Pinned to EXACTLY the floor the generated client declares.
+      # The floor is enforcement, not preference: the templates emit a
+      # conservative Python subset, and this job is what catches a
+      # newer-version idiom sneaking in (the Z-suffix fromisoformat
+      # trap is the canonical example).
+      - name: Install Python at the declared floor
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build the CLI
+        run: cargo build -p morpholog-cli --locked
+
+      # The committed package under the worked embedder must be exactly
+      # what this binary generates - regenerate-and-diff is the drift
+      # contract embedders themselves rely on.
+      - name: Regenerate the example client and diff
+        run: |
+          target/debug/morpholog generate python-client \
+            examples/10_trade_lifecycle/trade_lifecycle.morph \
+            --out examples/etrm_embedder
+          git diff --exit-code examples/etrm_embedder/morpholog_client
+
+      - name: Template unit tests (same goldens as the Rust contract test)
+        run: python -m unittest discover crates/morpholog-cli/templates/python_client/tests
+
+      - name: Worked embedder end to end
+        env:
+          MORPHOLOG_BIN: ${{ github.workspace }}/target/debug/morpholog
+          PGPASSWORD: postgres
+        run: python examples/etrm_embedder/etrm_lifecycle.py
+
   coverage:
     name: coverage (llvm-cov)
     runs-on: ubuntu-latest
