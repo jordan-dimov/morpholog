@@ -12,9 +12,9 @@
 //! the bottom of this file.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{Program, Transformation, ValidatedProgram};
+use morpholog_core::{Program, Transformation, ValidatedProgram, ValidationError};
 use morpholog_postgres::PgPool;
-use morpholog_surface::parse_program;
+use morpholog_surface::{Diagnostic, SourceMap, parse_program_with_sources};
 use serde::Serialize;
 use std::path::Path;
 
@@ -30,20 +30,31 @@ pub(crate) mod run;
 pub(crate) mod schema;
 pub(crate) mod verify;
 
+/// One parsed `.morph` file with everything needed to render a
+/// later finding against its source: the programme, the source map
+/// the parser kept, and the original text and display name.
+pub(crate) struct ParsedSource {
+    pub(crate) program: Program,
+    pub(crate) map: SourceMap,
+    pub(crate) source: String,
+    pub(crate) source_name: String,
+}
+
 /// Read a `.morph` source file and parse it. On parse failure,
 /// render diagnostics via ariadne to stderr and exit 1. Shared by
 /// `parse` and `check` so the diagnostic rendering stays identical
 /// across both subcommands.
-///
-/// Returns the parsed `Program` together with the original source
-/// and source-name (the latter two are needed by callers that want
-/// to render further diagnostics anchored in the same source).
-pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<(Program, String, String)> {
+pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<ParsedSource> {
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("read source file {}", file.display()))?;
     let source_name = file.display().to_string();
-    match parse_program(&source) {
-        Ok(program) => Ok((program, source, source_name)),
+    match parse_program_with_sources(&source) {
+        Ok((program, map)) => Ok(ParsedSource {
+            program,
+            map,
+            source,
+            source_name,
+        }),
         Err(diagnostics) => {
             for d in &diagnostics {
                 eprint!("{}", d.render(&source_name, &source));
@@ -53,9 +64,23 @@ pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<(Program, String, Str
     }
 }
 
+/// Render one validation error to stderr: an ariadne caret block when
+/// the source map places it, the plain `error: ...` line when it has
+/// no source anchor (a generated discipline invariant, for one).
+pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSource) {
+    match parsed.map.span_for_error(err) {
+        Some(span) => eprint!(
+            "{}",
+            Diagnostic::error(err.to_string(), span).render(&parsed.source_name, &parsed.source)
+        ),
+        None => eprintln!("error: {err}"),
+    }
+}
+
 /// Validate a parsed programme; on failure, print each diagnostic to
-/// stderr and exit 1; on success, return a [`ValidatedProgram`]
-/// handle the analysis surface ([`morpholog_core::transformation_param_kinds`],
+/// stderr (caret-located where the source map can place it) and exit
+/// 1; on success, return a [`ValidatedProgram`] handle the analysis
+/// surface ([`morpholog_core::transformation_param_kinds`],
 /// [`morpholog_core::transformation_arg_schema`]) consumes. Threading
 /// the handle through means the CLI pays the validation cost once,
 /// instead of once here and once again inside the analysis layer's
@@ -67,12 +92,12 @@ pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<(Program, String, Str
 /// reading or rendering, `schema` before computing the JSON Schema -
 /// so an arbitrary file is held to the same vocabulary contract the
 /// kernel would otherwise enforce only at proposal time.
-pub(crate) fn validate_or_exit(program: &Program) -> ValidatedProgram<'_> {
-    match program.validated() {
+pub(crate) fn validate_or_exit(parsed: &ParsedSource) -> ValidatedProgram<'_> {
+    match parsed.program.validated() {
         Ok(validated) => validated,
         Err(errors) => {
             for err in &errors {
-                eprintln!("error: {err}");
+                render_validation_error(err, parsed);
             }
             std::process::exit(1);
         }

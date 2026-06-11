@@ -1,41 +1,48 @@
-//! `morpholog check` - parse + validate a `.morph` source file.
+//! `morpholog check` - parse + validate + lint a `.morph` source file.
 
 use crate::CheckArgs;
-use crate::commands::parse_or_exit;
+use crate::commands::{ParsedSource, parse_or_exit, render_validation_error};
 use morpholog_core::Program;
+use morpholog_surface::{Diagnostic, line_col, parse_program_with_sources};
+use serde::Serialize;
 use std::path::Path;
 
 /// Run the `check` subcommand. Parse + validate the source file,
 /// surface diagnostics with a uniform shape from either layer.
 ///
 /// - Parse failure: render parse diagnostics via ariadne, exit 1.
-/// - Validation failure: render validation errors as plain
-///   `error: <message>` lines (the kernel's `ValidationError`
-///   carries no source span), exit 1.
-/// - Both clean: lints run next. A finding prints to stderr as
-///   `hint: ...` and the check still passes - lints flag shapes with
-///   a deliberate reading. Under `--strict` the same finding prints
-///   as `error: ...` and the check fails.
+/// - Validation failure: render each error as an ariadne caret block
+///   when the source map places it (its declaration, or the exact
+///   statement), as a plain `error: <message>` line when it has no
+///   source anchor. Exit 1.
+/// - Both clean: lints run next. A finding renders at hint severity
+///   and the check still passes - lints flag shapes with a deliberate
+///   reading. Under `--strict` the same finding renders as an error
+///   and the check fails.
 /// - Fully clean: print nothing and exit 0, or print a one-screen
 ///   summary under `--verbose`. Scripts rely on the silent stdout
-///   default; hints go to stderr, so that contract holds either way.
+///   default; findings go to stderr, so that contract holds either
+///   way. `--json` is the opt-in machine-readable stdout shape: one
+///   object carrying every finding with byte offsets and line/column,
+///   same exit semantics.
 pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
-    let (program, _source, _source_name) = parse_or_exit(&args.file)?;
+    if args.json {
+        return run_json(&args);
+    }
 
-    if let Err(errors) = program.validate() {
+    let parsed = parse_or_exit(&args.file)?;
+
+    if let Err(errors) = parsed.program.validate() {
         for err in &errors {
-            // `ValidationError` carries a `Display` impl with the
-            // canonical phrasing; no per-variant rewording here.
-            eprintln!("error: {err}");
+            render_validation_error(err, &parsed);
         }
         std::process::exit(1);
     }
 
-    let lints = morpholog_core::lints(&program);
+    let lints = morpholog_core::lints(&parsed.program);
     if !lints.is_empty() {
-        let label = if args.strict { "error" } else { "hint" };
         for lint in &lints {
-            eprintln!("{label}: {lint}");
+            render_lint(lint, args.strict, &parsed);
         }
         if args.strict {
             std::process::exit(1);
@@ -43,9 +50,131 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
 
     if args.verbose {
-        print!("{}", summary(&program, &args.file));
+        print!("{}", summary(&parsed.program, &args.file));
     }
 
+    Ok(())
+}
+
+/// Render one lint to stderr: a caret block at hint severity (error
+/// under `--strict`) when the source map places it, the plain
+/// `hint: ...` / `error: ...` line otherwise.
+fn render_lint(lint: &morpholog_core::Lint, strict: bool, parsed: &ParsedSource) {
+    match parsed.map.span_for_lint(lint) {
+        Some(span) => {
+            let diagnostic = if strict {
+                Diagnostic::error(lint.to_string(), span)
+            } else {
+                Diagnostic::hint(lint.to_string(), span)
+            };
+            eprint!("{}", diagnostic.render(&parsed.source_name, &parsed.source));
+        }
+        None => {
+            let label = if strict { "error" } else { "hint" };
+            eprintln!("{label}: {lint}");
+        }
+    }
+}
+
+/// One finding in the `--json` output. Byte offsets and 1-based
+/// line/column are present when the finding has a source anchor;
+/// a finding without one (a generated discipline invariant) carries
+/// only severity and message.
+#[derive(Serialize)]
+struct JsonDiagnostic {
+    severity: &'static str,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+}
+
+impl JsonDiagnostic {
+    fn new(
+        severity: &'static str,
+        message: String,
+        span: Option<morpholog_surface::Span>,
+        source: &str,
+    ) -> Self {
+        let (line, column) = match &span {
+            Some(s) => {
+                let (l, c) = line_col(source, s.start);
+                (Some(l), Some(c))
+            }
+            None => (None, None),
+        };
+        Self {
+            severity,
+            message,
+            start: span.as_ref().map(|s| s.start),
+            end: span.as_ref().map(|s| s.end),
+            line,
+            column,
+        }
+    }
+}
+
+/// `check --json`: every finding - parse errors, validation errors,
+/// lints - in one stdout object, uniform across layers. Exit
+/// semantics match the plain form (`--strict` promotes hints).
+fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
+    let source = std::fs::read_to_string(&args.file)
+        .map_err(|e| anyhow::anyhow!("read source file {}: {e}", args.file.display()))?;
+
+    let mut findings = Vec::new();
+    let mut failed = false;
+
+    match parse_program_with_sources(&source) {
+        Err(diagnostics) => {
+            failed = true;
+            for d in diagnostics {
+                findings.push(JsonDiagnostic::new(
+                    "error",
+                    d.message,
+                    Some(d.primary),
+                    &source,
+                ));
+            }
+        }
+        Ok((program, map)) => {
+            if let Err(errors) = program.validate() {
+                failed = true;
+                for err in &errors {
+                    findings.push(JsonDiagnostic::new(
+                        "error",
+                        err.to_string(),
+                        map.span_for_error(err),
+                        &source,
+                    ));
+                }
+            } else {
+                for lint in &morpholog_core::lints(&program) {
+                    let severity = if args.strict { "error" } else { "hint" };
+                    failed |= args.strict;
+                    findings.push(JsonDiagnostic::new(
+                        severity,
+                        lint.to_string(),
+                        map.span_for_lint(lint),
+                        &source,
+                    ));
+                }
+            }
+        }
+    }
+
+    let payload = serde_json::json!({
+        "file": args.file.display().to_string(),
+        "diagnostics": findings,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if failed {
+        std::process::exit(1);
+    }
     Ok(())
 }
 

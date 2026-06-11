@@ -17,6 +17,11 @@ pub type Span = Range<usize>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
+    /// Lint-grade: the finding deserves attention but does not fail
+    /// the check (unless promoted). The parser never produces hints;
+    /// the CLI renders [`morpholog_core::Lint`] findings at this
+    /// severity through the same diagnostic shape.
+    Hint,
 }
 
 /// One diagnostic emitted by the parser. Multiple diagnostics may
@@ -46,6 +51,15 @@ impl Diagnostic {
         }
     }
 
+    pub fn hint(message: impl Into<String>, primary: Span) -> Self {
+        Self {
+            severity: Severity::Hint,
+            message: message.into(),
+            primary,
+            secondary: Vec::new(),
+        }
+    }
+
     pub fn with_secondary(mut self, span: Span, note: impl Into<String>) -> Self {
         self.secondary.push((span, note.into()));
         self
@@ -57,15 +71,22 @@ impl Diagnostic {
     /// structural assertions.
     pub fn render(&self, source_name: &str, source: &str) -> String {
         use ariadne::{Color, Label, Report, ReportKind, Source};
-        let kind = match self.severity {
-            Severity::Error => ReportKind::Error,
+        // Lowercase custom kinds, so the rendered header reads
+        // `error: ...` / `hint: ...` - the same prefix the plain-line
+        // fallback prints when a finding has no source span.
+        let (kind, color) = match self.severity {
+            Severity::Error => (ReportKind::Custom("error", Color::Red), Color::Red),
+            Severity::Hint => (ReportKind::Custom("hint", Color::Yellow), Color::Yellow),
         };
+        // The primary label points, it does not repeat: the header
+        // already holds the message, and repeating a teaching-length
+        // message under the carets doubles the noise.
         let mut report = Report::build(kind, (source_name, self.primary.clone()))
             .with_message(&self.message)
             .with_label(
                 Label::new((source_name, self.primary.clone()))
-                    .with_message(&self.message)
-                    .with_color(Color::Red),
+                    .with_message("here")
+                    .with_color(color),
             );
         for (span, note) in &self.secondary {
             report = report.with_label(
@@ -98,6 +119,18 @@ impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Severity::Error => write!(f, "error"),
+            Severity::Hint => write!(f, "hint"),
         }
     }
+}
+
+/// 1-based line and column for a byte offset into `source`. Columns
+/// count bytes, which matches what editors and `ariadne` show for
+/// ASCII-dominated `.morph` text. Offsets past the end clamp to it.
+pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(source.len());
+    let prefix = &source[..offset];
+    let line_start = prefix.rfind('\n').map_or(0, |i| i + 1);
+    let line = prefix.bytes().filter(|&b| b == b'\n').count() + 1;
+    (line, offset - line_start + 1)
 }

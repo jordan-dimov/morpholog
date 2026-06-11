@@ -28,6 +28,26 @@ fn temp_morph(source: &str) -> NamedTempFile {
     f
 }
 
+/// Drop ANSI colour sequences so assertions can read the rendered
+/// diagnostic as plain text (ariadne colours the quoted source line
+/// per character).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for d in chars.by_ref() {
+                if d == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[test]
 fn check_clean_program_exits_zero_with_no_output() {
     let out = Command::new(bin())
@@ -316,9 +336,10 @@ invariant decisions_need_live_mandate:
 "#;
 
 // A lint finding is advisory by default: hint on stderr, exit 0, and
-// stdout stays silent so the empty-stdout script contract holds.
+// stdout stays silent so the empty-stdout script contract holds. The
+// hint carets the invariant it concerns - LINT_TRIP's sits at 9:1.
 #[test]
-fn check_prints_a_hint_and_passes_without_strict() {
+fn check_prints_a_located_hint_and_passes_without_strict() {
     let f = temp_morph(LINT_TRIP);
     let out = Command::new(bin())
         .arg("check")
@@ -327,10 +348,14 @@ fn check_prints_a_hint_and_passes_without_strict() {
         .expect("spawn morpholog");
     assert!(out.status.success(), "lints alone must not fail the check");
     assert!(out.stdout.is_empty(), "stdout stays silent");
-    let stderr = String::from_utf8(out.stderr).unwrap();
+    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
     assert!(
-        stderr.starts_with("hint: ") && stderr.contains("decisions_need_live_mandate"),
+        stderr.contains("hint:") && stderr.contains("decisions_need_live_mandate"),
         "got: {stderr}"
+    );
+    assert!(
+        stderr.contains(":9:1") && stderr.contains("invariant decisions_need_live_mandate:"),
+        "the hint carets the invariant's source line; got: {stderr}"
     );
 }
 
@@ -347,9 +372,108 @@ fn check_strict_promotes_the_hint_to_an_error() {
     assert!(!out.status.success(), "--strict fails on a finding");
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stderr.starts_with("error: ") && stderr.contains("belongs in the admitting"),
+        stderr.contains("error:") && stderr.contains("belongs in the admitting"),
         "got: {stderr}"
     );
+}
+
+// A validation error carets the declaration that contains it.
+#[test]
+fn check_validation_error_carets_the_declaration() {
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         invariant test: UndeclaredPred(x)\n",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    assert!(
+        stderr.contains(":3:1") && stderr.contains("invariant test: UndeclaredPred(x)"),
+        "the error carets the invariant's source line; got: {stderr}"
+    );
+}
+
+/// Run `check --json` and parse the stdout object.
+fn check_json(path: &std::path::Path, strict: bool) -> (serde_json::Value, bool) {
+    let mut cmd = Command::new(bin());
+    cmd.arg("check").arg("--json").arg(path);
+    if strict {
+        cmd.arg("--strict");
+    }
+    let out = cmd.output().expect("spawn morpholog");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    (payload, out.status.success())
+}
+
+#[test]
+fn check_json_clean_program_reports_no_diagnostics() {
+    let (payload, ok) = check_json(
+        &repo_root().join("examples/01_settlement_netting/netting.morph"),
+        false,
+    );
+    assert!(ok);
+    assert_eq!(payload["diagnostics"], serde_json::json!([]));
+    assert!(
+        payload["file"].as_str().unwrap().ends_with("netting.morph"),
+        "got: {payload}"
+    );
+}
+
+#[test]
+fn check_json_validation_error_carries_line_and_column() {
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         invariant test: UndeclaredPred(x)\n",
+    );
+    let (payload, ok) = check_json(tmp.path(), false);
+    assert!(!ok, "validation failure exits non-zero under --json too");
+    let d = &payload["diagnostics"][0];
+    assert_eq!(d["severity"], "error");
+    assert_eq!(d["line"], 3);
+    assert_eq!(d["column"], 1);
+    assert!(
+        d["message"]
+            .as_str()
+            .unwrap()
+            .contains("undeclared predicate"),
+        "got: {payload}"
+    );
+    let (start, end) = (
+        d["start"].as_u64().unwrap() as usize,
+        d["end"].as_u64().unwrap() as usize,
+    );
+    assert!(start < end, "byte span is well-formed: {payload}");
+}
+
+#[test]
+fn check_json_lint_is_a_hint_and_strict_promotes_it() {
+    let f = temp_morph(LINT_TRIP);
+    let (payload, ok) = check_json(f.path(), false);
+    assert!(ok, "a hint alone passes");
+    let d = &payload["diagnostics"][0];
+    assert_eq!(d["severity"], "hint");
+    assert_eq!(d["line"], 9);
+
+    let (payload, ok) = check_json(f.path(), true);
+    assert!(!ok, "--strict fails on the same finding");
+    assert_eq!(payload["diagnostics"][0]["severity"], "error");
+}
+
+#[test]
+fn check_json_parse_error_is_reported_in_band() {
+    let tmp = temp_morph("predicate Foo(x: Subject)\n");
+    let (payload, ok) = check_json(tmp.path(), false);
+    assert!(!ok);
+    let diags = payload["diagnostics"].as_array().unwrap();
+    assert!(!diags.is_empty(), "parse errors appear in the JSON");
+    assert_eq!(diags[0]["severity"], "error");
 }
 
 // A lint-clean programme is identical under --strict.

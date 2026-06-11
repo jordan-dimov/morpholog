@@ -12,10 +12,10 @@
 //! name instead of by hand-coded position.
 //!
 //! No `--json` flag: a JSON Schema is JSON by definition. Errors
-//! follow the existing diagnostic style - parse failures via
-//! ariadne (handled by [`parse_or_exit`]), validation failures via
-//! plain `error: <message>` lines (handled by [`validate_or_exit`]),
-//! unknown transformation / intent as a single `error:` line.
+//! follow the existing diagnostic style - parse and validation
+//! failures via ariadne caret blocks (handled by [`parse_or_exit`]
+//! and [`validate_or_exit`]), unknown transformation / intent as a
+//! single `error:` line.
 //!
 //! Exits zero on success; non-zero on any error path. The schema
 //! itself never carries an error field - operational failures are
@@ -29,8 +29,9 @@ use morpholog_core::{
 };
 
 pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
-    let (program, _source, _source_name) = parse_or_exit(&args.file)?;
-    let validated = validate_or_exit(&program);
+    let parsed = parse_or_exit(&args.file)?;
+    let validated = validate_or_exit(&parsed);
+    let program = &parsed.program;
 
     // Clap enforces exactly-one-of `transformation` / `--intent` /
     // `--all`.
@@ -72,7 +73,7 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
         }
         return print_json(&serde_json::json!({
             "program": program.name,
-            "hash": crate::commands::hash::canonical_hash(&program),
+            "hash": crate::commands::hash::canonical_hash(program),
             "predicates": program.predicates,
             "transformation_order": transformation_order,
             "transformations": transformations,

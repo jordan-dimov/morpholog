@@ -46,10 +46,11 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             // authority, an unknown predicate matches nothing.)
             let named_program = match &args.named {
                 Some(file) => {
-                    let (program, _source, _name) = parse_or_exit(file)?;
-                    validate_or_exit(&program);
+                    let parsed = parse_or_exit(file)?;
+                    validate_or_exit(&parsed);
                     for requested in &args.predicate {
-                        if !program
+                        if !parsed
+                            .program
                             .predicates
                             .iter()
                             .any(|d| d.name.as_str() == requested.as_str())
@@ -58,11 +59,11 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                                 "requested predicate `{requested}` is not declared in `{}`; \
                                  declared: {}",
                                 file.display(),
-                                declared_predicates(&program),
+                                declared_predicates(&parsed.program),
                             );
                         }
                     }
-                    Some((program, file))
+                    Some((parsed.program, file))
                 }
                 None => None,
             };
@@ -187,8 +188,9 @@ fn decode_claims_named(
 ///   declared on the parsed programme.
 /// - Connection failure or kernel error: propagated via anyhow context.
 async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> {
-    let (program, _source, _name) = parse_or_exit(&args.file)?;
-    validate_or_exit(&program);
+    let parsed = parse_or_exit(&args.file)?;
+    validate_or_exit(&parsed);
+    let program = &parsed.program;
 
     let derived = program.derived_claim(&args.derived).ok_or_else(|| {
         let available = program
@@ -225,17 +227,17 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
 /// prints its declared predicates as JSON. Read-only and synchronous; no
 /// database connection.
 fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> {
-    let (program, _source, _name) = parse_or_exit(&args.file)?;
-    print_json(&program.predicates)
+    let parsed = parse_or_exit(&args.file)?;
+    print_json(&parsed.program.predicates)
 }
 
 /// Show a parsed programme's control matrix: per-transformation
 /// preconditions plus the invariant guarantees. Static and read-only -
 /// no database. Prose by default; `--json` emits the structured form.
 fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
-    let (program, _source, _name) = parse_or_exit(&args.file)?;
-    validate_or_exit(&program);
-    let matrix = morpholog_core::controls(&program);
+    let parsed = parse_or_exit(&args.file)?;
+    validate_or_exit(&parsed);
+    let matrix = morpholog_core::controls(&parsed.program);
     if args.json {
         print_json(&matrix)
     } else {
@@ -248,9 +250,10 @@ fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
 /// invariant. Static and read-only - no database. Prose by default;
 /// `--json` emits the structured form.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
-    let (program, _source, _name) = parse_or_exit(&args.file)?;
-    validate_or_exit(&program);
-    let guarantees = morpholog_core::guarantees(&program);
+    let parsed = parse_or_exit(&args.file)?;
+    validate_or_exit(&parsed);
+    let program = &parsed.program;
+    let guarantees = morpholog_core::guarantees(program);
     if args.json {
         print_json(&guarantees)
     } else {

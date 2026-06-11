@@ -37,26 +37,15 @@ pub enum DeclKind {
 /// Byte-offset spans for one parsed programme, keyed the way findings
 /// refer back to source: by declaration kind and name, plus the
 /// position of each top-level statement within a transformation body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SourceMap {
     decls: HashMap<(DeclKind, String), Span>,
     statements: HashMap<String, Vec<Span>>,
-    line_starts: Vec<usize>,
 }
 
 impl SourceMap {
-    pub(crate) fn new(source: &str) -> Self {
-        let mut line_starts = vec![0];
-        for (i, b) in source.bytes().enumerate() {
-            if b == b'\n' {
-                line_starts.push(i + 1);
-            }
-        }
-        Self {
-            decls: HashMap::new(),
-            statements: HashMap::new(),
-            line_starts,
-        }
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
     pub(crate) fn insert_decl(&mut self, kind: DeclKind, name: &str, span: Span) {
@@ -139,18 +128,6 @@ impl SourceMap {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
         }
-    }
-
-    /// 1-based line and column for a byte offset, computed against the
-    /// source this map was built from. Columns count bytes, which
-    /// matches what editors and `ariadne` show for ASCII-dominated
-    /// `.morph` text.
-    pub fn line_col(&self, offset: usize) -> (usize, usize) {
-        let line = self
-            .line_starts
-            .partition_point(|&start| start <= offset)
-            .saturating_sub(1);
-        (line + 1, offset - self.line_starts[line] + 1)
     }
 
     fn context_span(&self, context: &ValidationContext) -> Option<Span> {

@@ -1068,6 +1068,14 @@ async fn run_rejects_unbalanced_entry_via_invariant() {
         "rejection reason should name the failing invariant; got: {}",
         receipt["reason"]
     );
+    // The courtesy location line: stderr points at the violated
+    // rule's declaration in the source (the invariant sits at 9:1 in
+    // the temp programme). Stderr only - the stdout envelope above
+    // already parsed as the same pinned receipt shape.
+    assert!(
+        stderr.contains("rule at") && stderr.contains(":9:1 (balanced_posted_entry)"),
+        "stderr should locate the violated rule; got: {stderr}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2026,6 +2034,13 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
     assert!(
         stderr.contains("5 rows - 3 committed, 1 rejected, 1 errors"),
         "summary on stderr: {stderr}"
+    );
+    // The single-run rule-location courtesy line stays out of batch
+    // mode: receipts are the machine contract, and stderr carries
+    // only the summary.
+    assert!(
+        !stderr.contains("rule at"),
+        "no rule-location lines in batch mode; got: {stderr}"
     );
 }
 

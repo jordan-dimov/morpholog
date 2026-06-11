@@ -42,6 +42,6 @@ pub mod lexer;
 mod parser;
 mod source_map;
 
-pub use diagnostics::{Diagnostic, Severity, Span};
+pub use diagnostics::{Diagnostic, Severity, Span, line_col};
 pub use parser::{parse_expression, parse_program, parse_program_with_sources, parse_value_expr};
 pub use source_map::{DeclKind, SourceMap};

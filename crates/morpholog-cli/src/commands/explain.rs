@@ -28,10 +28,11 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same parse + validate front-end as `run`: a malformed programme
     // never reaches the explanation path. The returned
     // `ValidatedProgram` handle threads through to the codec.
-    let (program, _source, _source_name) = parse_or_exit(&args.file)?;
-    let validated = validate_or_exit(&program);
+    let parsed = parse_or_exit(&args.file)?;
+    let validated = validate_or_exit(&parsed);
+    let program = &parsed.program;
 
-    let transformation = lookup_transformation(&program, &args.transformation, &args.file)?;
+    let transformation = lookup_transformation(program, &args.transformation, &args.file)?;
 
     // Decode --args or --args-named via the same shared codec `run`
     // uses, so the two paths cannot drift on what is a valid input.
@@ -58,7 +59,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         actor: Subject::from(args.actor.clone()),
     };
 
-    let explanation = explain(&program, &transition, &state);
+    let explanation = explain(program, &transition, &state);
     if args.json {
         print_json(&explanation)
     } else {

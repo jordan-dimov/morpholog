@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{ValidationContext, ValidationError, lints};
-use morpholog_surface::{DeclKind, SourceMap, parse_program_with_sources};
+use morpholog_surface::{DeclKind, SourceMap, line_col, parse_program_with_sources};
 
 const SOURCE: &str = r#"
 program locating
@@ -199,12 +199,15 @@ fn a_lint_resolves_to_its_invariant() {
 
 #[test]
 fn line_col_is_one_based_lines_and_columns() {
-    let (_, map) = parsed();
-    assert_eq!(map.line_col(0), (1, 1));
+    assert_eq!(line_col(SOURCE, 0), (1, 1));
     let intent_offset = SOURCE.find("intent NotifyAudit").unwrap();
-    assert_eq!(map.line_col(intent_offset), (11, 1));
+    assert_eq!(line_col(SOURCE, intent_offset), (11, 1));
     let require_offset = SOURCE.find("require Account").unwrap();
-    assert_eq!(map.line_col(require_offset), (20, 5));
+    assert_eq!(line_col(SOURCE, require_offset), (20, 5));
+    assert_eq!(
+        line_col(SOURCE, SOURCE.len() + 100),
+        line_col(SOURCE, SOURCE.len())
+    );
 }
 
 #[test]

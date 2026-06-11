@@ -170,7 +170,7 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         return Err(diagnostics);
     }
 
-    let mut map = SourceMap::new(source);
+    let mut map = SourceMap::new();
     for (d, s) in &raw.predicates {
         map.insert_decl(DeclKind::Predicate, d.name.as_str(), s.clone());
     }

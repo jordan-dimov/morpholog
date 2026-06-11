@@ -18,22 +18,23 @@ use morpholog_postgres::{
 use crate::RunArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
-    connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
+    ParsedSource, connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
 };
 
 pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
     //    diagnostics (same path `check` and `parse` use).
-    let (program, _source, _source_name) = parse_or_exit(&args.file)?;
+    let parsed = parse_or_exit(&args.file)?;
 
     // 2. Validate. Same error shape as `check`; exits non-zero on
     //    validation failure so a malformed programme never reaches
     //    the proposal path. The returned `ValidatedProgram` handle
     //    threads through to the codec so it does not re-validate.
-    let validated = validate_or_exit(&program);
+    let validated = validate_or_exit(&parsed);
+    let program = &parsed.program;
 
     if let Some(batch_path) = &args.batch {
-        return run_batch(&args, &program, &validated, batch_path).await;
+        return run_batch(&args, program, &validated, batch_path).await;
     }
 
     // 3. Resolve the transformation. Clap guarantees it is present
@@ -44,7 +45,7 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
         // panic path in the binary.
         anyhow::bail!("a transformation name is required outside --batch");
     };
-    let transformation = lookup_transformation(&program, transformation_name, &args.file)?;
+    let transformation = lookup_transformation(program, transformation_name, &args.file)?;
 
     // 4. Decode --args or --args-named into `Vec<EvalValue>`. Clap
     //    has already enforced exactly-one-of via `conflicts_with` +
@@ -86,7 +87,8 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
                     "result": &outcome,
                     "trace": &trace,
                 }))?;
-                if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
+                if let PgProposalOutcome::Rejected { reason } = &outcome {
+                    print_rule_location(reason, &parsed);
                     std::process::exit(1);
                 }
             }
@@ -118,12 +120,13 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
         .context("propose_against_pg_with_rejection_state failed")?;
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
-                let explanation = explain(&program, &transition, &state);
+                let explanation = explain(program, &transition, &state);
                 print_json(&serde_json::json!({
                     "status": "rejected",
                     "reason": reason,
                     "explanation": explanation,
                 }))?;
+                print_rule_location(reason, &parsed);
                 std::process::exit(1);
             }
             _ => print_json(&outcome)?,
@@ -139,11 +142,33 @@ pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
         .await
         .context("propose_against_pg failed")?;
         print_json(&outcome)?;
-        if matches!(outcome, PgProposalOutcome::Rejected { .. }) {
+        if let PgProposalOutcome::Rejected { reason } = &outcome {
+            print_rule_location(reason, &parsed);
             std::process::exit(1);
         }
     }
     Ok(())
+}
+
+/// On a single-run rejection, point stderr at the rule: take the
+/// first backticked name in the reason, resolve it as an invariant
+/// declared in the source, and print `rule at <file>:<line>:<col>
+/// (<name>)`. A name the map cannot place (a generated discipline
+/// invariant, a gate refusal that names no invariant) prints
+/// nothing. Stderr only - every stdout envelope stays byte-identical
+/// - and single-run only: batch receipts are the machine contract.
+fn print_rule_location(reason: &str, parsed: &ParsedSource) {
+    let Some(name) = reason.split('`').nth(1) else {
+        return;
+    };
+    let Some(span) = parsed
+        .map
+        .decl_span(morpholog_surface::DeclKind::Invariant, name)
+    else {
+        return;
+    };
+    let (line, col) = morpholog_surface::line_col(&parsed.source, span.start);
+    eprintln!("rule at {}:{line}:{col} ({name})", parsed.source_name);
 }
 
 /// One NDJSON batch row: a self-contained transition naming its own
