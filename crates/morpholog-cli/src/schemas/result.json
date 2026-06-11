@@ -302,6 +302,108 @@
         }
       ]
     },
+    "audit_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id",
+        "transformation_name",
+        "arguments",
+        "actor",
+        "invariant_epoch",
+        "invariants_checked",
+        "asserted_claims",
+        "retracted_claims",
+        "emitted_intents",
+        "committed_at"
+      ],
+      "properties": {
+        "transition_id": { "type": "string", "format": "uuid" },
+        "transformation_name": { "type": "string" },
+        "arguments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tagged_value" }
+        },
+        "actor": { "$ref": "#/$defs/tagged_value" },
+        "invariant_epoch": { "type": "integer" },
+        "invariants_checked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "version"],
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "asserted_claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/claim_instance" }
+        },
+        "retracted_claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/claim_instance" }
+        },
+        "emitted_intents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/intent_instance" }
+        },
+        "committed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "audit_row_named": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id",
+        "transformation_name",
+        "arguments",
+        "actor",
+        "invariant_epoch",
+        "invariants_checked",
+        "asserted_claims",
+        "retracted_claims",
+        "emitted_intents",
+        "committed_at"
+      ],
+      "properties": {
+        "transition_id": { "type": "string", "format": "uuid" },
+        "transformation_name": { "type": "string" },
+        "arguments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tagged_value" }
+        },
+        "actor": { "$ref": "#/$defs/tagged_value" },
+        "invariant_epoch": { "type": "integer" },
+        "invariants_checked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "version"],
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "asserted_claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/named_claim" }
+        },
+        "retracted_claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/named_claim" }
+        },
+        "emitted_intents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/intent_instance" }
+        },
+        "committed_at": { "type": "string", "format": "date-time" }
+      }
+    },
     "outbox_row": {
       "type": "object",
       "additionalProperties": false,

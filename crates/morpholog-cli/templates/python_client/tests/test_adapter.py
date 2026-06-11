@@ -37,6 +37,21 @@ if mode == "record_argv":
         f.write("\\n".join(sys.argv[1:]))
     print("[]")
     sys.exit(0)
+if mode == "record_argv_empty":
+    with open(os.environ["STUB_ARGV_FILE"], "w") as f:
+        f.write("\\n".join(sys.argv[1:]))
+    sys.exit(0)
+if mode == "audit_ndjson":
+    row = ('{"transition_id": "01900000-0000-7000-8000-00000000000%d", '
+           '"transformation_name": "post", "arguments": [], '
+           '"actor": {"type": "subject", "value": "alex"}, '
+           '"invariant_epoch": 1, "invariants_checked": [], '
+           '"asserted_claims": [], "retracted_claims": [], '
+           '"emitted_intents": [], '
+           '"committed_at": "2026-06-01T12:00:0%d.000000Z"}')
+    print(row % (1, 1))
+    print(row % (2, 2))
+    sys.exit(0)
 raise SystemExit(f"unknown STUB_MODE {mode}")
 """
 
@@ -123,6 +138,57 @@ class AdapterDiscrimination(unittest.TestCase):
             argv = argv_after(lambda: self.client.claims("OfficialCurve"))
             self.assertNotIn("--as-of", argv)
             self.assertNotIn("--named", argv)
+
+    def test_audit_flags_land_on_argv_exactly_when_supplied(self):
+        # The four-case matrix for the audit tail: --after and --named
+        # each appear exactly when asked for.
+        self._mode("record_argv_empty")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                return open(record.name).read().split("\n")
+
+            tid = "01900000-0000-7000-8000-000000000001"
+            argv = argv_after(lambda: self.client.audit_named(after=tid))
+            self.assertIn("--after", argv)
+            self.assertEqual(argv[argv.index("--after") + 1], tid)
+            self.assertIn("--named", argv)
+
+            argv = argv_after(lambda: self.client.audit_named())
+            self.assertNotIn("--after", argv)
+            self.assertIn("--named", argv)
+
+            argv = argv_after(lambda: self.client.audit(after=tid))
+            self.assertIn("--after", argv)
+            self.assertNotIn("--named", argv)
+
+            argv = argv_after(lambda: self.client.audit())
+            self.assertNotIn("--after", argv)
+            self.assertNotIn("--named", argv)
+
+    def test_audit_empty_tail_is_a_lawful_empty_list(self):
+        self._mode("record_argv_empty")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+            self.assertEqual(self.client.audit(), [])
+
+    def test_audit_parses_one_row_per_ndjson_line_in_order(self):
+        self._mode("audit_ndjson")
+        rows = self.client.audit()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0].transition_id.endswith("1"))
+        self.assertTrue(rows[1].transition_id.endswith("2"))
+        self.assertEqual(rows[0].actor, "alex")
+
+    def test_audit_operational_failure_raises_with_stderr(self):
+        self._mode("operational_failure")
+        with self.assertRaises(MorphologError) as caught:
+            self.client.audit()
+        self.assertIn("failed to connect", str(caught.exception))
 
     def test_submit_is_duck_typed_on_the_request_protocol(self):
         self._mode("rejected_exit_1")

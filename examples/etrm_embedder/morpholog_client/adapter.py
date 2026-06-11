@@ -194,6 +194,46 @@ class Morpholog:
         )
         return [envelopes.NamedClaim.from_json(c) for c in payload]
 
+    def audit(self, after: str | None = None) -> list:
+        """The audit tail: committed transitions in commit order, one
+        ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
+        a previously seen transition id - lossless: rows whose writers
+        were still in flight are withheld until the next call, never
+        skipped. An empty tail is a lawful empty list."""
+        return [
+            envelopes.AuditRow.from_json(row)
+            for row in self._audit_lines(after, named=False)
+        ]
+
+    def audit_named(self, after: str | None = None) -> list:
+        """The audit tail with asserted/retracted claims decoded by
+        declared field name under this programme's authority (skew is
+        a hard error on the binary side). ``arguments`` and intent
+        payloads stay positional - a different vocabulary."""
+        return [
+            envelopes.AuditRowNamed.from_json(row)
+            for row in self._audit_lines(after, named=True)
+        ]
+
+    def _audit_lines(self, after: str | None, named: bool) -> list:
+        # Not _invoke: an empty tail is a lawful empty stdout, not a
+        # protocol violation - so the discrimination here is on the
+        # exit code alone.
+        argv = [self.binary, "inspect", "audit"]
+        if after is not None:
+            argv.extend(["--after", after])
+        if named:
+            argv.extend(["--named", self.file])
+        argv.extend(["--database-url", self.database_url])
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise MorphologError(
+                f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
+            )
+        return [
+            json.loads(line) for line in proc.stdout.splitlines() if line.strip()
+        ]
+
     def coverage(self) -> envelopes.CoverageReport:
         """Replay the audit log and report which rules have ever
         actually done work - per invariant, whether its condition ever

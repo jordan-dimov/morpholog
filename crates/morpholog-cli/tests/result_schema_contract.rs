@@ -32,7 +32,7 @@ use morpholog_core::ir_builder::{
 use morpholog_core::{
     ClaimInstance, CoverageTracker, EvalValue, IntentInstance, State, Subject, Transition, explain,
 };
-use morpholog_postgres::{OutboxRow, PgProposalOutcome};
+use morpholog_postgres::{AuditRow, AuditedInvariantCheck, OutboxRow, PgProposalOutcome};
 use rust_decimal::Decimal;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -225,6 +225,48 @@ fn outbox_row_serializes_as_pinned() {
         "outbox_update_lease_lost.json",
         &serde_json::json!({ "status": "lease_lost" }),
     );
+}
+
+// The audit tail's row, byte-equal to the AuditRow the adapter
+// serialises - the shape every `inspect audit` line carries.
+#[test]
+fn audit_rows_serialize_as_pinned() {
+    let row = AuditRow {
+        transition_id: sample_uuid(),
+        transformation_name: "open_account".into(),
+        arguments: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        actor: Subject::from("alex"),
+        invariant_epoch: 1,
+        invariants_checked: vec![AuditedInvariantCheck {
+            name: "account_unique_by_account_id".into(),
+            version: 1,
+        }],
+        asserted_claims: vec![kitchen_sink_claim()],
+        retracted_claims: vec![],
+        emitted_intents: vec![IntentInstance {
+            name: "AccountOpened".into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        }],
+        committed_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+    };
+    assert_golden("audit_row.json", &to_value(&row));
+
+    // The --named form replaces the two claim arrays with
+    // field-keyed bare objects (the named_claim shape) and leaves
+    // everything else byte-identical. The live binary's construction
+    // is pinned by cli_integration; this golden pins the bytes the
+    // Python tests consume.
+    let mut named = to_value(&row);
+    let obj = named.as_object_mut().unwrap();
+    obj.insert(
+        "asserted_claims".to_string(),
+        serde_json::json!([{
+            "predicate": "Account",
+            "args": { "account_id": "acct_1", "balance": "100.50" }
+        }]),
+    );
+    obj.insert("retracted_claims".to_string(), serde_json::json!([]));
+    assert_golden("audit_row_named.json", &named);
 }
 
 // Composite envelopes, built exactly the way commands/run.rs builds
@@ -488,6 +530,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("outbox_update_applied.json", "outbox_update"),
         ("outbox_update_lease_lost.json", "outbox_update"),
         ("coverage_report.json", "coverage_report"),
+        ("audit_row.json", "audit_row"),
+        ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("hash_report.json", "hash_report"),
         ("init_report.json", "init_report"),

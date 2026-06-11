@@ -210,6 +210,20 @@ def main() -> None:
         f"today it is {pointer.official_price_id}"
     )
 
+    # The projector's tail: the read side of an ETRM does not poll
+    # claims, it folds the audit log - every transition since its
+    # cursor, in commit order, claims decoded by declared field name.
+    # Resuming from the confirmation replays exactly what happened
+    # after it; the next poll would pass the last line's id.
+    print("9. the projector's tail: fold the settlements after the confirmation")
+    for row in morph.audit_named(after=confirmed.transition_id):
+        for claim in row.asserted_claims:
+            if claim.predicate == "TradeSettled":
+                print(
+                    f"    blotter: {claim.args['settlement_id']} settled "
+                    f"{claim.args['settled_qty']} (transition {row.transition_id})"
+                )
+
     print(f"\n--- interface friction this lifecycle still hits ---\n  {READ_SURFACE_FRICTION}")
 
 

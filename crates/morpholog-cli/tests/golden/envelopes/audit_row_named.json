@@ -1,0 +1,43 @@
+{
+  "actor": {
+    "type": "subject",
+    "value": "alex"
+  },
+  "arguments": [
+    {
+      "type": "subject",
+      "value": "acct_1"
+    }
+  ],
+  "asserted_claims": [
+    {
+      "args": {
+        "account_id": "acct_1",
+        "balance": "100.50"
+      },
+      "predicate": "Account"
+    }
+  ],
+  "committed_at": "2026-06-01T12:00:00Z",
+  "emitted_intents": [
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "acct_1"
+        }
+      ],
+      "name": "AccountOpened"
+    }
+  ],
+  "invariant_epoch": 1,
+  "invariants_checked": [
+    {
+      "name": "account_unique_by_account_id",
+      "version": 1
+    }
+  ],
+  "retracted_claims": [],
+  "transformation_name": "open_account",
+  "transition_id": "01900000-0000-7000-8000-000000000001"
+}
