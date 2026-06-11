@@ -25,121 +25,154 @@ mod commands;
 
 /// Top-level Morpholog CLI.
 #[derive(Parser, Debug)]
-#[command(version, about = "Morpholog runtime CLI", long_about = None)]
+#[command(
+    version,
+    about = "Business rules the database itself enforces: declare them once in a \
+             .morph file, and no change that breaks them can ever commit.",
+    help_template = "{name} {version}\n{about-with-newline}\n{usage-heading} {usage}\n\n{all-args}{after-help}",
+    after_help = "Getting started:\n  \
+        morpholog check rules.morph        are my rules sound?\n  \
+        morpholog init                     set up the database tables\n  \
+        morpholog run rules.morph <transformation> --actor you --args-named '{...}'\n  \
+        morpholog inspect claims           what is admitted right now?\n\n\
+        Database commands read the connection from --database-url or $DATABASE_URL.\n\
+        Every command has deeper help: morpholog help <command>."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
 
+// Listed in the order a new user meets them: write rules, set up a
+// database, propose changes, ask why, look at what happened - then
+// the integrity, contract, and plumbing commands. The first doc line
+// of each variant is the whole story a beginner needs; the paragraphs
+// after it are the depth `morpholog help <command>` shows.
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Inspect the durable state of a Morpholog database.
+    /// Check that a `.morph` file parses and its rules are sound.
+    ///
+    /// Validates the whole programme: declarations and arity for
+    /// predicates and intents, kind/type compatibility, binding flow
+    /// (unbound variables), expression shape, actor context, and a
+    /// nesting-depth bound. Exits zero on a clean programme -
+    /// silently by default, with a one-screen summary under
+    /// `--verbose`; hint-grade lints print to stderr and `--strict`
+    /// promotes them to errors. Exits one with diagnostics pointing
+    /// at the source line on either a parse or a validation failure.
+    Check(CheckArgs),
+
+    /// Set up the Morpholog tables in an existing PostgreSQL database.
+    ///
+    /// Provisions the schema (claims, audit, outbox, rejections) from
+    /// the canonical copy embedded in this binary, so a binary-only
+    /// deployment provisions exactly the schema this build expects -
+    /// nothing to vendor, nothing to drift. Day-zero only: refuses if
+    /// the `morpholog` schema already exists (`--skip-if-exists`
+    /// reports and exits zero instead, for idempotent entrypoints);
+    /// never drops, never migrates.
+    Init(InitArgs),
+
+    /// Propose a change: it commits only if every rule holds.
+    ///
+    /// Parses and validates the `.morph` source, then proposes the
+    /// named transformation with the supplied actor and arguments
+    /// (`--args-named` for a field-keyed object, `--args` for the
+    /// tagged positional form). On commit, prints the outcome as JSON
+    /// and exits zero; on a refusal, prints the reason and exits one
+    /// (a lawful answer, on the record); on any other error - bad
+    /// args, unknown transformation, connection failure - prints to
+    /// stderr and exits one. `--batch -` admits NDJSON rows from
+    /// stdin, one receipt per row; `--explain-on-reject` attaches the
+    /// structured explanation to refusals.
+    Run(RunArgs),
+
+    /// Preview whether a change would be admitted or refused, and why.
+    ///
+    /// Nothing is committed and nothing is recorded: this is a
+    /// dry-run diagnosis against live state. Renders the gate that
+    /// would fail with the directly-missing claims, the violated
+    /// invariant, or admissibility - as plain prose, or as JSON with
+    /// `--json`. The verdict does not affect the exit code (zero on
+    /// both admissible and refused); only operational failures exit
+    /// non-zero.
+    Explain(ExplainArgs),
+
+    /// Look inside a running system: state, history, refusals, rules.
+    ///
+    /// Every view is read-only. `claims` and `derived` read what is
+    /// admitted (now, or at any past moment via `--as-of`); `audit`
+    /// streams the full history of committed changes; `rejections`
+    /// lists refusals; `coverage`, `guarantees`, `controls`, and
+    /// `predicates` answer what the rules forbid, require, and have
+    /// actually been doing.
     Inspect {
         #[command(subcommand)]
         what: Inspect,
     },
 
-    /// Parse a `.morph` source file. On success, prints the parsed
-    /// `Program` as JSON and exits zero. On parse failure, renders
-    /// ariadne-formatted diagnostics to stderr and exits one.
-    Parse(SourceFileArgs),
+    /// Check that the claims table and the audit log still agree.
+    ///
+    /// The two tables are independent records of the same history, so
+    /// replaying the audit log must land on exactly the current
+    /// claims - a difference is evidence that one was modified
+    /// outside the runtime. Prints the outcome as JSON; consistent
+    /// exits zero, divergent prints the claims each record holds that
+    /// the other does not and exits one. Read-only; an empty database
+    /// is trivially consistent.
+    Verify(DatabaseArgs),
 
-    /// Parse and validate a `.morph` source file. If parsing succeeds,
-    /// runs `Program::validate()` against the IR: declarations and arity
-    /// for predicates and intents, kind/type compatibility, binding flow
-    /// (unbound variables), expression shape, actor context, and a
-    /// nesting-depth bound. Exits zero on a clean programme - silently by
-    /// default, or with a one-screen summary of what validated under
-    /// `--verbose`; exits one with uniform diagnostics on either a parse
-    /// or a validation failure.
-    Check(CheckArgs),
+    /// Print a stable fingerprint of a programme's rules.
+    ///
+    /// SHA-256 over the canonical (formatter-rendered) source, as
+    /// `{"program": ..., "hash": "sha256:..."}`. Formatting-only
+    /// edits do not change the hash and comments do not survive
+    /// canonicalisation, so this is rules-identity, not
+    /// file-identity - the right value for a ruleset version in
+    /// deployment metadata or an evidence pack. Only a valid
+    /// programme hashes.
+    Hash(SourceFileArgs),
 
-    /// Propose a transformation defined in a `.morph` source file against
-    /// a Morpholog PostgreSQL database. Parses and validates the source,
-    /// then proposes the named transformation with the supplied actor and
-    /// a JSON array of `EvalValue` args. On commit, prints the outcome as
-    /// JSON and exits zero; on business rejection, prints the reason and
-    /// exits one; on any other error (bad args, unknown transformation,
-    /// connection failure), prints to stderr and exits one.
-    Run(RunArgs),
+    /// Print the JSON Schema contracts an external system integrates against.
+    ///
+    /// A named transformation's argument object, an intent's payload
+    /// (`--intent <Type>`), the machine-readable outcome envelopes
+    /// (`--result`), or one manifest covering the whole programme
+    /// (`--all`: every schema, the predicate vocabulary, the
+    /// declaration-order arrays, and the canonical model hash). The
+    /// schema is the public contract a non-Rust embedder uses to
+    /// validate request bodies, generate forms, or derive typed
+    /// models without touching Rust. Output is JSON Schema (Draft
+    /// 2020-12); no `--json` flag because the output IS JSON.
+    Schema(SchemaArgs),
 
-    /// Explain why a transformation from a `.morph` source file would be
-    /// admitted or rejected against live state, without proposing it.
-    /// Parses and validates the source like `run`, loads the scoped
-    /// pre-state, then renders the structured explanation - the gate that
-    /// failed and the directly-missing claims, the violated invariant, or
-    /// admissibility - as claim-shaped prose, or as JSON with `--json`.
-    /// Read-only: the verdict does not affect the exit code (zero on both
-    /// admissible and rejected). Only operational failures - parse or
-    /// validation errors, bad `--args`, an unknown transformation, a
-    /// database failure - exit non-zero.
-    Explain(ExplainArgs),
+    /// Generate a typed client that speaks exactly this binary's contract.
+    ///
+    /// The client is a projection of the programme, like the schema
+    /// and the envelopes; generating it here is what keeps it from
+    /// being hand-maintained downstream, where it drifts.
+    Generate {
+        #[command(subcommand)]
+        what: GenerateCmd,
+    },
 
-    /// Drive the outbox state machine from outside Rust. Lets a
-    /// shell or Python deliverer participate in the lease protocol
-    /// (`claim` to acquire a row, `complete` to resolve it,
-    /// `release` to abandon it back to pending) without writing a
-    /// `Deliverer` trait impl.
+    /// Drive outbox delivery from a shell or script.
+    ///
+    /// Lets any external deliverer participate in the lease protocol
+    /// (`claim` to acquire a row, `complete` to resolve it, `release`
+    /// to abandon it back to pending) without writing a Rust
+    /// `Deliverer` impl.
     Outbox {
         #[command(subcommand)]
         what: OutboxCmd,
     },
 
-    /// Emit a JSON Schema describing a named transformation's argument
-    /// object, or (with `--intent <Type>`) an emitted intent's payload
-    /// object - or, with `--all`, one manifest covering the whole
-    /// programme (every schema, the predicate vocabulary, the
-    /// declaration-order arrays, and the canonical model hash). Thin
-    /// wrapper over
-    /// the library's `transformation_arg_schema`
-    /// / `intent_arg_schema`: parse, validate, render. The schema is the
-    /// public contract a non-Rust embedder uses to validate request
-    /// bodies, generate input forms, decode an outbox payload by name, or
-    /// derive typed client models without touching Rust. Output is a JSON
-    /// Schema (Draft 2020-12); exits zero on success, non-zero on parse /
-    /// validation failure or an unknown transformation / intent. No
-    /// `--json` flag because the output IS JSON.
-    Schema(SchemaArgs),
-
-    /// Provision the Morpholog schema (claims, audit, outbox) in an
-    /// existing PostgreSQL database, from the canonical schema embedded
-    /// in this binary - so a binary-only deployment provisions exactly
-    /// the schema this build expects, with nothing to vendor and
-    /// nothing to drift. Day-zero only: refuses if the `morpholog`
-    /// schema already exists (`--skip-if-exists` reports and exits
-    /// zero instead, for idempotent entrypoints); never drops, never
-    /// migrates.
-    Init(InitArgs),
-
-    /// Emit a stable content hash of a `.morph` programme's rules:
-    /// SHA-256 over the canonical (formatter-rendered) source, as
-    /// `{"program": ..., "hash": "sha256:..."}`. Formatting-only edits
-    /// do not change the hash; comments do not survive
-    /// canonicalisation, so this is rules-identity, not
-    /// file-identity - the right value for a ruleset_version in
-    /// deployment metadata or an evidence pack. Only a valid
-    /// programme hashes; parse or validation failures exit non-zero.
-    Hash(SourceFileArgs),
-
-    /// Replay the audit log to its latest transition and compare the
-    /// reconstructed state against the claims table. The two tables are
-    /// independent records of the same history, so a difference is
-    /// evidence that one was modified outside the runtime. Prints the
-    /// outcome as JSON; consistent exits zero, divergent prints the
-    /// claims each record holds that the other does not and exits one.
-    /// Read-only; an empty database is trivially consistent.
-    Verify(DatabaseArgs),
-
-    /// Generate a typed client for a `.morph` programme, so an embedder
-    /// speaks exactly the contract this binary speaks - the same
-    /// argument that embeds the schema in `init`. The client is a
-    /// projection of the programme, like the schema and the envelopes;
-    /// generating it here is what keeps it from being hand-maintained
-    /// downstream, where it drifts.
-    Generate {
-        #[command(subcommand)]
-        what: GenerateCmd,
-    },
+    /// Print a `.morph` file's internal representation as JSON.
+    ///
+    /// A debugging view of the parsed `Program`; `check` is the
+    /// command that answers whether the programme is sound. On parse
+    /// failure, renders diagnostics to stderr and exits one.
+    Parse(SourceFileArgs),
 }
 
 /// Client-generation targets. One language per worked embedder that
@@ -322,66 +355,79 @@ pub(crate) struct OutboxReleaseArgs {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Inspect {
-    /// List currently-admitted claims, or claims as they were at a past
-    /// `transition_id` via `--as-of`. A repeatable `--predicate <Name>`
-    /// narrows either read to the named predicates - the targeted query
-    /// an embedder uses to read governed state back.
+    /// List what is admitted right now - or at any past moment.
+    ///
+    /// A repeatable `--predicate <Name>` narrows the read to the
+    /// named predicates - the targeted query an embedder uses to read
+    /// governed state back; `--named <file.morph>` decodes arguments
+    /// by declared field name under that programme's authority.
+    /// `--as-of` reads the state as it was at a past transition id or
+    /// RFC 3339 timestamp.
     Claims(InspectClaimsArgs),
-    /// Stream committed transitions as NDJSON, one per line, in
-    /// commit order - the blessed tail for downstream projectors.
+    /// Compute a read-side view (a derived claim) from the admitted state.
+    ///
+    /// Enumerates the named derived claim against current state, or
+    /// against a past state via `--as-of`. Read-only: no claims are
+    /// written, no audit row is produced.
+    Derived(InspectDerivedArgs),
+    /// Stream the history of committed changes, one JSON line each.
+    ///
+    /// Commit order, the blessed tail for downstream projectors.
     /// `--after <transition_id>` resumes strictly after a previously
     /// seen transition (lossless: rows whose writers were still in
     /// flight are withheld until the next invocation, never skipped).
     /// `--named <file.morph>` decodes the asserted/retracted claim
     /// arrays by declared field name under that programme's
     /// authority; `arguments` and `emitted_intents` stay tagged.
-    /// `--as-of` does not apply: the audit table IS the
-    /// chronological record.
+    /// `--as-of` does not apply: the audit table IS the chronological
+    /// record.
     Audit(InspectAuditArgs),
-    /// List recorded rejections, in rejection order: who proposed
-    /// what, and which rule refused it. Operational evidence, written
-    /// after each rollback at-most-once - the audit table remains the
-    /// legitimacy-grade record of what was admitted.
+    /// List every refusal: who proposed what, and which rule said no.
+    ///
+    /// Operational evidence, written after each rollback
+    /// at-most-once - the audit table remains the legitimacy-grade
+    /// record of what was admitted.
     Rejections(DatabaseArgs),
-    /// List outbox rows, in enqueue order. Defaults to `--status
-    /// pending`; use `--status all` for a full view, or any of
-    /// `delivered|failed|in-progress` for a specific slice. `--as-of`
-    /// does not apply: outbox is delivery state, not claim state.
-    Outbox(InspectOutboxArgs),
-    /// Enumerate a derived claim from a `.morph` source file against the
-    /// current state, or against the state at a past `transition_id`
-    /// via `--as-of`. Read-only: no claims are written, no audit row
-    /// is produced.
-    Derived(InspectDerivedArgs),
-    /// List the declared predicate vocabulary of a `.morph` source file.
-    /// Read-only: no database connection, no state. The declarations
-    /// are static programme metadata, the same data `Program::validate`
-    /// checks references against.
-    Predicates(InspectPredicatesArgs),
-    /// Show the states a `.morph` programme makes impossible - one entry
-    /// per invariant, naming the forbidden state where it is
-    /// mechanically obvious. Read-only and static: no database, no
-    /// state. Prose by default; `--json` for the structured form.
-    Guarantees(InspectGuaranteesArgs),
-    /// Show a programme's control matrix: what must already be true
-    /// before each action (every transformation's `require` and `bind`
-    /// preconditions, with the predicates each consults) and what can
-    /// never be true (the invariant guarantees). The view an auditor
-    /// reads, and the table a compliance mapping cites rule by rule.
-    /// Read-only and static: no database, no state. Prose by default;
-    /// `--json` for the structured form.
-    Controls(InspectGuaranteesArgs),
-    /// Replay the audit log and report, per invariant, whether its
-    /// condition ever matched anything - which rules have actually
-    /// done work, which have only ever been trivially true, and which
+    /// Report which rules have actually done work over the history.
+    ///
+    /// Replays the audit log and reports, per invariant, whether its
+    /// condition ever matched anything - which rules have fired,
+    /// which have only ever been trivially true, which
     /// transformations have never been used - and, from the
-    /// operational rejection log, which rules have demonstrably
-    /// refused a proposal (the `constrained` verdict). Read-only;
-    /// replays under a deferrable serializable snapshot, safe against
+    /// rejection log, which rules have demonstrably refused a
+    /// proposal (the `constrained` verdict). Read-only, safe against
     /// a live system. Prose with a legend by default; `--json` for
     /// the structured form. Always exits zero: coverage answers a
     /// question, it does not enforce.
     Coverage(InspectCoverageArgs),
+    /// Show the states a programme makes impossible, rule by rule.
+    ///
+    /// One entry per invariant, naming the forbidden state where it
+    /// is mechanically obvious. Static: no database, no state. Prose
+    /// by default; `--json` for the structured form.
+    Guarantees(InspectGuaranteesArgs),
+    /// Show what each action requires first, and what can never hold.
+    ///
+    /// The control matrix: every transformation's `require` and
+    /// `bind` preconditions with the predicates each consults, beside
+    /// the invariant guarantees. The view an auditor reads, and the
+    /// table a compliance mapping cites rule by rule. Static: no
+    /// database, no state. Prose by default; `--json` for the
+    /// structured form.
+    Controls(InspectGuaranteesArgs),
+    /// List the kinds of claims a programme declares.
+    ///
+    /// Static programme metadata - the same declarations
+    /// `Program::validate` checks references against. No database
+    /// connection.
+    Predicates(InspectPredicatesArgs),
+    /// List outbox intents awaiting (or past) delivery.
+    ///
+    /// Enqueue order; defaults to `--status pending`. Use `--status
+    /// all` for a full view, or any of `delivered|failed|in-progress`
+    /// for a slice. `--as-of` does not apply: outbox is delivery
+    /// state, not claim state.
+    Outbox(InspectOutboxArgs),
 }
 
 /// Arguments for `inspect coverage`: a `.morph` source file, the
