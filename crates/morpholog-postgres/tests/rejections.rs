@@ -337,3 +337,34 @@ async fn sequential_rejections_each_record_in_replay_order() {
         "each batch-style sequential rejection records, in order"
     );
 }
+
+// The kind/version agreement is enforced by the table itself, not
+// only by the writer: a versioned gate or an unversioned invariant
+// cannot be inserted even by hand - the operational evidence is hard
+// to corrupt manually.
+#[tokio::test]
+async fn the_table_refuses_kind_version_disagreement() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    for (kind, version) in [("require", Some(2_i64)), ("invariant", None)] {
+        let result = sqlx::query(
+            "INSERT INTO morpholog.rejections (
+                rejection_id, transformation_name, arguments, actor,
+                kind, rule, invariant_version, reason
+             ) VALUES ($1, $2, '[]'::jsonb, '{\"type\":\"subject\",\"value\":\"x\"}'::jsonb,
+                       $3, 'r', $4, 'reason')",
+        )
+        .bind(uuid::Uuid::now_v7())
+        .bind("hand_written")
+        .bind(kind)
+        .bind(version)
+        .execute(&pool)
+        .await;
+        let err = result.expect_err("kind/version disagreement must be refused");
+        assert!(
+            err.to_string().contains("rejections_kind_version_agree"),
+            "the CHECK constraint names itself: {err}"
+        );
+    }
+}

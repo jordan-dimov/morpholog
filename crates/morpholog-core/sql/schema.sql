@@ -75,7 +75,13 @@ CREATE TABLE rejections (
     rule                 text         NOT NULL,
     invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
-    rejected_at          timestamptz  NOT NULL DEFAULT now()
+    rejected_at          timestamptz  NOT NULL DEFAULT now(),
+    -- The writer never emits a versioned gate or an unversioned
+    -- invariant; the constraint keeps hand-edits from corrupting
+    -- the operational evidence either way.
+    CONSTRAINT rejections_kind_version_agree CHECK (
+        (kind = 'invariant') = (invariant_version IS NOT NULL)
+    )
 );
 
 -- Keyset replay order for coverage, mirroring audit_committed_at.

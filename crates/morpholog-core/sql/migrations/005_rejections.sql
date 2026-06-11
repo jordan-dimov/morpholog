@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS rejections (
     rule                 text         NOT NULL,
     invariant_version    bigint,
     reason               text         NOT NULL,
-    rejected_at          timestamptz  NOT NULL DEFAULT now()
+    rejected_at          timestamptz  NOT NULL DEFAULT now(),
+    CONSTRAINT rejections_kind_version_agree CHECK (
+        (kind = 'invariant') = (invariant_version IS NOT NULL)
+    )
 );
 
 CREATE INDEX IF NOT EXISTS rejections_rejected_at

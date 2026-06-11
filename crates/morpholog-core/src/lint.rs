@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use crate::definitions::DefinitionIndex;
 use crate::disciplines::append_only_predicates;
-use crate::ir::{Discipline, PredicateName, Program, Prop, ValueExpr};
+use crate::ir::{Discipline, PredicateName, Program, Prop, Term, ValueExpr};
 
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,12 +90,13 @@ pub fn lints(program: &Program) -> Vec<Lint> {
             true,
             definitions,
             &mut BTreeSet::new(),
+            &mut Vec::new(),
             &mut implications,
         );
-        for (antecedent, consequent) in implications {
+        for implication in implications {
             let mut antecedent_refs = BTreeSet::new();
             positive_claims(
-                antecedent,
+                implication.antecedent,
                 true,
                 definitions,
                 &mut BTreeSet::new(),
@@ -103,7 +104,7 @@ pub fn lints(program: &Program) -> Vec<Lint> {
             );
             let mut consequent_refs = BTreeSet::new();
             positive_claims(
-                consequent,
+                implication.consequent,
                 true,
                 definitions,
                 &mut BTreeSet::new(),
@@ -123,6 +124,24 @@ pub fn lints(program: &Program) -> Vec<Lint> {
     out
 }
 
+/// One `Defined` call traversed on the way to a collected
+/// implication: the definition's name plus the argument terms at the
+/// call site. Coverage replays the chain through the canonical call
+/// frames so a call-site-constrained antecedent (a literal argument,
+/// a pre-bound variable) is evaluated under that constraint instead
+/// of with the definition's parameters free; the lint ignores it
+/// (substitution never changes predicate names).
+pub(crate) type DefinedCall<'a> = (&'a crate::ir::DefinitionName, &'a [Term]);
+
+/// One collected implication: antecedent, consequent, and the stack
+/// of `Defined` calls (outermost first) it was found under - empty
+/// for an implication spelled directly in the invariant body.
+pub(crate) struct CollectedImplication<'a> {
+    pub(crate) antecedent: &'a Prop,
+    pub(crate) consequent: &'a Prop,
+    pub(crate) calls: Vec<DefinedCall<'a>>,
+}
+
 /// Every `Implies` node the invariant actually ASSERTS - collected
 /// only at positive polarity, because a negated implication
 /// (`not (A implies B)` is `A and not B`) and an implication sitting
@@ -131,28 +150,31 @@ pub fn lints(program: &Program) -> Vec<Lint> {
 /// `Not` flips it; an `Implies` flips its own left side. `Defined`
 /// calls descend into their bodies (recursion-stack guard against
 /// cycles, the walker red line): an implication hidden behind a named
-/// condition is still an implication the invariant asserts. The collected
-/// antecedent/consequent references may therefore point into a
-/// definition's body, where variables are the definition's
-/// parameters - free from the caller's perspective, which is exactly
-/// the "does this bind for ANY arguments" reading both consumers
-/// (the lint and coverage) want.
+/// condition is still an implication the invariant asserts. The
+/// collected antecedent/consequent references may therefore point
+/// into a definition's body; each implication carries the call chain
+/// it was found under so coverage can evaluate it in call context.
 pub(crate) fn collect_implications<'a>(
     prop: &'a Prop,
     positive: bool,
     definitions: DefinitionIndex<'a>,
     seen: &mut BTreeSet<crate::ir::DefinitionName>,
-    out: &mut Vec<(&'a Prop, &'a Prop)>,
+    calls: &mut Vec<DefinedCall<'a>>,
+    out: &mut Vec<CollectedImplication<'a>>,
 ) {
     match prop {
         Prop::Implies { left, right } => {
             if positive {
-                out.push((left, right));
+                out.push(CollectedImplication {
+                    antecedent: left,
+                    consequent: right,
+                    calls: calls.clone(),
+                });
             }
-            collect_implications(left, !positive, definitions, seen, out);
-            collect_implications(right, positive, definitions, seen, out);
+            collect_implications(left, !positive, definitions, seen, calls, out);
+            collect_implications(right, positive, definitions, seen, calls, out);
         }
-        Prop::Defined { name, .. } => {
+        Prop::Defined { name, args } => {
             // `seen` is a recursion-STACK guard, not a visited set:
             // polarity is part of the meaning here, so the same
             // definition called again at a different polarity must be
@@ -160,7 +182,9 @@ pub(crate) fn collect_implications<'a>(
             // cycles still terminate (re-entry while on the stack).
             if seen.insert(name.clone()) {
                 if let Some(def) = definitions.get(name) {
-                    collect_implications(&def.body, positive, definitions, seen, out);
+                    calls.push((name, args));
+                    collect_implications(&def.body, positive, definitions, seen, calls, out);
+                    calls.pop();
                 }
                 seen.remove(name);
             }
@@ -168,20 +192,20 @@ pub(crate) fn collect_implications<'a>(
         Prop::Claim { .. } | Prop::In(_, _) => {}
         Prop::And(props) | Prop::Or(props) => {
             for p in props {
-                collect_implications(p, positive, definitions, seen, out);
+                collect_implications(p, positive, definitions, seen, calls, out);
             }
         }
         Prop::Xor(left, right) => {
-            collect_implications(left, positive, definitions, seen, out);
-            collect_implications(right, positive, definitions, seen, out);
+            collect_implications(left, positive, definitions, seen, calls, out);
+            collect_implications(right, positive, definitions, seen, calls, out);
         }
-        Prop::Not(p) => collect_implications(p, !positive, definitions, seen, out),
+        Prop::Not(p) => collect_implications(p, !positive, definitions, seen, calls, out),
         Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            collect_implications(p, positive, definitions, seen, out);
+            collect_implications(p, positive, definitions, seen, calls, out);
         }
         Prop::Forall { source, body, .. } => {
-            collect_implications(source, positive, definitions, seen, out);
-            collect_implications(body, positive, definitions, seen, out);
+            collect_implications(source, positive, definitions, seen, calls, out);
+            collect_implications(body, positive, definitions, seen, calls, out);
         }
         Prop::Eq(_, _) | Prop::Neq(_, _) | Prop::Compare { .. } => {}
     }

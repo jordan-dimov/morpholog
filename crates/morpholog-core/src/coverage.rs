@@ -45,7 +45,13 @@
 //! every-walker-transitive red line): an implication hidden behind a
 //! named condition is still an implication, and only a body with no
 //! positive-polarity implication anywhere - including through its
-//! definitions - classifies always-on.
+//! definitions - classifies always-on. An antecedent extracted from a
+//! definition body is evaluated UNDER its call chain's frames, so a
+//! call-site-constrained argument (a literal, a pre-bound variable)
+//! constrains the firing question too. One recorded residual: a call
+//! repeating an UNBOUND variable (`f(x, x)` at invariant scope)
+//! carries an equality constraint frames cannot express, so such an
+//! antecedent can still overcount `fired`.
 //!
 //! The driver (the PG adapter's `coverage_replay`) folds the audit
 //! log transition by transition and calls [`CoverageTracker::observe`]
@@ -61,7 +67,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::definitions::DefinitionIndex;
-use crate::eval::{EvalContext, EvalError, find_matches};
+use crate::eval::{EvalContext, EvalError, definition_call_frame, find_matches};
 use crate::ir::{Definition, InvariantOrigin, PredicateName, Program, Prop};
 use crate::lint::collect_implications;
 use crate::predicates_referenced_by_prop;
@@ -150,6 +156,21 @@ pub struct CoverageReport {
     pub transformations: Vec<TransformationUsage>,
 }
 
+/// One antecedent to test for firing: the proposition plus the
+/// `Defined` call chain (outermost first) it was extracted from. An
+/// antecedent found inside a definition body is evaluated UNDER the
+/// chain's call frames, so a call-site-constrained argument (a
+/// literal, a pre-bound variable) constrains the firing question the
+/// way it constrains enforcement. The residual imprecision is the
+/// repeated-UNBOUND-variable call (`f(x, x)` at invariant scope):
+/// frames cannot carry an equality between two free positions, so
+/// such an antecedent is still evaluated without that constraint and
+/// can overcount - the bound is recorded in the module doc.
+struct Antecedent<'p> {
+    prop: &'p Prop,
+    calls: Vec<crate::lint::DefinedCall<'p>>,
+}
+
 /// How one invariant participates in coverage.
 enum Shape<'p> {
     /// One or more positive-polarity implications (the collector
@@ -163,7 +184,7 @@ enum Shape<'p> {
     /// PRE-state only from T+1), so pruning by the current delta
     /// would skip exactly the transition where it first binds.
     Implication {
-        antecedents: Vec<&'p Prop>,
+        antecedents: Vec<Antecedent<'p>>,
         footprint: BTreeSet<PredicateName>,
         uses_pre: bool,
     },
@@ -214,6 +235,10 @@ pub struct CoverageTracker<'p> {
     program_name: String,
     definitions: &'p [Definition],
     entries: Vec<Entry<'p>>,
+    /// Invariant name -> position in `entries`, so the rejection
+    /// pass attributes each row in O(log invariants) instead of a
+    /// linear scan per row - the rejection log can be long.
+    entry_index: BTreeMap<String, usize>,
     declared_transformations: Vec<String>,
     usage: BTreeMap<String, Usage>,
     /// Refusals attributed to invariant names the current programme
@@ -229,7 +254,7 @@ impl<'p> CoverageTracker<'p> {
     /// zero).
     pub fn new(program: &'p Program) -> Self {
         let provenance = crate::disciplines::discipline_provenance(program);
-        let entries = program
+        let entries: Vec<Entry<'p>> = program
             .invariants
             .iter()
             .map(|inv| {
@@ -239,24 +264,28 @@ impl<'p> CoverageTracker<'p> {
                     true,
                     DefinitionIndex::new(&program.definitions),
                     &mut BTreeSet::new(),
+                    &mut Vec::new(),
                     &mut implications,
                 );
                 let shape = if implications.is_empty() {
                     Shape::AlwaysOn
                 } else {
-                    let antecedents: Vec<&Prop> = implications
-                        .iter()
-                        .map(|(antecedent, _)| *antecedent)
+                    let antecedents: Vec<Antecedent<'p>> = implications
+                        .into_iter()
+                        .map(|i| Antecedent {
+                            prop: i.antecedent,
+                            calls: i.calls,
+                        })
                         .collect();
                     let mut footprint = BTreeSet::new();
                     for antecedent in &antecedents {
                         predicates_referenced_by_prop(
-                            antecedent,
+                            antecedent.prop,
                             &program.definitions,
                             &mut footprint,
                         );
                     }
-                    let uses_pre = antecedents.iter().any(|a| mentions_pre(a));
+                    let uses_pre = antecedents.iter().any(|a| mentions_pre(a.prop));
                     Shape::Implication {
                         antecedents,
                         footprint,
@@ -281,6 +310,11 @@ impl<'p> CoverageTracker<'p> {
         Self {
             program_name: program.name.clone(),
             definitions: &program.definitions,
+            entry_index: entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.name.clone(), i))
+                .collect(),
             entries,
             declared_transformations: program
                 .transformations
@@ -315,8 +349,8 @@ impl<'p> CoverageTracker<'p> {
             .or_default()
             .proposals_refused += 1;
         if let Some(name) = invariant {
-            if let Some(entry) = self.entries.iter_mut().find(|e| e.name == name) {
-                entry.refusals.record(rejection_id);
+            if let Some(&i) = self.entry_index.get(name) {
+                self.entries[i].refusals.record(rejection_id);
             } else {
                 self.unmatched_refusals
                     .entry(name.to_string())
@@ -393,16 +427,25 @@ impl<'p> CoverageTracker<'p> {
             if !uses_pre && footprint.intersection(delta).next().is_none() {
                 continue;
             }
-            let ctx = EvalContext::new(
-                post_state,
-                Some(pre_state),
-                &bindings,
-                None,
-                DefinitionIndex::new(self.definitions),
-            );
+            let index = DefinitionIndex::new(self.definitions);
             let mut fired = false;
             for antecedent in antecedents {
-                if !find_matches(antecedent, &ctx)?.is_empty() {
+                // Replay the antecedent's call chain through the
+                // canonical call frames: each step resolves the call's
+                // arguments in the enclosing scope, so a literal or
+                // pre-bound argument pins the matching parameter and
+                // the antecedent is asked the question the call site
+                // asked - not "does this bind for ANY arguments".
+                let mut scope = bindings.clone();
+                for (name, args) in &antecedent.calls {
+                    let def = index
+                        .get(name)
+                        .ok_or_else(|| EvalError::UnknownDefinition(name.to_string()))?;
+                    let ctx = EvalContext::new(post_state, Some(pre_state), &scope, None, index);
+                    scope = definition_call_frame(def, args, &ctx)?;
+                }
+                let ctx = EvalContext::new(post_state, Some(pre_state), &scope, None, index);
+                if !find_matches(antecedent.prop, &ctx)?.is_empty() {
                     fired = true;
                     break;
                 }
