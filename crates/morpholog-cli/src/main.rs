@@ -33,7 +33,7 @@ mod commands;
     after_help = "Getting started:\n  \
         morpholog check rules.morph        are my rules sound?\n  \
         morpholog init                     set up the database tables\n  \
-        morpholog run rules.morph <transformation> --actor you --args-named '{...}'\n  \
+        morpholog propose rules.morph <transformation> --actor you --args-named '{...}'\n  \
         morpholog inspect claims           what is admitted right now?\n\n\
         Database commands read the connection from --database-url or $DATABASE_URL.\n\
         Every command has deeper help: morpholog help <command>."
@@ -60,6 +60,8 @@ enum Command {
     /// `--verbose`; hint-grade lints print to stderr and `--strict`
     /// promotes them to errors. Exits one with diagnostics pointing
     /// at the source line on either a parse or a validation failure.
+    /// `--ir` additionally prints the validated programme's internal
+    /// representation as JSON - the debugging view.
     Check(CheckArgs),
 
     /// Set up the Morpholog tables in an existing PostgreSQL database.
@@ -85,7 +87,7 @@ enum Command {
     /// stderr and exits one. `--batch -` admits NDJSON rows from
     /// stdin, one receipt per row; `--explain-on-reject` attaches the
     /// structured explanation to refusals.
-    Run(RunArgs),
+    Propose(ProposeArgs),
 
     /// Preview whether a change would be admitted or refused, and why.
     ///
@@ -166,13 +168,6 @@ enum Command {
         #[command(subcommand)]
         what: OutboxCmd,
     },
-
-    /// Print a `.morph` file's internal representation as JSON.
-    ///
-    /// A debugging view of the parsed `Program`; `check` is the
-    /// command that answers whether the programme is sound. On parse
-    /// failure, renders diagnostics to stderr and exits one.
-    Parse(SourceFileArgs),
 }
 
 /// Client-generation targets. One language per worked embedder that
@@ -622,6 +617,13 @@ pub(crate) struct CheckArgs {
     #[arg(long)]
     pub(crate) strict: bool,
 
+    /// Print the validated programme's internal representation as
+    /// JSON - the debugging view. Behind validation on purpose: only
+    /// a sound programme renders, which is what makes the view
+    /// trustworthy.
+    #[arg(long, conflicts_with_all = ["json", "verbose"])]
+    pub(crate) ir: bool,
+
     /// Emit every finding - parse errors, validation errors, lints -
     /// as one JSON object on stdout, each with byte offsets and
     /// 1-based line/column where the finding has a source location.
@@ -675,7 +677,7 @@ pub(crate) struct SchemaArgs {
     pub(crate) result: bool,
 }
 
-/// Arguments for the `run` subcommand: a `.morph` source file plus the
+/// Arguments for the `propose` subcommand: a `.morph` source file plus the
 /// transformation, JSON args (in one of two codecs), actor, connection
 /// string, and optional trace flag.
 ///
@@ -685,7 +687,7 @@ pub(crate) struct SchemaArgs {
 /// embedder-facing bare-by-name codec that mirrors the JSON Schema
 /// `morpholog schema` emits.
 #[derive(clap::Args, Debug)]
-pub(crate) struct RunArgs {
+pub(crate) struct ProposeArgs {
     /// Path to a `.morph` source file containing the programme.
     pub(crate) file: PathBuf,
 
@@ -759,12 +761,12 @@ pub(crate) struct RunArgs {
 }
 
 /// Arguments for `explain`. The same source/transformation/args/actor
-/// shape as [`RunArgs`] - it builds the identical `Transition` - but with
+/// shape as [`ProposeArgs`] - it builds the identical `Transition` - but with
 /// `--json` in place of `--trace`: explain's whole output already is the
 /// interpreted trace, so prose-or-JSON is the only output choice.
 ///
 /// `--args` and `--args-named` are mutually exclusive at the Clap level
-/// and exactly one is required. Same semantics as `run`: the first is
+/// and exactly one is required. Same semantics as `propose`: the first is
 /// the implementer-facing tagged codec, the second is the embedder-
 /// facing bare-by-name codec.
 #[derive(clap::Args, Debug)]
@@ -810,9 +812,8 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Inspect { what } => commands::inspect::run(what).await,
-        Command::Parse(args) => commands::parse::run(args),
         Command::Check(args) => commands::check::run(args),
-        Command::Run(args) => commands::run::run(args).await,
+        Command::Propose(args) => commands::propose::run(args).await,
         Command::Explain(args) => commands::explain::run(args).await,
         Command::Outbox { what } => match what {
             OutboxCmd::Claim(args) => commands::outbox::claim(args).await,
@@ -1139,7 +1140,7 @@ mod tests {
     fn run_with_all_args_parses() {
         let cli = Cli::parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--args",
@@ -1149,7 +1150,7 @@ mod tests {
             "--database-url",
             "postgres:///morpholog_dev",
         ]);
-        let Command::Run(args) = cli.command else {
+        let Command::Propose(args) = cli.command else {
             panic!("expected Run, got {:?}", cli.command);
         };
         assert_eq!(
@@ -1169,7 +1170,7 @@ mod tests {
     fn run_with_args_named_parses_into_the_named_slot() {
         let cli = Cli::parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--args-named",
@@ -1179,7 +1180,7 @@ mod tests {
             "--database-url",
             "postgres:///morpholog_dev",
         ]);
-        let Command::Run(args) = cli.command else {
+        let Command::Propose(args) = cli.command else {
             panic!("expected Run, got {:?}", cli.command);
         };
         assert!(args.args.is_none(), "--args should not be set");
@@ -1193,7 +1194,7 @@ mod tests {
     fn run_with_both_args_codecs_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--args",
@@ -1213,7 +1214,7 @@ mod tests {
     fn run_missing_args_flag_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--actor",
@@ -1229,7 +1230,7 @@ mod tests {
     fn run_missing_actor_flag_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/03_double_entry_ledger/ledger.morph",
             "post_simple_entry",
             "--args",
@@ -1245,7 +1246,7 @@ mod tests {
     fn run_missing_positional_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/03_double_entry_ledger/ledger.morph",
             // missing transformation positional
             "--args",
@@ -1335,13 +1336,13 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
-    /// `run --trace` parses to a `RunArgs` with `trace: true`. All other
+    /// `run --trace` parses to a `ProposeArgs` with `trace: true`. All other
     /// fields keep their existing behaviour.
     #[test]
     fn run_with_trace_flag_parses() {
         let cli = Cli::parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/01_settlement_netting/netting.morph",
             "create_net_settlement",
             "--actor",
@@ -1352,7 +1353,7 @@ mod tests {
             "postgres:///morpholog_dev",
             "--trace",
         ]);
-        let Command::Run(args) = cli.command else {
+        let Command::Propose(args) = cli.command else {
             panic!("expected Run, got {:?}", cli.command);
         };
         assert!(args.trace, "expected trace flag to be set");
@@ -1363,13 +1364,13 @@ mod tests {
         assert_eq!(args.actor.as_deref(), Some("jordan"));
     }
 
-    /// Without `--trace`, `RunArgs.trace` defaults to false. The non-trace
+    /// Without `--trace`, `ProposeArgs.trace` defaults to false. The non-trace
     /// path must not be affected by the flag.
     #[test]
     fn run_without_trace_flag_defaults_to_false() {
         let cli = Cli::parse_from([
             "morpholog",
-            "run",
+            "propose",
             "examples/01_settlement_netting/netting.morph",
             "create_net_settlement",
             "--actor",
@@ -1379,7 +1380,7 @@ mod tests {
             "--database-url",
             "postgres:///morpholog_dev",
         ]);
-        let Command::Run(args) = cli.command else {
+        let Command::Propose(args) = cli.command else {
             panic!("expected Run, got {:?}", cli.command);
         };
         assert!(!args.trace, "expected trace flag to default to false");
@@ -1445,13 +1446,19 @@ mod tests {
         );
     }
 
+    /// `parse` is no longer a subcommand - it folded into
+    /// `check --ir`. Pins both the removal and the fold.
     #[test]
-    fn parse_with_file_argument_parses() {
-        let cli = Cli::try_parse_from(["morpholog", "parse", "demo.morph"]).unwrap();
-        let Command::Parse(args) = cli.command else {
-            panic!("expected Command::Parse, got {:?}", cli.command);
+    fn parse_is_gone_and_check_ir_replaces_it() {
+        let err = Cli::try_parse_from(["morpholog", "parse", "demo.morph"])
+            .expect_err("parse must no longer be a subcommand");
+        assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+
+        let cli = Cli::parse_from(["morpholog", "check", "demo.morph", "--ir"]);
+        let Command::Check(args) = cli.command else {
+            panic!("expected Command::Check, got {:?}", cli.command);
         };
-        assert_eq!(args.file.as_os_str(), "demo.morph");
+        assert!(args.ir);
     }
 
     /// `check -v` parses to `CheckArgs { verbose: true }`. Pins the
@@ -1478,9 +1485,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_missing_file_argument_errors() {
+    fn check_missing_file_argument_errors() {
         let err =
-            Cli::try_parse_from(["morpholog", "parse"]).expect_err("expected clap parse error");
+            Cli::try_parse_from(["morpholog", "check"]).expect_err("expected clap parse error");
         assert!(
             matches!(err.kind(), ErrorKind::MissingRequiredArgument),
             "expected missing-argument error, got {:?}",

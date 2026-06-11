@@ -9,7 +9,7 @@ use crate::commands::{connect, print_json};
 /// Run the `verify` subcommand: replay, diff, report. The outcome JSON
 /// goes to stdout either way; the exit code is the verdict (consistent
 /// exits zero, divergent exits one) - the same data-on-stdout,
-/// exit-code-as-verdict shape as `run`.
+/// exit-code-as-verdict shape as `propose`.
 pub(crate) async fn run(args: DatabaseArgs) -> anyhow::Result<()> {
     let pool = connect(&args.database_url).await?;
     let outcome = verify_replay(&pool).await.context("verify_replay failed")?;

@@ -26,8 +26,7 @@ pub(crate) mod hash;
 pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod outbox;
-pub(crate) mod parse;
-pub(crate) mod run;
+pub(crate) mod propose;
 pub(crate) mod schema;
 pub(crate) mod verify;
 
@@ -88,7 +87,7 @@ pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSour
 /// previous defensive re-validation.
 ///
 /// The gate every subcommand that acts on a `.morph` file's
-/// *semantics* applies after parsing - `run` and `explain` before
+/// *semantics* applies after parsing - `propose` and `explain` before
 /// touching the database, `inspect derived`/`guarantees` before
 /// reading or rendering, `schema` before computing the JSON Schema -
 /// so an arbitrary file is held to the same vocabulary contract the
@@ -107,7 +106,7 @@ pub(crate) fn validate_or_exit(parsed: &ParsedSource) -> ValidatedProgram<'_> {
 
 /// Resolve a transformation by name against a parsed programme, the
 /// not-found error naming every transformation the file does declare.
-/// Shared by `run` and `explain` so the lookup error (and any future
+/// Shared by `propose` and `explain` so the lookup error (and any future
 /// "did you mean?" refinement) cannot drift between them.
 pub(crate) fn lookup_transformation<'a>(
     program: &'a Program,

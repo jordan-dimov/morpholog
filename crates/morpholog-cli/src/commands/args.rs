@@ -1,4 +1,4 @@
-//! Shared decoder for `run` and `explain` transformation arguments.
+//! Shared decoder for `propose` and `explain` transformation arguments.
 //!
 //! The CLI accepts two flag-distinguished input forms; both decode
 //! into the same positional `Vec<EvalValue>` the kernel expects.
@@ -34,7 +34,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::str::FromStr;
 
-/// The two flag-distinguished inputs `run` and `explain` accept.
+/// The two flag-distinguished inputs `propose` and `explain` accept.
 /// Constructed by the caller after Clap has enforced one-of-two;
 /// the decoder does not re-check exclusivity.
 pub(crate) enum CliArgs<'a> {

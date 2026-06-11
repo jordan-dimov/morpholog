@@ -1,5 +1,6 @@
-//! End-to-end test of the `morpholog parse` subcommand against
-//! real `.morph` fixture files. Spawns the built binary, asserts
+//! End-to-end test of `morpholog check --ir` (the IR debugging view,
+//! formerly the `parse` subcommand) against real `.morph` fixture
+//! files. Spawns the built binary, asserts
 //! on stdout/stderr/exit code.
 //!
 //! Distinct from the in-crate argument-parsing tests (which only
@@ -27,13 +28,13 @@ fn write_fixture(name: &str, content: &str) -> tempfile::TempPath {
 }
 
 #[test]
-fn parse_happy_path_emits_json_and_exits_zero() {
+fn check_ir_happy_path_emits_json_and_exits_zero() {
     let path = write_fixture(
         "happy",
         "program demo\npredicate Foo(a: Subject)\npredicate Bar(b: Decimal)\n",
     );
     let out = Command::new(bin())
-        .args(["parse", path.to_str().unwrap()])
+        .args(["check", path.to_str().unwrap(), "--ir"])
         .output()
         .expect("run morpholog parse");
     assert!(
@@ -51,7 +52,7 @@ fn parse_happy_path_emits_json_and_exits_zero() {
 }
 
 #[test]
-fn parse_projects_invariants_transformations_and_derived_claims() {
+fn check_ir_projects_invariants_transformations_and_derived_claims() {
     // The happy-path test above exercises only the predicate
     // projection; the bulk of the parse command is the three rendered
     // projections (invariant bodies, transformation bodies, derived
@@ -72,7 +73,7 @@ fn parse_projects_invariants_transformations_and_derived_claims() {
              value total = sum(x | Balance(acct, x))\n",
     );
     let out = Command::new(bin())
-        .args(["parse", path.to_str().unwrap()])
+        .args(["check", path.to_str().unwrap(), "--ir"])
         .output()
         .expect("run morpholog parse");
     assert!(
@@ -116,10 +117,10 @@ fn parse_projects_invariants_transformations_and_derived_claims() {
 }
 
 #[test]
-fn parse_error_emits_diagnostic_on_stderr_and_exits_nonzero() {
+fn check_ir_parse_error_emits_diagnostic_on_stderr_and_exits_nonzero() {
     let path = write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");
     let out = Command::new(bin())
-        .args(["parse", path.to_str().unwrap()])
+        .args(["check", path.to_str().unwrap(), "--ir"])
         .output()
         .expect("run morpholog parse");
     assert!(!out.status.success(), "expected non-zero exit");
@@ -139,9 +140,9 @@ fn parse_error_emits_diagnostic_on_stderr_and_exits_nonzero() {
 }
 
 #[test]
-fn parse_missing_file_errors_via_anyhow() {
+fn check_ir_missing_file_errors_via_anyhow() {
     let out = Command::new(bin())
-        .args(["parse", "/nonexistent/path/to/file.morph"])
+        .args(["check", "/nonexistent/path/to/file.morph", "--ir"])
         .output()
         .expect("run morpholog parse");
     assert!(!out.status.success(), "expected non-zero exit");

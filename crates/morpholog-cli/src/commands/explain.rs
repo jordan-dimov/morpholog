@@ -1,7 +1,7 @@
 //! `morpholog explain` - a deterministic, structured account of why a
 //! proposed transition would be admitted or rejected against live state.
 //!
-//! The read-only counterpart of `run`: the same `.morph` parse/validate
+//! The read-only counterpart of `propose`: the same `.morph` parse/validate
 //! path and the same `Transition` codec, but instead of proposing it
 //! loads the scoped pre-state, runs the kernel in-memory via
 //! `morpholog_core::explain`, and renders the resulting `Explanation` as
@@ -12,7 +12,7 @@
 //! a transition is answering a question, not taking an action. Only
 //! operational failures - a parse or validation error, malformed `--args`,
 //! an unknown transformation, a database failure - exit non-zero. A script
-//! that wants the gate uses `run`.
+//! that wants the gate uses `propose`.
 
 use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
@@ -25,7 +25,7 @@ use crate::commands::{
 };
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
-    // Same parse + validate front-end as `run`: a malformed programme
+    // Same parse + validate front-end as `propose`: a malformed programme
     // never reaches the explanation path. The returned
     // `ValidatedProgram` handle threads through to the codec.
     let parsed = parse_or_exit(&args.file)?;
@@ -34,7 +34,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
 
     let transformation = lookup_transformation(program, &args.transformation, &args.file)?;
 
-    // Decode --args or --args-named via the same shared codec `run`
+    // Decode --args or --args-named via the same shared codec `propose`
     // uses, so the two paths cannot drift on what is a valid input.
     let codec_input = match (&args.args, &args.args_named) {
         (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),

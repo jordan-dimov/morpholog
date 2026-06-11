@@ -82,7 +82,7 @@ fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
         ]"#
     );
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "post_simple_entry",
         "--actor",
@@ -113,7 +113,7 @@ fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
 async fn run_malformed_args_json_errors_to_stderr() {
     reset_db().await;
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "post_simple_entry",
         "--actor",
@@ -134,7 +134,7 @@ async fn run_business_rejection_exits_one_with_rejected_receipt_on_stdout() {
     // Close q1_2026, then attempt to post into the closed period - the
     // require gate rejects.
     let (status, _stdout, _stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "close_period",
         "--actor",
@@ -145,7 +145,7 @@ async fn run_business_rejection_exits_one_with_rejected_receipt_on_stdout() {
     assert!(status.success(), "close_period should commit");
 
     let (status, stdout, _stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "post_simple_entry",
         "--actor",
@@ -372,7 +372,7 @@ async fn explain_without_json_renders_prose_for_both_verdicts() {
     // Close the period: the same proposal is now refused at the gate,
     // and the prose names it.
     let (status, _o, _e) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "close_period",
         "--actor",
@@ -686,7 +686,7 @@ async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
     // Close the period, then post into it: the require gate refuses
     // and the refusal is on the record.
     let (status, ..) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "close_period",
         "--actor",
@@ -696,7 +696,7 @@ async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
     ]);
     assert!(status.success(), "close_period should commit");
     let (status, ..) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "post_simple_entry",
         "--actor",
@@ -856,7 +856,7 @@ async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
         {"type":"decimal","value":"100"}
     ]"#;
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -892,7 +892,7 @@ async fn run_args_named_commits_with_the_friendly_codec() {
         "amount":"250"
     }"#;
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -924,7 +924,7 @@ async fn run_args_named_missing_required_errors_with_schema_hint() {
         "credit_account":"018f0000-0000-7000-8000-000000000015"
     }"#;
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -961,7 +961,7 @@ async fn run_args_named_unknown_key_errors_with_expected_names() {
         "amaount":"100"
     }"#;
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -1047,7 +1047,7 @@ async fn run_args_named_accepts_symbolic_subject_values() {
         "amount":"100"
     }"#;
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -1086,7 +1086,7 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
             }}"#
         );
         let (status, _stdout, stderr) = run_cli(&[
-            "run",
+            "propose",
             path.to_str().unwrap(),
             "post_simple_entry",
             "--actor",
@@ -1121,7 +1121,7 @@ async fn run_args_named_wrong_type_errors_with_kind_label() {
         "amount": true
     }"#;
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -1142,7 +1142,7 @@ async fn run_errors_with_available_list_on_unknown_transformation() {
     let path = write_temp_ledger_morph();
     let args_json = r#"[]"#;
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "no_such_transformation",
         "--actor",
@@ -1211,7 +1211,7 @@ async fn run_rejects_unbalanced_entry_via_invariant() {
         {"type":"decimal","value":"90"}
     ]"#;
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_unbalanced_entry",
         "--actor",
@@ -1255,7 +1255,7 @@ async fn run_rejects_parse_failure_in_user_morph() {
     std::fs::write(&path, "program is_invalid syntax here\n").expect("write bad .morph");
 
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "anything",
         "--actor",
@@ -1283,7 +1283,7 @@ async fn run_with_trace_emits_structured_trace_alongside_outcome() {
         {"type":"decimal","value":"50"}
     ]"#;
     let (status, stdout, _stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -1682,7 +1682,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
         {"type":"decimal","value":"500"}
     ]"#;
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path.to_str().unwrap(),
         "post_simple_entry",
         "--actor",
@@ -1841,7 +1841,7 @@ async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
     // rejection envelope carries the explanation computed against the
     // exact pre-state the gate evaluated.
     let (status, _o, _e) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "close_period",
         "--actor",
@@ -1852,7 +1852,7 @@ async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
     assert!(status.success());
 
     let (status, stdout, _stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "post_simple_entry",
         "--actor",
@@ -1883,7 +1883,7 @@ async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
 async fn run_explain_on_reject_leaves_committed_envelopes_unchanged() {
     reset_db().await;
     let (status, stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "close_period",
         "--actor",
@@ -2029,7 +2029,7 @@ async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
 
     // Named codec in: the bare amount, no unit on the wire.
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path,
         "settle",
         "--actor",
@@ -2054,7 +2054,7 @@ async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
 
     // Tagged codec in: self-describing, the unit rides the value.
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         path,
         "settle",
         "--actor",
@@ -2114,7 +2114,7 @@ fn run_batch(rows: &str, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value
     std::fs::write(f.path(), rows).expect("write batch rows");
     let path = f.path().to_str().expect("utf8 path").to_string();
     let ledger = ledger_morph();
-    let mut args = vec!["run", ledger.as_str(), "--batch", path.as_str()];
+    let mut args = vec!["propose", ledger.as_str(), "--batch", path.as_str()];
     args.extend_from_slice(extra);
     let (status, stdout, stderr) = run_cli(&args);
     let receipts = stdout
@@ -2257,7 +2257,7 @@ async fn batch_rejected_rows_carry_explanations_when_asked() {
 #[tokio::test]
 async fn batch_with_unreadable_input_exits_nonzero() {
     let (status, _stdout, stderr) = run_cli(&[
-        "run",
+        "propose",
         &ledger_morph(),
         "--batch",
         "/nonexistent/rows.ndjson",
@@ -2269,7 +2269,8 @@ async fn batch_with_unreadable_input_exits_nonzero() {
 // --trace is single-run diagnostics; clap refuses the combination.
 #[tokio::test]
 async fn batch_conflicts_with_trace() {
-    let (status, _stdout, stderr) = run_cli(&["run", &ledger_morph(), "--batch", "-", "--trace"]);
+    let (status, _stdout, stderr) =
+        run_cli(&["propose", &ledger_morph(), "--batch", "-", "--trace"]);
     assert!(!status.success());
     assert!(
         stderr.contains("cannot be used with"),
@@ -2283,7 +2284,7 @@ async fn batch_conflicts_with_trace() {
 async fn batch_conflicts_with_both_args_flags() {
     for flag in [["--args", "[]"], ["--args-named", "{}"]] {
         let (status, _stdout, stderr) =
-            run_cli(&["run", &ledger_morph(), "--batch", "-", flag[0], flag[1]]);
+            run_cli(&["propose", &ledger_morph(), "--batch", "-", flag[0], flag[1]]);
         assert!(!status.success(), "{} must conflict with --batch", flag[0]);
         assert!(
             stderr.contains("cannot be used with"),
