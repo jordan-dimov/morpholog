@@ -1,0 +1,5 @@
+{
+  "error": "malformed batch row: expected value at line 1 column 1",
+  "row": 3,
+  "status": "error"
+}

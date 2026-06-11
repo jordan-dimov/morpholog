@@ -1,0 +1,25 @@
+{
+  "transition": {
+    "actor": "alex",
+    "args": [
+      "acct_1"
+    ],
+    "transformation": "open_account"
+  },
+  "verdict": {
+    "rejected": {
+      "directly_missing_claims": [
+        {
+          "candidate_supplier_transformations": [
+            "flag_account"
+          ],
+          "predicate": "Flag",
+          "rendered": "Flag(acct_1)"
+        }
+      ],
+      "gate": "Flag(account_id)",
+      "kind": "gate",
+      "statement_kind": "require"
+    }
+  }
+}

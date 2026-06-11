@@ -106,4 +106,35 @@ else
     done
 fi
 
+# ----------------------------------------------------------------
+# The generated Python client (mirrors the ci.yml python-client job).
+#
+# The template unit tests run against the same goldens the Rust
+# contract test pins; the end-to-end drives the rewritten worked
+# embedder against the database. The committed-package drift gate
+# itself is a Rust test (generate_e2e), so it ran above either way.
+# The CI job pins the declared 3.10 floor; the local run uses
+# whatever python3 is on PATH as a smoke test.
+# ----------------------------------------------------------------
+step 'generated Python client (unit tests + worked embedder)'
+if ! command -v python3 >/dev/null 2>&1; then
+    echo '  python3 not on PATH; skipping (CI runs this at the 3.10 floor).'
+else
+    python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
+    if [ -z "${DATABASE_URL:-}" ]; then
+        echo '  DATABASE_URL not set; skipping the worked-embedder run.'
+    elif ! command -v psql >/dev/null 2>&1; then
+        echo '  psql not on PATH; skipping the worked-embedder run.'
+    else
+        # Honour CARGO_TARGET_DIR like the rest of the script (python3
+        # is guaranteed on this branch, so cargo metadata is free).
+        TARGET_DIR=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+        MORPHOLOG_BIN="$TARGET_DIR/debug/morpholog" \
+            DATABASE_URL="$DATABASE_URL" \
+            python3 examples/etrm_embedder/etrm_lifecycle.py >/dev/null
+        echo '  worked embedder lifecycle ran end to end.'
+    fi
+fi
+
 printf '\n=== All checks passed. ===\n'

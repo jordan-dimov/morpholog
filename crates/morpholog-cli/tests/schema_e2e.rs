@@ -310,3 +310,41 @@ fn schema_all_conflicts_with_the_single_shot_forms() {
         .expect("run morpholog schema");
     assert!(!out.status.success(), "--all plus --intent must conflict");
 }
+
+// ============================================================
+// `schema --result`: the outcome-envelope contract, no .morph needed.
+// ============================================================
+
+#[test]
+fn schema_result_emits_the_envelope_contract() {
+    let out = Command::new(bin())
+        .args(["schema", "--result"])
+        .output()
+        .expect("run morpholog schema --result");
+    assert!(out.status.success(), "schema --result should exit zero");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON document");
+    let defs = doc["$defs"].as_object().expect("$defs object");
+    // The load-bearing entries an embedder discriminates on; the full
+    // set is pinned by the result_schema_contract suite.
+    for key in [
+        "run_outcome",
+        "explanation",
+        "batch_receipt",
+        "outbox_claim",
+        "check_report",
+        "tagged_value",
+    ] {
+        assert!(defs.contains_key(key), "$defs lacks `{key}`: {doc}");
+    }
+}
+
+#[test]
+fn schema_result_conflicts_with_per_programme_modes() {
+    let path = write_fixture("result_conflict", "program p\npredicate A(x: Subject)\n");
+    let out = Command::new(bin())
+        .args(["schema", "--result", path.to_str().unwrap(), "--all"])
+        .output()
+        .expect("run morpholog schema");
+    assert!(!out.status.success(), "--result plus --all must conflict");
+}

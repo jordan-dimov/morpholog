@@ -214,7 +214,8 @@ What this document promises:
 - The `run --explain-on-reject` envelope (rejections gain `explanation` in the `explain --json` shape, computed against the rejecting snapshot; commits unchanged).
 - The `inspect claims --named` decoded-claim shape and its hard-error skew contract.
 - The `morpholog hash` output shape and its rules-identity semantics (canonical-source SHA-256; formatting and comments excluded).
-- The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; declaration order).
+- The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; the keyed objects serialise with sorted keys, and declaration order travels in the explicit `transformation_order` / `intent_order` arrays).
+- The `morpholog schema --result` outcome-envelope contract (one `$defs` entry per machine-readable envelope).
 - Exit-code semantics for `run` and `explain`.
 
 What is deliberately left open, pending the worked example that forces the shape:
@@ -222,9 +223,23 @@ What is deliberately left open, pending the worked example that forces the shape
 - **Argument-level claim selection.** `inspect claims --predicate` (forced by the `examples/etrm_embedder/` worked embedder) reads claims back at predicate granularity; picking one subject's claims out of the result is client-side. A `--where trade=t1`-style filter waits for an example with a book big enough that the predicate-level cut is not enough.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
 - **The remaining `morpholog inspect` output shapes.** The claims shapes (bare and `--named`) are pinned above; `audit`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them.
-- **Result schema generation (a `morpholog schema --result` mode).** The outcome envelope is uniform across transformations, so a documented spec covers it. Auto-generation waits for a real consumer that needs to discriminate dynamically.
-
 The discipline is the same as the rest of Morpholog: ship the contract that an example forces, leave the rest open.
+
+## The outcome-envelope contract (`schema --result`)
+
+`morpholog schema --result` emits one JSON Schema (Draft 2020-12) document whose `$defs` pin every machine-readable envelope this document describes in prose: the tagged value encoding, claim and intent instances, the `run` outcome union (committed | rejected, the latter optionally carrying `--explain-on-reject`'s `explanation`), the traced envelope, the `explain --json` Explanation with its gate / invariant / error verdicts, batch receipts, outbox rows and the claim / complete / release wrappers, the `check --json` report, and the `hash` / `init` reports. Programme-independent - the shapes vary only with the binary, so no `.morph` file is taken and the document is byte-stable for a given build.
+
+This is the artefact client generation consumes (the reserved "waits for a real consumer" slot is now filled): the generated Python client's envelope models derive from the same pinned document, and a contract-test suite in the binary's own repository holds the document, the binary's real serialization, and the generated models to one set of golden envelopes. Trace entry internals remain reserved (the `trace` array is pinned as an array, its items deliberately unconstrained).
+
+## The generated Python client (`generate python-client`)
+
+```bash
+morpholog generate python-client <file.morph> --out <dir>
+```
+
+emits a complete, self-contained `morpholog_client/` package: the value codecs both directions (decimals as `decimal.Decimal` end to end, aware datetimes with naive ones refused on write), the envelope models (key-set strict - an envelope field this client does not know raises instead of dropping data), the subprocess adapter over the whole surface this document pins (including `run --batch` and `check --json`), a frozen request dataclass per transformation with fields in declaration order and `to_args_named()`, a read model per predicate parsing the named read's wire-true values by declared kind, and a payload model per intent with the positional arg order baked in - no runtime `schema --intent` call. `__init__.py` carries the stamps (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`) and enforces the declared Python floor (3.10) at first import.
+
+The properties that make it a contract rather than a convenience: **stdlib-only** (no dependency treadmill; richer types are the embedder's to build on top), **deterministic** (the same binary and programme produce byte-identical output, so the drift check is regenerate-and-diff), and **whole-run refusal** (a programme whose contract the client cannot carry - a Duration field, a parameter with no single concrete kind, a Python-keyword field name - fails generation with every finding listed and nothing written; no partial packages, no silent mangling). The worked embedder (`examples/etrm_embedder/`) runs on its committed output.
 
 ## Disciplines on the manifest (additive)
 

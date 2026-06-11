@@ -1,0 +1,7 @@
+{
+  "result": {
+    "error": "bind matched 2 claims",
+    "status": "errored"
+  },
+  "trace": []
+}

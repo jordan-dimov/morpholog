@@ -1,0 +1,15 @@
+{
+  "transition": {
+    "actor": "alex",
+    "args": [
+      "acct_1"
+    ],
+    "transformation": "no_such_transformation"
+  },
+  "verdict": {
+    "rejected": {
+      "kind": "error",
+      "message": "no transformation named `no_such_transformation` in program `envelopes`"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "row": {
+    "arguments": [
+      {
+        "type": "subject",
+        "value": "acct_1"
+      }
+    ],
+    "attempt_count": 0,
+    "compensation_transition_id": null,
+    "delivered_at": null,
+    "enqueued_at": "2026-06-01T12:00:00Z",
+    "failed_at": null,
+    "failure_reason": null,
+    "idempotency_key": "k1",
+    "intent_id": "01900000-0000-7000-8000-000000000001",
+    "intent_type": "AccountOpened",
+    "last_attempt_at": null,
+    "lock_expires_at": "2026-06-01T12:00:30Z",
+    "locked_by": "worker-1",
+    "next_attempt_at": null,
+    "status": "pending",
+    "transition_id": "01900000-0000-7000-8000-000000000001"
+  }
+}
