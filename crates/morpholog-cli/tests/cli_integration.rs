@@ -2145,8 +2145,12 @@ async fn inspect_coverage_prose_reports_fired_and_never_fired() {
         "declared-but-unused transformations are named; got:\n{stdout}"
     );
     assert!(
-        stdout.contains("rejections never commit"),
-        "the legend states the committed-history bound; got:\n{stdout}"
+        stdout.contains("a floor, not a census"),
+        "the legend states the rejection log's at-most-once bound; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0 recorded rejection(s)"),
+        "the header counts the rejection log; got:\n{stdout}"
     );
 }
 
@@ -2160,6 +2164,7 @@ async fn inspect_coverage_json_carries_the_pinned_field_set() {
     assert!(status.success(), "coverage always exits zero; {stderr}");
     let report: Value = serde_json::from_str(&stdout).expect("coverage --json is JSON");
     assert_eq!(report["transitions_replayed"], 1);
+    assert_eq!(report["rejections_replayed"], 0);
     assert!(report["program"].is_string());
 
     let invariants = report["invariants"].as_array().expect("invariants array");

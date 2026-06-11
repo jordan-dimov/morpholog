@@ -304,15 +304,123 @@ fn worked_example_shapes_classify_as_documented() {
 #[test]
 fn the_prose_render_carries_verdicts_and_the_legend() {
     let program = parsed();
-    let report = CoverageTracker::new(&program).into_report();
+    let mut tracker = CoverageTracker::new(&program);
+    // The refusal goes to an implication-shaped rule so every verdict
+    // stays represented: ghosts_never_fire stays NEVER FIRED and the
+    // prohibition stays always on.
+    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
+    let report = tracker.into_report();
     let prose = morpholog_core::render_coverage(&report);
     assert!(prose.contains("NEVER FIRED"));
     assert!(prose.contains("always on"));
     assert!(prose.contains("never used"));
+    assert!(prose.contains("CONSTRAINED"));
+    assert!(prose.contains("refused: 1 proposal(s)"));
     assert!(
-        prose.contains("rejections never commit"),
-        "the legend states what committed history cannot show"
+        prose.contains("a floor, not a census"),
+        "the legend states the rejection log's at-most-once bound"
     );
+}
+
+#[test]
+fn a_refusal_beats_fired_and_records_first_and_last_ids() {
+    let program = parsed();
+    let empty = State::from_claims(Vec::new());
+    let mut tracker = CoverageTracker::new(&program);
+    let s1 = State::from_claims(vec![
+        subject_claim("Account", &["a1"]),
+        subject_claim("Flag", &["a1"]),
+    ]);
+    tracker
+        .observe(
+            &s1,
+            &empty,
+            &delta(&["Account", "Flag"]),
+            "t1",
+            "flag_account",
+        )
+        .unwrap();
+    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
+    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r2");
+
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "flagged_accounts_exist")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Constrained);
+    assert_eq!(inv.transitions_fired, 1, "firing stats survive the upgrade");
+    assert_eq!(inv.proposals_refused, 2);
+    assert_eq!(inv.first_refused.as_deref(), Some("r1"));
+    assert_eq!(inv.last_refused.as_deref(), Some("r2"));
+}
+
+// THE headline payoff: an always-on prohibition's enforcement work is
+// invisible in committed history, but the rejection log shows it
+// refusing - the first time such a rule becomes measurable at all.
+#[test]
+fn an_always_on_prohibition_with_a_refusal_is_constrained() {
+    let program = parsed();
+    let mut tracker = CoverageTracker::new(&program);
+    tracker.observe_rejection(Some("no_flag_without_account_ever"), "flag_account", "r1");
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "no_flag_without_account_ever")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Constrained);
+    assert_eq!(inv.proposals_refused, 1);
+    assert_eq!(report.rejections_replayed, 1);
+}
+
+#[test]
+fn a_gate_refusal_counts_for_the_transformation_not_any_invariant() {
+    let program = parsed();
+    let mut tracker = CoverageTracker::new(&program);
+    tracker.observe_rejection(None, "flag_account", "r1");
+    let report = tracker.into_report();
+    assert!(
+        report
+            .invariants
+            .iter()
+            .all(|i| i.verdict != CoverageVerdict::Constrained && i.proposals_refused == 0),
+        "a require/bind refusal belongs to its transformation, not a rule"
+    );
+    let usage = report
+        .transformations
+        .iter()
+        .find(|t| t.transformation == "flag_account")
+        .unwrap();
+    assert_eq!(usage.proposals_refused, 1);
+    assert_eq!(usage.transitions, 0);
+    assert!(!usage.not_in_programme);
+}
+
+#[test]
+fn refusals_naming_undeclared_rules_and_transformations_surface_flagged() {
+    let program = parsed();
+    let mut tracker = CoverageTracker::new(&program);
+    tracker.observe_rejection(Some("retired_rule"), "renamed_long_ago", "r1");
+    let report = tracker.into_report();
+
+    let drifted = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "retired_rule")
+        .expect("a rejection-log-only rule name appears, flagged");
+    assert_eq!(drifted.verdict, CoverageVerdict::Constrained);
+    assert!(drifted.not_in_programme);
+    assert_eq!(drifted.proposals_refused, 1);
+
+    let usage = report
+        .transformations
+        .iter()
+        .find(|t| t.transformation == "renamed_long_ago")
+        .expect("the undeclared transformation appears");
+    assert!(usage.not_in_programme);
+    assert_eq!(usage.proposals_refused, 1);
 }
 
 // REGRESSION (review catch): a pre(...) antecedent's firing

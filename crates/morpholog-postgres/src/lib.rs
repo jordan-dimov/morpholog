@@ -1820,11 +1820,13 @@ pub enum VerifyOutcome {
     },
 }
 
-/// Replay the audit log through a [`CoverageTracker`] and report,
-/// per invariant of `program`, whether its antecedent ever bound -
-/// the auditor question "which of these rules has ever actually done
-/// work?". See `morpholog_core::coverage` for the verdict semantics
-/// and the committed-history bound that shapes them.
+/// Replay the audit log through a [`CoverageTracker`], then count
+/// the rejection log into it, and report, per invariant of
+/// `program`, whether its antecedent ever bound and whether it ever
+/// refused a real proposal - the auditor questions "which of these
+/// rules has ever actually done work?" and "which has demonstrably
+/// said no?". See `morpholog_core::coverage` for the verdict
+/// semantics and the bounds that shape them.
 ///
 /// One `SERIALIZABLE READ ONLY DEFERRABLE` transaction reads the
 /// whole log: the deferrable mode waits for a safe snapshot and then
@@ -1957,6 +1959,57 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
             break;
         }
     }
+
+    // Second pass: the rejection log, inside the same deferrable
+    // snapshot so refusal counts and committed history describe one
+    // consistent moment. Pure counting - no state folding - but the
+    // same keyset shape, over the index made for it.
+    type RejRow = (Uuid, String, String, String, DateTime<Utc>);
+    let mut rej_cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    loop {
+        let rows: Vec<RejRow> = match &rej_cursor {
+            None => {
+                sqlx::query_as(
+                    "SELECT rejection_id, transformation_name, kind, rule, rejected_at
+                     FROM morpholog.rejections
+                     ORDER BY rejected_at, rejection_id
+                     LIMIT $1",
+                )
+                .bind(CHUNK)
+                .fetch_all(&mut *tx)
+                .await
+            }
+            Some((after_at, after_id)) => {
+                sqlx::query_as(
+                    "SELECT rejection_id, transformation_name, kind, rule, rejected_at
+                     FROM morpholog.rejections
+                     WHERE (rejected_at, rejection_id) > ($2, $3)
+                     ORDER BY rejected_at, rejection_id
+                     LIMIT $1",
+                )
+                .bind(CHUNK)
+                .bind(after_at)
+                .bind(*after_id)
+                .fetch_all(&mut *tx)
+                .await
+            }
+        }
+        .map_err(classify)?;
+        let Some(last) = rows.last() else {
+            break;
+        };
+        rej_cursor = Some((last.4, last.0));
+        let exhausted = (rows.len() as i64) < CHUNK;
+
+        for (rejection_id, transformation_name, kind, rule, _) in rows {
+            let invariant = (kind == "invariant").then_some(rule.as_str());
+            tracker.observe_rejection(invariant, &transformation_name, &rejection_id.to_string());
+        }
+        if exhausted {
+            break;
+        }
+    }
+
     tx.commit().await.map_err(classify)?;
     Ok(tracker.into_report())
 }

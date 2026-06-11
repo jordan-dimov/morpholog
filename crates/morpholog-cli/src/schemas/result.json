@@ -361,10 +361,11 @@
     "coverage_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["program", "transitions_replayed", "invariants", "transformations"],
+      "required": ["program", "transitions_replayed", "rejections_replayed", "invariants", "transformations"],
       "properties": {
         "program": { "type": "string" },
         "transitions_replayed": { "type": "integer", "minimum": 0 },
+        "rejections_replayed": { "type": "integer", "minimum": 0 },
         "invariants": {
           "type": "array",
           "items": {
@@ -374,10 +375,14 @@
             "properties": {
               "invariant": { "type": "string" },
               "from": { "type": "string" },
-              "verdict": { "enum": ["fired", "never_fired", "always_on"] },
+              "verdict": { "enum": ["constrained", "fired", "never_fired", "always_on"] },
               "transitions_fired": { "type": "integer", "minimum": 0 },
               "first_fired": { "type": "string" },
-              "last_fired": { "type": "string" }
+              "last_fired": { "type": "string" },
+              "proposals_refused": { "type": "integer", "minimum": 1 },
+              "first_refused": { "type": "string" },
+              "last_refused": { "type": "string" },
+              "not_in_programme": { "type": "boolean" }
             }
           }
         },
@@ -392,6 +397,7 @@
               "transitions": { "type": "integer", "minimum": 0 },
               "first": { "type": "string" },
               "last": { "type": "string" },
+              "proposals_refused": { "type": "integer", "minimum": 1 },
               "not_in_programme": { "type": "boolean" }
             }
           }
