@@ -127,6 +127,11 @@ impl fmt::Display for Severity {
 /// 1-based line and column for a byte offset into `source`. Columns
 /// count bytes, which matches what editors and `ariadne` show for
 /// ASCII-dominated `.morph` text. Offsets past the end clamp to it.
+///
+/// Deliberately O(prefix) per call: the CLI renders a bounded set of
+/// findings once per invocation over kilobyte-scale sources, so a
+/// precomputed offset index would be surface without a workload. The
+/// index earns its place with the LSP, whose lookups are repeated.
 pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
     let offset = offset.min(source.len());
     let prefix = &source[..offset];

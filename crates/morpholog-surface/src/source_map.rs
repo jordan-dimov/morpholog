@@ -39,7 +39,7 @@ pub enum DeclKind {
 /// position of each top-level statement within a transformation body.
 #[derive(Debug, Default)]
 pub struct SourceMap {
-    decls: HashMap<(DeclKind, String), Span>,
+    decls: HashMap<DeclKind, HashMap<String, Span>>,
     statements: HashMap<String, Vec<Span>>,
 }
 
@@ -49,7 +49,10 @@ impl SourceMap {
     }
 
     pub(crate) fn insert_decl(&mut self, kind: DeclKind, name: &str, span: Span) {
-        self.decls.insert((kind, name.to_string()), span);
+        self.decls
+            .entry(kind)
+            .or_default()
+            .insert(name.to_string(), span);
     }
 
     pub(crate) fn insert_statements(&mut self, transformation: &str, spans: Vec<Span>) {
@@ -59,7 +62,7 @@ impl SourceMap {
     /// The span of a declaration, if this programme declared it in
     /// source. Generated names (discipline invariants) are absent.
     pub fn decl_span(&self, kind: DeclKind, name: &str) -> Option<Span> {
-        self.decls.get(&(kind, name.to_string())).cloned()
+        self.decls.get(&kind)?.get(name).cloned()
     }
 
     /// The span of the `index`-th (0-based) top-level statement in a

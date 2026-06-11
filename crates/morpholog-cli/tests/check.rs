@@ -28,17 +28,23 @@ fn temp_morph(source: &str) -> NamedTempFile {
     f
 }
 
-/// Drop ANSI colour sequences so assertions can read the rendered
-/// diagnostic as plain text (ariadne colours the quoted source line
-/// per character).
+/// Drop ANSI CSI sequences (`ESC [` parameters, closed by a final
+/// byte in `@`..=`~`) so assertions can read the rendered diagnostic
+/// as plain text (ariadne colours the quoted source line per
+/// character). Restricted to CSI rather than skip-to-`m` so a
+/// non-SGR escape can never swallow unrelated output; a lone ESC is
+/// dropped.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
+    let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\u{1b}' {
-            for d in chars.by_ref() {
-                if d == 'm' {
-                    break;
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for d in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&d) {
+                        break;
+                    }
                 }
             }
         } else {
