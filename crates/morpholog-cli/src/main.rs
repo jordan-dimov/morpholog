@@ -371,11 +371,13 @@ pub(crate) enum Inspect {
     /// Replay the audit log and report, per invariant, whether its
     /// condition ever matched anything - which rules have actually
     /// done work, which have only ever been trivially true, and which
-    /// transformations have never been used. Read-only; replays under
-    /// a deferrable serializable snapshot, safe against a live system.
-    /// Prose with a legend by default; `--json` for the structured
-    /// form. Always exits zero: coverage answers a question, it does
-    /// not enforce.
+    /// transformations have never been used - and, from the
+    /// operational rejection log, which rules have demonstrably
+    /// refused a proposal (the `constrained` verdict). Read-only;
+    /// replays under a deferrable serializable snapshot, safe against
+    /// a live system. Prose with a legend by default; `--json` for
+    /// the structured form. Always exits zero: coverage answers a
+    /// question, it does not enforce.
     Coverage(InspectCoverageArgs),
 }
 

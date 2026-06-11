@@ -69,7 +69,7 @@ type RejectionTuple = (
     String,
     String,
     String,
-    Option<i32>,
+    Option<i64>,
     String,
     serde_json::Value,
     serde_json::Value,

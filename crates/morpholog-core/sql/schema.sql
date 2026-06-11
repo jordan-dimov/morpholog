@@ -73,7 +73,7 @@ CREATE TABLE rejections (
     -- expression for the gate kinds. Structured at the source, never
     -- parsed back out of `reason`.
     rule                 text         NOT NULL,
-    invariant_version    int,                             -- NULL for gate kinds
+    invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
     rejected_at          timestamptz  NOT NULL DEFAULT now()
 );

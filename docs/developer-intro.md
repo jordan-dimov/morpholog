@@ -477,7 +477,10 @@ morpholog run revenue.morph run_covenant_test --actor bank_credit_cttee \
   "reason": "require failed: CurrentFigure(asset, period, figure_id) did not hold over pre-state" }
 ```
 
-Refused. The exit code is non-zero; nothing was written. That second `require`
+Refused. The exit code is non-zero; nothing was admitted - no claims
+changed, no audit row. (The refusal itself lands in an operational
+rejection log, so `inspect coverage` can later show which rules have
+actually said no.) That second `require`
 in `run_covenant_test` - "the figure must be the one in force" - is a **gate**:
 it governs what you may do *next*, and f1 is no longer in force. But notice what
 the gate did *not* do: it did not reach back and invalidate the June test that

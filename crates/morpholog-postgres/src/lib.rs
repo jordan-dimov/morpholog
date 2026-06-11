@@ -96,7 +96,10 @@ pub enum PgError {
 /// On `Committed`, the database transaction has already been committed:
 /// claims have been mutated, one audit row written, and one outbox row
 /// per emitted intent. On `Rejected`, the transaction has been rolled
-/// back and no governed state has changed.
+/// back and no governed state has changed - and one row has been
+/// recorded in the operational rejection log (`morpholog.rejections`)
+/// after the rollback; a failed log insert surfaces as `Err(PgError)`,
+/// never as a `Rejected` outcome.
 ///
 /// `Serialize` uses serde's internally-tagged representation so the
 /// CLI can emit outcomes directly as JSON with a `status` discriminant.
@@ -122,6 +125,8 @@ pub enum PgProposalOutcome {
 /// the current claims into an in-memory [`State`], calls the existing
 /// synchronous [`propose`] kernel, then either commits the changes
 /// (writing claims, audit, and outbox rows) or rolls back atomically.
+/// A rejection additionally records one row in the operational
+/// rejection log after the rollback (see [`PgProposalOutcome`]).
 ///
 /// External side effects do not run inside this transaction. Outbox rows
 /// are enqueued for post-commit delivery by workers running outside.
@@ -217,7 +222,8 @@ pub enum PgTracedOutcome {
 /// Trace preservation contract:
 ///
 /// - **Committed** / **Rejected** kernel outcomes -
-///   `Ok(PgTracedOutcome::Outcome { outcome, trace })`.
+///   `Ok(PgTracedOutcome::Outcome { outcome, trace })`. A rejection
+///   records its rejection-log row exactly as the untraced path does.
 /// - **Kernel error** (`EvalError` raised mid-transformation) -
 ///   `Ok(PgTracedOutcome::KernelErrored { error, trace })`. The
 ///   open SERIALIZABLE transaction is rolled back before returning.
@@ -439,6 +445,13 @@ pub struct AuditedInvariantCheck {
     pub version: u32,
 }
 
+/// The `kind` column's vocabulary, shared by the writer below and the
+/// readers (`coverage_replay`'s invariant attribution) so they cannot
+/// drift; the schema's CHECK constraint pins the same three values.
+const REJECTION_KIND_INVARIANT: &str = "invariant";
+const REJECTION_KIND_REQUIRE: &str = "require";
+const REJECTION_KIND_BIND: &str = "bind";
+
 /// Record a refused proposal in `morpholog.rejections`. Runs on the
 /// pool (implicit autocommit transaction) because the refusing
 /// transaction has already rolled back - see `finalise_outcome` for
@@ -451,12 +464,14 @@ async fn write_rejection(
     transition: &Transition,
     reason: &RejectionReason,
 ) -> Result<(), PgError> {
-    let (kind, rule, invariant_version): (&str, &str, Option<i32>) = match reason {
-        RejectionReason::Invariant { name, version } => {
-            ("invariant", name.as_str(), Some(*version as i32))
-        }
-        RejectionReason::Require { rendered } => ("require", rendered.as_str(), None),
-        RejectionReason::BindNone { rendered } => ("bind", rendered.as_str(), None),
+    let (kind, rule, invariant_version): (&str, &str, Option<i64>) = match reason {
+        RejectionReason::Invariant { name, version } => (
+            REJECTION_KIND_INVARIANT,
+            name.as_str(),
+            Some(i64::from(*version)),
+        ),
+        RejectionReason::Require { rendered } => (REJECTION_KIND_REQUIRE, rendered.as_str(), None),
+        RejectionReason::BindNone { rendered } => (REJECTION_KIND_BIND, rendered.as_str(), None),
     };
     let args_json: serde_json::Value =
         serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;
@@ -890,7 +905,7 @@ pub struct RejectionRow {
     pub kind: String,
     pub rule: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub invariant_version: Option<i32>,
+    pub invariant_version: Option<i64>,
     pub reason: String,
     pub rejected_at: DateTime<Utc>,
 }
@@ -906,7 +921,7 @@ pub async fn list_rejection_rows(pool: &PgPool) -> Result<Vec<RejectionRow>, PgE
         serde_json::Value,
         String,
         String,
-        Option<i32>,
+        Option<i64>,
         String,
         DateTime<Utc>,
     );
@@ -2086,7 +2101,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
         let exhausted = (rows.len() as i64) < CHUNK;
 
         for (rejection_id, transformation_name, kind, rule, _) in rows {
-            let invariant = (kind == "invariant").then_some(rule.as_str());
+            let invariant = (kind == REJECTION_KIND_INVARIANT).then_some(rule.as_str());
             tracker.observe_rejection(invariant, &transformation_name, &rejection_id.to_string());
         }
         if exhausted {

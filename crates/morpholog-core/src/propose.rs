@@ -461,23 +461,25 @@ pub(crate) fn execute_stmt(
             let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
-                // Render once; reused for both the reason string and the
+                // Render once; reused for both the reason and the
                 // trace entry.
                 let rendered = format::format_prop_inline(expr);
-                let reason = RejectionReason::Require { rendered };
                 if trace.is_on() {
                     let failing = find_failing_subexpr(expr, &ctx);
                     let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                     trace.push(TraceEntry::Require {
-                        expression: format::format_prop_inline(expr),
+                        expression: rendered.clone(),
                         outcome: RequireOutcome::Rejected {
-                            reason: reason.to_string(),
+                            reason: RejectionReason::Require {
+                                rendered: rendered.clone(),
+                            }
+                            .to_string(),
                             failing_sub_expression: failing,
                             directly_missing_claims,
                         },
                     });
                 }
-                Ok(StmtOutcome::Rejected(reason))
+                Ok(StmtOutcome::Rejected(RejectionReason::Require { rendered }))
             } else {
                 if trace.is_on() {
                     trace.push(TraceEntry::Require {

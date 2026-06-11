@@ -2106,6 +2106,16 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
         !stderr.contains("rule at"),
         "no rule-location lines in batch mode; got: {stderr}"
     );
+
+    // The batch's one lawful rejection landed in the rejection log -
+    // batch rows record through the same single site as single runs.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
+    assert!(status.success());
+    let logged: Value = serde_json::from_str(&stdout).unwrap();
+    let logged = logged.as_array().unwrap();
+    assert_eq!(logged.len(), 1, "one rejected row, one log row: {stdout}");
+    assert_eq!(logged[0]["transformation_name"], "post_simple_entry");
+    assert_eq!(logged[0]["actor"]["value"], "jordan");
 }
 
 // --explain-on-reject composes per row: the rejected row's receipt

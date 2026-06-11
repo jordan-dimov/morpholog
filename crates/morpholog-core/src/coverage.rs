@@ -596,6 +596,13 @@ pub fn render_coverage(report: &CoverageReport) -> String {
     for t in &report.transformations {
         if t.transitions == 0 && t.proposals_refused == 0 {
             out.push_str(&format!("\n  {} - never used\n", t.transformation));
+        } else if t.transitions == 0 {
+            // Proposed but only ever refused - "0 transition(s)" would
+            // read as never-proposed, which is the opposite of true.
+            out.push_str(&format!(
+                "\n  {} - never committed a transition\n",
+                t.transformation
+            ));
         } else {
             out.push_str(&format!(
                 "\n  {} - {} transition(s)\n",

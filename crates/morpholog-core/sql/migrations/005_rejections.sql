@@ -6,6 +6,13 @@
 --
 -- Idempotent: re-running is safe.
 --
+-- Until applied, every REJECTION (the normal business refusal path)
+-- and every `inspect coverage` / `inspect rejections` surfaces as an
+-- operational error, because the recording insert and the replay
+-- read hit a missing table. Unlike earlier migrations, the breakage
+-- lands on the refusal path embedders exercise constantly - apply
+-- this before upgrading the binary.
+--
 -- What this migration does:
 --   Creates morpholog.rejections, one row per refused proposal,
 --   recording who proposed what and which rule refused it (kind +
@@ -28,7 +35,7 @@ CREATE TABLE IF NOT EXISTS rejections (
     actor                jsonb        NOT NULL,
     kind                 text         NOT NULL CHECK (kind IN ('invariant', 'require', 'bind')),
     rule                 text         NOT NULL,
-    invariant_version    int,
+    invariant_version    bigint,
     reason               text         NOT NULL,
     rejected_at          timestamptz  NOT NULL DEFAULT now()
 );
