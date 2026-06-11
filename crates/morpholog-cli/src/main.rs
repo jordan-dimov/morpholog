@@ -335,6 +335,11 @@ pub(crate) enum Inspect {
     /// which selects the wrong rows when commit order and UUID order
     /// diverge under concurrent commits.
     Audit(DatabaseArgs),
+    /// List recorded rejections, in rejection order: who proposed
+    /// what, and which rule refused it. Operational evidence, written
+    /// after each rollback at-most-once - the audit table remains the
+    /// legitimacy-grade record of what was admitted.
+    Rejections(DatabaseArgs),
     /// List outbox rows, in enqueue order. Defaults to `--status
     /// pending`; use `--status all` for a full view, or any of
     /// `delivered|failed|in-progress` for a specific slice. `--as-of`
@@ -776,6 +781,7 @@ mod tests {
         match what {
             Inspect::Claims(args) => args.db.database_url,
             Inspect::Audit(args) => args.database_url,
+            Inspect::Rejections(args) => args.database_url,
             Inspect::Outbox(args) => args.db.database_url,
             Inspect::Coverage(args) => args.db.database_url,
             Inspect::Derived(_) => {

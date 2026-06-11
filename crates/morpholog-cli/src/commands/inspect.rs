@@ -7,7 +7,7 @@ use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
     PgPool, list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
     list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
-    resolve_transition_at_or_before,
+    list_rejection_rows, resolve_transition_at_or_before,
 };
 use std::path::Path;
 use uuid::Uuid;
@@ -95,6 +95,13 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             let rows = list_audit_rows(&pool)
                 .await
                 .context("list_audit_rows failed")?;
+            print_json(&rows)
+        }
+        Inspect::Rejections(args) => {
+            let pool = connect(&args.database_url).await?;
+            let rows = list_rejection_rows(&pool)
+                .await
+                .context("list_rejection_rows failed")?;
             print_json(&rows)
         }
         Inspect::Outbox(args) => {
