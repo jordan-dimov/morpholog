@@ -165,6 +165,53 @@ fn refusal_names_every_finding_and_writes_nothing() {
     );
 }
 
+// A field named after a generated metadata slot would corrupt the
+// very ClassVar `submit()` dispatches on; refused like a keyword.
+#[test]
+fn fields_colliding_with_generated_members_are_refused() {
+    let (_dir, path) = refusal_fixture(
+        "program members\n\
+         predicate Meta(id: Subject, PREDICATE: Subject)\n\
+         transformation t(id, PREDICATE):\n    admit Meta(id, PREDICATE)\n",
+    );
+    let out = tempfile::tempdir().unwrap();
+    let result = generate(&path, out.path());
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("`PREDICATE` collides with a generated member name"),
+        "got:\n{stderr}"
+    );
+}
+
+// camel() is many-to-one: `capture_trade` and `CaptureTrade` are
+// distinct lawful Morpholog names that render the same Python class.
+#[test]
+fn class_name_collisions_are_refused_naming_both_sources() {
+    let (_dir, path) = refusal_fixture(
+        "program collisions\n\
+         predicate Logged(id: Subject)\n\
+         transformation capture_trade(id):\n    admit Logged(id)\n\
+         transformation CaptureTrade(id):\n    admit Logged(id)\n",
+    );
+    let out = tempfile::tempdir().unwrap();
+    let result = generate(&path, out.path());
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains(
+            "`CaptureTrade` and `capture_trade` all generate class `CaptureTradeRequest`"
+        ) || stderr.contains(
+            "`capture_trade` and `CaptureTrade` all generate class `CaptureTradeRequest`"
+        ),
+        "both sources are named; got:\n{stderr}"
+    );
+    assert!(
+        !out.path().join("morpholog_client").exists(),
+        "refusal must leave the out directory untouched"
+    );
+}
+
 // The committed package under the worked embedder is exactly what
 // this binary generates - the drift gate, caught locally under
 // precommit before CI's regenerate-and-diff sees it.

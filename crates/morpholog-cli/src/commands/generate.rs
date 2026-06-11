@@ -60,8 +60,10 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    // Render everything in memory before touching the filesystem, so a
-    // failure cannot leave a partial package behind.
+    // Render everything in memory before touching the filesystem, so
+    // no SEMANTIC failure can leave a partial package behind (an IO
+    // failure mid-write can, like any file copy; regenerating is the
+    // recovery either way).
     let models = render_models(program, &validated)?;
     let init = render_init(program);
 
@@ -101,8 +103,19 @@ const PYTHON_KEYWORDS: &[&str] = &[
 ];
 
 /// Member names the generated classes define; a field sharing one
-/// would shadow it.
-const RESERVED_MEMBERS: &[&str] = &["to_args_named", "from_named", "from_args"];
+/// would shadow it. The uppercase entries are the ClassVar metadata
+/// slots - `TRANSFORMATION` is an unlikely field name but a lawful
+/// `.morph` identifier, and a collision there corrupts the very
+/// metadata `submit()` dispatches on.
+const RESERVED_MEMBERS: &[&str] = &[
+    "to_args_named",
+    "from_named",
+    "from_args",
+    "TRANSFORMATION",
+    "PREDICATE",
+    "INTENT",
+    "_ARG_ORDER",
+];
 
 fn kind_supported(kind: &PredicateArgKind) -> bool {
     matches!(
@@ -193,7 +206,59 @@ fn sweep(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow::Result<
             &mut refusals,
         );
     }
+
+    // camel() is many-to-one (`capture_trade` and `CaptureTrade` both
+    // render `CaptureTradeRequest`), and Morpholog's duplicate check
+    // is on exact names - so two lawful declarations can collide at
+    // the generated class. Refuse with both sources named; the suffix
+    // keeps the three categories disjoint from one another.
+    sweep_class_collisions(
+        "transformation",
+        "Request",
+        program.transformations.iter().map(|t| t.name.as_str()),
+        &mut refusals,
+    );
+    sweep_class_collisions(
+        "predicate",
+        "Claim",
+        program.predicates.iter().map(|p| p.name.as_str()),
+        &mut refusals,
+    );
+    sweep_class_collisions(
+        "intent",
+        "Payload",
+        program.intents.iter().map(|i| i.name.as_str()),
+        &mut refusals,
+    );
     Ok(refusals)
+}
+
+fn sweep_class_collisions<'a>(
+    category: &str,
+    suffix: &str,
+    names: impl Iterator<Item = &'a str>,
+    refusals: &mut Vec<String>,
+) {
+    let mut by_class: std::collections::BTreeMap<String, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for name in names {
+        by_class
+            .entry(format!("{}{suffix}", camel(name)))
+            .or_default()
+            .push(name);
+    }
+    for (class, sources) in by_class {
+        if sources.len() > 1 {
+            refusals.push(format!(
+                "{category}s {} all generate class `{class}`; rename one",
+                sources
+                    .iter()
+                    .map(|s| format!("`{s}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            ));
+        }
+    }
 }
 
 fn sweep_decl(owner: &str, args: &[ArgDecl], refusals: &mut Vec<String>) {
