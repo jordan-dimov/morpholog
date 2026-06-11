@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::{Diagnostic, Span};
 use crate::lexer::{Token, lex, token_stream};
+use crate::source_map::{DeclKind, SourceMap};
 
 use super::expr::{expression_parser, value_expr_parser};
 use super::stmt::statement_parser;
@@ -29,6 +30,14 @@ use super::stmt::statement_parser;
 /// lex or parse failure. Diagnostics carry byte-offset spans; the
 /// CLI renders them via `ariadne` against the original source.
 pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
+    parse_program_with_sources(source).map(|(program, _)| program)
+}
+
+/// [`parse_program`], keeping the source locations the parser already
+/// knows. The returned [`SourceMap`] places every declaration (and
+/// every top-level transformation-body statement) in the source, so
+/// findings produced over the IR can be rendered with carets.
+pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), Vec<Diagnostic>> {
     let raw_tokens = match lex(source) {
         Ok(t) => t,
         Err(errs) => {
@@ -112,7 +121,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         "transformation",
         raw.transformations
             .iter()
-            .map(|(t, s)| (t.name.as_str(), s)),
+            .map(|(t, s, _)| (t.name.as_str(), s)),
     );
     report_duplicates(
         &mut diagnostics,
@@ -161,13 +170,34 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         return Err(diagnostics);
     }
 
+    let mut map = SourceMap::new(source);
+    for (d, s) in &raw.predicates {
+        map.insert_decl(DeclKind::Predicate, d.name.as_str(), s.clone());
+    }
+    for (d, s) in &raw.intents {
+        map.insert_decl(DeclKind::Intent, d.name.as_str(), s.clone());
+    }
+    for (d, s) in &raw.definitions {
+        map.insert_decl(DeclKind::Definition, d.name.as_str(), s.clone());
+    }
+    for (i, s) in &raw.invariants {
+        map.insert_decl(DeclKind::Invariant, i.name.as_str(), s.clone());
+    }
+    for (t, s, stmt_spans) in &raw.transformations {
+        map.insert_decl(DeclKind::Transformation, t.name.as_str(), s.clone());
+        map.insert_statements(t.name.as_str(), stmt_spans.clone());
+    }
+    for (d, s) in &raw.derived_claims {
+        map.insert_decl(DeclKind::DerivedClaim, d.predicate.as_str(), s.clone());
+    }
+
     let mut program = Program {
         name: raw.name,
         predicates: raw.predicates.into_iter().map(|(d, _)| d).collect(),
         intents: raw.intents.into_iter().map(|(d, _)| d).collect(),
         definitions: raw.definitions.into_iter().map(|(d, _)| d).collect(),
         invariants: raw.invariants.into_iter().map(|(i, _)| i).collect(),
-        transformations: raw.transformations.into_iter().map(|(t, _)| t).collect(),
+        transformations: raw.transformations.into_iter().map(|(t, _, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
     };
     // A call is spelled exactly like a claim reference; only the
@@ -182,7 +212,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     // audit, guarantees, explain) then sees them with no caller
     // changes. The formatter omits them; reparsing regenerates them.
     morpholog_core::lower_disciplines(&mut program);
-    Ok(program)
+    Ok((program, map))
 }
 
 /// Report every name declared more than once in `items`: the
@@ -212,8 +242,10 @@ fn report_duplicates<'a>(
 
 /// Intermediate parse result. Carries spans alongside the parsed
 /// values so the post-pass (duplicate detection) can produce
-/// span-rich diagnostics. The final `Program` strips spans because
-/// the kernel IR is source-agnostic.
+/// span-rich diagnostics and the [`SourceMap`] can keep them. The
+/// final `Program` strips spans because the kernel IR is
+/// source-agnostic; transformations also carry one span per
+/// top-level body statement.
 #[derive(Debug)]
 struct RawProgram {
     name: String,
@@ -221,7 +253,7 @@ struct RawProgram {
     intents: Vec<(IntentDecl, Span)>,
     definitions: Vec<(Definition, Span)>,
     invariants: Vec<(Invariant, Span)>,
-    transformations: Vec<(Transformation, Span)>,
+    transformations: Vec<(Transformation, Span, Vec<Span>)>,
     derived_claims: Vec<(DerivedClaim, Span)>,
 }
 
@@ -236,7 +268,7 @@ enum TopLevelDecl {
     Intent(IntentDecl, Span),
     Definition(Definition, Span),
     Invariant(Invariant, Span),
-    Transformation(Transformation, Span),
+    Transformation(Transformation, Span, Vec<Span>),
     Derived(DerivedClaim, Span),
 }
 
@@ -463,9 +495,17 @@ where
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<String>>();
+    // Each top-level statement keeps its span so the SourceMap can
+    // place a check finding on the statement, not just the
+    // transformation header. Nested statements (inside a `for`) are
+    // covered by the enclosing statement's span.
     let transformation_body = just(Token::Indent)
         .ignore_then(
             statement_parser()
+                .map_with(|stmt, e| {
+                    let span: SimpleSpan = e.span();
+                    (stmt, span.start()..span.end())
+                })
                 .repeated()
                 .at_least(1)
                 .collect::<Vec<_>>(),
@@ -478,6 +518,7 @@ where
         .then(transformation_body)
         .map_with(|((name, parameters), body), e| {
             let span: SimpleSpan = e.span();
+            let (body, stmt_spans): (Vec<_>, Vec<_>) = body.into_iter().unzip();
             TopLevelDecl::Transformation(
                 Transformation {
                     name: name.into(),
@@ -485,6 +526,7 @@ where
                     body,
                 },
                 span.start()..span.end(),
+                stmt_spans,
             )
         });
 
@@ -578,7 +620,7 @@ where
                     TopLevelDecl::Intent(i, s) => intents.push((i, s)),
                     TopLevelDecl::Definition(d, s) => definitions.push((d, s)),
                     TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
-                    TopLevelDecl::Transformation(t, s) => transformations.push((t, s)),
+                    TopLevelDecl::Transformation(t, s, ss) => transformations.push((t, s, ss)),
                     TopLevelDecl::Derived(d, s) => derived_claims.push((d, s)),
                 }
             }
