@@ -129,9 +129,9 @@ pub fn lints(program: &Program) -> Vec<Lint> {
 /// in another implication's antecedent enforce nothing of the shape
 /// the lint reads. Enclosing `And`/`Or`/quantifiers preserve polarity;
 /// `Not` flips it; an `Implies` flips its own left side. `Defined`
-/// calls descend into their bodies (seen-set against cycles, the
-/// walker red line): an implication hidden behind a named condition
-/// is still an implication the invariant asserts. The collected
+/// calls descend into their bodies (recursion-stack guard against
+/// cycles, the walker red line): an implication hidden behind a named
+/// condition is still an implication the invariant asserts. The collected
 /// antecedent/consequent references may therefore point into a
 /// definition's body, where variables are the definition's
 /// parameters - free from the caller's perspective, which is exactly
@@ -153,10 +153,16 @@ pub(crate) fn collect_implications<'a>(
             collect_implications(right, positive, definitions, seen, out);
         }
         Prop::Defined { name, .. } => {
-            if seen.insert(name.clone())
-                && let Some(def) = definitions.get(name)
-            {
-                collect_implications(&def.body, positive, definitions, seen, out);
+            // `seen` is a recursion-STACK guard, not a visited set:
+            // polarity is part of the meaning here, so the same
+            // definition called again at a different polarity must be
+            // expanded again. Insert before descending, remove after -
+            // cycles still terminate (re-entry while on the stack).
+            if seen.insert(name.clone()) {
+                if let Some(def) = definitions.get(name) {
+                    collect_implications(&def.body, positive, definitions, seen, out);
+                }
+                seen.remove(name);
             }
         }
         Prop::Claim { .. } | Prop::In(_, _) => {}
@@ -203,10 +209,13 @@ fn positive_claims(
             }
         }
         Prop::Defined { name, .. } => {
-            if seen.insert(name.clone())
-                && let Some(def) = definitions.get(name)
-            {
-                positive_claims(&def.body, positive, definitions, seen, out);
+            // Recursion-stack guard, not a visited set - same polarity
+            // reasoning as collect_implications above.
+            if seen.insert(name.clone()) {
+                if let Some(def) = definitions.get(name) {
+                    positive_claims(&def.body, positive, definitions, seen, out);
+                }
+                seen.remove(name);
             }
         }
         Prop::Not(inner) => positive_claims(inner, !positive, definitions, seen, out),

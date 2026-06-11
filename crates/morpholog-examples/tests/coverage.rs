@@ -420,3 +420,35 @@ invariant accounts_audited_when_flagged:
     assert_eq!(report.invariants[0].verdict, CoverageVerdict::Fired);
     assert_eq!(report.invariants[0].transitions_fired, 1);
 }
+
+// REGRESSION (review catch): the definition-descent guard is a
+// recursion STACK, not a visited set - polarity is part of the
+// meaning. The same define called at negative polarity FIRST and
+// positive polarity second must still surface its implication on the
+// positive call; a visited-set would mark it seen on the negative
+// pass and silently skip the positive one.
+#[test]
+fn a_define_seen_at_negative_polarity_first_still_classifies_on_the_positive_call() {
+    let source = r#"
+program polarity_revisit
+
+predicate Account(account_id: Subject)
+predicate Flag(account_id: Subject)
+predicate Audited(account_id: Subject)
+
+define audited_when_flagged(a):
+    Account(a) and (Flag(a) implies Audited(a))
+
+invariant tautological_guard:
+    not audited_when_flagged(x) or audited_when_flagged(x)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+    let report = CoverageTracker::new(&program).into_report();
+    assert_eq!(
+        report.invariants[0].verdict,
+        CoverageVerdict::NeverFired,
+        "the positive call's implication must be collected even though the \
+         negative call walked the definition first"
+    );
+}

@@ -1783,16 +1783,6 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
         .execute(&mut *tx)
         .await
         .map_err(classify)?;
-    type Row = (Uuid, String, serde_json::Value, serde_json::Value);
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT transition_id, transformation_name, asserted_claims, retracted_claims
-         FROM morpholog.audit
-         ORDER BY committed_at, transition_id",
-    )
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(classify)?;
-    tx.commit().await.map_err(classify)?;
 
     let mut tracker = CoverageTracker::new(program);
     let needs_pre = tracker.needs_pre_state();
@@ -1803,56 +1793,112 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
     // instead of erroring).
     let mut pre_state = State::from_claims(Vec::new());
 
-    for (transition_id, transformation_name, asserted_json, retracted_json) in rows {
-        let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
-        let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
-        let delta: std::collections::BTreeSet<PredicateName> = retracted
-            .iter()
-            .chain(asserted.iter())
-            .map(|c| c.predicate.clone())
-            .collect();
-
-        // Within each transition: retractions first, then assertions -
-        // the same order the kernel's candidate build uses.
-        for r in &retracted {
-            replay.retract(r);
-        }
-        for a in &asserted {
-            replay.assert(a);
-        }
-
-        // A snapshot costs O(live claims); take one only when this
-        // transition can fire something, or when pre(...) tracking
-        // forces the previous state to stay current.
-        let relevant = tracker.delta_is_relevant(&delta);
-        if relevant || needs_pre {
-            let post_state = replay.snapshot_state();
-            tracker
-                .observe(
-                    &post_state,
-                    &pre_state,
-                    &delta,
-                    &transition_id.to_string(),
-                    &transformation_name,
+    // Keyset-paginated read inside the one deferrable snapshot: the
+    // replay is linear and streamable, so the whole log never needs to
+    // sit in memory at once - only one chunk of rows does. The cursor
+    // is the same (committed_at, transition_id) tuple every replay
+    // path orders by.
+    const CHUNK: i64 = 1024;
+    type Row = (
+        Uuid,
+        String,
+        serde_json::Value,
+        serde_json::Value,
+        DateTime<Utc>,
+    );
+    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    loop {
+        let rows: Vec<Row> = match &cursor {
+            None => {
+                sqlx::query_as(
+                    "SELECT transition_id, transformation_name,
+                            asserted_claims, retracted_claims, committed_at
+                     FROM morpholog.audit
+                     ORDER BY committed_at, transition_id
+                     LIMIT $1",
                 )
-                .map_err(PgError::Kernel)?;
-            if needs_pre {
-                pre_state = post_state;
+                .bind(CHUNK)
+                .fetch_all(&mut *tx)
+                .await
             }
-        } else {
-            // Nothing to evaluate; the states are unread, but the
-            // transition still counts and the usage table still grows.
-            tracker
-                .observe(
-                    &pre_state,
-                    &pre_state,
-                    &delta,
-                    &transition_id.to_string(),
-                    &transformation_name,
+            Some((after_at, after_id)) => {
+                sqlx::query_as(
+                    "SELECT transition_id, transformation_name,
+                            asserted_claims, retracted_claims, committed_at
+                     FROM morpholog.audit
+                     WHERE (committed_at, transition_id) > ($2, $3)
+                     ORDER BY committed_at, transition_id
+                     LIMIT $1",
                 )
-                .map_err(PgError::Kernel)?;
+                .bind(CHUNK)
+                .bind(after_at)
+                .bind(*after_id)
+                .fetch_all(&mut *tx)
+                .await
+            }
+        }
+        .map_err(classify)?;
+        let Some(last) = rows.last() else {
+            break;
+        };
+        cursor = Some((last.4, last.0));
+        let exhausted = (rows.len() as i64) < CHUNK;
+
+        for (transition_id, transformation_name, asserted_json, retracted_json, _) in rows {
+            let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
+            let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
+            let delta: std::collections::BTreeSet<PredicateName> = retracted
+                .iter()
+                .chain(asserted.iter())
+                .map(|c| c.predicate.clone())
+                .collect();
+
+            // Within each transition: retractions first, then assertions -
+            // the same order the kernel's candidate build uses.
+            for r in &retracted {
+                replay.retract(r);
+            }
+            for a in &asserted {
+                replay.assert(a);
+            }
+
+            // A snapshot costs O(live claims); take one only when this
+            // transition can fire something, or when pre(...) tracking
+            // forces the previous state to stay current.
+            let relevant = tracker.delta_is_relevant(&delta);
+            if relevant || needs_pre {
+                let post_state = replay.snapshot_state();
+                tracker
+                    .observe(
+                        &post_state,
+                        &pre_state,
+                        &delta,
+                        &transition_id.to_string(),
+                        &transformation_name,
+                    )
+                    .map_err(PgError::Kernel)?;
+                if needs_pre {
+                    pre_state = post_state;
+                }
+            } else {
+                // Nothing to evaluate; the states are unread, but the
+                // transition still counts and the usage table grows.
+                tracker
+                    .observe(
+                        &pre_state,
+                        &pre_state,
+                        &delta,
+                        &transition_id.to_string(),
+                        &transformation_name,
+                    )
+                    .map_err(PgError::Kernel)?;
+            }
+        }
+        if exhausted {
+            break;
         }
     }
+    tx.commit().await.map_err(classify)?;
     Ok(tracker.into_report())
 }
 
