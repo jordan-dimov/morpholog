@@ -2402,14 +2402,52 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
             .to_vec(),
         None => Vec::new(),
     };
-    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
-        "SELECT predicate_name, arguments
-         FROM morpholog.claims
-         ORDER BY asserted_at, predicate_name, arguments::text",
-    )
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(classify)?;
+    // Keyset over the primary key: the multiset diff below is
+    // order-insensitive, so the PK order serves where the listing
+    // helpers' (asserted_at, ...) contract is not needed - and the
+    // claims table never has to fit in memory beyond the diff's own
+    // accumulation.
+    let mut rows: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut claims_cursor: Option<(String, serde_json::Value)> = None;
+    loop {
+        let page: Vec<(String, serde_json::Value)> = match &claims_cursor {
+            None => {
+                sqlx::query_as(
+                    "SELECT predicate_name, arguments
+                     FROM morpholog.claims
+                     ORDER BY predicate_name, arguments
+                     LIMIT $1",
+                )
+                .bind(REPLAY_CHUNK)
+                .fetch_all(&mut *tx)
+                .await
+            }
+            Some((pred, args)) => {
+                sqlx::query_as(
+                    "SELECT predicate_name, arguments
+                     FROM morpholog.claims
+                     WHERE (predicate_name, arguments) > ($2, $3)
+                     ORDER BY predicate_name, arguments
+                     LIMIT $1",
+                )
+                .bind(REPLAY_CHUNK)
+                .bind(pred)
+                .bind(args)
+                .fetch_all(&mut *tx)
+                .await
+            }
+        }
+        .map_err(classify)?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        claims_cursor = Some((last.0.clone(), last.1.clone()));
+        let exhausted = (page.len() as i64) < REPLAY_CHUNK;
+        rows.extend(page);
+        if exhausted {
+            break;
+        }
+    }
     tx.commit().await.map_err(classify)?;
     let current = decode_claim_rows(rows)?;
 
@@ -2509,38 +2547,75 @@ async fn reconstruct_inner(
     // Replay every transition with a `(committed_at, transition_id)`
     // tuple less than or equal to the target's. PostgreSQL row
     // comparison (`(a, b) <= (c, d)`) is lexicographic; ordering by
-    // the same two columns guarantees a deterministic replay.
-    type Row = (serde_json::Value, serde_json::Value);
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT asserted_claims, retracted_claims
-         FROM morpholog.audit
-         WHERE (committed_at, transition_id) <= ($1, $2)
-         ORDER BY committed_at, transition_id",
-    )
-    .bind(target_committed_at)
-    .bind(target_transition_id)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(classify)?;
-
+    // the same two columns guarantees a deterministic replay. Keyset
+    // pages inside the caller's snapshot keep memory at one chunk
+    // regardless of log length - the same shape as every other
+    // replay-order read.
+    type Row = (Uuid, serde_json::Value, serde_json::Value, DateTime<Utc>);
     let mut replay = ReplaySet::new();
-    for (asserted_json, retracted_json) in rows {
-        let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
-        let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
-
-        // Within each transition: retractions first, then assertions.
-        // Matches build_candidate_state in the kernel.
-        for r in &retracted {
-            if !predicate_in_scope_set(r.predicate.as_str(), scope_set.as_ref()) {
-                continue;
+    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    loop {
+        let rows: Vec<Row> = match &cursor {
+            None => {
+                sqlx::query_as(
+                    "SELECT transition_id, asserted_claims, retracted_claims, committed_at
+                     FROM morpholog.audit
+                     WHERE (committed_at, transition_id) <= ($1, $2)
+                     ORDER BY committed_at, transition_id
+                     LIMIT $3",
+                )
+                .bind(target_committed_at)
+                .bind(target_transition_id)
+                .bind(REPLAY_CHUNK)
+                .fetch_all(&mut *conn)
+                .await
             }
-            replay.retract(r);
+            Some((after_at, after_id)) => {
+                sqlx::query_as(
+                    "SELECT transition_id, asserted_claims, retracted_claims, committed_at
+                     FROM morpholog.audit
+                     WHERE (committed_at, transition_id) <= ($1, $2)
+                       AND (committed_at, transition_id) > ($4, $5)
+                     ORDER BY committed_at, transition_id
+                     LIMIT $3",
+                )
+                .bind(target_committed_at)
+                .bind(target_transition_id)
+                .bind(REPLAY_CHUNK)
+                .bind(after_at)
+                .bind(*after_id)
+                .fetch_all(&mut *conn)
+                .await
+            }
         }
-        for a in &asserted {
-            if !predicate_in_scope_set(a.predicate.as_str(), scope_set.as_ref()) {
-                continue;
+        .map_err(classify)?;
+        let Some(last) = rows.last() else {
+            break;
+        };
+        cursor = Some((last.3, last.0));
+        let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
+
+        for (_, asserted_json, retracted_json, _) in rows {
+            let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
+            let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
+
+            // Within each transition: retractions first, then
+            // assertions. Matches build_candidate_state in the kernel.
+            for r in &retracted {
+                if !predicate_in_scope_set(r.predicate.as_str(), scope_set.as_ref()) {
+                    continue;
+                }
+                replay.retract(r);
             }
-            replay.assert(a);
+            for a in &asserted {
+                if !predicate_in_scope_set(a.predicate.as_str(), scope_set.as_ref()) {
+                    continue;
+                }
+                replay.assert(a);
+            }
+        }
+        if exhausted {
+            break;
         }
     }
     Ok(replay.into_state())
