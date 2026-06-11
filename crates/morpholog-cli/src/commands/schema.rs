@@ -24,12 +24,31 @@
 
 use crate::SchemaArgs;
 use crate::commands::{parse_or_exit, print_json, validate_or_exit};
+use anyhow::Context;
 use morpholog_core::{
     AnalysisError, IntentName, TransformationName, intent_arg_schema, transformation_arg_schema,
 };
 
 pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
+    if args.result {
+        // The outcome-envelope contract is programme-independent and
+        // pinned in the binary. Parse-then-print rather than printing
+        // the raw bytes: the binary cannot ship a syntactically broken
+        // document, and the output stays print_json-canonical.
+        let document: serde_json::Value =
+            serde_json::from_str(include_str!("../schemas/result.json")).context(
+                "the embedded result schema failed to parse; the contract test pins its validity",
+            )?;
+        return print_json(&document);
+    }
+
+    let Some(file) = &args.file else {
+        // Clap's required_unless_present("result") makes this
+        // unreachable; the bail keeps the invariant honest without a
+        // panic path in the binary.
+        anyhow::bail!("a .morph file is required for every mode except --result");
+    };
+    let parsed = parse_or_exit(file)?;
     let validated = validate_or_exit(&parsed);
     let program = &parsed.program;
 

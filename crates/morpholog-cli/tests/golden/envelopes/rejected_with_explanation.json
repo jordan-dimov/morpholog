@@ -1,0 +1,20 @@
+{
+  "explanation": {
+    "transition": {
+      "actor": "alex",
+      "args": [
+        "acct_1"
+      ],
+      "transformation": "open_account"
+    },
+    "verdict": {
+      "rejected": {
+        "kind": "invariant",
+        "name": "no_flagged_accounts",
+        "rule": "Account(a) implies (not Flag(a))"
+      }
+    }
+  },
+  "reason": "invariant `no_flagged_accounts` violated",
+  "status": "rejected"
+}

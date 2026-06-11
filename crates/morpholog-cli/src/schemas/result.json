@@ -1,0 +1,404 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Morpholog CLI outcome envelopes",
+  "description": "Every machine-readable envelope the CLI prints on stdout, one $defs entry per shape. Programme-independent: these shapes vary only with the binary. Trace entry internals are deliberately unconstrained (reserved); see docs/embedder-integration.md.",
+  "$defs": {
+    "tagged_value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "subject" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "decimal" },
+            "value": { "type": "string", "pattern": "^-?(0|[1-9]\\d*)(\\.\\d+)?$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "bool" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "date" },
+            "value": { "type": "string", "format": "date" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "timestamp" },
+            "value": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "duration" },
+            "value": { "type": "string", "format": "duration" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "quantity" },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["amount", "unit"],
+              "properties": {
+                "amount": { "type": "string", "pattern": "^-?(0|[1-9]\\d*)(\\.\\d+)?$" },
+                "unit": { "type": "string" }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "collection" },
+            "value": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } }
+          }
+        }
+      ]
+    },
+    "bare_value": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "boolean" },
+        { "type": "array", "items": { "$ref": "#/$defs/bare_value" } }
+      ]
+    },
+    "claim_instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "args"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } }
+      }
+    },
+    "intent_instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "args"],
+      "properties": {
+        "name": { "type": "string" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } }
+      }
+    },
+    "named_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "args"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "args": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/bare_value" }
+        }
+      }
+    },
+    "committed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "transition_id",
+        "actor",
+        "asserted_claims",
+        "retracted_claims",
+        "emitted_intents"
+      ],
+      "properties": {
+        "status": { "const": "committed" },
+        "transition_id": { "type": "string", "format": "uuid" },
+        "actor": { "$ref": "#/$defs/tagged_value" },
+        "asserted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+        "retracted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+        "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } }
+      }
+    },
+    "rejected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "const": "rejected" },
+        "reason": { "type": "string" },
+        "explanation": { "$ref": "#/$defs/explanation" }
+      }
+    },
+    "run_outcome": {
+      "oneOf": [{ "$ref": "#/$defs/committed" }, { "$ref": "#/$defs/rejected" }]
+    },
+    "errored": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "error"],
+      "properties": {
+        "status": { "const": "errored" },
+        "error": { "type": "string" }
+      }
+    },
+    "traced_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "trace"],
+      "properties": {
+        "result": {
+          "oneOf": [{ "$ref": "#/$defs/run_outcome" }, { "$ref": "#/$defs/errored" }]
+        },
+        "trace": { "type": "array" }
+      }
+    },
+    "explanation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transition", "verdict"],
+      "properties": {
+        "transition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transformation", "args", "actor"],
+          "properties": {
+            "transformation": { "type": "string" },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "actor": { "type": "string" }
+          }
+        },
+        "verdict": {
+          "oneOf": [
+            { "const": "admissible" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rejected"],
+              "properties": { "rejected": { "$ref": "#/$defs/rejection" } }
+            }
+          ]
+        }
+      }
+    },
+    "rejection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "gate", "statement_kind", "directly_missing_claims"],
+          "properties": {
+            "kind": { "const": "gate" },
+            "gate": { "type": "string" },
+            "statement_kind": { "enum": ["require", "bind_one"] },
+            "directly_missing_claims": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/missing_claim" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "rule"],
+          "properties": {
+            "kind": { "const": "invariant" },
+            "name": { "type": "string" },
+            "rule": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "message"],
+          "properties": {
+            "kind": { "const": "error" },
+            "message": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "missing_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "rendered", "candidate_supplier_transformations"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "rendered": { "type": "string" },
+        "candidate_supplier_transformations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "batch_receipt": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "row",
+            "status",
+            "transition_id",
+            "actor",
+            "asserted_claims",
+            "retracted_claims",
+            "emitted_intents"
+          ],
+          "properties": {
+            "row": { "type": "integer", "minimum": 1 },
+            "status": { "const": "committed" },
+            "transition_id": { "type": "string", "format": "uuid" },
+            "actor": { "$ref": "#/$defs/tagged_value" },
+            "asserted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+            "retracted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+            "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["row", "status", "reason"],
+          "properties": {
+            "row": { "type": "integer", "minimum": 1 },
+            "status": { "const": "rejected" },
+            "reason": { "type": "string" },
+            "explanation": { "$ref": "#/$defs/explanation" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["row", "status", "error"],
+          "properties": {
+            "row": { "type": "integer", "minimum": 1 },
+            "status": { "const": "error" },
+            "error": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "outbox_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent_id",
+        "transition_id",
+        "intent_type",
+        "arguments",
+        "idempotency_key",
+        "status",
+        "attempt_count",
+        "enqueued_at",
+        "last_attempt_at",
+        "delivered_at",
+        "failed_at",
+        "failure_reason",
+        "next_attempt_at",
+        "compensation_transition_id",
+        "locked_by",
+        "lock_expires_at"
+      ],
+      "properties": {
+        "intent_id": { "type": "string", "format": "uuid" },
+        "transition_id": { "type": "string", "format": "uuid" },
+        "intent_type": { "type": "string" },
+        "arguments": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } },
+        "idempotency_key": { "type": "string" },
+        "status": { "type": "string" },
+        "attempt_count": { "type": "integer" },
+        "enqueued_at": { "type": "string", "format": "date-time" },
+        "last_attempt_at": { "type": ["string", "null"], "format": "date-time" },
+        "delivered_at": { "type": ["string", "null"], "format": "date-time" },
+        "failed_at": { "type": ["string", "null"], "format": "date-time" },
+        "failure_reason": { "type": ["string", "null"] },
+        "next_attempt_at": { "type": ["string", "null"], "format": "date-time" },
+        "compensation_transition_id": { "type": ["string", "null"], "format": "uuid" },
+        "locked_by": { "type": ["string", "null"] },
+        "lock_expires_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "outbox_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row"],
+      "properties": {
+        "row": { "oneOf": [{ "$ref": "#/$defs/outbox_row" }, { "type": "null" }] }
+      }
+    },
+    "outbox_update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["applied", "lease_lost"] }
+      }
+    },
+    "check_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "diagnostics"],
+      "properties": {
+        "file": { "type": "string" },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["severity", "message"],
+            "properties": {
+              "severity": { "enum": ["error", "hint"] },
+              "message": { "type": "string" },
+              "start": { "type": "integer" },
+              "end": { "type": "integer" },
+              "line": { "type": "integer" },
+              "column": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "hash_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "hash"],
+      "properties": {
+        "program": { "type": "string" },
+        "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "init_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema"],
+      "properties": {
+        "status": { "enum": ["initialised", "already-initialised"] },
+        "schema": { "const": "morpholog" }
+      }
+    }
+  }
+}

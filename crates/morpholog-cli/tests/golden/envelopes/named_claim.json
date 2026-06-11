@@ -1,0 +1,8 @@
+{
+  "args": {
+    "flagged": false,
+    "settled_qty": "5000",
+    "trade": "trade_1"
+  },
+  "predicate": "TradeSettled"
+}

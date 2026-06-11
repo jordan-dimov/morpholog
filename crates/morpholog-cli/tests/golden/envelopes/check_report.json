@@ -1,0 +1,13 @@
+{
+  "diagnostics": [
+    {
+      "column": 1,
+      "end": 447,
+      "line": 19,
+      "message": "undeclared predicate `Ghost` referenced in invariant `cap`",
+      "severity": "error",
+      "start": 412
+    }
+  ],
+  "file": "model.morph"
+}

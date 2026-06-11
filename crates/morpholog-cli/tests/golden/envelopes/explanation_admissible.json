@@ -1,0 +1,10 @@
+{
+  "transition": {
+    "actor": "alex",
+    "args": [
+      "acct_1"
+    ],
+    "transformation": "flag_account"
+  },
+  "verdict": "admissible"
+}

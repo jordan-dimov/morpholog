@@ -496,19 +496,25 @@ pub(crate) struct CheckArgs {
 /// pure static read over the parsed and validated programme.
 #[derive(clap::Args, Debug)]
 pub(crate) struct SchemaArgs {
-    /// Path to a `.morph` source file.
-    pub(crate) file: PathBuf,
+    /// Path to a `.morph` source file. Not needed for `--result`,
+    /// whose envelope contract is programme-independent.
+    #[arg(required_unless_present = "result")]
+    pub(crate) file: Option<PathBuf>,
 
     /// Transformation name whose argument contract to emit.
     #[arg(
-        required_unless_present_any = ["intent", "all"],
-        conflicts_with_all = ["intent", "all"]
+        required_unless_present_any = ["intent", "all", "result"],
+        conflicts_with_all = ["intent", "all", "result"]
     )]
     pub(crate) transformation: Option<String>,
 
     /// Intent type name whose payload contract to emit, instead of a
     /// transformation's arguments.
-    #[arg(long, required_unless_present_any = ["transformation", "all"], conflicts_with = "all")]
+    #[arg(
+        long,
+        required_unless_present_any = ["transformation", "all", "result"],
+        conflicts_with_all = ["all", "result"]
+    )]
     pub(crate) intent: Option<String>,
 
     /// Emit one manifest covering the whole programme: every
@@ -516,8 +522,16 @@ pub(crate) struct SchemaArgs {
     /// schema, the declared predicate vocabulary, and the canonical
     /// model hash. One artefact for codegen to consume and CI to
     /// drift-check, instead of N subprocess calls.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "result")]
     pub(crate) all: bool,
+
+    /// Emit the outcome-envelope contract: one JSON Schema document
+    /// whose `$defs` cover every machine-readable envelope the CLI
+    /// prints (run outcomes, explanations, batch receipts, outbox
+    /// rows, check reports). Programme-independent - the shapes vary
+    /// only with the binary, so no `.morph` file is taken.
+    #[arg(long)]
+    pub(crate) result: bool,
 }
 
 /// Arguments for the `run` subcommand: a `.morph` source file plus the
@@ -1454,9 +1468,47 @@ mod tests {
         assert_eq!(args.transformation.as_deref(), Some("capture_trade"));
         assert!(args.intent.is_none());
         assert_eq!(
-            args.file.to_string_lossy(),
+            args.file.expect("file is present").to_string_lossy(),
             "examples/10_trade_lifecycle/trade_lifecycle.morph"
         );
+    }
+
+    /// `schema --result` needs no `.morph` file (the envelope contract
+    /// is programme-independent) and conflicts with every per-programme
+    /// mode.
+    #[test]
+    fn schema_result_parses_without_a_file() {
+        let cli = Cli::parse_from(["morpholog", "schema", "--result"]);
+        let Command::Schema(args) = cli.command else {
+            panic!("expected Command::Schema, got {:?}", cli.command);
+        };
+        assert!(args.result);
+        assert!(args.file.is_none());
+    }
+
+    #[test]
+    fn schema_result_conflicts_with_per_programme_modes() {
+        for extra in [
+            vec!["file.morph", "capture_trade"],
+            vec!["file.morph", "--intent", "X"],
+            vec!["file.morph", "--all"],
+        ] {
+            let mut argv = vec!["morpholog", "schema", "--result"];
+            argv.extend(extra.clone());
+            let err = Cli::try_parse_from(argv)
+                .expect_err("--result with a per-programme mode should conflict");
+            assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "case {extra:?}");
+        }
+    }
+
+    /// Without `--result`, schema still demands a file plus exactly one
+    /// mode - the pre-existing contract survives the file becoming
+    /// optional.
+    #[test]
+    fn schema_without_result_still_requires_a_file_and_mode() {
+        let err = Cli::try_parse_from(["morpholog", "schema"])
+            .expect_err("bare schema should be missing required args");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     /// `--intent <Type>` parses as the payload-schema alternative to a
