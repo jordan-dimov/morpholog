@@ -120,6 +120,38 @@ invariant refers_to_nothing:
     );
 }
 
+// A finding made inside a transformation body resolves to the
+// statement it was made in, via the statement index the check
+// carries in its context.
+#[test]
+fn a_statement_level_error_resolves_to_the_statement() {
+    let source = r#"
+program broken
+
+predicate Account(account_id: Subject, balance: Decimal)
+
+transformation touch(account_id):
+    require Account(account_id, _)
+    admit Account(account_id, mystery)
+"#;
+    let (program, map) = parse_program_with_sources(source).expect("parses; validation fails");
+    let errors = program.validate().expect_err("mystery is unbound");
+    let unbound = errors
+        .iter()
+        .find(|e| matches!(e, ValidationError::UnboundVariable { .. }))
+        .expect("the unbound-variable error is among them");
+    assert!(
+        unbound.to_string().contains("statement 2"),
+        "the rendered error names the statement: {unbound}"
+    );
+    let span = map.span_for_error(unbound).expect("statement is in source");
+    assert!(
+        source[span.clone()].starts_with("admit Account"),
+        "span points at: {:?}",
+        &source[span]
+    );
+}
+
 #[test]
 fn declaration_naming_errors_resolve_by_name() {
     let (_, map) = parsed();

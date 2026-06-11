@@ -156,9 +156,9 @@ impl SourceMap {
     fn context_span(&self, context: &ValidationContext) -> Option<Span> {
         match context {
             ValidationContext::Invariant { name } => self.decl_span(DeclKind::Invariant, name),
-            ValidationContext::Transformation { name } => {
-                self.decl_span(DeclKind::Transformation, name)
-            }
+            ValidationContext::Transformation { name, statement } => statement
+                .and_then(|index| self.statement_span(name, index))
+                .or_else(|| self.decl_span(DeclKind::Transformation, name)),
             ValidationContext::DerivedClaim { predicate } => {
                 self.decl_span(DeclKind::DerivedClaim, predicate)
             }

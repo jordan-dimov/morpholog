@@ -83,10 +83,24 @@ impl std::fmt::Display for VocabularyKind {
 /// without trawling the whole programme.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationContext {
-    Invariant { name: String },
-    Transformation { name: String },
-    DerivedClaim { predicate: String },
-    Definition { name: String },
+    Invariant {
+        name: String,
+    },
+    Transformation {
+        name: String,
+        /// 0-based index of the top-level body statement the finding
+        /// was made in, when the walk knows it; `None` for
+        /// transformation-level findings. A finding inside a `for`
+        /// carries the `for`'s own index. Surface tooling resolves
+        /// this to the statement's source span.
+        statement: Option<usize>,
+    },
+    DerivedClaim {
+        predicate: String,
+    },
+    Definition {
+        name: String,
+    },
 }
 
 /// A single failure surfaced by [`Program::validate`]. The validator
@@ -294,7 +308,13 @@ impl std::fmt::Display for ValidationContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ValidationContext::Invariant { name } => write!(f, "invariant `{name}`"),
-            ValidationContext::Transformation { name } => write!(f, "transformation `{name}`"),
+            ValidationContext::Transformation { name, statement } => {
+                write!(f, "transformation `{name}`")?;
+                if let Some(index) = statement {
+                    write!(f, ", statement {}", index + 1)?;
+                }
+                Ok(())
+            }
             ValidationContext::DerivedClaim { predicate } => {
                 write!(f, "derived claim `{predicate}`")
             }
@@ -650,13 +670,15 @@ fn collect_depth_errors(
         }
     }
     for t in &p.transformations {
-        if t.body
+        if let Some(index) = t
+            .body
             .iter()
-            .any(|s| stmt_exceeds_depth(s, MAX_EXPR_DEPTH, depths))
+            .position(|s| stmt_exceeds_depth(s, MAX_EXPR_DEPTH, depths))
         {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Transformation {
                     name: t.name.to_string(),
+                    statement: Some(index),
                 },
             });
         }
@@ -992,10 +1014,11 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
     let append_only = crate::disciplines::append_only_predicates(p);
     if !append_only.is_empty() {
         for t in &p.transformations {
-            let context = ValidationContext::Transformation {
-                name: t.name.to_string(),
-            };
-            for stmt in &t.body {
+            for (index, stmt) in t.body.iter().enumerate() {
+                let context = ValidationContext::Transformation {
+                    name: t.name.to_string(),
+                    statement: Some(index),
+                };
                 collect_retract_bans(stmt, &append_only, &context, &mut errors);
             }
         }
@@ -1086,7 +1109,7 @@ mod tests {
             errs.iter().any(|e| matches!(
                 e,
                 ValidationError::NestingTooDeep {
-                    context: ValidationContext::Transformation { name }
+                    context: ValidationContext::Transformation { name, .. }
                 } if name == "deep"
             )),
             "expected NestingTooDeep for the transformation; got {errs:?}"
