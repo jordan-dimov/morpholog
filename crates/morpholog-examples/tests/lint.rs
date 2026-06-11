@@ -143,6 +143,39 @@ fn tests_common_all_programs() -> Vec<(String, morpholog_core::Program)> {
     out
 }
 
+// The implication itself can hide behind a named condition too: the
+// implication collector descends through `define` bodies (the same
+// red line the consequent walker already honoured), so the trip
+// shape is linted wherever it is spelled.
+#[test]
+fn an_implication_inside_a_defined_call_still_fires() {
+    let found = lints_of(
+        r#"
+program implication_through_define
+
+predicate Registered(doc: Subject)
+predicate Decision(decision_id: Subject, doc: Subject)
+    append only
+predicate CurrentMandate(doc: Subject, mandate_id: Subject)
+    current pointer by (doc)
+
+define decisions_mandated(doc):
+    Registered(doc) and (Decision(_, doc) implies CurrentMandate(doc, _))
+
+invariant registered_docs_decisions_mandated:
+    decisions_mandated(doc)
+"#,
+    );
+    assert_eq!(found.len(), 1, "got {found:?}");
+    let Lint::GateVsInvariant {
+        append_only,
+        pointer,
+        ..
+    } = &found[0];
+    assert_eq!(append_only, "Decision");
+    assert_eq!(pointer, "CurrentMandate");
+}
+
 // A negated implication asserts no implication at all -
 // `not (A implies B)` is `A and not B` - so the lint must not read
 // one out of it.

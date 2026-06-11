@@ -31,6 +31,12 @@
 //! audit rows' `invariants_checked` column is the substrate for a
 //! later "when did this rule enter service" tier, not consulted here.
 //!
+//! Shape classification descends through definition calls (the
+//! every-walker-transitive red line): an implication hidden behind a
+//! named condition is still an implication, and only a body with no
+//! positive-polarity implication anywhere - including through its
+//! definitions - classifies always-on.
+//!
 //! The driver (the PG adapter's `coverage_replay`) folds the audit
 //! log transition by transition and calls [`CoverageTracker::observe`]
 //! with each post-state and the transition's delta predicates; the
@@ -108,16 +114,25 @@ pub struct CoverageReport {
 
 /// How one invariant participates in coverage.
 enum Shape<'p> {
-    /// One or more positive-polarity implications; coverage asks
-    /// whether any antecedent ever binds. `footprint` is the union of
-    /// the antecedents' referenced predicates (transitive through
-    /// definitions), the delta-pruning key.
+    /// One or more positive-polarity implications (the collector
+    /// descends through definition calls, so an implication hidden
+    /// behind a named condition still counts); coverage asks whether
+    /// any antecedent ever binds. `footprint` is the union of the
+    /// antecedents' referenced predicates (transitive through
+    /// definitions), the delta-pruning key. `uses_pre` disables the
+    /// prune: a `pre(...)` antecedent's firing opportunity lags the
+    /// delta by one transition (the claim asserted at T sits in the
+    /// PRE-state only from T+1), so pruning by the current delta
+    /// would skip exactly the transition where it first binds.
     Implication {
         antecedents: Vec<&'p Prop>,
         footprint: BTreeSet<PredicateName>,
+        uses_pre: bool,
     },
-    /// No positive-polarity implication: holds over every committed
-    /// state by construction; nothing to measure here.
+    /// No positive-polarity implication, even through definitions:
+    /// holds over every committed state by construction. "Always on"
+    /// means *not measurable by antecedent firing* - its enforcement
+    /// work is invisible in committed history.
     AlwaysOn,
 }
 
@@ -158,7 +173,13 @@ impl<'p> CoverageTracker<'p> {
             .iter()
             .map(|inv| {
                 let mut implications = Vec::new();
-                collect_implications(&inv.body, true, &mut implications);
+                collect_implications(
+                    &inv.body,
+                    true,
+                    DefinitionIndex::new(&program.definitions),
+                    &mut BTreeSet::new(),
+                    &mut implications,
+                );
                 let shape = if implications.is_empty() {
                     Shape::AlwaysOn
                 } else {
@@ -174,9 +195,11 @@ impl<'p> CoverageTracker<'p> {
                             &mut footprint,
                         );
                     }
+                    let uses_pre = antecedents.iter().any(|a| mentions_pre(a));
                     Shape::Implication {
                         antecedents,
                         footprint,
+                        uses_pre,
                     }
                 };
                 let from = match inv.origin {
@@ -207,14 +230,19 @@ impl<'p> CoverageTracker<'p> {
         }
     }
 
-    /// True when `delta` touches at least one tracked antecedent's
-    /// footprint - the driver's cue that this transition needs a
-    /// state snapshot at all. A transition whose delta misses every
-    /// footprint still counts (transitions, usage) but evaluates
-    /// nothing, so the driver may pass any state.
+    /// True when this transition needs a state snapshot at all:
+    /// `delta` touches a tracked antecedent's footprint, or some
+    /// antecedent reads pre-state (those are never pruned). A
+    /// transition that is not relevant still counts (transitions,
+    /// usage) but evaluates nothing, so the driver may pass any
+    /// state.
     pub fn delta_is_relevant(&self, delta: &BTreeSet<PredicateName>) -> bool {
         self.entries.iter().any(|entry| match &entry.shape {
-            Shape::Implication { footprint, .. } => footprint.intersection(delta).next().is_some(),
+            Shape::Implication {
+                footprint,
+                uses_pre,
+                ..
+            } => *uses_pre || footprint.intersection(delta).next().is_some(),
             Shape::AlwaysOn => false,
         })
     }
@@ -225,7 +253,7 @@ impl<'p> CoverageTracker<'p> {
     /// and the driver can skip the bookkeeping entirely.
     pub fn needs_pre_state(&self) -> bool {
         self.entries.iter().any(|entry| match &entry.shape {
-            Shape::Implication { antecedents, .. } => antecedents.iter().any(|a| mentions_pre(a)),
+            Shape::Implication { uses_pre, .. } => *uses_pre,
             Shape::AlwaysOn => false,
         })
     }
@@ -240,6 +268,8 @@ impl<'p> CoverageTracker<'p> {
     /// are evaluated - an antecedent that gained no new claims cannot
     /// have started binding, and one that lost claims either still
     /// binds (counted earlier) or stopped (nothing new to count).
+    /// Antecedents that read pre-state are exempt from the prune:
+    /// their firing opportunity lags the delta by one transition.
     pub fn observe(
         &mut self,
         post_state: &State,
@@ -259,11 +289,12 @@ impl<'p> CoverageTracker<'p> {
             let Shape::Implication {
                 antecedents,
                 footprint,
+                uses_pre,
             } = &entry.shape
             else {
                 continue;
             };
-            if footprint.intersection(delta).next().is_none() {
+            if !uses_pre && footprint.intersection(delta).next().is_none() {
                 continue;
             }
             let ctx = EvalContext::new(

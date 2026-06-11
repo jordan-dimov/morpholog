@@ -314,3 +314,109 @@ fn the_prose_render_carries_verdicts_and_the_legend() {
         "the legend states what committed history cannot show"
     );
 }
+
+// REGRESSION (review catch): a pre(...) antecedent's firing
+// opportunity lags the delta by one transition - the claim asserted
+// at T sits in the PRE-state only from T+1. The prune must therefore
+// never skip a pre-reading invariant, even when the current delta
+// misses its footprint entirely.
+#[test]
+fn pre_antecedent_fires_on_a_transition_whose_delta_misses_its_footprint() {
+    let source = r#"
+program pre_lag
+
+predicate Count(slot: Subject)
+predicate Marker(slot: Subject)
+
+invariant previous_count_requires_marker:
+    pre(Count(s)) implies Marker(s)
+
+transformation start(slot):
+    admit Count(slot)
+
+transformation mark(slot):
+    admit Marker(slot)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+    let mut tracker = CoverageTracker::new(&program);
+
+    let empty = State::from_claims(vec![]);
+    let s1 = State::from_claims(vec![subject_claim("Count", &["s1"])]);
+    let s2 = State::from_claims(vec![
+        subject_claim("Count", &["s1"]),
+        subject_claim("Marker", &["s1"]),
+    ]);
+
+    // t1 asserts Count; the PRE-state is empty, nothing binds.
+    tracker
+        .observe(&s1, &empty, &delta(&["Count"]), "t1", "start")
+        .unwrap();
+    // t2's delta is ONLY Marker - outside the antecedent's {Count}
+    // footprint - yet the previous state now holds Count, so this is
+    // exactly the transition where the antecedent first binds.
+    tracker
+        .observe(&s2, &s1, &delta(&["Marker"]), "t2", "mark")
+        .unwrap();
+
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "previous_count_requires_marker")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Fired);
+    assert_eq!(inv.transitions_fired, 1);
+    assert_eq!(
+        inv.first_fired.as_deref(),
+        Some("t2"),
+        "the pre-lagged firing lands on the delta-mismatched transition"
+    );
+}
+
+// REGRESSION (review catch): an implication hidden behind a `define`
+// call is still an implication - the every-walker-transitive red
+// line. It must classify (and fire) as implication-shaped, never
+// always-on.
+#[test]
+fn an_implication_inside_a_define_is_implication_shaped_and_fires() {
+    let source = r#"
+program defined_implication
+
+predicate Account(account_id: Subject)
+predicate Flag(account_id: Subject)
+predicate Audited(account_id: Subject)
+
+define audited_when_flagged(a):
+    Account(a) and (Flag(a) implies Audited(a))
+
+invariant accounts_audited_when_flagged:
+    audited_when_flagged(a)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+    let mut tracker = CoverageTracker::new(&program);
+
+    // Zero history: the verdict must be never-fired, NOT always-on -
+    // the implication is visible through the call.
+    let report = CoverageTracker::new(&program).into_report();
+    assert_eq!(
+        report.invariants[0].verdict,
+        CoverageVerdict::NeverFired,
+        "the hidden implication must classify as implication-shaped"
+    );
+
+    // And it fires when the hidden antecedent (Flag) binds.
+    let empty = State::from_claims(vec![]);
+    let state = State::from_claims(vec![
+        subject_claim("Account", &["a1"]),
+        subject_claim("Flag", &["a1"]),
+        subject_claim("Audited", &["a1"]),
+    ]);
+    tracker
+        .observe(&state, &empty, &delta(&["Flag"]), "t1", "ignored")
+        .unwrap();
+    let report = tracker.into_report();
+    assert_eq!(report.invariants[0].verdict, CoverageVerdict::Fired);
+    assert_eq!(report.invariants[0].transitions_fired, 1);
+}
