@@ -165,6 +165,27 @@ fn refusal_names_every_finding_and_writes_nothing() {
     );
 }
 
+// The committed package under the worked embedder is exactly what
+// this binary generates - the drift gate, caught locally under
+// precommit before CI's regenerate-and-diff sees it.
+#[test]
+fn the_committed_example_package_is_current() {
+    let out = tempfile::tempdir().unwrap();
+    assert!(generate(&trade_lifecycle(), out.path()).status.success());
+    let committed = repo_root().join("examples/etrm_embedder/morpholog_client");
+    for file in PACKAGE_FILES {
+        let fresh = std::fs::read(out.path().join("morpholog_client").join(file)).unwrap();
+        let on_disk = std::fs::read(committed.join(file)).unwrap_or_else(|e| {
+            panic!("missing committed {file} ({e}); regenerate the example package")
+        });
+        assert_eq!(
+            fresh, on_disk,
+            "{file} drifted; regenerate with `morpholog generate python-client \
+             examples/10_trade_lifecycle/trade_lifecycle.morph --out examples/etrm_embedder`"
+        );
+    }
+}
+
 // The worked examples that fit the supported kind set all generate;
 // the laytime example (Duration-shaped by design) is refused by name -
 // the documented consequence of the kind floor.

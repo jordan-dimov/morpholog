@@ -102,7 +102,7 @@ const PYTHON_KEYWORDS: &[&str] = &[
 
 /// Member names the generated classes define; a field sharing one
 /// would shadow it.
-const RESERVED_MEMBERS: &[&str] = &["to_args_named", "from_named", "from_tagged_args"];
+const RESERVED_MEMBERS: &[&str] = &["to_args_named", "from_named", "from_args"];
 
 fn kind_supported(kind: &PredicateArgKind) -> bool {
     matches!(
@@ -346,9 +346,12 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
     }
 
-    // Intent payloads: positional tagged args become named typed
-    // fields, the contract baked at generation time under the hash
-    // stamp - no runtime `schema --intent` call, no hand-coded order.
+    // Intent payloads: positional args become named typed fields, the
+    // contract baked at generation time under the hash stamp - no
+    // runtime `schema --intent` call, no hand-coded order. `from_args`
+    // takes the DECODED positional values the adapter's OutboxRow
+    // already carries (decode_tagged is the adapter's job, arity and
+    // naming are the contract's).
     for intent in &program.intents {
         let class = format!("{}Payload", camel(intent.name.as_str()));
         let order = intent
@@ -373,7 +376,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         }
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_tagged_args(cls, args: list) -> \"{class}\":\n        if len(args) != {arity}:\n            raise ValueError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(*[values.decode_tagged(a) for a in args])\n",
+            "\n    @classmethod\n    def from_args(cls, args: list) -> \"{class}\":\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise ValueError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(*args)\n",
             arity = intent.args.len(),
             intent = intent.name,
         );

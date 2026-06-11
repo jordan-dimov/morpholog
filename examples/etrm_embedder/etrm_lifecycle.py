@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-"""A worked embedder: an ETRM driving Morpholog over the CLI contract.
+"""A worked embedder: an ETRM driving Morpholog through its generated client.
 
 The smallest honest sketch of the reference energy-trading risk system
 integrating with Morpholog the way any non-Rust system would - a
-subprocess and JSON, no FFI, no generated client. It drives one commodity
-trade through its whole governed life against
-`../10_trade_lifecycle/trade_lifecycle.morph`:
+subprocess and JSON underneath, but spoken through the typed client the
+binary itself emits:
+
+    morpholog generate python-client ../10_trade_lifecycle/trade_lifecycle.morph --out .
+
+The `morpholog_client/` package beside this script is that output,
+committed so this example is runnable as-is and so CI can prove the
+binary still generates it byte-for-byte (regenerate-and-diff). The
+client is a projection of the programme, like the schema and the
+envelopes - nothing here is hand-maintained interface code any more;
+this script is only the business narrative:
 
     grant authority -> capture -> confirm -> correct the price -> settle
-
-using only the public surface in `docs/embedder-integration.md`:
-`morpholog init` to provision the schema from the binary itself,
-`morpholog schema` to learn a contract, `run` to commit, `explain` to
-diagnose a refusal, `inspect claims --predicate --named` to read
-governed state back decoded by declared field name, and `outbox
-claim`/`complete` to deliver the intents each commit emits.
-
-It is written to lean on the contract's edges, not glide over them: it
-forced `morpholog schema --intent` (so a deliverer decodes payloads by
-name, not hand-coded position), and it prints the friction it still hits
-at the end as the next pressure on the interface.
 
 Run it against a DISPOSABLE database (the run path commits; this resets
 the schema for a reproducible run). Needs `morpholog`, `psql`, and a
@@ -28,21 +24,26 @@ PostgreSQL database on hand:
     DATABASE_URL=postgres:///morpholog_bench python3 examples/etrm_embedder/etrm_lifecycle.py
 """
 
-import json
+import dataclasses
 import os
 import subprocess
 import sys
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
+
+from morpholog_client import Morpholog, MorphologError, envelopes, models
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MORPH_FILE = REPO_ROOT / "examples" / "10_trade_lifecycle" / "trade_lifecycle.morph"
 
 # The friction this lifecycle still hits, printed at the end. (Decoding
 # emitted intents used to be friction; it forced `morpholog schema
-# --intent`. Reading governed state back used to be friction; it forced
-# `inspect claims --predicate`. Decoding those reads by field name was
-# the next friction - this script and Glasshouse both hand-rolled the
-# same zip-and-guard - and it forced `--named`, so the helper is gone.)
+# --intent`, and the generated payload models have now retired even
+# that runtime call. Reading governed state back used to be friction;
+# it forced `inspect claims --predicate` and then `--named`. The
+# hand-rolled client itself was the last friction - two embedders
+# wrote the same one - and it forced `generate python-client`.)
 READ_SURFACE_FRICTION = (
     "The targeted read stops at predicate granularity: picking THIS trade's pointer out "
     "of `inspect claims --predicate CurrentOfficialPrice` is client-side filtering. Fine "
@@ -51,186 +52,141 @@ READ_SURFACE_FRICTION = (
 )
 
 
-class MorphologError(RuntimeError):
-    """An operational failure from the CLI - distinct from a lawful business
-    rejection, which `run` reports as a `{"status": "rejected"}` outcome."""
-
-
-class Morpholog:
-    """A thin client over the `morpholog` CLI: arguments in, JSON out. This
-    is the entire integration surface - a subprocess and a pipe."""
-
-    def __init__(self, file: Path, database_url: str, binary: str = "morpholog") -> None:
-        self.file = str(file)
-        self.database_url = database_url
-        self.binary = binary
-
-    def _json(self, *args: str) -> dict | list:
-        proc = subprocess.run([self.binary, *args], capture_output=True, text=True)
-        # The contract puts the result on stdout - a committed or rejected
-        # outcome, a schema, an outbox row - even when a non-zero exit flags
-        # a business rejection or a lost lease. Empty stdout is the only
-        # genuinely operational failure.
-        if not proc.stdout.strip():
-            raise MorphologError(f"`{' '.join(args)}`:\n{proc.stderr.strip()}")
-        return json.loads(proc.stdout)
-
-    def schema(self, transformation: str) -> dict:
-        return self._json("schema", self.file, transformation)
-
-    def intent_schema(self, intent: str) -> dict:
-        return self._json("schema", self.file, "--intent", intent)
-
-    def run(self, transformation: str, actor: str, **args: str) -> dict:
-        return self._json(
-            "run", self.file, transformation,
-            "--actor", actor, "--args-named", json.dumps(args),
-            "--database-url", self.database_url,
-        )
-    def explain(self, transformation: str, actor: str, **args: str) -> dict:
-        return self._json(
-            "explain", self.file, transformation,
-            "--actor", actor, "--args-named", json.dumps(args),
-            "--json", "--database-url", self.database_url,
-        )
-    def claims_named(self, *predicates: str) -> list:
-        flags = [flag for p in predicates for flag in ("--predicate", p)]
-        return self._json(
-            "inspect", "claims", *flags, "--named", self.file,
-            "--database-url", self.database_url,
-        )
-    def claim(self, intent_type: str) -> dict | None:
-        return self._json(
-            "outbox", "claim", "--intent-type", intent_type,
-            "--database-url", self.database_url,
-        )["row"]
-    def complete(self, intent_id: str, worker_id: str) -> dict:
-        return self._json(
-            "outbox", "complete", intent_id,
-            "--worker-id", worker_id, "--outcome", "delivered",
-            "--database-url", self.database_url,
-        )
-
-def decode_payload(morph: Morpholog, intent_type: str, args: list[dict]) -> dict:
-    """Map an emitted intent's positional, tagged payload to named fields,
-    using the declared contract - `x-morpholog-arg-order` gives the order,
-    so the deliverer never hard-codes it (and `required`, a set keyword, is
-    never relied on for ordering)."""
-    order = morph.intent_schema(intent_type)["x-morpholog-arg-order"]
-    values = [arg["value"] for arg in args]
-    if len(order) != len(values):
-        raise MorphologError(
-            f"{intent_type}: payload arity {len(values)} != contract arity {len(order)} "
-            f"(schema/payload skew); fields={order}, values={values}"
-        )
-    return dict(zip(order, values, strict=True))
-
-
-def deliver(morph: Morpholog, outcome: dict) -> None:
+def deliver(morph: Morpholog, outcome: object) -> None:
     """The deliverer side: for each intent the commit emitted, claim it,
-    decode its payload by name, "deliver" it, and resolve the lease."""
-    if outcome.get("status") != "committed":
+    decode its payload through the generated model (the arg order was
+    baked at generation time under the model hash), and resolve the
+    lease."""
+    if not isinstance(outcome, envelopes.Committed):
         raise MorphologError(f"expected a commit, got {outcome}")
-    emitted = ", ".join(i["name"] for i in outcome["emitted_intents"]) or "none"
+    emitted = ", ".join(i.name for i in outcome.emitted_intents) or "none"
     print(f"  committed (emitted: {emitted})")
-    for intent in outcome["emitted_intents"]:
-        name = intent["name"]
-        row = morph.claim(name)
+    for intent in outcome.emitted_intents:
+        row = morph.outbox_claim(intent.name)
         if row is None:
             continue
-        print(f"    delivered {name} -> {decode_payload(morph, name, row['arguments'])}")
-        applied = morph.complete(row["intent_id"], row["locked_by"])
-        if applied.get("status") != "applied":
-            raise MorphologError(f"lease lost completing {name}: {applied}")
+        payload = models.INTENT_PAYLOADS[intent.name].from_args(row.arguments)
+        print(f"    delivered {intent.name} -> {payload}")
+        applied = morph.outbox_complete(row.intent_id, row.locked_by)
+        if not applied.applied:
+            raise MorphologError(f"lease lost completing {intent.name}: {applied}")
 
 
-def reset_schema(database_url: str, binary: str) -> None:
+def reset_schema(morph: Morpholog) -> None:
     """Demo-only, so the script is re-runnable; a real embedder never drops
     the schema out from under itself. The drop needs psql; the provisioning
-    goes through `morpholog init` - the same embedded-schema path a
-    binary-only deployment uses, with nothing to vendor and nothing to drift."""
-    subprocess.run(["psql", database_url, "-qc", "DROP SCHEMA IF EXISTS morpholog CASCADE"], check=True)
-    subprocess.run([binary, "init", "--database-url", database_url], check=True, capture_output=True)
+    goes through `init` - the same embedded-schema path a binary-only
+    deployment uses, with nothing to vendor and nothing to drift."""
+    subprocess.run(
+        ["psql", morph.database_url, "-qc", "DROP SCHEMA IF EXISTS morpholog CASCADE"],
+        check=True,
+    )
+    morph.init()
 
 
 def main() -> None:
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise MorphologError("set DATABASE_URL to a disposable database (the run path commits)")
-    binary = os.environ.get("MORPHOLOG_BIN", "morpholog")
-    reset_schema(database_url, binary)
+    morph = Morpholog(str(MORPH_FILE), database_url)
+    reset_schema(morph)
 
-    morph = Morpholog(MORPH_FILE, database_url, binary)
     trade, commodity, desk = "t1", "oil", "middle_office"
 
-    print(f"driving {MORPH_FILE.name} via `{morph.binary}` (subprocess + JSON)\n")
-    print(f"capture_trade expects: {sorted(morph.schema('capture_trade')['properties'])}\n")
+    print(f"driving {MORPH_FILE.name} via `{morph.binary}` (generated client over subprocess + JSON)\n")
+    fields = [f.name for f in dataclasses.fields(models.CaptureTradeRequest)]
+    print(f"capture_trade expects: {sorted(fields)}\n")
 
     print("1. grant the desk confirmation authority for oil")
-    deliver(morph, morph.run("grant_confirm_authority", desk, principal=desk, commodity=commodity))
+    deliver(morph, morph.submit(
+        models.GrantConfirmAuthorityRequest(principal=desk, commodity=commodity), desk,
+    ))
 
     print("2. front office captures the trade")
-    deliver(morph, morph.run(
-        "capture_trade", "trader",
-        trade=trade, commodity=commodity, direction="buy", version_id="v1",
-        quantity="100", delivery_period="2026Q3", captured_on="2026-05-01", price="45.20",
+    deliver(morph, morph.submit(
+        models.CaptureTradeRequest(
+            trade=trade, commodity=commodity, direction="buy", version_id="v1",
+            quantity=Decimal("100"), delivery_period="2026Q3",
+            captured_on=date(2026, 5, 1), price=Decimal("45.20"),
+        ),
+        "trader",
     ))
+
     print("3. before confirming, ask why a settlement would be refused")
-    verdict = morph.explain(
-        "settle_trade", desk,
-        trade=trade, settled_qty="60", settlement_id="s1",
-        official_price_id="op1", effective_on="2026-06-30",
+    premature = models.SettleTradeRequest(
+        trade=trade, settled_qty=Decimal("60"), settlement_id="s1",
+        official_price_id="op1", effective_on=date(2026, 6, 30),
     )
-    print(f"    explain -> {json.dumps(verdict['verdict'])[:160]}")
+    verdict = morph.explain(premature.TRANSFORMATION, desk, premature.to_args_named())
+    print(f"    explain -> {verdict.rejection}")
 
     print("4. middle office confirms and sets the official price")
-    deliver(morph, morph.run(
-        "confirm_trade", desk,
-        trade=trade, counterparty="acme", confirmation_id="conf1",
-        official_price_id="op1", confirmed_price="45.20",
+    deliver(morph, morph.submit(
+        models.ConfirmTradeRequest(
+            trade=trade, counterparty="acme", confirmation_id="conf1",
+            official_price_id="op1", confirmed_price=Decimal("45.20"),
+        ),
+        desk,
     ))
+
     print("5. the official price is corrected (restatement; prior settlements stand)")
-    deliver(morph, morph.run(
-        "correct_official_price", desk,
-        trade=trade, prior_official_price_id="op1",
-        new_official_price_id="op2", corrected_price="46.00",
+    deliver(morph, morph.submit(
+        models.CorrectOfficialPriceRequest(
+            trade=trade, prior_official_price_id="op1",
+            new_official_price_id="op2", corrected_price=Decimal("46.00"),
+        ),
+        desk,
     ))
+
     # We minted op2 ourselves, but a resumed process or separate service
     # would not know it. So settle the way that process would: read the
-    # in-force pointer back through the targeted claim query, then look
-    # up the figure it points at.
+    # in-force pointer back through the typed read models, then look up
+    # the figure it points at - `figure.price` arrives as a Decimal, not
+    # a string, because the model parsed it by declared kind.
     #
     # A bare `next()` with no zero/many handling is deliberate. The
-    # programme's `at_most_one_current_official_price` invariant means two
-    # pointers for one trade is a state the runtime refuses to commit, and
-    # the confirm step just guaranteed one exists. The model's invariants
-    # are what license the simple read - governed state is not untrusted
-    # input to be defensively re-checked.
+    # programme's `current_official_price_unique_by_trade` invariant means
+    # two pointers for one trade is a state the runtime refuses to commit,
+    # and the confirm step just guaranteed one exists. The model's
+    # invariants are what license the simple read - governed state is not
+    # untrusted input to be defensively re-checked.
     print("6. read the in-force figure back, then settle a 60-lot slice against it")
     pointer = next(
-        c["args"]
-        for c in morph.claims_named("CurrentOfficialPrice")
-        if c["args"]["trade"] == trade
+        p
+        for p in (
+            models.CurrentOfficialPriceClaim.from_named(c.args)
+            for c in morph.claims_named("CurrentOfficialPrice")
+        )
+        if p.trade == trade
     )
-    in_force = pointer["official_price_id"]
     figure = next(
-        c["args"]
-        for c in morph.claims_named("OfficialPrice")
-        if c["args"]["trade"] == trade and c["args"]["official_price_id"] == in_force
+        f
+        for f in (
+            models.OfficialPriceClaim.from_named(c.args)
+            for c in morph.claims_named("OfficialPrice")
+        )
+        if f.trade == trade and f.official_price_id == pointer.official_price_id
     )
-    print(f"    in-force official price for {trade}: {figure['price']} under {in_force}")
-    deliver(morph, morph.run(
-        "settle_trade", desk,
-        trade=trade, settled_qty="60", settlement_id="s1",
-        official_price_id=in_force, effective_on="2026-06-30",
+    print(f"    in-force official price for {trade}: {figure.price} under {figure.official_price_id}")
+    deliver(morph, morph.submit(
+        models.SettleTradeRequest(
+            trade=trade, settled_qty=Decimal("60"), settlement_id="s1",
+            official_price_id=pointer.official_price_id, effective_on=date(2026, 6, 30),
+        ),
+        desk,
     ))
+
     print("7. an over-cap second settlement (60 + 60 > 100) is refused")
-    over = morph.run(
-        "settle_trade", desk,
-        trade=trade, settled_qty="60", settlement_id="s2",
-        official_price_id=in_force, effective_on="2026-06-30",
+    over = morph.submit(
+        models.SettleTradeRequest(
+            trade=trade, settled_qty=Decimal("60"), settlement_id="s2",
+            official_price_id=pointer.official_price_id, effective_on=date(2026, 6, 30),
+        ),
+        desk,
     )
-    print(f"    settle_trade(s2) -> {json.dumps(over)}")
+    if not isinstance(over, envelopes.Rejected):
+        raise MorphologError(f"the over-cap settlement should be refused, got {over}")
+    print(f"    settle_trade(s2) -> rejected: {over.reason}")
 
     print(f"\n--- interface friction this lifecycle still hits ---\n  {READ_SURFACE_FRICTION}")
 
