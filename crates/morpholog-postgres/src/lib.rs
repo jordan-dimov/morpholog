@@ -10,9 +10,9 @@ pub mod testing;
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{
-    ClaimInstance, Definition, DerivedClaim, EvalError, EvalValue, IntentInstance, Invariant,
-    InvariantName, Outcome, PredicateName, State, Subject, TraceEntry, TracedProposal,
-    Transformation, TransformationName, Transition, enumerate_derived,
+    ClaimInstance, CoverageReport, CoverageTracker, Definition, DerivedClaim, EvalError, EvalValue,
+    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, State, Subject,
+    TraceEntry, TracedProposal, Transformation, TransformationName, Transition, enumerate_derived,
     predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
@@ -1761,6 +1761,101 @@ pub enum VerifyOutcome {
     },
 }
 
+/// Replay the audit log through a [`CoverageTracker`] and report,
+/// per invariant of `program`, whether its antecedent ever bound -
+/// the auditor question "which of these rules has ever actually done
+/// work?". See `morpholog_core::coverage` for the verdict semantics
+/// and the committed-history bound that shapes them.
+///
+/// One `SERIALIZABLE READ ONLY DEFERRABLE` transaction reads the
+/// whole log: the deferrable mode waits for a safe snapshot and then
+/// runs with a guaranteed-serializable view and zero SSI footprint -
+/// the right isolation for a long analytical read over a live system.
+///
+/// Cost: one pass over the audit log, plus a state snapshot and an
+/// antecedent evaluation for each transition whose delta predicates
+/// touch a tracked antecedent (the tracker's pruning). The same
+/// scaling family as `verify` and as-of replay - an offline auditor
+/// command, not a hot path.
+pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<CoverageReport, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+    type Row = (Uuid, String, serde_json::Value, serde_json::Value);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT transition_id, transformation_name, asserted_claims, retracted_claims
+         FROM morpholog.audit
+         ORDER BY committed_at, transition_id",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(classify)?;
+    tx.commit().await.map_err(classify)?;
+
+    let mut tracker = CoverageTracker::new(program);
+    let needs_pre = tracker.needs_pre_state();
+    let mut replay = ReplaySet::new();
+    // The previous transition's state, carried only when some tracked
+    // antecedent contains pre(...); the empty state otherwise (and for
+    // the first transition - never absent, so pre(...) evaluates
+    // instead of erroring).
+    let mut pre_state = State::from_claims(Vec::new());
+
+    for (transition_id, transformation_name, asserted_json, retracted_json) in rows {
+        let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
+        let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
+        let delta: std::collections::BTreeSet<PredicateName> = retracted
+            .iter()
+            .chain(asserted.iter())
+            .map(|c| c.predicate.clone())
+            .collect();
+
+        // Within each transition: retractions first, then assertions -
+        // the same order the kernel's candidate build uses.
+        for r in &retracted {
+            replay.retract(r);
+        }
+        for a in &asserted {
+            replay.assert(a);
+        }
+
+        // A snapshot costs O(live claims); take one only when this
+        // transition can fire something, or when pre(...) tracking
+        // forces the previous state to stay current.
+        let relevant = tracker.delta_is_relevant(&delta);
+        if relevant || needs_pre {
+            let post_state = replay.snapshot_state();
+            tracker
+                .observe(
+                    &post_state,
+                    &pre_state,
+                    &delta,
+                    &transition_id.to_string(),
+                    &transformation_name,
+                )
+                .map_err(PgError::Kernel)?;
+            if needs_pre {
+                pre_state = post_state;
+            }
+        } else {
+            // Nothing to evaluate; the states are unread, but the
+            // transition still counts and the usage table still grows.
+            tracker
+                .observe(
+                    &pre_state,
+                    &pre_state,
+                    &delta,
+                    &transition_id.to_string(),
+                    &transformation_name,
+                )
+                .map_err(PgError::Kernel)?;
+        }
+    }
+    Ok(tracker.into_report())
+}
+
 /// Replay the audit log to its latest transition and compare the
 /// reconstructed state against the claims table.
 ///
@@ -2034,6 +2129,21 @@ impl ReplaySet {
             .into_iter()
             .zip(self.live)
             .filter_map(|(c, alive)| alive.then_some(c))
+            .collect();
+        State::from_claims(claims)
+    }
+
+    /// A `State` of the currently-live claims without consuming the
+    /// replay - the per-step snapshot coverage needs. O(live claims)
+    /// per call, which is why [`coverage_replay`] only calls it when
+    /// a transition's delta actually touches a tracked antecedent.
+    fn snapshot_state(&self) -> State {
+        let claims: Vec<ClaimInstance> = self
+            .claims
+            .iter()
+            .zip(&self.live)
+            .filter(|&(_, &alive)| alive)
+            .map(|(c, _)| c.clone())
             .collect();
         State::from_claims(claims)
     }

@@ -207,6 +207,29 @@ impl<'p> CoverageTracker<'p> {
         }
     }
 
+    /// True when `delta` touches at least one tracked antecedent's
+    /// footprint - the driver's cue that this transition needs a
+    /// state snapshot at all. A transition whose delta misses every
+    /// footprint still counts (transitions, usage) but evaluates
+    /// nothing, so the driver may pass any state.
+    pub fn delta_is_relevant(&self, delta: &BTreeSet<PredicateName>) -> bool {
+        self.entries.iter().any(|entry| match &entry.shape {
+            Shape::Implication { footprint, .. } => footprint.intersection(delta).next().is_some(),
+            Shape::AlwaysOn => false,
+        })
+    }
+
+    /// True when any tracked antecedent contains `pre(...)` - the
+    /// driver's cue that it must carry the previous state forward on
+    /// every step. When false, the pre-state argument is never read
+    /// and the driver can skip the bookkeeping entirely.
+    pub fn needs_pre_state(&self) -> bool {
+        self.entries.iter().any(|entry| match &entry.shape {
+            Shape::Implication { antecedents, .. } => antecedents.iter().any(|a| mentions_pre(a)),
+            Shape::AlwaysOn => false,
+        })
+    }
+
     /// Record one replayed transition: `post_state` is the state after
     /// it committed, `pre_state` the state before (the empty state for
     /// the first transition - never `None`, so `pre(...)` antecedents
@@ -322,6 +345,28 @@ impl<'p> CoverageTracker<'p> {
             invariants,
             transformations,
         }
+    }
+}
+
+/// Does this proposition contain `pre(...)`? Definitions cannot (a
+/// validated programme bans `pre` inside bodies), so the walk does
+/// not descend through calls.
+fn mentions_pre(prop: &Prop) -> bool {
+    match prop {
+        Prop::Pre(_) => true,
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::In(_, _)
+        | Prop::Eq(_, _)
+        | Prop::Neq(_, _)
+        | Prop::Compare { .. } => false,
+        Prop::And(props) | Prop::Or(props) => props.iter().any(mentions_pre),
+        Prop::Xor(left, right) | Prop::Implies { left, right } => {
+            mentions_pre(left) || mentions_pre(right)
+        }
+        Prop::Not(inner) => mentions_pre(inner),
+        Prop::Exists { body, .. } => mentions_pre(body),
+        Prop::Forall { source, body, .. } => mentions_pre(source) || mentions_pre(body),
     }
 }
 
