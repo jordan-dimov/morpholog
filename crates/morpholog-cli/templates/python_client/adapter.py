@@ -159,26 +159,53 @@ class Morpholog:
     # Reading governed state back.
     # ------------------------------------------------------------
 
-    def claims(self, *predicates: str) -> list:
+    def claims(self, *predicates: str, as_of: str | None = None) -> list:
         """The bare read: the claims table is the authority, an unknown
-        predicate matches nothing. Tagged args decoded to bare values."""
+        predicate matches nothing. Tagged args decoded to bare values.
+
+        `as_of` reads the claims as they were at a past moment - a
+        transition id, or an RFC 3339 timestamp resolved to the last
+        transition committed at or before it.
+        """
         flags = [flag for p in predicates for flag in ("--predicate", p)]
+        if as_of is not None:
+            flags.extend(["--as-of", as_of])
         payload = self._json(
             "inspect", "claims", *flags, "--database-url", self.database_url
         )
         return [envelopes.ClaimInstance.from_json(c) for c in payload]
 
-    def claims_named(self, *predicates: str) -> list:
+    def claims_named(self, *predicates: str, as_of: str | None = None) -> list:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
-        generated read models parse them by declared kind."""
+        generated read models parse them by declared kind.
+
+        `as_of` reads the claims as they were at a past moment - a
+        transition id, or an RFC 3339 timestamp resolved to the last
+        transition committed at or before it.
+        """
         flags = [flag for p in predicates for flag in ("--predicate", p)]
+        if as_of is not None:
+            flags.extend(["--as-of", as_of])
         payload = self._json(
             "inspect", "claims", *flags,
             "--named", self.file,
             "--database-url", self.database_url,
         )
         return [envelopes.NamedClaim.from_json(c) for c in payload]
+
+    def coverage(self) -> envelopes.CoverageReport:
+        """Replay the audit log and report which rules have ever
+        actually done work - per invariant, whether its condition ever
+        matched anything; per transformation, whether it was ever
+        used. Read-only."""
+        return envelopes.CoverageReport.from_json(
+            self._json(
+                "inspect", "coverage", self.file,
+                "--json",
+                "--database-url", self.database_url,
+            )
+        )
 
     # ------------------------------------------------------------
     # The outbox lease protocol.

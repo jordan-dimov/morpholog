@@ -391,6 +391,92 @@ class OutboxUpdate:
 
 
 @dataclass(frozen=True)
+class InvariantCoverage:
+    """Coverage of one invariant: did its condition ever match? The
+    verdicts are bounded by committed history - `fired`, `never_fired`
+    (its condition never matched anything), `always_on` (a prohibition
+    whose work is invisible in committed history)."""
+
+    invariant: str
+    verdict: str
+    transitions_fired: int
+    from_clause: str | None = None
+    first_fired: str | None = None
+    last_fired: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> "InvariantCoverage":
+        data = _strict(
+            "invariant coverage",
+            payload,
+            {"invariant", "verdict", "transitions_fired"},
+            {"from", "first_fired", "last_fired"},
+        )
+        return cls(
+            invariant=data["invariant"],
+            verdict=data["verdict"],
+            transitions_fired=data["transitions_fired"],
+            # `from` is a Python keyword; the wire name maps to
+            # `from_clause` on this side only.
+            from_clause=data.get("from"),
+            first_fired=data.get("first_fired"),
+            last_fired=data.get("last_fired"),
+        )
+
+
+@dataclass(frozen=True)
+class TransformationUsage:
+    transformation: str
+    transitions: int
+    first: str | None = None
+    last: str | None = None
+    not_in_programme: bool = False
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TransformationUsage":
+        data = _strict(
+            "transformation usage",
+            payload,
+            {"transformation", "transitions"},
+            {"first", "last", "not_in_programme"},
+        )
+        return cls(
+            transformation=data["transformation"],
+            transitions=data["transitions"],
+            first=data.get("first"),
+            last=data.get("last"),
+            not_in_programme=data.get("not_in_programme", False),
+        )
+
+
+@dataclass(frozen=True)
+class CoverageReport:
+    """Which rules have ever actually done work, over replayed
+    committed history."""
+
+    program: str
+    transitions_replayed: int
+    invariants: list
+    transformations: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "CoverageReport":
+        data = _strict(
+            "coverage report",
+            payload,
+            {"program", "transitions_replayed", "invariants", "transformations"},
+        )
+        return cls(
+            program=data["program"],
+            transitions_replayed=data["transitions_replayed"],
+            invariants=[InvariantCoverage.from_json(i) for i in data["invariants"]],
+            transformations=[
+                TransformationUsage.from_json(t) for t in data["transformations"]
+            ],
+        )
+
+
+@dataclass(frozen=True)
 class Diagnostic:
     severity: str
     message: str

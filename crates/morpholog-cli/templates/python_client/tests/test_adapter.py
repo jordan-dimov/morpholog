@@ -32,6 +32,11 @@ if mode == "batch_aborted":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}')
     print("batch aborted at row 2", file=sys.stderr)
     sys.exit(1)
+if mode == "record_argv":
+    with open(os.environ["STUB_ARGV_FILE"], "w") as f:
+        f.write("\\n".join(sys.argv[1:]))
+    print("[]")
+    sys.exit(0)
 raise SystemExit(f"unknown STUB_MODE {mode}")
 """
 
@@ -82,6 +87,42 @@ class AdapterDiscrimination(unittest.TestCase):
             )
         self.assertIn("1 receipt", str(caught.exception))
         self.assertIn("aborted at row 2", str(caught.exception))
+
+    def test_as_of_threads_through_both_claims_reads(self):
+        # The flag lands on the CLI argv exactly when supplied, on both
+        # reads, and is absent otherwise - all four cases, since the
+        # issue asked for both surfaces.
+        self._mode("record_argv")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                return open(record.name).read().split("\n")
+
+            argv = argv_after(
+                lambda: self.client.claims_named(
+                    "OfficialCurve", as_of="2026-06-07T12:00:00Z"
+                )
+            )
+            self.assertIn("--as-of", argv)
+            self.assertEqual(argv[argv.index("--as-of") + 1], "2026-06-07T12:00:00Z")
+            self.assertIn("--named", argv)
+
+            argv = argv_after(lambda: self.client.claims_named("OfficialCurve"))
+            self.assertNotIn("--as-of", argv)
+            self.assertIn("--named", argv)
+
+            argv = argv_after(
+                lambda: self.client.claims("OfficialCurve", as_of="2026-06-07T12:00:00Z")
+            )
+            self.assertIn("--as-of", argv)
+            self.assertNotIn("--named", argv)
+
+            argv = argv_after(lambda: self.client.claims("OfficialCurve"))
+            self.assertNotIn("--as-of", argv)
+            self.assertNotIn("--named", argv)
 
     def test_submit_is_duck_typed_on_the_request_protocol(self):
         self._mode("rejected_exit_1")
