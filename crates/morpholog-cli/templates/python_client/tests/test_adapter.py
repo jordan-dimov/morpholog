@@ -75,19 +75,19 @@ class AdapterDiscrimination(unittest.TestCase):
 
     def test_a_rejection_at_exit_1_is_a_decided_outcome_not_an_error(self):
         self._mode("rejected_exit_1")
-        outcome = self.client.run("t", "alex", {"x": "1"})
+        outcome = self.client.propose("t", "alex", {"x": "1"})
         self.assertIsInstance(outcome, envelopes.Rejected)
         self.assertIn("cap", outcome.reason)
 
     def test_empty_stdout_raises_with_the_stderr_text(self):
         self._mode("operational_failure")
         with self.assertRaises(MorphologError) as caught:
-            self.client.run("t", "alex", {"x": "1"})
+            self.client.propose("t", "alex", {"x": "1"})
         self.assertIn("failed to connect", str(caught.exception))
 
     def test_batch_returns_one_receipt_per_row(self):
         self._mode("batch_ok")
-        receipts = self.client.run_batch(
+        receipts = self.client.propose_batch(
             [{"transformation": "t", "actor": "a", "args_named": {}}]
         )
         self.assertEqual([r.row for r in receipts], [1, 2])
@@ -97,7 +97,7 @@ class AdapterDiscrimination(unittest.TestCase):
     def test_an_aborted_batch_raises_naming_the_receipts_that_arrived(self):
         self._mode("batch_aborted")
         with self.assertRaises(MorphologError) as caught:
-            self.client.run_batch(
+            self.client.propose_batch(
                 [{"transformation": "t", "actor": "a", "args_named": {}}]
             )
         self.assertIn("1 receipt", str(caught.exception))

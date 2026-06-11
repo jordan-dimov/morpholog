@@ -83,7 +83,7 @@ deployment carries exactly the schema its build expects, nothing to vendor.
 Post a journal entry - debit $100 to cash, credit $100 to revenue:
 
 ```bash
-morpholog run examples/03_double_entry_ledger/ledger.morph post_simple_entry \
+morpholog propose examples/03_double_entry_ledger/ledger.morph post_simple_entry \
   --actor jordan \
   --args-named '{"entry_id":"entry_001","posting_date":"2026-04-15","period":"q1_2026",
                  "debit_account":"account_cash","credit_account":"account_revenue","amount":"100"}'
@@ -135,7 +135,7 @@ cargo install --path crates/morpholog-cli
 morpholog check examples/01_settlement_netting/netting.morph
 ```
 
-`check` parses and validates - one command answers "is this program well-formed?", and any finding arrives with a caret pointing at the exact line. `run` and `inspect` take a `.morph` file path and run against PostgreSQL once `DATABASE_URL` is set; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for local-database setup.
+`check` parses and validates - one command answers "is this program well-formed?", and any finding arrives with a caret pointing at the exact line. `propose` and `inspect` take a `.morph` file path and run against PostgreSQL once `DATABASE_URL` is set; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for local-database setup.
 
 New to Morpholog? [The developer introduction](docs/developer-intro.md) is the gentle, hands-on place to start - written for a developer who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the as-of replay that keeps both answers true.
 

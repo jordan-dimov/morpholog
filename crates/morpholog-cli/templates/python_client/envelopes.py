@@ -142,7 +142,9 @@ class Errored:
 
 
 def parse_run_outcome(payload: object) -> "Committed | Rejected":
-    """The ``run`` envelope: a lawful business outcome either way."""
+    """The ``propose`` outcome envelope: a lawful business outcome
+    either way. (The wire keeps the historical ``run_outcome`` name in
+    the pinned schema; only the command verb changed.)"""
     status = payload.get("status") if isinstance(payload, dict) else None
     match status:
         case "committed":
@@ -150,7 +152,7 @@ def parse_run_outcome(payload: object) -> "Committed | Rejected":
         case "rejected":
             return Rejected.from_json(payload)
         case _:
-            raise EnvelopeError(f"not a run outcome: {payload!r}")
+            raise EnvelopeError(f"not a propose outcome: {payload!r}")
 
 
 @dataclass(frozen=True)

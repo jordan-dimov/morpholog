@@ -272,7 +272,7 @@ fn decode_claims_named(
 /// state via `--as-of`).
 ///
 /// Errors:
-/// - Parse failure: rendered diagnostics, exits non-zero (the `check`/`run` path).
+/// - Parse failure: rendered diagnostics, exits non-zero (the `check`/`propose` path).
 /// - Unknown derived claim: surfaces the list of derived predicates
 ///   declared on the parsed programme.
 /// - Connection failure or kernel error: propagated via anyhow context.

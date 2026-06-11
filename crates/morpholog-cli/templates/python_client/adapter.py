@@ -81,15 +81,18 @@ class Morpholog:
     # The commit path.
     # ------------------------------------------------------------
 
-    def run(
+    def propose(
         self,
         transformation: str,
         actor: str,
         args_named: dict,
         explain_on_reject: bool = False,
     ) -> "envelopes.Committed | envelopes.Rejected":
+        """Propose a change by transformation name: it commits only if
+        every rule holds; a refusal is a lawful outcome, returned as
+        ``Rejected``."""
         args = [
-            "run", self.file, transformation,
+            "propose", self.file, transformation,
             "--actor", actor,
             "--args-named", json.dumps({k: v for k, v in args_named.items()}),
             "--database-url", self.database_url,
@@ -103,15 +106,15 @@ class Morpholog:
     ) -> "envelopes.Committed | envelopes.Rejected":
         """Commit a generated request model: its class names the
         transformation, its fields encode themselves."""
-        return self.run(
+        return self.propose(
             request.TRANSFORMATION,  # type: ignore[attr-defined]
             actor,
             request.to_args_named(),  # type: ignore[attr-defined]
             explain_on_reject=explain_on_reject,
         )
 
-    def run_batch(self, rows: list) -> list:
-        """Admit many rows in one invocation (`run --batch -`).
+    def propose_batch(self, rows: list) -> list:
+        """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
         of ``args``/``args_named``. Returns one ``BatchReceipt`` per
@@ -123,7 +126,7 @@ class Morpholog:
         proc = subprocess.run(
             [
                 self.binary,
-                "run", self.file,
+                "propose", self.file,
                 "--batch", "-",
                 "--database-url", self.database_url,
             ],

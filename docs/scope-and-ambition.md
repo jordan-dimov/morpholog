@@ -63,7 +63,7 @@ The doctrinal statement, in one sentence:
 
 That sentence determines the shape of every integration. There is no synchronous call-out from inside a transformation - it would break the atomicity guarantee and couple the kernel to whatever the called system was doing. There is no "Morpholog drives the simulation" - the simulation lives in the compute zone, in whatever language and framework suits it, and submits its result back as a candidate claim. There is no "external system polls and mutates" - state changes always come through `propose`.
 
-**Input (compute -> commit).** External compute proposes a transformation by name, with an actor and typed arguments (a `Vec<EvalValue>`, the same codec across the CLI's `run` and the Rust `propose_against_pg`). The input is deliberately narrow: Morpholog owns whether to admit; the caller owns what to propose.
+**Input (compute -> commit).** External compute proposes a transformation by name, with an actor and typed arguments (a `Vec<EvalValue>`, the same codec across the CLI's `propose` and the Rust `propose_against_pg`). The input is deliberately narrow: Morpholog owns whether to admit; the caller owns what to propose.
 
 **Output (commit -> compute).** Intents a committed transformation emitted land in the outbox, delivered at-least-once post-commit - either by an in-process Rust `Deliverer` (the polling worker) or out-of-process through the `morpholog outbox` CLI's claim/complete lease protocol, whichever suits the deployment.
 

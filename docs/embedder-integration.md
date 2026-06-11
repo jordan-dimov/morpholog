@@ -15,7 +15,7 @@ This document is the public contract. What it pins is what an embedder can rely 
         +-----------+-----------+
         |                       |
         v                       v
-   morpholog schema       morpholog run / explain
+   morpholog schema       morpholog propose / explain
    (input contract)       (commit / diagnose)
         |                       |
         v                       v
@@ -23,18 +23,18 @@ This document is the public contract. What it pins is what an embedder can rely 
   / generates forms        the JSON envelope
 ```
 
-The embedder asks `morpholog schema <file> <transformation>` for the JSON Schema of the transformation's argument object. For the transformations whose parameters all resolve to unambiguous scalar kinds (`Subject`, `Decimal`, `Decimal[U]`, `Date`, `Timestamp`, `Duration`, `Bool`), it sends that shape to `morpholog run --args-named` to commit (or to `morpholog explain --args-named --json` to dry-run and diagnose). For the corner cases the named codec cannot decode unambiguously - `Polymorphic`, `Unconstrained`, `Ambiguous`, and `Collection` parameters - it falls back to `--args` with the tagged `EvalValue` codec. The named codec's refusals are documented below alongside each pointer to `--args`. Between transitions, `morpholog inspect claims --predicate` reads governed state back - decoded by declared field name under `--named` - so the next transition can be built from claims the embedder did not itself mint. On day zero, `morpholog init` provisions the schema from the binary itself. The embedder parses the JSON envelope on stdout. None of that requires Rust. The `.morph` source is the single source of truth; everything else is derivable from it.
+The embedder asks `morpholog schema <file> <transformation>` for the JSON Schema of the transformation's argument object. For the transformations whose parameters all resolve to unambiguous scalar kinds (`Subject`, `Decimal`, `Decimal[U]`, `Date`, `Timestamp`, `Duration`, `Bool`), it sends that shape to `morpholog propose --args-named` to commit (or to `morpholog explain --args-named --json` to dry-run and diagnose). For the corner cases the named codec cannot decode unambiguously - `Polymorphic`, `Unconstrained`, `Ambiguous`, and `Collection` parameters - it falls back to `--args` with the tagged `EvalValue` codec. The named codec's refusals are documented below alongside each pointer to `--args`. Between transitions, `morpholog inspect claims --predicate` reads governed state back - decoded by declared field name under `--named` - so the next transition can be built from claims the embedder did not itself mint. On day zero, `morpholog init` provisions the schema from the binary itself. The embedder parses the JSON envelope on stdout. None of that requires Rust. The `.morph` source is the single source of truth; everything else is derivable from it.
 
 ## The argument codecs
 
-`run` and `explain` accept arguments in one of two codecs. Exactly one of `--args` or `--args-named` must be supplied; Clap enforces this at parse time.
+`propose` and `explain` accept arguments in one of two codecs. Exactly one of `--args` or `--args-named` must be supplied; Clap enforces this at parse time.
 
 ### `--args-named` (embedder-facing)
 
 A JSON object keyed by parameter name with **bare** values matching the schema:
 
 ```bash
-morpholog run trade_lifecycle.morph capture_trade \
+morpholog propose trade_lifecycle.morph capture_trade \
     --actor 018f-... \
     --args-named '{
         "trade":"018f-...","commodity":"oil",
@@ -62,7 +62,7 @@ Strict beyond the kind check. Missing required keys, unknown keys, wrong JSON ty
 A JSON array of adjacently-tagged `EvalValue`s, exactly the wire shape the kernel uses internally:
 
 ```bash
-morpholog run trade_lifecycle.morph capture_trade \
+morpholog propose trade_lifecycle.morph capture_trade \
     --actor 018f-... \
     --args '[
         {"type":"subject","value":"018f-..."},
@@ -72,7 +72,7 @@ morpholog run trade_lifecycle.morph capture_trade \
 
 The full codec, faithful and unambiguous. Use this when the schema cannot narrow a parameter's kind (the `--args-named` refusals above), when sending Collection values, or when the embedder genuinely wants the lower-level codec.
 
-Both codecs decode through one shared function so the `run` and `explain` paths cannot drift on what counts as a valid input.
+Both codecs decode through one shared function so the `propose` and `explain` paths cannot drift on what counts as a valid input.
 
 ## The output envelopes
 
@@ -80,7 +80,7 @@ Both codecs decode through one shared function so the `run` and `explain` paths 
 
 Output is a JSON Schema (Draft 2020-12) for the transformation's argument object. No `--json` flag - the output is JSON by definition. The schema is what the embedder validates request bodies against, generates form fields from, or derives typed client models off.
 
-`morpholog schema <file> --intent <IntentType>` emits the same shape for an emitted intent's **payload** instead of a transformation's arguments - the contract a deliverer uses to decode an outbox row (or a `run` outcome's `emitted_intents`) by name rather than by hand-coded position. Intent arguments are declared with explicit kinds, so the payload schema is a direct projection of the declaration. Exactly one of a transformation name or `--intent <Type>` is supplied. Unknown intent exits non-zero with the empty-stdout / `error:` on stderr contract.
+`morpholog schema <file> --intent <IntentType>` emits the same shape for an emitted intent's **payload** instead of a transformation's arguments - the contract a deliverer uses to decode an outbox row (or a `propose` outcome's `emitted_intents`) by name rather than by hand-coded position. Intent arguments are declared with explicit kinds, so the payload schema is a direct projection of the declaration. Exactly one of a transformation name or `--intent <Type>` is supplied. Unknown intent exits non-zero with the empty-stdout / `error:` on stderr contract.
 
 **Positional order: `x-morpholog-arg-order`.** Both the transformation-argument and intent-payload schemas carry an `x-morpholog-arg-order` extension: a JSON array of the parameter / field names in declaration order. This is the contract for anything positional - decoding a tagged intent payload array, or building the tagged `--args` codec. `required` happens to list the same names, but it is the JSON Schema validation keyword (semantically a set), so a consumer that needs the order reads `x-morpholog-arg-order`, never the incidental array order of `required`.
 
@@ -107,7 +107,7 @@ A note on `Subject`: the schema describes `Subject` as `{"type": "string"}` with
 
 Exits zero on success; non-zero on parse, validation, or unknown-transformation. The schema output stream is empty on any error path.
 
-### `morpholog run`
+### `morpholog propose`
 
 Without `--trace`, stdout is the `PgProposalOutcome` JSON directly:
 
@@ -147,7 +147,7 @@ The traced and untraced envelopes are intentionally asymmetric; the embedder sho
 
 Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, database error).
 
-On a single-run rejection whose reason names an invariant declared in the source, stderr carries a courtesy line locating the rule (`rule at <file>:<line>:<col> (<name>)`). It is for the human at the terminal, not the integration: parse stdout only. Batch mode never prints it - receipts are the whole contract there.
+On a single-proposal rejection whose reason names an invariant declared in the source, stderr carries a courtesy line locating the rule (`rule at <file>:<line>:<col> (<name>)`). It is for the human at the terminal, not the integration: parse stdout only. Batch mode never prints it - receipts are the whole contract there.
 
 ### `morpholog explain --json`
 
@@ -179,9 +179,9 @@ One entry per finding - parse errors, validation errors, and lints uniformly - w
 
 Provisions the `morpholog` schema (claims, audit, outbox) in an existing database, from the canonical schema **embedded in the binary** - a binary-only deployment provisions exactly the schema its build expects, with nothing to vendor and nothing to drift. Day-zero only: if the schema already exists it refuses (exit non-zero, the remedy named), or reports `{"status": "already-initialised"}` and exits zero under `--skip-if-exists` - the flag for deployment entrypoints that may re-run. It never drops and never migrates; schema evolution is deliberately out of this command's scope.
 
-### `run --explain-on-reject`
+### `propose --explain-on-reject`
 
-With the flag, a business rejection's envelope carries an `explanation` field: the same structured account `explain --json` emits, computed against **the exact pre-state the gates evaluated** - one snapshot, not a run-then-explain pair whose second read can describe different state than the one that refused. Committed envelopes are unchanged (no `explanation` field), exit codes are unchanged, and only business rejections are explained - kernel errors and serialization failures have no admissibility story to tell. Mutually exclusive with `--trace`.
+With the flag, a business rejection's envelope carries an `explanation` field: the same structured account `explain --json` emits, computed against **the exact pre-state the gates evaluated** - one snapshot, not a propose-then-explain pair whose second read can describe different state than the one that refused. Committed envelopes are unchanged (no `explanation` field), exit codes are unchanged, and only business rejections are explained - kernel errors and serialization failures have no admissibility story to tell. Mutually exclusive with `--trace`.
 
 ### `morpholog hash`
 
@@ -221,28 +221,28 @@ What this document promises:
 
 - The argument codecs (`--args`, `--args-named`).
 - The `morpholog schema` output shape, for both transformation arguments and (`--intent`) intent payloads.
-- The `morpholog run` outcome shape, traced and untraced.
+- The `morpholog propose` outcome shape, traced and untraced (the `$defs` key keeps its historical `run_outcome` name).
 - The `morpholog explain --json` Explanation shape.
 - The `morpholog inspect claims --predicate` claim-object shape (predicate name plus tagged positional args).
 - The `morpholog init` provisioning contract (embedded schema, day-zero only, refuse-or-skip on an existing schema, never drop or migrate).
-- The `run --explain-on-reject` envelope (rejections gain `explanation` in the `explain --json` shape, computed against the rejecting snapshot; commits unchanged).
+- The `propose --explain-on-reject` envelope (rejections gain `explanation` in the `explain --json` shape, computed against the rejecting snapshot; commits unchanged).
 - The `inspect claims --named` decoded-claim shape and its hard-error skew contract.
 - The `inspect audit` NDJSON tail (the `audit_row` / `audit_row_named` line shapes, the `(committed_at, transition_id)` order, `--after`'s lossless-resume semantics and its preconditions).
 - The `morpholog hash` output shape and its rules-identity semantics (canonical-source SHA-256; formatting and comments excluded).
 - The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; the keyed objects serialise with sorted keys, and declaration order travels in the explicit `transformation_order` / `intent_order` arrays).
 - The `morpholog schema --result` outcome-envelope contract (one `$defs` entry per machine-readable envelope).
-- Exit-code semantics for `run` and `explain`.
+- Exit-code semantics for `propose` and `explain`.
 
 What is deliberately left open, pending the worked example that forces the shape:
 
 - **Argument-level claim selection.** `inspect claims --predicate` (forced by the `examples/etrm_embedder/` worked embedder) reads claims back at predicate granularity; picking one subject's claims out of the result is client-side. A `--where trade=t1`-style filter waits for an example with a book big enough that the predicate-level cut is not enough.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
-- **The remaining `morpholog inspect` output shapes.** The claims and audit shapes are pinned above; `rejections`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `run` envelope itself is unchanged by that log's existence.)
+- **The remaining `morpholog inspect` output shapes.** The claims and audit shapes are pinned above; `rejections`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `propose` envelope itself is unchanged by that log's existence.)
 The discipline is the same as the rest of Morpholog: ship the contract that an example forces, leave the rest open.
 
 ## The outcome-envelope contract (`schema --result`)
 
-`morpholog schema --result` emits one JSON Schema (Draft 2020-12) document whose `$defs` pin every machine-readable envelope this document describes in prose: the tagged value encoding, claim and intent instances, the `run` outcome union (committed | rejected, the latter optionally carrying `--explain-on-reject`'s `explanation`), the traced envelope, the `explain --json` Explanation with its gate / invariant / error verdicts, batch receipts, the audit tail's row shapes (tagged and `--named`), outbox rows and the claim / complete / release wrappers, the `check --json` report, the `inspect coverage --json` report, and the `hash` / `init` reports. Programme-independent - the shapes vary only with the binary, so no `.morph` file is taken and the document is byte-stable for a given build.
+`morpholog schema --result` emits one JSON Schema (Draft 2020-12) document whose `$defs` pin every machine-readable envelope this document describes in prose: the tagged value encoding, claim and intent instances, the `propose` outcome union (the `run_outcome` def: committed | rejected, the latter optionally carrying `--explain-on-reject`'s `explanation`), the traced envelope, the `explain --json` Explanation with its gate / invariant / error verdicts, batch receipts, the audit tail's row shapes (tagged and `--named`), outbox rows and the claim / complete / release wrappers, the `check --json` report, the `inspect coverage --json` report, and the `hash` / `init` reports. Programme-independent - the shapes vary only with the binary, so no `.morph` file is taken and the document is byte-stable for a given build.
 
 This is the artefact client generation consumes (the reserved "waits for a real consumer" slot is now filled): the generated Python client's envelope models derive from the same pinned document, and a contract-test suite in the binary's own repository holds the document, the binary's real serialization, and the generated models to one set of golden envelopes. Trace entry internals remain reserved (the `trace` array is pinned as an array, its items deliberately unconstrained).
 
@@ -252,7 +252,7 @@ This is the artefact client generation consumes (the reserved "waits for a real 
 morpholog generate python-client <file.morph> --out <dir>
 ```
 
-emits a complete, self-contained `morpholog_client/` package: the value codecs both directions (decimals as `decimal.Decimal` end to end, aware datetimes with naive ones refused on write), the envelope models (key-set strict - an envelope field this client does not know raises instead of dropping data), the subprocess adapter over the whole surface this document pins (including `run --batch`, `check --json`, `inspect coverage`, the `inspect audit` tail as `audit()` / `audit_named()` with the `--after` resume cursor, and `as_of` on both claims reads - a transition id or RFC 3339 timestamp, threading the binary's `--as-of`), a frozen request dataclass per transformation with fields in declaration order and `to_args_named()`, a read model per predicate parsing the named read's wire-true values by declared kind, and a payload model per intent with the positional arg order baked in - no runtime `schema --intent` call. `__init__.py` carries the stamps (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`) and enforces the declared Python floor (3.10) at first import.
+emits a complete, self-contained `morpholog_client/` package: the value codecs both directions (decimals as `decimal.Decimal` end to end, aware datetimes with naive ones refused on write), the envelope models (key-set strict - an envelope field this client does not know raises instead of dropping data), the subprocess adapter over the whole surface this document pins (including `propose --batch`, `check --json`, `inspect coverage`, the `inspect audit` tail as `audit()` / `audit_named()` with the `--after` resume cursor, and `as_of` on both claims reads - a transition id or RFC 3339 timestamp, threading the binary's `--as-of`), a frozen request dataclass per transformation with fields in declaration order and `to_args_named()`, a read model per predicate parsing the named read's wire-true values by declared kind, and a payload model per intent with the positional arg order baked in - no runtime `schema --intent` call. `__init__.py` carries the stamps (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`) and enforces the declared Python floor (3.10) at first import.
 
 The properties that make it a contract rather than a convenience: **stdlib-only** (no dependency treadmill; richer types are the embedder's to build on top), **deterministic** (the same binary and programme produce byte-identical output, so the drift check is regenerate-and-diff), and **whole-run refusal** (a programme whose contract the client cannot carry - a Duration field, a parameter with no single concrete kind, a Python-keyword field name - fails generation with every finding listed and nothing written; no partial packages, no silent mangling). The worked embedder (`examples/etrm_embedder/`) runs on its committed output.
 
@@ -270,9 +270,9 @@ Morpholog, as generated invariants and authoring-time checks); a
 client that surfaces it should treat unknown discipline tags as
 opaque.
 
-## Batch runs (`run --batch`)
+## Batch proposals (`propose --batch`)
 
-`morpholog run <file.morph> --batch <rows.ndjson>` (`-` reads stdin)
+`morpholog propose <file.morph> --batch <rows.ndjson>` (`-` reads stdin)
 admits many governed transitions in one invocation. One JSON object
 per line:
 
@@ -284,15 +284,15 @@ per line:
 row, decoded by the same codecs as the flags. Each row commits or
 rolls back on its own - an import is explicitly NOT all-or-nothing -
 and produces one NDJSON receipt on stdout in input order: the
-single-run envelope above plus `"row"`, the 1-based input line number
+single-proposal envelope above plus `"row"`, the 1-based input line number
 (blank lines skip silently, so receipts map back to the file). A
 malformed row (bad JSON, unknown transformation, undecodable args)
 yields `{"row": N, "status": "error", "error": "..."}` and processing
 continues. `--explain-on-reject` composes per row, exactly as in
-single runs. A summary line lands on stderr.
+single proposals. A summary line lands on stderr.
 
-**Exit code contract - deliberately different from single `run`.**
-Single `run` exits 1 on a rejection; a batch exits 0 whenever every
+**Exit code contract - deliberately different from a single `propose`.**
+A single `propose` exits 1 on a rejection; a batch exits 0 whenever every
 row was processed, because partial admission is an import's normal
 outcome - the receipts are the result, not the exit code. Non-zero is
 reserved for operational failure: unreadable input, a programme that

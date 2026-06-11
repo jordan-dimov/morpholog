@@ -1,7 +1,7 @@
 //! `morpholog check` - parse + validate + lint a `.morph` source file.
 
 use crate::CheckArgs;
-use crate::commands::{ParsedSource, parse_or_exit, render_validation_error};
+use crate::commands::{ParsedSource, parse_or_exit, print_json, render_validation_error};
 use morpholog_core::Program;
 use morpholog_surface::{Diagnostic, line_col, parse_program_with_sources};
 use serde::Serialize;
@@ -52,8 +52,97 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     if args.verbose {
         print!("{}", summary(&parsed.program, &args.file));
     }
+    if args.ir {
+        return print_ir(&parsed.program);
+    }
 
     Ok(())
+}
+
+/// Print the validated programme's internal representation as pretty
+/// JSON - `check --ir`, the debugging view (formerly the `parse`
+/// subcommand; now behind validation, so only a sound programme
+/// renders).
+///
+/// `Program` does not derive `Serialize` directly today, so the CLI
+/// emits a projection: declarations roundtrip structurally, while
+/// invariant, definition, transformation, and derived-claim bodies
+/// render through the canonical formatter. When the IR types pick up
+/// `Serialize`, this can collapse to a direct `print_json(&program)`.
+fn print_ir(program: &Program) -> anyhow::Result<()> {
+    let invariants_payload: Vec<serde_json::Value> = program
+        .invariants
+        .iter()
+        .map(|inv| {
+            serde_json::json!({
+                "name": &inv.name,
+                "version": inv.version,
+                "body": morpholog_core::format::format_prop_inline(&inv.body),
+            })
+        })
+        .collect();
+
+    let definitions_payload: Vec<serde_json::Value> = program
+        .definitions
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "name": &d.name,
+                "parameters": &d.parameters,
+                "body": morpholog_core::format::format_prop_inline(&d.body),
+            })
+        })
+        .collect();
+
+    let transformations_payload: Vec<serde_json::Value> = program
+        .transformations
+        .iter()
+        .map(|t| {
+            let body_lines: Vec<String> = t
+                .body
+                .iter()
+                .map(|s| morpholog_core::format::format_stmt(s, 0))
+                .collect();
+            serde_json::json!({
+                "name": &t.name,
+                "parameters": &t.parameters,
+                "body": body_lines,
+            })
+        })
+        .collect();
+
+    let derived_payload: Vec<serde_json::Value> = program
+        .derived_claims
+        .iter()
+        .map(|d| {
+            let values: Vec<serde_json::Value> = d
+                .values
+                .iter()
+                .map(|v| {
+                    serde_json::json!({
+                        "name": &v.name,
+                        "expr": morpholog_core::format::format_value_inline(&v.expr),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "predicate": &d.predicate,
+                "keys": &d.keys,
+                "over": morpholog_core::format::format_prop_inline(&d.domain),
+                "values": values,
+            })
+        })
+        .collect();
+
+    let payload = serde_json::json!({
+        "name": program.name,
+        "predicates": program.predicates,
+        "definitions": definitions_payload,
+        "invariants": invariants_payload,
+        "transformations": transformations_payload,
+        "derived_claims": derived_payload,
+    });
+    print_json(&payload)
 }
 
 /// Render one lint to stderr: a caret block at hint severity (error

@@ -3,7 +3,7 @@
 #
 # The in-process `morpholog-bench` amortises away everything a subprocess
 # embedder pays on every call. The reference ETRM (and any non-Rust
-# caller) drives Morpholog as `morpholog run ...`, so each governed
+# caller) drives Morpholog as `morpholog propose ...`, so each governed
 # transition pays: process spawn, .morph parse, Program::validate, a
 # fresh DB connection (no warm pool), then propose + commit + JSON
 # serialise. This harness times the CLI end-to-end so that per-call tax
@@ -55,7 +55,7 @@ check_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
 # starts empty and grows over the run.
 start=$(date +%s%N)
 for i in $(seq 1 "$N"); do
-    "$BIN" run "$FILE" post_simple_entry \
+    "$BIN" propose "$FILE" post_simple_entry \
         --args-named "{\"entry_id\":\"e$i\",\"posting_date\":\"d1\",\"period\":\"p1\",\"debit_account\":\"cash\",\"credit_account\":\"rev\",\"amount\":\"42\"}" \
         --actor bench >/dev/null
 done
@@ -65,5 +65,5 @@ run_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
 echo
 echo "embedder latency (N=${N}, local PostgreSQL, --release):"
 printf '  morpholog check (spawn + parse + validate)           : %7.2f ms/call\n' "$check_ms"
-printf '  morpholog run   (+ connect + propose + commit + JSON) : %7.2f ms/call\n' "$run_ms"
-awk "BEGIN { printf \"  per-call DB + propose tax (run - check)              : %7.2f ms/call\\n\", $run_ms - $check_ms }"
+printf '  morpholog propose (+ connect + propose + commit + JSON) : %7.2f ms/call\n' "$run_ms"
+awk "BEGIN { printf \"  per-call DB + propose tax (propose - check)              : %7.2f ms/call\\n\", $run_ms - $check_ms }"

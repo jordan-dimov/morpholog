@@ -1,4 +1,4 @@
-//! `morpholog run` - parse and validate a `.morph` source file, then
+//! `morpholog propose` - parse and validate a `.morph` source file, then
 //! propose a named transformation against a Morpholog PostgreSQL
 //! database. The CLI's commit path: JSON-encoded args, a required
 //! `--actor`, optional `--trace`, committed/rejected JSON output and the
@@ -15,13 +15,13 @@ use morpholog_postgres::{
     propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 
-use crate::RunArgs;
+use crate::ProposeArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
     ParsedSource, connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
 };
 
-pub(crate) async fn run(args: RunArgs) -> anyhow::Result<()> {
+pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
     //    diagnostics (same path `check` and `parse` use).
     let parsed = parse_or_exit(&args.file)?;
@@ -222,7 +222,7 @@ fn classify_pg_error(err: morpholog_postgres::PgError) -> BatchRowError {
 /// 1-based line number in the input; blank lines are skipped without
 /// receipts.
 async fn run_batch(
-    args: &RunArgs,
+    args: &ProposeArgs,
     program: &morpholog_core::Program,
     validated: &morpholog_core::ValidatedProgram<'_>,
     batch_path: &std::path::Path,
@@ -290,7 +290,7 @@ async fn run_batch(
 /// shapes as the non-batch path, so the receipt contract cannot drift
 /// from the pinned single-run contract.
 async fn batch_row_outcome(
-    args: &RunArgs,
+    args: &ProposeArgs,
     program: &morpholog_core::Program,
     validated: &morpholog_core::ValidatedProgram<'_>,
     pool: &morpholog_postgres::PgPool,
