@@ -78,6 +78,33 @@ fn every_declaration_kind_is_mapped() {
     }
 }
 
+// A declaration that ends in an indented block (discipline clauses,
+// a transformation body) ends AT its own last token: the Dedent the
+// declaration consumes is anchored at the block's end, so blank
+// lines and comments before the next declaration stay outside the
+// span. Trust-sensitive once carets render - an over-wide span
+// reads as a wrong span.
+#[test]
+fn declaration_spans_end_at_their_own_last_token() {
+    let (_, map) = parsed();
+    let posting = map
+        .decl_span(DeclKind::Predicate, "Posting")
+        .expect("mapped");
+    assert!(
+        text_at(posting.clone()).ends_with("append only"),
+        "span ends at the discipline clause: {:?}",
+        text_at(posting)
+    );
+    let post = map
+        .decl_span(DeclKind::Transformation, "post")
+        .expect("mapped");
+    assert!(
+        text_at(post.clone()).ends_with("emit NotifyAudit(account_id)"),
+        "span ends at the last statement: {:?}",
+        text_at(post)
+    );
+}
+
 #[test]
 fn statement_spans_follow_body_order() {
     let (_, map) = parsed();

@@ -1,41 +1,15 @@
-//! Parser for the v0 surface fragment.
+//! Parser for the v0 surface.
 //!
-//! Grammar (BNF):
-//!
-//! ```text
-//! program        ::= program_header top_level_decl*
-//! top_level_decl ::= predicate_decl | invariant_decl
-//! program_header ::= "program" Ident
-//! predicate_decl ::= "predicate" Ident "(" arg_list? ")"
-//! arg_list       ::= arg ("," arg)* ","?
-//! arg            ::= Ident ":" Kind ("[" Ident "]")?
-//! Kind           ::= "Subject" | "Decimal" | "Date" | "Bool" | "Collection" | "Any"
-//!                    (unit brackets attach only to "Decimal": `Decimal[USD]`)
-//! invariant_decl ::= "invariant" Ident ":" expression
-//!
-//! expression     ::= quantifier | implies
-//! quantifier     ::= "exists" Ident ":" expression
-//!                  | "forall" Ident "in" forall_source ":" expression
-//! forall_source  ::= "(" expression ")"
-//!                  | Ident "(" term_list ")"           -- claim call
-//!                  | Ident                             -- variable (auto-lifts to In)
-//! implies        ::= and ("implies" implies)?
-//! and            ::= not_expr ("and" not_expr)*
-//! not_expr       ::= "not" not_expr | comparison
-//! comparison     ::= arith (cmp_op arith)?
-//! cmp_op         ::= "=" | "!=" | "<=" | "in"
-//! arith          ::= primary (("+" | "-") primary)*
-//! primary        ::= "(" expression ")"
-//!                  | sum_expr | value_expr
-//!                  | DecimalLit | DateLit | SubjectLit
-//!                  | "_"
-//!                  | Ident "(" term_list ")"           -- claim call (args optional)
-//!                  | Ident                             -- variable | actor
-//! sum_expr       ::= "sum" "(" Ident "|" expression ")"
-//! value_expr     ::= "value" Ident "(" term_list ")" ("default" expression)?
-//! term_list      ::= (term ("," term)* ","?)?         -- zero or more terms
-//! term           ::= Ident | "_" | DecimalLit | DateLit | SubjectLit
-//! ```
+//! The grammar is documented where each tier is implemented: the
+//! declaration grammar (programme header, predicates with discipline
+//! clauses, intents, definitions, invariants, transformations,
+//! derived claims) in [`program`]'s comments, the statement grammar
+//! in [`stmt`]'s module doc, and the expression productions beside
+//! their combinators in [`expr`]. The canonical surface-to-IR table
+//! (every operator, comparator, and quantifier form, with the
+//! reason it is spelled the way it is) lives in
+//! `docs/runtime-semantics.md`; this header does not duplicate it -
+//! an earlier copy here rotted as the grammar grew.
 //!
 //! Newlines are insignificant. Trailing commas in argument lists
 //! are allowed. Comments are stripped at the lexer; the parser
@@ -43,8 +17,8 @@
 //!
 //! Asymmetry to honour: `Prop::In(Term, Term)` operates on *terms*,
 //! not expressions, as do claim-call arguments. `Eq`, `Neq`, and the
-//! comparators relate two value expressions; `Sub` and `Add` compose
-//! value expressions. The
+//! comparators relate two value expressions; the arithmetic
+//! operators compose value expressions. The
 //! parser must therefore reject `a + 1 in xs` (membership is
 //! term-only) and `Foo(x + 1, y)` (claim arguments are terms), while
 //! `Foo + 1 != Bar` is accepted - `!=` is symmetric with `=`. These
@@ -75,8 +49,8 @@
 //! the `pub(super)` re-export from `expr`.
 //!
 //! Error recovery: humble. On a parse failure inside a top-level
-//! declaration, the parser skips forward to the next `predicate`
-//! or `invariant` keyword (or EOF) and continues. The intent is
+//! declaration, the parser skips forward to the next top-level
+//! declaration keyword (or EOF) and continues. The intent is
 //! "tell the author about every malformed declaration in one
 //! parse run", not a full-language error-recovery framework.
 //! Expression parsing does not yet add recovery shapes; a
