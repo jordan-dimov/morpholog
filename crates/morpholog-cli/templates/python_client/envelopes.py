@@ -152,7 +152,7 @@ def parse_run_outcome(payload: object) -> "Committed | Rejected":
         case "rejected":
             return Rejected.from_json(payload)
         case _:
-            raise EnvelopeError(f"not a run outcome: {payload!r}")
+            raise EnvelopeError(f"not a propose outcome: {payload!r}")
 
 
 @dataclass(frozen=True)

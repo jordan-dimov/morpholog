@@ -780,7 +780,7 @@ pub(crate) struct ExplainArgs {
     /// JSON array of arguments matching the transformation's parameter
     /// list, in the tagged-EvalValue codec - e.g.
     /// `[{"type":"subject","value":"c1"},{"type":"decimal","value":"100"}]`.
-    /// See `run --args` for the full codec description.
+    /// See `propose --args` for the full codec description.
     #[arg(
         long,
         conflicts_with = "args_named",
@@ -790,7 +790,7 @@ pub(crate) struct ExplainArgs {
 
     /// JSON object keyed by parameter name with bare values matching
     /// the JSON Schema emitted by `morpholog schema`. The embedder-
-    /// facing codec; same strict semantics as `run --args-named`.
+    /// facing codec; same strict semantics as `propose --args-named`.
     #[arg(long, conflicts_with = "args", required_unless_present = "args")]
     pub(crate) args_named: Option<String>,
 
@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn run_with_all_args_parses() {
+    fn propose_with_all_args_parses() {
         let cli = Cli::parse_from([
             "morpholog",
             "propose",
@@ -1151,7 +1151,7 @@ mod tests {
             "postgres:///morpholog_dev",
         ]);
         let Command::Propose(args) = cli.command else {
-            panic!("expected Run, got {:?}", cli.command);
+            panic!("expected Propose, got {:?}", cli.command);
         };
         assert_eq!(
             args.file,
@@ -1164,10 +1164,10 @@ mod tests {
         assert_eq!(args.db.database_url, "postgres:///morpholog_dev");
     }
 
-    /// `run --args-named '{...}'` parses with `args_named: Some(...)`
+    /// `propose --args-named '{...}'` parses with `args_named: Some(...)`
     /// and `args: None`. Confirms the new flag plumbs through.
     #[test]
-    fn run_with_args_named_parses_into_the_named_slot() {
+    fn propose_with_args_named_parses_into_the_named_slot() {
         let cli = Cli::parse_from([
             "morpholog",
             "propose",
@@ -1181,7 +1181,7 @@ mod tests {
             "postgres:///morpholog_dev",
         ]);
         let Command::Propose(args) = cli.command else {
-            panic!("expected Run, got {:?}", cli.command);
+            panic!("expected Propose, got {:?}", cli.command);
         };
         assert!(args.args.is_none(), "--args should not be set");
         assert_eq!(args.args_named.as_deref(), Some(r#"{"trade":"a"}"#));
@@ -1191,7 +1191,7 @@ mod tests {
     /// Clap-parse time so the run path never sees an ambiguous
     /// request shape.
     #[test]
-    fn run_with_both_args_codecs_errors() {
+    fn propose_with_both_args_codecs_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
             "propose",
@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    fn run_missing_args_flag_errors() {
+    fn propose_missing_args_flag_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
             "propose",
@@ -1227,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn run_missing_actor_flag_errors() {
+    fn propose_missing_actor_flag_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
             "propose",
@@ -1243,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn run_missing_positional_errors() {
+    fn propose_missing_positional_errors() {
         let err = Cli::try_parse_from([
             "morpholog",
             "propose",
@@ -1336,10 +1336,10 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
-    /// `run --trace` parses to a `ProposeArgs` with `trace: true`. All other
+    /// `propose --trace` parses to a `ProposeArgs` with `trace: true`. All other
     /// fields keep their existing behaviour.
     #[test]
-    fn run_with_trace_flag_parses() {
+    fn propose_with_trace_flag_parses() {
         let cli = Cli::parse_from([
             "morpholog",
             "propose",
@@ -1354,7 +1354,7 @@ mod tests {
             "--trace",
         ]);
         let Command::Propose(args) = cli.command else {
-            panic!("expected Run, got {:?}", cli.command);
+            panic!("expected Propose, got {:?}", cli.command);
         };
         assert!(args.trace, "expected trace flag to be set");
         assert_eq!(
@@ -1367,7 +1367,7 @@ mod tests {
     /// Without `--trace`, `ProposeArgs.trace` defaults to false. The non-trace
     /// path must not be affected by the flag.
     #[test]
-    fn run_without_trace_flag_defaults_to_false() {
+    fn propose_without_trace_flag_defaults_to_false() {
         let cli = Cli::parse_from([
             "morpholog",
             "propose",
@@ -1381,7 +1381,7 @@ mod tests {
             "postgres:///morpholog_dev",
         ]);
         let Command::Propose(args) = cli.command else {
-            panic!("expected Run, got {:?}", cli.command);
+            panic!("expected Propose, got {:?}", cli.command);
         };
         assert!(!args.trace, "expected trace flag to default to false");
     }
