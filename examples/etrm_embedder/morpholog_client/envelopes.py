@@ -391,6 +391,109 @@ class OutboxUpdate:
 
 
 @dataclass(frozen=True)
+class AuditedInvariantCheck:
+    """One invariant that governed an admission: name plus the
+    version active at commit time."""
+
+    name: str
+    version: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "AuditedInvariantCheck":
+        data = _strict("audited invariant check", payload, {"name", "version"})
+        return cls(name=data["name"], version=data["version"])
+
+
+_AUDIT_ROW_KEYS = {
+    "transition_id",
+    "transformation_name",
+    "arguments",
+    "actor",
+    "invariant_epoch",
+    "invariants_checked",
+    "asserted_claims",
+    "retracted_claims",
+    "emitted_intents",
+    "committed_at",
+}
+
+
+@dataclass(frozen=True)
+class AuditRow:
+    """One committed transition from the audit tail (`inspect
+    audit`): who proposed what, which rules governed the admission,
+    and what was asserted, retracted, and emitted. Claim and intent
+    arrays carry decoded positional values; see `AuditRowNamed` for
+    the field-keyed claim decode."""
+
+    transition_id: str
+    transformation_name: str
+    arguments: list
+    actor: str
+    invariant_epoch: int
+    invariants_checked: list
+    asserted_claims: list
+    retracted_claims: list
+    emitted_intents: list
+    committed_at: datetime
+
+    @classmethod
+    def from_json(cls, payload: object) -> "AuditRow":
+        data = _strict("audit row", payload, _AUDIT_ROW_KEYS)
+        return cls(
+            transition_id=data["transition_id"],
+            transformation_name=data["transformation_name"],
+            arguments=[values.decode_tagged(a) for a in data["arguments"]],
+            actor=str(values.decode_tagged(data["actor"])),
+            invariant_epoch=data["invariant_epoch"],
+            invariants_checked=[
+                AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
+            ],
+            asserted_claims=[ClaimInstance.from_json(c) for c in data["asserted_claims"]],
+            retracted_claims=[ClaimInstance.from_json(c) for c in data["retracted_claims"]],
+            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
+            committed_at=values.parse_timestamp(data["committed_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class AuditRowNamed:
+    """`AuditRow` with the asserted/retracted claims decoded by
+    declared field name (the `--named` tail). `arguments` and
+    `emitted_intents` stay positional - they belong to the
+    transformation/intent vocabularies, not predicate declarations."""
+
+    transition_id: str
+    transformation_name: str
+    arguments: list
+    actor: str
+    invariant_epoch: int
+    invariants_checked: list
+    asserted_claims: list
+    retracted_claims: list
+    emitted_intents: list
+    committed_at: datetime
+
+    @classmethod
+    def from_json(cls, payload: object) -> "AuditRowNamed":
+        data = _strict("named audit row", payload, _AUDIT_ROW_KEYS)
+        return cls(
+            transition_id=data["transition_id"],
+            transformation_name=data["transformation_name"],
+            arguments=[values.decode_tagged(a) for a in data["arguments"]],
+            actor=str(values.decode_tagged(data["actor"])),
+            invariant_epoch=data["invariant_epoch"],
+            invariants_checked=[
+                AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
+            ],
+            asserted_claims=[NamedClaim.from_json(c) for c in data["asserted_claims"]],
+            retracted_claims=[NamedClaim.from_json(c) for c in data["retracted_claims"]],
+            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
+            committed_at=values.parse_timestamp(data["committed_at"]),
+        )
+
+
+@dataclass(frozen=True)
 class InvariantCoverage:
     """Coverage of one invariant: did its condition ever match, and
     did it ever refuse a real proposal? The verdicts, strongest

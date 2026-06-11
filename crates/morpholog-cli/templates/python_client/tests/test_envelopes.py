@@ -118,6 +118,41 @@ class Reports(unittest.TestCase):
         self.assertIs(named.args["flagged"], False)
 
 
+class AuditTail(unittest.TestCase):
+    def test_the_audit_row_round_trips_the_golden(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row.json"))
+        self.assertEqual(row.transformation_name, "open_account")
+        self.assertEqual(row.actor, "alex")
+        self.assertEqual(row.invariant_epoch, 1)
+        self.assertEqual(len(row.invariants_checked), 1)
+        check = row.invariants_checked[0]
+        self.assertEqual(check.name, "account_unique_by_account_id")
+        self.assertEqual(check.version, 1)
+        # The kitchen-sink claim decodes through the same codecs the
+        # run envelopes use - decimals exact, datetimes aware.
+        claim = row.asserted_claims[0]
+        self.assertEqual(claim.predicate, "EveryKind")
+        self.assertEqual(claim.args[1], Decimal("100.50"))
+        self.assertEqual(row.emitted_intents[0].name, "AccountOpened")
+        self.assertEqual(row.committed_at.year, 2026)
+
+    def test_the_named_audit_row_round_trips_the_golden(self):
+        row = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
+        claim = row.asserted_claims[0]
+        self.assertEqual(claim.predicate, "Account")
+        self.assertEqual(claim.args["account_id"], "acct_1")
+        self.assertEqual(row.retracted_claims, [])
+        # The asymmetry the contract states: arguments stay
+        # positional even in the named tail.
+        self.assertEqual(row.arguments, ["acct_1"])
+
+    def test_an_unknown_audit_key_raises(self):
+        payload = golden("audit_row.json")
+        payload["surprise"] = 1
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.AuditRow.from_json(payload)
+
+
 class Coverage(unittest.TestCase):
     def test_the_coverage_report_round_trips_the_golden(self):
         report = envelopes.CoverageReport.from_json(golden("coverage_report.json"))

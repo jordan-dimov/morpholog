@@ -152,7 +152,11 @@ AuditRecord
   asserted_claims
   retracted_claims
   emitted_intents
-  committed_at
+  committed_at                   -- the writer's transaction START instant, not the
+                                    commit instant; (committed_at, transition_id) is
+                                    the stable total replay order every audit read
+                                    (verify, coverage, as-of, the inspect-audit tail)
+                                    orders by
 ```
 
 ## Surface-to-IR mapping

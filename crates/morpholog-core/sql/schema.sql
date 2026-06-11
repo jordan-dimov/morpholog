@@ -49,7 +49,9 @@ CREATE TABLE audit (
     committed_at         timestamptz  NOT NULL DEFAULT now()
 );
 
-CREATE INDEX audit_committed_at ON audit (committed_at);
+-- Keyset replay order: every audit read (the blessed tail, verify,
+-- coverage, as-of) orders and pages by this pair.
+CREATE INDEX audit_committed_at ON audit (committed_at, transition_id);
 
 
 -- Operational log of refused proposals. A rejection's transaction
