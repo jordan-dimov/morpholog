@@ -363,6 +363,30 @@ pub(crate) enum Inspect {
     /// Read-only and static: no database, no state. Prose by default;
     /// `--json` for the structured form.
     Controls(InspectGuaranteesArgs),
+    /// Replay the audit log and report, per invariant, whether its
+    /// condition ever matched anything - which rules have actually
+    /// done work, which have only ever been trivially true, and which
+    /// transformations have never been used. Read-only; replays under
+    /// a deferrable serializable snapshot, safe against a live system.
+    /// Prose with a legend by default; `--json` for the structured
+    /// form. Always exits zero: coverage answers a question, it does
+    /// not enforce.
+    Coverage(InspectCoverageArgs),
+}
+
+/// Arguments for `inspect coverage`: a `.morph` source file, the
+/// connection flag, and the prose/JSON toggle.
+#[derive(clap::Args, Debug)]
+pub(crate) struct InspectCoverageArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// Emit the structured JSON form instead of prose.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
@@ -753,6 +777,7 @@ mod tests {
             Inspect::Claims(args) => args.db.database_url,
             Inspect::Audit(args) => args.database_url,
             Inspect::Outbox(args) => args.db.database_url,
+            Inspect::Coverage(args) => args.db.database_url,
             Inspect::Derived(_) => {
                 panic!("use the dedicated inspect-derived parse tests, not parsed_url")
             }

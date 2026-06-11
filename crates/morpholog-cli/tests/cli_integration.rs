@@ -2115,3 +2115,77 @@ async fn batch_conflicts_with_both_args_flags() {
         );
     }
 }
+
+// ============================================================
+// `inspect coverage` - which rules have ever actually done work.
+// ============================================================
+
+// Prose mode names the verdicts and carries the legend that says what
+// committed history structurally cannot show; the exit code is zero
+// regardless of findings (coverage answers a question - the `explain`
+// stance), and never-fired rules are the point, not a failure.
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_coverage_prose_reports_fired_and_never_fired() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 250);
+
+    let (status, stdout, stderr) = run_cli(&["inspect", "coverage", &ledger_morph()]);
+    assert!(status.success(), "coverage always exits zero; {stderr}");
+    assert!(
+        stdout.contains("balanced_posted_entry - fired in 2 transition(s)"),
+        "the balance rule fired twice; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("NEVER FIRED"),
+        "a two-transition history leaves rules never-fired; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("close_period - never used"),
+        "declared-but-unused transformations are named; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("rejections never commit"),
+        "the legend states the committed-history bound; got:\n{stdout}"
+    );
+}
+
+// The --json form: the exact field set the report promises, pinned.
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_coverage_json_carries_the_pinned_field_set() {
+    reset_db().await;
+    let tid = post_balanced_entry("entry_001", 100);
+
+    let (status, stdout, stderr) = run_cli(&["inspect", "coverage", &ledger_morph(), "--json"]);
+    assert!(status.success(), "coverage always exits zero; {stderr}");
+    let report: Value = serde_json::from_str(&stdout).expect("coverage --json is JSON");
+    assert_eq!(report["transitions_replayed"], 1);
+    assert!(report["program"].is_string());
+
+    let invariants = report["invariants"].as_array().expect("invariants array");
+    let balanced = invariants
+        .iter()
+        .find(|i| i["invariant"] == "balanced_posted_entry")
+        .expect("balance rule in report");
+    assert_eq!(balanced["verdict"], "fired");
+    assert_eq!(balanced["transitions_fired"], 1);
+    assert_eq!(balanced["first_fired"], tid.to_string());
+    assert_eq!(balanced["last_fired"], tid.to_string());
+    assert!(
+        invariants.iter().any(|i| i["verdict"] == "never_fired"),
+        "verdicts use snake_case and never-fired rules appear: {report}"
+    );
+
+    let transformations = report["transformations"]
+        .as_array()
+        .expect("transformations array");
+    let posting = transformations
+        .iter()
+        .find(|t| t["transformation"] == "post_simple_entry")
+        .expect("posting transformation in report");
+    assert_eq!(posting["transitions"], 1);
+    assert!(
+        transformations.iter().any(|t| t["transitions"] == 0),
+        "declared-but-unused transformations appear at zero: {report}"
+    );
+}

@@ -29,6 +29,7 @@ pub mod ir_builder;
 pub mod analysis;
 mod check;
 mod controls;
+mod coverage;
 mod definitions;
 mod derive;
 mod disciplines;
@@ -48,6 +49,10 @@ pub use analysis::{
     transformation_param_kinds, transformations_asserting,
 };
 pub use controls::{ControlMatrix, GateControl, TransformationControls, controls, render_controls};
+pub use coverage::{
+    CoverageReport, CoverageTracker, CoverageVerdict, InvariantCoverage, TransformationUsage,
+    render_coverage,
+};
 pub use definitions::resolve_defined_calls;
 pub use derive::{enumerate_derived, eval_invariant};
 pub use disciplines::lower_disciplines;
