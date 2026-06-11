@@ -124,7 +124,16 @@ class Coverage(unittest.TestCase):
         self.assertEqual(report.transitions_replayed, 2)
         fired = report.invariants[0]
         self.assertEqual(fired.verdict, "fired")
-        self.assertEqual(fired.first_fired, "t2")
+        self.assertEqual(fired.first_fired, "t1")
+        # The wire field is `from` (the report's name); Python maps it
+        # to `from_clause` because `from` is a keyword - the one
+        # mapping wrinkle this golden exists to defend.
+        self.assertEqual(
+            fired.from_clause,
+            "predicate CurrentRef, current pointer by (account_id)",
+        )
+        never = next(i for i in report.invariants if i.verdict == "never_fired")
+        self.assertIsNone(never.from_clause)
         unused = next(
             t for t in report.transformations if t.transformation == "open_account"
         )

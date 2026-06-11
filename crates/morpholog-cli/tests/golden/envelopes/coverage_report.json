@@ -1,24 +1,30 @@
 {
   "invariants": [
     {
-      "first_fired": "t2",
-      "invariant": "no_flagged_accounts",
-      "last_fired": "t2",
+      "first_fired": "t1",
+      "from": "predicate CurrentRef, current pointer by (account_id)",
+      "invariant": "current_ref_unique_by_account_id",
+      "last_fired": "t1",
       "transitions_fired": 1,
       "verdict": "fired"
+    },
+    {
+      "invariant": "no_flagged_accounts",
+      "transitions_fired": 0,
+      "verdict": "never_fired"
     }
   ],
-  "program": "envelopes",
+  "program": "envelopes_coverage",
   "transformations": [
+    {
+      "transformation": "open_account",
+      "transitions": 0
+    },
     {
       "first": "t1",
       "last": "t1",
       "transformation": "flag_account",
       "transitions": 1
-    },
-    {
-      "transformation": "open_account",
-      "transitions": 0
     },
     {
       "first": "t2",

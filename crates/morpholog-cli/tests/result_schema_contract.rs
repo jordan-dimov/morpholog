@@ -276,38 +276,45 @@ fn composite_envelopes_serialize_as_pinned() {
     );
 }
 
-// A real coverage report: the explanation programme's invariant fires
-// once the flagged state appears, flag_account is used, open_account
-// is declared-but-unused, and a historical-only name is flagged.
+// A real coverage report over a programme with a DECLARED discipline,
+// so the golden carries the generated invariant's `from` provenance -
+// the one optional field with a special Python mapping (`from` is a
+// Python keyword; the client maps it to `from_clause`). The authored
+// invariant stays never-fired, flag_account is used, open_account is
+// declared-but-unused, and a historical-only name is flagged: every
+// optional field of the shape appears in the golden.
 #[test]
 fn coverage_report_serializes_as_pinned() {
-    let p = explanation_program();
+    let source = "program envelopes_coverage\n\
+        predicate Account(account_id: Subject)\n\
+        predicate Flag(account_id: Subject)\n\
+        predicate CurrentRef(account_id: Subject, ref_id: Subject)\n    \
+            current pointer by (account_id)\n\
+        invariant no_flagged_accounts:\n    \
+            Account(a) implies not Flag(a)\n\
+        transformation open_account(account_id):\n    \
+            admit Account(account_id)\n\
+        transformation flag_account(account_id):\n    \
+            admit Flag(account_id)\n";
+    let p = morpholog_surface::parse_program(source).unwrap();
+    p.validate().unwrap();
+
     let mut tracker = CoverageTracker::new(&p);
     let empty = State::from_claims(vec![]);
-    let flagged = flagged_state();
-    let with_account = State::from_claims(vec![
-        ClaimInstance {
-            predicate: "Flag".into(),
-            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
-        },
-        ClaimInstance {
-            predicate: "Account".into(),
-            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
-        },
-    ]);
+    let with_ref = State::from_claims(vec![ClaimInstance {
+        predicate: "CurrentRef".into(),
+        args: vec![
+            EvalValue::Subject(Subject::from("acct_1")),
+            EvalValue::Subject(Subject::from("ref_1")),
+        ],
+    }]);
+    let delta_ref = std::iter::once("CurrentRef".into()).collect();
     let delta_flag = std::iter::once("Flag".into()).collect();
-    let delta_account = std::iter::once("Account".into()).collect();
     tracker
-        .observe(&flagged, &empty, &delta_flag, "t1", "flag_account")
+        .observe(&with_ref, &empty, &delta_ref, "t1", "flag_account")
         .unwrap();
     tracker
-        .observe(
-            &with_account,
-            &flagged,
-            &delta_account,
-            "t2",
-            "renamed_long_ago",
-        )
+        .observe(&with_ref, &with_ref, &delta_flag, "t2", "renamed_long_ago")
         .unwrap();
     assert_golden("coverage_report.json", &to_value(&tracker.into_report()));
 }
