@@ -109,6 +109,26 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         Inspect::Predicates(args) => inspect_predicates(args),
         Inspect::Guarantees(args) => inspect_guarantees(args),
         Inspect::Controls(args) => inspect_controls(args),
+        Inspect::Coverage(args) => inspect_coverage(args).await,
+    }
+}
+
+/// Run `inspect coverage <file.morph>`: replay the audit log through
+/// the coverage tracker and report which rules ever fired. Read-only;
+/// always exits zero on a parsed-and-validated programme - coverage
+/// answers a question, it does not enforce (the `explain` stance).
+async fn inspect_coverage(args: crate::InspectCoverageArgs) -> anyhow::Result<()> {
+    let parsed = parse_or_exit(&args.file)?;
+    validate_or_exit(&parsed);
+    let pool = connect(&args.db.database_url).await?;
+    let report = morpholog_postgres::coverage_replay(&pool, &parsed.program)
+        .await
+        .context("coverage_replay failed")?;
+    if args.json {
+        print_json(&report)
+    } else {
+        println!("{}", morpholog_core::render_coverage(&report));
+        Ok(())
     }
 }
 
