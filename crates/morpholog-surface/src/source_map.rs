@@ -37,7 +37,7 @@ pub enum DeclKind {
 /// Byte-offset spans for one parsed programme, keyed the way findings
 /// refer back to source: by declaration kind and name, plus the
 /// position of each top-level statement within a transformation body.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct SourceMap {
     decls: HashMap<(DeclKind, String), Span>,
     statements: HashMap<String, Vec<Span>>,
