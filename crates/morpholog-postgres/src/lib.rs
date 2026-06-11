@@ -828,7 +828,7 @@ pub async fn load_scoped_state(
 /// Page size for every keyset read over the replay order - the audit
 /// tail, coverage's two passes, and the chunked replays. One chunk in
 /// memory at a time; hardcoded until a real history forces tuning.
-pub const REPLAY_CHUNK: i64 = 1024;
+const REPLAY_CHUNK: i64 = 1024;
 
 /// The audit table's full column tuple, shared by the fetch-all
 /// helper and the keyset page.

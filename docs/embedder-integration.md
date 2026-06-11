@@ -201,6 +201,20 @@ Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [
 
 Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering, and a predicate read returns zero or more claims - multiplicity is the caller's to handle, except where the programme's own invariants pin it (a singleton in-force pointer, say), which is exactly what licenses a simple lookup. Argument-level selection is deliberately left open below.
 
+### `morpholog inspect audit` - the projector's tail
+
+The blessed read for downstream projectors (forced by the first real one: an ETRM read side folding transitions into blotters and positions). Stdout is NDJSON - one committed transition per line, in `(committed_at, transition_id)` order, each line an `audit_row` exactly as pinned in the `$defs` (transition id, transformation name, tagged arguments and actor, the invariants checked with their versions, asserted/retracted claims, emitted intents, `committed_at`). An empty tail is empty stdout, exit 0 - the poll loop's steady state. There is no `--limit` and no `--follow`: the poll loop is the projector's own.
+
+**`--after <transition_id>`** resumes strictly after a previously seen transition - one opaque token, since every commit envelope, batch receipt, and audit line already carries one. An unknown id is a hard error naming it, never a silent restart from zero.
+
+**The resume is lossless, and the guarantee has a mechanism.** `committed_at` is the WRITER's transaction start time (server-evaluated `now()`), while row visibility follows commit order - so a writer still in flight when a reader snapshots leaves a row that sorts BELOW rows the reader already emitted, and a naive cursor would skip it forever. Each invocation therefore computes a resume horizon first - the minimum transaction start over the database's open transactions - and only then takes its snapshot, emitting nothing at or above the horizon. Rows beyond it are withheld, never lost: the next invocation's fresh horizon surfaces them. Preconditions: the reader's role must see the writers' sessions in `pg_stat_activity` (same role, `pg_read_all_stats`, or superuser - insufficient visibility is detected and is an error naming the remedy, never an unsound frontier), and no prepared transactions write audit (PostgreSQL's default `max_prepared_transactions = 0`). Liveness: the horizon trails the oldest open transaction in the database, so a stuck session stalls the tail without ever losing rows.
+
+**`--named <file.morph>`** decodes each line's asserted/retracted claims into the `named_claim` shape under the programme's authority, with the same hard-error skew contract as the claims read. `arguments` and `emitted_intents` deliberately stay tagged: they belong to the transformation and intent vocabularies (parameter kinds), not predicate declarations, and the asymmetry is stated rather than papered over with a second decoder.
+
+`--as-of` does not apply: the audit table IS the chronological record, and the tail's coordinate is `--after`.
+
+**For direct SQL readers** (a projector that prefers the table): the `(committed_at, transition_id)` total order is stable - it is load-bearing in `verify`, coverage replay, and the as-of reconstructions, so it cannot drift; the claim JSONB inside `asserted_claims`/`retracted_claims` is the pinned `claim_instance` shape; the column set may grow additively. And `committed_at` is the transaction START instant, not the commit instant - any direct tail wanting lossless resume needs the same compute-horizon-first recipe the CLI implements (min `xact_start` over `pg_stat_activity`, then snapshot, then page strictly below it).
+
 ## Stability and what is not pinned
 
 What this document promises:
@@ -213,6 +227,7 @@ What this document promises:
 - The `morpholog init` provisioning contract (embedded schema, day-zero only, refuse-or-skip on an existing schema, never drop or migrate).
 - The `run --explain-on-reject` envelope (rejections gain `explanation` in the `explain --json` shape, computed against the rejecting snapshot; commits unchanged).
 - The `inspect claims --named` decoded-claim shape and its hard-error skew contract.
+- The `inspect audit` NDJSON tail (the `audit_row` / `audit_row_named` line shapes, the `(committed_at, transition_id)` order, `--after`'s lossless-resume semantics and its preconditions).
 - The `morpholog hash` output shape and its rules-identity semantics (canonical-source SHA-256; formatting and comments excluded).
 - The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; the keyed objects serialise with sorted keys, and declaration order travels in the explicit `transformation_order` / `intent_order` arrays).
 - The `morpholog schema --result` outcome-envelope contract (one `$defs` entry per machine-readable envelope).
@@ -222,12 +237,12 @@ What is deliberately left open, pending the worked example that forces the shape
 
 - **Argument-level claim selection.** `inspect claims --predicate` (forced by the `examples/etrm_embedder/` worked embedder) reads claims back at predicate granularity; picking one subject's claims out of the result is client-side. A `--where trade=t1`-style filter waits for an example with a book big enough that the predicate-level cut is not enough.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
-- **The remaining `morpholog inspect` output shapes.** The claims shapes (bare and `--named`) are pinned above; `audit`, `rejections`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `run` envelope itself is unchanged by that log's existence.)
+- **The remaining `morpholog inspect` output shapes.** The claims and audit shapes are pinned above; `rejections`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `run` envelope itself is unchanged by that log's existence.)
 The discipline is the same as the rest of Morpholog: ship the contract that an example forces, leave the rest open.
 
 ## The outcome-envelope contract (`schema --result`)
 
-`morpholog schema --result` emits one JSON Schema (Draft 2020-12) document whose `$defs` pin every machine-readable envelope this document describes in prose: the tagged value encoding, claim and intent instances, the `run` outcome union (committed | rejected, the latter optionally carrying `--explain-on-reject`'s `explanation`), the traced envelope, the `explain --json` Explanation with its gate / invariant / error verdicts, batch receipts, outbox rows and the claim / complete / release wrappers, the `check --json` report, the `inspect coverage --json` report, and the `hash` / `init` reports. Programme-independent - the shapes vary only with the binary, so no `.morph` file is taken and the document is byte-stable for a given build.
+`morpholog schema --result` emits one JSON Schema (Draft 2020-12) document whose `$defs` pin every machine-readable envelope this document describes in prose: the tagged value encoding, claim and intent instances, the `run` outcome union (committed | rejected, the latter optionally carrying `--explain-on-reject`'s `explanation`), the traced envelope, the `explain --json` Explanation with its gate / invariant / error verdicts, batch receipts, the audit tail's row shapes (tagged and `--named`), outbox rows and the claim / complete / release wrappers, the `check --json` report, the `inspect coverage --json` report, and the `hash` / `init` reports. Programme-independent - the shapes vary only with the binary, so no `.morph` file is taken and the document is byte-stable for a given build.
 
 This is the artefact client generation consumes (the reserved "waits for a real consumer" slot is now filled): the generated Python client's envelope models derive from the same pinned document, and a contract-test suite in the binary's own repository holds the document, the binary's real serialization, and the generated models to one set of golden envelopes. Trace entry internals remain reserved (the `trace` array is pinned as an array, its items deliberately unconstrained).
 
