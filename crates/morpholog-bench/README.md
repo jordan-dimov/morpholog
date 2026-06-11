@@ -124,12 +124,12 @@ The residual ~2.4 retries/commit at full disjointness is *consistent with* Postg
 
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 
-Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog run ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, starting from an empty ledger - state grows over the run - local PostgreSQL):
+Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog propose ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, starting from an empty ledger - state grows over the run - local PostgreSQL):
 
 | invocation | per-call |
 |---|--:|
 | `morpholog check` (spawn + parse + validate) | ~3 ms |
-| `morpholog run` (+ connect + propose + commit + encode) | ~9 ms |
+| `morpholog propose` (+ connect + propose + commit + encode) | ~9 ms |
 
 So the fixed per-call tax a subprocess embedder pays is **single-digit milliseconds** - ~3 ms of spawn/parse/validate plus ~6 ms of connect/propose/commit against a small ledger. That sustains roughly 100 governed transitions/second single-threaded, which is comfortable for lifecycle events (capture, confirm, settle, approve) and admin/audit flows. The propose component grows with in-scope state exactly as the `write` scenario measures; the spawn/parse/validate floor does not. A long-lived worker (load + validate once, keep a pool warm, speak HTTP/socket) is the answer only if a high-frequency path needs it - and per the doctrine those paths should not run through the governed core anyway.
 

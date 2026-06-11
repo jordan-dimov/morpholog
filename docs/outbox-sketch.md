@@ -90,7 +90,7 @@ while True:
         # Phase 4a: admit the result through a governed
         # transformation. The invariants on `record_result` decide
         # whether the result is legitimate.
-        admit = run("run", "simulator.morph", "record_result",
+        admit = run("propose", "simulator.morph", "record_result",
                     "--actor", "compute-worker-7",
                     "--args", json.dumps(result_args(result)))
         if admit["status"] != "committed":
@@ -117,7 +117,7 @@ while True:
             "--reason", str(e))
 ```
 
-That is the contract: the kernel does not call out, the kernel does not pause, the kernel does not learn about Python. The external system reads from the outbox, does work, writes back through `morpholog run`. Both sides of the round trip are governed transformations; everything in between is the compute zone's business.
+That is the contract: the kernel does not call out, the kernel does not pause, the kernel does not learn about Python. The external system reads from the outbox, does work, writes back through `morpholog propose`. Both sides of the round trip are governed transformations; everything in between is the compute zone's business.
 
 ### Why a *new* transformation for the result
 

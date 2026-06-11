@@ -280,7 +280,7 @@ and you supply the arguments as a matching JSON object (`amount` is a string,
 because exact decimals do not survive being a JSON number):
 
 ```bash
-morpholog run revenue.morph report_revenue --actor verifier_anna \
+morpholog propose revenue.morph report_revenue --actor verifier_anna \
   --args-named '{"asset":"battery_07","period":"q1_2026","amount":"1000","figure_id":"f1"}'
 ```
 
@@ -320,7 +320,7 @@ the same commit that wrote the claims wrote this, atomically, or wrote nothing.
 against that figure**, in good faith, on what the books say today:
 
 ```bash
-morpholog run revenue.morph run_covenant_test --actor bank_credit_cttee \
+morpholog propose revenue.morph run_covenant_test --actor bank_credit_cttee \
   --args-named '{"test_id":"covtest_june","asset":"battery_07","period":"q1_2026","amount":"1000","figure_id":"f1"}'
 ```
 
@@ -411,7 +411,7 @@ Now watch Morpholog do the whole thing.
 **Correct the figure:**
 
 ```bash
-morpholog run revenue.morph correct_revenue --actor verifier_anna \
+morpholog propose revenue.morph correct_revenue --actor verifier_anna \
   --args-named '{"asset":"battery_07","period":"q1_2026","new_amount":"1200","new_figure_id":"f2","prior_figure_id":"f1"}'
 ```
 
@@ -469,7 +469,7 @@ deleted. Things stop being current.
 against the old figure f1 - the one that has been superseded:
 
 ```bash
-morpholog run revenue.morph run_covenant_test --actor bank_credit_cttee \
+morpholog propose revenue.morph run_covenant_test --actor bank_credit_cttee \
   --args-named '{"test_id":"covtest_august","asset":"battery_07","period":"q1_2026","amount":"1000","figure_id":"f1"}'
 ```
 ```json
@@ -513,7 +513,7 @@ That is not a string you grepped out of a stack trace. It is the exact missing
 claim and the named transformations that could supply it - structured enough
 that a program (or an AI agent proposing changes) can read the refusal, repair
 its proposal, and try again. And when the caller is a service rather than a
-person at a terminal, you do not need the second command: `morpholog run
+person at a terminal, you do not need the second command: `morpholog propose
 --explain-on-reject` attaches this same account to the rejection receipt
 itself, computed against the very state that refused.
 
@@ -641,7 +641,7 @@ import subprocess
 
 def propose(transformation: str, actor: str, args: dict) -> dict:
     result = subprocess.run(
-        ["morpholog", "run", "revenue.morph", transformation,
+        ["morpholog", "propose", "revenue.morph", transformation,
          "--actor", actor, "--args-named", json.dumps(args)],
         capture_output=True, text=True,
     )
@@ -654,7 +654,7 @@ receipt = propose("report_revenue", "verifier_anna", {
     "amount": "1000", "figure_id": "f1",
 })
 if receipt["status"] == "rejected":
-    ...  # show receipt["reason"] (run with --explain-on-reject and the
+    ...  # show receipt["reason"] (propose with --explain-on-reject and the
          # receipt carries the full missing-evidence account too)
 ```
 
