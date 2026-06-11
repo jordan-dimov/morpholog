@@ -7,6 +7,7 @@ Notes for developers working on the codebase. For the project's framing and work
 - **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
 - **PostgreSQL 17+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
+- **Python 3** (optional): the precommit script runs the generated-client template tests, and (with `DATABASE_URL`) the worked embedder end to end; both are skipped with a note when `python3` is absent. CI pins the generated client's declared floor; any local Python 3 is a smoke test.
 
 No Docker. No additional system dependencies.
 
@@ -50,16 +51,18 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --lock
 cargo audit
 cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support --all-targets --locked
 DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox --all-targets --locked -- --test-threads=1
+  cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1
+# when python3 is available:
+python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 ```
 
-The PG-backed test suites share one schema and truncate it between tests; they must run serially (`--test-threads=1`).
+The PG-backed test suites share one schema and truncate it between tests; they must run serially (`--test-threads=1`). The `morpholog-bench` entry is its N=1 compatibility smoke test, not a scale run.
 
 ## Workspace layout
 
 ```
 crates/
-  morpholog-cli/           # binary `morpholog`; inspect, run, parse, check, explain
+  morpholog-cli/           # binary `morpholog`; file-path-driven CLI (see `morpholog --help`)
   morpholog-core/          # synchronous semantic kernel - no I/O
   morpholog-examples/      # worked examples parsed from .morph + typed test fixtures (depends on core)
   morpholog-postgres/      # async PostgreSQL persistence adapter
@@ -115,6 +118,8 @@ The `.morph` comments are a **learner's guide**, not implementation notes. Their
 - [`docs/roadmap.md`](docs/roadmap.md) - what's imminent, deferred, and out of scope.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - what the kernel means.
 - [`docs/design-history.md`](docs/design-history.md) - for each significant IR decision, the worked example that forced it.
+- [`docs/embedder-integration.md`](docs/embedder-integration.md) - the pinned public contract for non-Rust integrations, including the generated Python client.
+- [`docs/prior-art.md`](docs/prior-art.md) - the influences behind the roadmap directions, with the calibrations that survived review.
 - [`docs/outbox-sketch.md`](docs/outbox-sketch.md) - the "Morpholog plus an Outside Coordinator" doctrine for the outbox worker.
 
 ## License

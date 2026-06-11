@@ -245,9 +245,12 @@ morpholog check revenue.morph
 ```
 
 Silence and a zero exit means it parsed and validated - argument counts,
-unbound variables, expression shapes, the lot. This is your compiler. Success
-is quiet by design, because scripts depend on the empty output. When you want
-the reassurance, ask for it:
+unbound variables, expression shapes, the lot. This is your compiler, and it
+behaves like one: any mistake comes back with a caret pointing at the exact
+line and statement in your source, not just a description. (Tooling can ask
+for the same findings as data with `check --json`.) Success is quiet by
+design, because scripts depend on the empty output. When you want the
+reassurance, ask for it:
 
 ```bash
 morpholog check -v revenue.morph
@@ -639,7 +642,7 @@ def propose(transformation: str, actor: str, args: dict) -> dict:
          "--actor", actor, "--args-named", json.dumps(args)],
         capture_output=True, text=True,
     )
-    if result.stderr:
+    if not result.stdout.strip():
         raise RuntimeError(result.stderr)   # operational failure, not a refusal
     return json.loads(result.stdout)        # committed or rejected, either way a receipt
 
@@ -654,7 +657,10 @@ if receipt["status"] == "rejected":
 
 A business refusal is data, not an exception. That is why the snippet does not
 pass `check=True`: a refusal exits non-zero but still writes the receipt to
-stdout, and `check=True` would raise before you ever read it. Your endpoint
+stdout, and `check=True` would raise before you ever read it. The
+discrimination rule is the one load-bearing line: every *decided* result
+arrives on stdout (stderr may carry advisory lines, like the rule's source
+location on a refusal); **empty stdout** is the only operational failure. Your endpoint
 turns the rejection into a 422 with the reason attached. A worked version of
 exactly this pattern, driving a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
@@ -706,6 +712,9 @@ things to try with the program you already have:
    { "status": "rejected", "reason": "invariant `one_figure_in_force_per_period` violated" }
    ```
 
+   (And on stderr, a courtesy line points at the violated rule's exact
+   location in your source: `rule at revenue.morph:<line>:<col>`.)
+
    This is the lesson the other pokes only hint at. A gate makes a bad
    proposal hard to attempt; the invariant makes the bad state impossible to
    commit - even for a careless transformation someone adds next year. The
@@ -717,6 +726,42 @@ things to try with the program you already have:
 The gate refusals each trace to a `require` line you can point at in
 `revenue.morph`; the sloppy one traces to the invariant itself - and
 `morpholog explain` points at both kinds.
+
+## Say the rules on the declarations
+
+The invariants you hand-wrote in this guide were the right way to learn them -
+you now know exactly what each one means. But look at what they
+*are*: "one current figure per asset and period" is a uniqueness rule, and
+"the correction chain never forks" is a property of the supersession chain.
+Rules of that shape are so common that Morpholog lets you declare them on the
+predicates themselves:
+
+```morph
+predicate Revenue(asset: Subject, period: Subject, amount: Decimal, figure_id: Subject)
+    append only
+predicate CurrentFigure(asset: Subject, period: Subject, figure_id: Subject)
+    current pointer by (asset, period)
+    superseded via Supersedes
+```
+
+Those clauses say, in order: revenue figures are permanent records - nothing
+may ever retract one (corrections supersede, as you built); `CurrentFigure`
+is a *pointer* - at most one per asset and period, and retractable, because
+pointers must move; and its history lives in `Supersedes`, whose chain may
+never fork. With these clauses in place, the hand-written invariants
+could be deleted: the runtime generates the same rules from the declarations
+(run `morpholog inspect guarantees` and you will see them listed, each with a
+`from:` line naming the clause it came from). The `append only` clause goes
+one better than a runtime rule - a transformation that tries to `retract` a
+`Revenue` row is refused when you `check` the file, before anything runs.
+
+This guide's programme keeps the hand-written form so every rule you met has
+a name you chose. The worked examples in the repository use the declaration
+form throughout - and when your own programmes grow past a handful of rules,
+so should you. (The same instinct - name the idea, not the plumbing - has a
+second tool: `define` lets you name a condition once and use it from several
+gates and invariants. The clinical-trial example reads as five named
+conditions instead of one twenty-line gate.)
 
 ## Questions you are probably asking
 
@@ -803,10 +848,13 @@ works, the tooling does not exist yet.
 **"Does this scale beyond one small file?"**
 The programmes are deliberately small so far, and `.morph` has no imports or
 namespaces yet - they arrive when a real codebase forces them. What exists now
-for keeping a rule set legible: `morpholog inspect guarantees` lists what a
-model makes impossible, and `morpholog explain` turns any refusal into the
-exact failing rule. Debugging is not grepping a thousand global rules; it is
-being handed the one that fired.
+for keeping a rule set legible: named conditions (`define`) keep large gates
+readable, claim disciplines put the structural rules on the declarations
+(the previous section), `morpholog inspect guarantees` lists what a model
+makes impossible, `morpholog check` flags suspicious-but-legal shapes as
+hints, and `morpholog explain` turns any refusal into the exact failing rule.
+Debugging is not grepping a thousand global rules; it is being handed the one
+that fired, with a caret on its line.
 
 ## Where to go next
 
@@ -819,6 +867,13 @@ being handed the one that fired.
   cousins of what you just built.
 - [`runtime-semantics.md`](runtime-semantics.md) - what the kernel means, and the
   full surface-to-IR mapping if you want to know what every keyword lowers to.
+- [`embedder-integration.md`](embedder-integration.md) - when you are ready to
+  drive Morpholog from an application rather than a terminal: the pinned
+  contract this guide's `propose()` sketch was secretly following, batch
+  import for many transitions in one call, and `morpholog generate
+  python-client` - one command that emits a complete, typed, dependency-free
+  Python client for your own programme, so the subprocess plumbing is
+  generated rather than written.
 - The project [`README`](../README.md) - the wider pitch and the list of
   questions Morpholog is built to answer.
 
