@@ -270,7 +270,9 @@ async fn finalise_outcome(
     match outcome {
         Outcome::Rejected { reason } => {
             tx.rollback().await.map_err(classify)?;
-            Ok(PgProposalOutcome::Rejected { reason })
+            Ok(PgProposalOutcome::Rejected {
+                reason: reason.to_string(),
+            })
         }
         Outcome::Accepted {
             asserted_claims,

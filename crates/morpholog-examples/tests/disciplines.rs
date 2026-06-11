@@ -90,7 +90,7 @@ fn a_duplicate_under_unique_by_is_refused_with_the_generated_name() {
     .expect("kernel must not error");
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("figure_unique_by_figure_id"),
+            reason.to_string().contains("figure_unique_by_figure_id"),
             "the generated invariant is named: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("a duplicate figure id must be refused"),
@@ -122,7 +122,9 @@ fn the_pointer_moves_atomically_and_its_singleton_holds() {
     .expect("kernel must not error");
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("current_figure_unique_by_owner"),
+            reason
+                .to_string()
+                .contains("current_figure_unique_by_owner"),
             "the pointer singleton is named: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("two current pointers must be refused"),
@@ -151,7 +153,9 @@ fn the_lineage_cannot_fork() {
     .expect("kernel must not error");
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("figure_supersedes_unique_by_prior"),
+            reason
+                .to_string()
+                .contains("figure_supersedes_unique_by_prior"),
             "the no-fork rule is named: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("a forked lineage must be refused"),

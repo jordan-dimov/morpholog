@@ -485,7 +485,9 @@ fn confirmed_match_blocks_onboarding_even_behind_a_clean_current_screening() {
     .expect("propose should not error");
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("onboarded_requires_no_confirmed_match"),
+            reason
+                .to_string()
+                .contains("onboarded_requires_no_confirmed_match"),
             "expected the confirmed-match bar to reject onboarding, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -559,7 +561,9 @@ fn adjudicated_marker_without_a_disposition_is_rejected() {
     .expect("kernel must not error");
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("adjudicated_match_resolves_exactly_one_way"),
+            reason
+                .to_string()
+                .contains("adjudicated_match_resolves_exactly_one_way"),
             "expected the xor invariant to reject a marker with no disposition, got: {reason}"
         ),
         Outcome::Accepted { .. } => {

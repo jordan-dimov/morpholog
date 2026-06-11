@@ -371,7 +371,9 @@ fn two_versions_on_the_same_effective_date_are_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("trade_terms_unique_by_trade_effective_from"),
+            reason
+                .to_string()
+                .contains("trade_terms_unique_by_trade_effective_from"),
             "expected the per-effective-date uniqueness invariant, got: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("two versions on one effective date must be rejected"),
@@ -402,7 +404,9 @@ fn reusing_a_version_id_for_a_different_record_is_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("trade_terms_unique_by_version_id"),
+            reason
+                .to_string()
+                .contains("trade_terms_unique_by_version_id"),
             "expected the version-id uniqueness invariant, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -630,7 +634,9 @@ fn slices_summing_over_the_effective_quantity_are_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("settled_within_effective_terms"),
+            reason
+                .to_string()
+                .contains("settled_within_effective_terms"),
             "expected the cumulative effective cap to reject the over-total slice, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -824,7 +830,9 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("trade_settled_unique_by_settlement_id"),
+            reason
+                .to_string()
+                .contains("trade_settled_unique_by_settlement_id"),
             "expected the id-uniqueness invariant to reject conflicting tuples, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -947,7 +955,9 @@ fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("settled_date_has_effective_terms"),
+            reason
+                .to_string()
+                .contains("settled_date_has_effective_terms"),
             "expected the no-effective-terms backstop to reject, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -979,7 +989,9 @@ fn negative_terms_quantity_is_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("trade_terms_quantity_is_positive"),
+            reason
+                .to_string()
+                .contains("trade_terms_quantity_is_positive"),
             "expected the positive-terms-quantity invariant, got: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("a negative terms quantity must be rejected"),
@@ -1008,7 +1020,7 @@ fn negative_settlement_quantity_is_rejected() {
     .unwrap();
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("settled_quantity_is_positive"),
+            reason.to_string().contains("settled_quantity_is_positive"),
             "expected the positive-settlement-quantity invariant, got: {reason}"
         ),
         Outcome::Accepted { .. } => panic!("a negative settlement quantity must be rejected"),

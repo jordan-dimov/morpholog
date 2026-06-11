@@ -57,13 +57,47 @@ pub enum Outcome {
         candidate_state: State,
     },
     Rejected {
-        reason: String,
+        reason: RejectionReason,
     },
+}
+
+/// Why a proposal was rejected, structured at the source. Every consumer
+/// that needs prose (envelopes, trace entries, the operational rejection
+/// log's `reason` column) renders through [`std::fmt::Display`], whose
+/// output is the pinned wire string - consumers that need the rule name
+/// or kind match the variant instead of parsing display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RejectionReason {
+    /// An invariant did not hold over the candidate state. Carries the
+    /// version checked because the rejecting site is the only place
+    /// that knows it; Display deliberately omits it.
+    Invariant { name: InvariantName, version: u32 },
+    /// A `require` gate found no witness over the pre-state.
+    Require { rendered: String },
+    /// A `bind` lookup matched no candidates. (Multi-match is an
+    /// [`EvalError`], not a rejection.)
+    BindNone { rendered: String },
+}
+
+impl std::fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RejectionReason::Invariant { name, .. } => {
+                write!(f, "invariant `{name}` violated")
+            }
+            RejectionReason::Require { rendered } => {
+                write!(f, "require failed: {rendered} did not hold over pre-state")
+            }
+            RejectionReason::BindNone { rendered } => {
+                write!(f, "bind_one failed: {rendered} matched no candidates")
+            }
+        }
+    }
 }
 
 pub(crate) enum StmtOutcome {
     Continue,
-    Rejected(String),
+    Rejected(RejectionReason),
 }
 
 // ===========================================================================
@@ -390,7 +424,10 @@ pub(crate) fn propose_inner(
         }
         if !held {
             return Ok(Outcome::Rejected {
-                reason: format!("invariant `{}` violated", inv.name),
+                reason: RejectionReason::Invariant {
+                    name: inv.name.clone(),
+                    version: inv.version,
+                },
             });
         }
     }
@@ -427,14 +464,14 @@ pub(crate) fn execute_stmt(
                 // Render once; reused for both the reason string and the
                 // trace entry.
                 let rendered = format::format_prop_inline(expr);
-                let reason = format!("require failed: {rendered} did not hold over pre-state");
+                let reason = RejectionReason::Require { rendered };
                 if trace.is_on() {
                     let failing = find_failing_subexpr(expr, &ctx);
                     let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                     trace.push(TraceEntry::Require {
-                        expression: rendered,
+                        expression: format::format_prop_inline(expr),
                         outcome: RequireOutcome::Rejected {
-                            reason: reason.clone(),
+                            reason: reason.to_string(),
                             failing_sub_expression: failing,
                             directly_missing_claims,
                         },
@@ -464,19 +501,20 @@ pub(crate) fn execute_stmt(
             match matches.len() {
                 0 => {
                     let rendered = format::format_prop_inline(expr);
-                    let reason = format!("bind_one failed: {rendered} matched no candidates");
                     if trace.is_on() {
                         let failing = find_failing_subexpr(expr, &ctx);
                         let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
-                            expression: rendered,
+                            expression: rendered.clone(),
                             outcome: BindOneOutcome::NoMatch {
                                 failing_sub_expression: failing,
                                 directly_missing_claims,
                             },
                         });
                     }
-                    Ok(StmtOutcome::Rejected(reason))
+                    Ok(StmtOutcome::Rejected(RejectionReason::BindNone {
+                        rendered,
+                    }))
                 }
                 1 => {
                     let new_bindings = matches.swap_remove(0);
@@ -584,7 +622,7 @@ pub(crate) fn execute_stmt(
                     // Labeled block scopes the iter_sink so its borrow
                     // on iter_entries ends before we move iter_entries
                     // into ForIterationTrace.
-                    let iter_result: Result<Option<String>, EvalError> = 'inner: {
+                    let iter_result: Result<Option<RejectionReason>, EvalError> = 'inner: {
                         let mut iter_sink = TraceSink::On(&mut iter_entries);
                         for inner in body {
                             match execute_stmt(

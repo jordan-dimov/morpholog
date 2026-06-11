@@ -115,7 +115,7 @@ fn duplicate_policy_id_violates_uniqueness_invariant() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("policy_unique_by_policy_id"),
+        reason.to_string().contains("policy_unique_by_policy_id"),
         "expected policy_unique_by_policy_id invariant violation, got: {reason}"
     );
 }
@@ -134,7 +134,10 @@ fn report_claim_without_policy_is_rejected_at_require() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    assert!(
+        reason.to_string().contains("require"),
+        "got reason: {reason}"
+    );
 }
 
 #[test]
@@ -164,7 +167,9 @@ fn duplicate_claim_id_violates_uniqueness_invariant() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("claim_reported_unique_by_claim_id"),
+        reason
+            .to_string()
+            .contains("claim_reported_unique_by_claim_id"),
         "expected claim_reported_unique_by_claim_id invariant violation, got: {reason}"
     );
 }
@@ -302,7 +307,10 @@ fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    assert!(
+        reason.to_string().contains("require"),
+        "got reason: {reason}"
+    );
 }
 
 #[test]
@@ -540,7 +548,9 @@ fn settlement_id_must_be_unique_across_payments() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("settlement_paid_unique_by_settlement_id"),
+        reason
+            .to_string()
+            .contains("settlement_paid_unique_by_settlement_id"),
         "expected settlement-id uniqueness invariant violation, got: {reason}"
     );
 }
@@ -811,7 +821,7 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     match outcome {
         Outcome::Rejected { reason } => {
             assert!(
-                reason.contains("headroom_consumed_by_payment"),
+                reason.to_string().contains("headroom_consumed_by_payment"),
                 "expected rejection to name the conservation invariant, got: {reason}"
             );
         }
@@ -944,7 +954,7 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     match outcome {
         Outcome::Rejected { reason } => {
             assert!(
-                reason.contains("headroom_consumed_by_payment"),
+                reason.to_string().contains("headroom_consumed_by_payment"),
                 "expected rejection to name the conservation invariant, got: {reason}"
             );
         }

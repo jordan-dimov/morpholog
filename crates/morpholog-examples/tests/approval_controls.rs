@@ -77,7 +77,10 @@ fn approve_without_authority_is_rejected_at_require() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    assert!(
+        reason.to_string().contains("require"),
+        "got reason: {reason}"
+    );
 }
 
 #[test]

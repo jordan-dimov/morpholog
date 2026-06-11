@@ -300,7 +300,10 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("no_double_netting"), "got: {reason}");
+    assert!(
+        reason.to_string().contains("no_double_netting"),
+        "got: {reason}"
+    );
 }
 
 // Pins the propose() guard that a Transition's transformation_name must
