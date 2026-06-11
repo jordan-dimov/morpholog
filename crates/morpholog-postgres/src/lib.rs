@@ -11,9 +11,9 @@ pub mod testing;
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, CoverageReport, CoverageTracker, Definition, DerivedClaim, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, State, Subject,
-    TraceEntry, TracedProposal, Transformation, TransformationName, Transition, enumerate_derived,
-    predicates_referenced_by_derived, propose, propose_with_trace,
+    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, RejectionReason,
+    State, Subject, TraceEntry, TracedProposal, Transformation, TransformationName, Transition,
+    enumerate_derived, predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -177,7 +177,8 @@ pub async fn propose_against_pg_with_rejection_state(
     let state = load_state(&mut tx, &scope).await?;
     let outcome = propose(transformation, transition, &state, invariants, definitions)?;
     let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
-    let pg_outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+    let pg_outcome =
+        finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
     Ok((pg_outcome, rejection_state))
 }
 
@@ -243,7 +244,7 @@ pub async fn propose_against_pg_with_trace(
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome =
-                finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+                finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
             Ok(PgTracedOutcome::Outcome { outcome, trace })
         }
         TracedProposal::Errored { error, trace } => {
@@ -260,7 +261,18 @@ pub async fn propose_against_pg_with_trace(
 /// `propose_against_pg` and `propose_against_pg_with_trace`. Takes
 /// the kernel's [`Outcome`], commits or rolls back, and returns
 /// the [`PgProposalOutcome`] the public API exposes.
+///
+/// A rejection is recorded in `morpholog.rejections` AFTER the
+/// rollback, in a separate autocommit insert on `pool` - it cannot
+/// live inside the transaction that refused, because that
+/// transaction rolls back. At-most-once: a crash between rollback
+/// and insert loses the record. Operational evidence only; the
+/// audit table remains the legitimacy-grade record. An insert
+/// failure surfaces as `Err(PgError)` rather than a rejected
+/// envelope - the database is broken, and pretending the refusal
+/// was cleanly recorded would not be honest.
 async fn finalise_outcome(
+    pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
     transformation: &Transformation,
     transition: &Transition,
@@ -270,6 +282,7 @@ async fn finalise_outcome(
     match outcome {
         Outcome::Rejected { reason } => {
             tx.rollback().await.map_err(classify)?;
+            write_rejection(pool, transformation, transition, &reason).await?;
             Ok(PgProposalOutcome::Rejected {
                 reason: reason.to_string(),
             })
@@ -424,6 +437,50 @@ fn compute_load_scope(
 pub struct AuditedInvariantCheck {
     pub name: InvariantName,
     pub version: u32,
+}
+
+/// Record a refused proposal in `morpholog.rejections`. Runs on the
+/// pool (implicit autocommit transaction) because the refusing
+/// transaction has already rolled back - see `finalise_outcome` for
+/// the at-most-once doctrine. The kind/rule/version columns come
+/// from matching the [`RejectionReason`] variant, never from parsing
+/// the display string.
+async fn write_rejection(
+    pool: &PgPool,
+    transformation: &Transformation,
+    transition: &Transition,
+    reason: &RejectionReason,
+) -> Result<(), PgError> {
+    let (kind, rule, invariant_version): (&str, &str, Option<i32>) = match reason {
+        RejectionReason::Invariant { name, version } => {
+            ("invariant", name.as_str(), Some(*version as i32))
+        }
+        RejectionReason::Require { rendered } => ("require", rendered.as_str(), None),
+        RejectionReason::BindNone { rendered } => ("bind", rendered.as_str(), None),
+    };
+    let args_json: serde_json::Value =
+        serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;
+    let actor_json: serde_json::Value =
+        serde_json::to_value(EvalValue::Subject(transition.actor.clone()))
+            .map_err(PgError::Encoding)?;
+    sqlx::query(
+        "INSERT INTO morpholog.rejections (
+            rejection_id, transformation_name, arguments, actor,
+            kind, rule, invariant_version, reason
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(transformation.name.as_str())
+    .bind(&args_json)
+    .bind(&actor_json)
+    .bind(kind)
+    .bind(rule)
+    .bind(invariant_version)
+    .bind(reason.to_string())
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

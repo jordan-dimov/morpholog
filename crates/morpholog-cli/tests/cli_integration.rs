@@ -35,7 +35,7 @@ async fn reset_db() {
     let pool = PgPool::connect(&database_url())
         .await
         .expect("connect to test DB");
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");

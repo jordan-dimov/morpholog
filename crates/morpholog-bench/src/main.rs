@@ -910,7 +910,7 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
 }
 
 async fn reset_db(pool: &PgPool) -> Result<()> {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
         .execute(pool)
         .await
         .context("TRUNCATE morpholog tables")?;
