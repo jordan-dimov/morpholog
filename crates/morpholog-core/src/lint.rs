@@ -123,7 +123,11 @@ pub fn lints(program: &Program) -> Vec<Lint> {
 /// in another implication's antecedent enforce nothing of the shape
 /// the lint reads. Enclosing `And`/`Or`/quantifiers preserve polarity;
 /// `Not` flips it; an `Implies` flips its own left side.
-fn collect_implications<'a>(prop: &'a Prop, positive: bool, out: &mut Vec<(&'a Prop, &'a Prop)>) {
+pub(crate) fn collect_implications<'a>(
+    prop: &'a Prop,
+    positive: bool,
+    out: &mut Vec<(&'a Prop, &'a Prop)>,
+) {
     match prop {
         Prop::Implies { left, right } => {
             if positive {
