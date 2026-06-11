@@ -382,29 +382,17 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
     }
 
-    // Dispatch tables, keyed the way the wire names things.
-    let request_entries = program
-        .transformations
-        .iter()
-        .map(|t| format!("    \"{}\": {}Request,", t.name, camel(t.name.as_str())))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let read_entries = program
-        .predicates
-        .iter()
-        .map(|p| format!("    \"{}\": {}Claim,", p.name, camel(p.name.as_str())))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // One dispatch table: the deliverer looks payloads up by the
+    // intent name the outbox row carries. Requests and reads are
+    // reached by class name (the caller knows which model it wants);
+    // tables for them arrive when a consumer does.
     let payload_entries = program
         .intents
         .iter()
         .map(|i| format!("    \"{}\": {}Payload,", i.name, camel(i.name.as_str())))
         .collect::<Vec<_>>()
         .join("\n");
-    let _ = write!(
-        out,
-        "\n\nREQUEST_MODELS = {{\n{request_entries}\n}}\n\nREAD_MODELS = {{\n{read_entries}\n}}\n\nINTENT_PAYLOADS = {{\n{payload_entries}\n}}\n"
-    );
+    let _ = write!(out, "\n\nINTENT_PAYLOADS = {{\n{payload_entries}\n}}\n");
     Ok(out)
 }
 

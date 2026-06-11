@@ -519,29 +519,6 @@ class TradeSettlementRequestedPayload:
         return cls(*args)
 
 
-REQUEST_MODELS = {
-    "capture_trade": CaptureTradeRequest,
-    "amend_trade_terms": AmendTradeTermsRequest,
-    "grant_confirm_authority": GrantConfirmAuthorityRequest,
-    "confirm_trade": ConfirmTradeRequest,
-    "correct_official_price": CorrectOfficialPriceRequest,
-    "settle_trade": SettleTradeRequest,
-}
-
-READ_MODELS = {
-    "TradeCaptured": TradeCapturedClaim,
-    "TradeTerms": TradeTermsClaim,
-    "TradeTermsSupersedes": TradeTermsSupersedesClaim,
-    "CapturedPrice": CapturedPriceClaim,
-    "MayConfirm": MayConfirmClaim,
-    "TradeConfirmed": TradeConfirmedClaim,
-    "OfficialPrice": OfficialPriceClaim,
-    "CurrentOfficialPrice": CurrentOfficialPriceClaim,
-    "OfficialPriceSupersedes": OfficialPriceSupersedesClaim,
-    "TradeSettled": TradeSettledClaim,
-    "TermsTimeline": TermsTimelineClaim,
-}
-
 INTENT_PAYLOADS = {
     "TradeCapturedAdmitted": TradeCapturedAdmittedPayload,
     "TradeTermsAmended": TradeTermsAmendedPayload,

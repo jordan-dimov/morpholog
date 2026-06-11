@@ -23,7 +23,7 @@ from decimal import Decimal
 _DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$")
 
 
-class ValueError_(ValueError):
+class CodecError(ValueError):
     """A value that cannot cross the wire contract in this direction."""
 
 
@@ -51,13 +51,13 @@ def parse_timestamp(text: str) -> datetime:
         text = text[:-1] + "+00:00"
     fraction = re.search(r"\.(\d+)", text)
     if fraction and len(fraction.group(1)) > 6:
-        raise ValueError_(
+        raise CodecError(
             f"timestamp {text!r} carries sub-microsecond precision, which "
             f"Python's datetime cannot represent exactly"
         )
     parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
-        raise ValueError_(f"timestamp {text!r} arrived without an offset")
+        raise CodecError(f"timestamp {text!r} arrived without an offset")
     return parsed
 
 
@@ -67,10 +67,10 @@ def encode_decimal(value: Decimal) -> str:
     schema pattern (rightly) refuses - and NaN/Inf are not numbers the
     contract knows."""
     if not value.is_finite():
-        raise ValueError_(f"{value} is not a finite decimal")
+        raise CodecError(f"{value} is not a finite decimal")
     text = format(value, "f")
     if not _DECIMAL_PATTERN.match(text):
-        raise ValueError_(f"{value} renders as {text!r}, outside the wire pattern")
+        raise CodecError(f"{value} renders as {text!r}, outside the wire pattern")
     return text
 
 
@@ -79,7 +79,7 @@ def encode_timestamp(value: datetime) -> str:
     an instant must name an instant, and a naive datetime names one only
     relative to an unstated zone."""
     if value.tzinfo is None:
-        raise ValueError_(f"naive datetime {value!r}; an instant must carry its offset")
+        raise CodecError(f"naive datetime {value!r}; an instant must carry its offset")
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -101,7 +101,7 @@ def encode_named(value: object) -> object:
         return encode_timestamp(value)
     if isinstance(value, date):
         return value.isoformat()
-    raise ValueError_(f"no named-codec encoding for {type(value).__name__}: {value!r}")
+    raise CodecError(f"no named-codec encoding for {type(value).__name__}: {value!r}")
 
 
 def decode_tagged(tagged: object) -> object:
@@ -109,7 +109,7 @@ def decode_tagged(tagged: object) -> object:
     unknown tag or a malformed payload raises rather than passing
     through, because a silently skipped value is contract drift."""
     if not isinstance(tagged, dict) or set(tagged) != {"type", "value"}:
-        raise ValueError_(f"not a tagged value: {tagged!r}")
+        raise CodecError(f"not a tagged value: {tagged!r}")
     tag, value = tagged["type"], tagged["value"]
     match tag:
         case "subject":
@@ -128,11 +128,11 @@ def decode_tagged(tagged: object) -> object:
             return str(value)
         case "quantity":
             if set(value) != {"amount", "unit"}:
-                raise ValueError_(f"malformed quantity payload: {value!r}")
+                raise CodecError(f"malformed quantity payload: {value!r}")
             # The bare amount; the unit is declared, not carried, on
             # the named surfaces this client generates models for.
             return parse_decimal(value["amount"])
         case "collection":
             return [decode_tagged(item) for item in value]
         case _:
-            raise ValueError_(f"unknown value tag {tag!r}")
+            raise CodecError(f"unknown value tag {tag!r}")
