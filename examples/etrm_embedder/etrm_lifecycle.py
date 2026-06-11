@@ -121,13 +121,14 @@ def main() -> None:
     print(f"    explain -> {verdict.rejection}")
 
     print("4. middle office confirms and sets the official price")
-    deliver(morph, morph.submit(
+    confirmed = morph.submit(
         models.ConfirmTradeRequest(
             trade=trade, counterparty="acme", confirmation_id="conf1",
             official_price_id="op1", confirmed_price=Decimal("45.20"),
         ),
         desk,
-    ))
+    )
+    deliver(morph, confirmed)
 
     print("5. the official price is corrected (restatement; prior settlements stand)")
     deliver(morph, morph.submit(
@@ -187,6 +188,27 @@ def main() -> None:
     if not isinstance(over, envelopes.Rejected):
         raise MorphologError(f"the over-cap settlement should be refused, got {over}")
     print(f"    settle_trade(s2) -> rejected: {over.reason}")
+
+    # The needle: WHICH price was official is a question whose answer
+    # depends on when you ask it. The corrected figure is in force
+    # today - but as-of the confirmation transition, the original was.
+    # Same read, one extra argument; the audit log answers both
+    # truthfully, and neither answer ever overwrites the other.
+    print("8. the needle: which price was official AS-OF the confirmation?")
+    then = next(
+        p
+        for p in (
+            models.CurrentOfficialPriceClaim.from_named(c.args)
+            for c in morph.claims_named(
+                "CurrentOfficialPrice", as_of=confirmed.transition_id
+            )
+        )
+        if p.trade == trade
+    )
+    print(
+        f"    as-of the confirmation: {then.official_price_id} was in force; "
+        f"today it is {pointer.official_price_id}"
+    )
 
     print(f"\n--- interface friction this lifecycle still hits ---\n  {READ_SURFACE_FRICTION}")
 

@@ -30,7 +30,7 @@ use morpholog_core::ir_builder::{
     var,
 };
 use morpholog_core::{
-    ClaimInstance, EvalValue, IntentInstance, State, Subject, Transition, explain,
+    ClaimInstance, CoverageTracker, EvalValue, IntentInstance, State, Subject, Transition, explain,
 };
 use morpholog_postgres::{OutboxRow, PgProposalOutcome};
 use rust_decimal::Decimal;
@@ -276,6 +276,42 @@ fn composite_envelopes_serialize_as_pinned() {
     );
 }
 
+// A real coverage report: the explanation programme's invariant fires
+// once the flagged state appears, flag_account is used, open_account
+// is declared-but-unused, and a historical-only name is flagged.
+#[test]
+fn coverage_report_serializes_as_pinned() {
+    let p = explanation_program();
+    let mut tracker = CoverageTracker::new(&p);
+    let empty = State::from_claims(vec![]);
+    let flagged = flagged_state();
+    let with_account = State::from_claims(vec![
+        ClaimInstance {
+            predicate: "Flag".into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        },
+        ClaimInstance {
+            predicate: "Account".into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        },
+    ]);
+    let delta_flag = std::iter::once("Flag".into()).collect();
+    let delta_account = std::iter::once("Account".into()).collect();
+    tracker
+        .observe(&flagged, &empty, &delta_flag, "t1", "flag_account")
+        .unwrap();
+    tracker
+        .observe(
+            &with_account,
+            &flagged,
+            &delta_account,
+            "t2",
+            "renamed_long_ago",
+        )
+        .unwrap();
+    assert_golden("coverage_report.json", &to_value(&tracker.into_report()));
+}
+
 // Single-shape reports, built as their commands build them.
 #[test]
 fn report_envelopes_serialize_as_pinned() {
@@ -439,6 +475,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("outbox_claim_null.json", "outbox_claim"),
         ("outbox_update_applied.json", "outbox_update"),
         ("outbox_update_lease_lost.json", "outbox_update"),
+        ("coverage_report.json", "coverage_report"),
         ("check_report.json", "check_report"),
         ("hash_report.json", "hash_report"),
         ("init_report.json", "init_report"),

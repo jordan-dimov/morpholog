@@ -1,0 +1,32 @@
+{
+  "invariants": [
+    {
+      "first_fired": "t2",
+      "invariant": "no_flagged_accounts",
+      "last_fired": "t2",
+      "transitions_fired": 1,
+      "verdict": "fired"
+    }
+  ],
+  "program": "envelopes",
+  "transformations": [
+    {
+      "first": "t1",
+      "last": "t1",
+      "transformation": "flag_account",
+      "transitions": 1
+    },
+    {
+      "transformation": "open_account",
+      "transitions": 0
+    },
+    {
+      "first": "t2",
+      "last": "t2",
+      "not_in_programme": true,
+      "transformation": "renamed_long_ago",
+      "transitions": 1
+    }
+  ],
+  "transitions_replayed": 2
+}

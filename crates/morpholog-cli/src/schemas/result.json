@@ -358,6 +358,46 @@
         "status": { "enum": ["applied", "lease_lost"] }
       }
     },
+    "coverage_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "transitions_replayed", "invariants", "transformations"],
+      "properties": {
+        "program": { "type": "string" },
+        "transitions_replayed": { "type": "integer", "minimum": 0 },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["invariant", "verdict", "transitions_fired"],
+            "properties": {
+              "invariant": { "type": "string" },
+              "from": { "type": "string" },
+              "verdict": { "enum": ["fired", "never_fired", "always_on"] },
+              "transitions_fired": { "type": "integer", "minimum": 0 },
+              "first_fired": { "type": "string" },
+              "last_fired": { "type": "string" }
+            }
+          }
+        },
+        "transformations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["transformation", "transitions"],
+            "properties": {
+              "transformation": { "type": "string" },
+              "transitions": { "type": "integer", "minimum": 0 },
+              "first": { "type": "string" },
+              "last": { "type": "string" },
+              "not_in_programme": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
     "check_report": {
       "type": "object",
       "additionalProperties": false,

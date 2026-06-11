@@ -118,6 +118,24 @@ class Reports(unittest.TestCase):
         self.assertIs(named.args["flagged"], False)
 
 
+class Coverage(unittest.TestCase):
+    def test_the_coverage_report_round_trips_the_golden(self):
+        report = envelopes.CoverageReport.from_json(golden("coverage_report.json"))
+        self.assertEqual(report.transitions_replayed, 2)
+        fired = report.invariants[0]
+        self.assertEqual(fired.verdict, "fired")
+        self.assertEqual(fired.first_fired, "t2")
+        unused = next(
+            t for t in report.transformations if t.transformation == "open_account"
+        )
+        self.assertEqual(unused.transitions, 0)
+        self.assertFalse(unused.not_in_programme)
+        drifted = next(
+            t for t in report.transformations if t.transformation == "renamed_long_ago"
+        )
+        self.assertTrue(drifted.not_in_programme)
+
+
 class DriftTripwire(unittest.TestCase):
     def test_an_unknown_envelope_key_raises(self):
         payload = golden("rejected.json")

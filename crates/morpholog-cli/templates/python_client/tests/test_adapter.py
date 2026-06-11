@@ -32,6 +32,11 @@ if mode == "batch_aborted":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}')
     print("batch aborted at row 2", file=sys.stderr)
     sys.exit(1)
+if mode == "record_argv":
+    with open(os.environ["STUB_ARGV_FILE"], "w") as f:
+        f.write("\\n".join(sys.argv[1:]))
+    print("[]")
+    sys.exit(0)
 raise SystemExit(f"unknown STUB_MODE {mode}")
 """
 
@@ -82,6 +87,27 @@ class AdapterDiscrimination(unittest.TestCase):
             )
         self.assertIn("1 receipt", str(caught.exception))
         self.assertIn("aborted at row 2", str(caught.exception))
+
+    def test_as_of_threads_through_both_claims_reads(self):
+        # The flag lands on the CLI argv exactly when supplied - the
+        # generated client catching up to the binary's pinned --as-of.
+        self._mode("record_argv")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            self.client.claims_named("OfficialCurve", as_of="2026-06-07T12:00:00Z")
+            argv = record.read().split("\n")
+            self.assertIn("--as-of", argv)
+            self.assertEqual(argv[argv.index("--as-of") + 1], "2026-06-07T12:00:00Z")
+            self.assertIn("--named", argv)
+
+            record.seek(0)
+            self.client.claims("OfficialCurve")
+            argv = open(record.name).read().split("\n")
+            self.assertNotIn(
+                "--as-of", argv, "the flag must be absent when as_of is not given"
+            )
 
     def test_submit_is_duck_typed_on_the_request_protocol(self):
         self._mode("rejected_exit_1")
