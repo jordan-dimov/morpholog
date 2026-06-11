@@ -1,7 +1,8 @@
 -- Morpholog v0 PostgreSQL schema.
 --
--- Three tables: claims (admitted state), audit (causal log of committed
--- transformations), outbox (post-commit intents).
+-- Tables: claims (admitted state), audit (causal log of committed
+-- transformations), outbox (post-commit intents), rejections
+-- (operational log of refused proposals).
 --
 -- A claim is an admitted assertion, not objective reality. It is
 -- set-valued: identity is (predicate_name, arguments). The runtime
@@ -29,9 +30,9 @@ CREATE TABLE claims (
 CREATE INDEX claims_asserted_in ON claims (asserted_in);
 
 
--- One row per committed transformation. Failed transformations
--- produce no audit row (they may be written to a separate
--- operational rejection log later, out of v0 scope).
+-- One row per committed transformation. Rejected proposals produce
+-- no audit row - they are recorded in `rejections` below, which is
+-- operational evidence, never part of this legitimacy-grade record.
 CREATE TABLE audit (
     transition_id        uuid         PRIMARY KEY,        -- UUIDv7, app-generated
     transformation_name  text         NOT NULL,
@@ -49,6 +50,36 @@ CREATE TABLE audit (
 );
 
 CREATE INDEX audit_committed_at ON audit (committed_at);
+
+
+-- Operational log of refused proposals. A rejection's transaction
+-- rolls back, so its record is written AFTERWARDS in a separate
+-- autocommit insert: at-most-once (a crash between rollback and
+-- insert loses the record), and never inside the refusing
+-- transaction. The audit table is the legitimacy-grade record;
+-- this one answers the operational question "how often, and on
+-- what grounds, did the rules refuse?" - the substrate for
+-- coverage's `constrained` verdict.
+CREATE TABLE rejections (
+    rejection_id         uuid         PRIMARY KEY,        -- UUIDv7, app-generated
+    transformation_name  text         NOT NULL,
+    arguments            jsonb        NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
+    -- Same codec as audit.actor: tagged EvalValue, v0 always a subject.
+    actor                jsonb        NOT NULL,
+    -- Which kind of rule refused: an invariant over the candidate
+    -- state, a `require` gate, or a `bind` with no candidates.
+    kind                 text         NOT NULL CHECK (kind IN ('invariant', 'require', 'bind')),
+    -- The invariant's name for kind = 'invariant'; the rendered gate
+    -- expression for the gate kinds. Structured at the source, never
+    -- parsed back out of `reason`.
+    rule                 text         NOT NULL,
+    invariant_version    int,                             -- NULL for gate kinds
+    reason               text         NOT NULL,           -- the exact envelope string
+    rejected_at          timestamptz  NOT NULL DEFAULT now()
+);
+
+-- Keyset replay order for coverage, mirroring audit_committed_at.
+CREATE INDEX rejections_rejected_at ON rejections (rejected_at, rejection_id);
 
 
 -- Post-commit intents. Workers poll, deliver at-least-once,
