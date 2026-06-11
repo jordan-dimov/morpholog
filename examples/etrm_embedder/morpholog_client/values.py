@@ -27,15 +27,24 @@ class CodecError(ValueError):
     """A value that cannot cross the wire contract in this direction."""
 
 
+def _expect_str(what: str, value: object) -> str:
+    """The wire carries these kinds as JSON strings, always. Accepting
+    a number here would be coercion, not decoding - ``Decimal(1.1)``
+    smuggles a float in inexactly, and that path must not exist."""
+    if not isinstance(value, str):
+        raise CodecError(f"{what} must arrive as a string: {value!r}")
+    return value
+
+
 def parse_decimal(text: str) -> Decimal:
-    """Wire decimal text -> exact ``Decimal``. The wire shape is already
-    pattern-constrained; parsing is exact by construction."""
-    return Decimal(text)
+    """Wire decimal text -> exact ``Decimal``. String in, exact out;
+    the wire shape is pattern-constrained on top."""
+    return Decimal(_expect_str("a decimal", text))
 
 
 def parse_date(text: str) -> date:
     """Wire civil date (ISO 8601 ``YYYY-MM-DD``) -> ``date``."""
-    return date.fromisoformat(text)
+    return date.fromisoformat(_expect_str("a date", text))
 
 
 def parse_timestamp(text: str) -> datetime:
@@ -47,6 +56,7 @@ def parse_timestamp(text: str) -> datetime:
     truncated: ``datetime`` carries microseconds, and an exact instant
     that cannot be represented exactly should fail loudly.
     """
+    text = _expect_str("a timestamp", text)
     if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
     fraction = re.search(r"\.(\d+)", text)
@@ -113,11 +123,13 @@ def decode_tagged(tagged: object) -> object:
     tag, value = tagged["type"], tagged["value"]
     match tag:
         case "subject":
-            return str(value)
+            return _expect_str("a subject", value)
         case "decimal":
             return parse_decimal(value)
         case "bool":
-            return bool(value)
+            if not isinstance(value, bool):
+                raise CodecError(f"a bool must arrive as a boolean: {value!r}")
+            return value
         case "date":
             return parse_date(value)
         case "timestamp":
@@ -125,14 +137,16 @@ def decode_tagged(tagged: object) -> object:
         case "duration":
             # No exact stdlib representation (timedelta rounds
             # nanoseconds); the ISO text IS the exact value.
-            return str(value)
+            return _expect_str("a duration", value)
         case "quantity":
-            if set(value) != {"amount", "unit"}:
+            if not isinstance(value, dict) or set(value) != {"amount", "unit"}:
                 raise CodecError(f"malformed quantity payload: {value!r}")
             # The bare amount; the unit is declared, not carried, on
             # the named surfaces this client generates models for.
             return parse_decimal(value["amount"])
         case "collection":
+            if not isinstance(value, list):
+                raise CodecError(f"a collection must arrive as an array: {value!r}")
             return [decode_tagged(item) for item in value]
         case _:
             raise CodecError(f"unknown value tag {tag!r}")

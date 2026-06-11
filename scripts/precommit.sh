@@ -126,7 +126,11 @@ else
     elif ! command -v psql >/dev/null 2>&1; then
         echo '  psql not on PATH; skipping the worked-embedder run.'
     else
-        MORPHOLOG_BIN="$(pwd)/target/debug/morpholog" \
+        # Honour CARGO_TARGET_DIR like the rest of the script (python3
+        # is guaranteed on this branch, so cargo metadata is free).
+        TARGET_DIR=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+        MORPHOLOG_BIN="$TARGET_DIR/debug/morpholog" \
             DATABASE_URL="$DATABASE_URL" \
             python3 examples/etrm_embedder/etrm_lifecycle.py >/dev/null
         echo '  worked embedder lifecycle ran end to end.'

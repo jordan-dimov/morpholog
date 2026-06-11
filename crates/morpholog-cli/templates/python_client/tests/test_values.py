@@ -56,6 +56,26 @@ class DecodeTagged(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 values.decode_tagged(bad)
 
+    def test_wrong_payload_types_are_refused_never_coerced(self):
+        # Decoding validates, never coerces: bool("false") is True,
+        # Decimal(1.1) smuggles a float in inexactly, and iterating a
+        # string "collection" iterates its characters - none of those
+        # paths may exist in a drift tripwire.
+        for bad in [
+            {"type": "bool", "value": "false"},
+            {"type": "bool", "value": 1},
+            {"type": "subject", "value": 7},
+            {"type": "decimal", "value": 123},
+            {"type": "decimal", "value": 1.1},
+            {"type": "date", "value": 20260601},
+            {"type": "timestamp", "value": 1750000000},
+            {"type": "duration", "value": 21600},
+            {"type": "quantity", "value": {"amount": 25000, "unit": "USD"}},
+            {"type": "collection", "value": "abc"},
+        ]:
+            with self.assertRaises(values.CodecError, msg=repr(bad)):
+                values.decode_tagged(bad)
+
 
 class EncodeNamed(unittest.TestCase):
     def test_bare_kinds_encode_to_their_wire_shapes(self):
