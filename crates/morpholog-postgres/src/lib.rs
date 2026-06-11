@@ -11,9 +11,9 @@ pub mod testing;
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, CoverageReport, CoverageTracker, Definition, DerivedClaim, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, State, Subject,
-    TraceEntry, TracedProposal, Transformation, TransformationName, Transition, enumerate_derived,
-    predicates_referenced_by_derived, propose, propose_with_trace,
+    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, RejectionReason,
+    State, Subject, TraceEntry, TracedProposal, Transformation, TransformationName, Transition,
+    enumerate_derived, predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -96,7 +96,10 @@ pub enum PgError {
 /// On `Committed`, the database transaction has already been committed:
 /// claims have been mutated, one audit row written, and one outbox row
 /// per emitted intent. On `Rejected`, the transaction has been rolled
-/// back and no governed state has changed.
+/// back and no governed state has changed - and one row has been
+/// recorded in the operational rejection log (`morpholog.rejections`)
+/// after the rollback; a failed log insert surfaces as `Err(PgError)`,
+/// never as a `Rejected` outcome.
 ///
 /// `Serialize` uses serde's internally-tagged representation so the
 /// CLI can emit outcomes directly as JSON with a `status` discriminant.
@@ -122,6 +125,8 @@ pub enum PgProposalOutcome {
 /// the current claims into an in-memory [`State`], calls the existing
 /// synchronous [`propose`] kernel, then either commits the changes
 /// (writing claims, audit, and outbox rows) or rolls back atomically.
+/// A rejection additionally records one row in the operational
+/// rejection log after the rollback (see [`PgProposalOutcome`]).
 ///
 /// External side effects do not run inside this transaction. Outbox rows
 /// are enqueued for post-commit delivery by workers running outside.
@@ -177,7 +182,8 @@ pub async fn propose_against_pg_with_rejection_state(
     let state = load_state(&mut tx, &scope).await?;
     let outcome = propose(transformation, transition, &state, invariants, definitions)?;
     let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
-    let pg_outcome = finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+    let pg_outcome =
+        finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
     Ok((pg_outcome, rejection_state))
 }
 
@@ -216,7 +222,8 @@ pub enum PgTracedOutcome {
 /// Trace preservation contract:
 ///
 /// - **Committed** / **Rejected** kernel outcomes -
-///   `Ok(PgTracedOutcome::Outcome { outcome, trace })`.
+///   `Ok(PgTracedOutcome::Outcome { outcome, trace })`. A rejection
+///   records its rejection-log row exactly as the untraced path does.
 /// - **Kernel error** (`EvalError` raised mid-transformation) -
 ///   `Ok(PgTracedOutcome::KernelErrored { error, trace })`. The
 ///   open SERIALIZABLE transaction is rolled back before returning.
@@ -243,7 +250,7 @@ pub async fn propose_against_pg_with_trace(
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome =
-                finalise_outcome(tx, transformation, transition, invariants, outcome).await?;
+                finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
             Ok(PgTracedOutcome::Outcome { outcome, trace })
         }
         TracedProposal::Errored { error, trace } => {
@@ -260,7 +267,18 @@ pub async fn propose_against_pg_with_trace(
 /// `propose_against_pg` and `propose_against_pg_with_trace`. Takes
 /// the kernel's [`Outcome`], commits or rolls back, and returns
 /// the [`PgProposalOutcome`] the public API exposes.
+///
+/// A rejection is recorded in `morpholog.rejections` AFTER the
+/// rollback, in a separate autocommit insert on `pool` - it cannot
+/// live inside the transaction that refused, because that
+/// transaction rolls back. At-most-once: a crash between rollback
+/// and insert loses the record. Operational evidence only; the
+/// audit table remains the legitimacy-grade record. An insert
+/// failure surfaces as `Err(PgError)` rather than a rejected
+/// envelope - the database is broken, and pretending the refusal
+/// was cleanly recorded would not be honest.
 async fn finalise_outcome(
+    pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
     transformation: &Transformation,
     transition: &Transition,
@@ -270,7 +288,10 @@ async fn finalise_outcome(
     match outcome {
         Outcome::Rejected { reason } => {
             tx.rollback().await.map_err(classify)?;
-            Ok(PgProposalOutcome::Rejected { reason })
+            write_rejection(pool, transformation, transition, &reason).await?;
+            Ok(PgProposalOutcome::Rejected {
+                reason: reason.to_string(),
+            })
         }
         Outcome::Accepted {
             asserted_claims,
@@ -422,6 +443,59 @@ fn compute_load_scope(
 pub struct AuditedInvariantCheck {
     pub name: InvariantName,
     pub version: u32,
+}
+
+/// The `kind` column's vocabulary, shared by the writer below and the
+/// readers (`coverage_replay`'s invariant attribution) so they cannot
+/// drift; the schema's CHECK constraint pins the same three values.
+const REJECTION_KIND_INVARIANT: &str = "invariant";
+const REJECTION_KIND_REQUIRE: &str = "require";
+const REJECTION_KIND_BIND: &str = "bind";
+
+/// Record a refused proposal in `morpholog.rejections`. Runs on the
+/// pool (implicit autocommit transaction) because the refusing
+/// transaction has already rolled back - see `finalise_outcome` for
+/// the at-most-once doctrine. The kind/rule/version columns come
+/// from matching the [`RejectionReason`] variant, never from parsing
+/// the display string.
+async fn write_rejection(
+    pool: &PgPool,
+    transformation: &Transformation,
+    transition: &Transition,
+    reason: &RejectionReason,
+) -> Result<(), PgError> {
+    let (kind, rule, invariant_version): (&str, &str, Option<i64>) = match reason {
+        RejectionReason::Invariant { name, version } => (
+            REJECTION_KIND_INVARIANT,
+            name.as_str(),
+            Some(i64::from(*version)),
+        ),
+        RejectionReason::Require { rendered } => (REJECTION_KIND_REQUIRE, rendered.as_str(), None),
+        RejectionReason::BindNone { rendered } => (REJECTION_KIND_BIND, rendered.as_str(), None),
+    };
+    let args_json: serde_json::Value =
+        serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;
+    let actor_json: serde_json::Value =
+        serde_json::to_value(EvalValue::Subject(transition.actor.clone()))
+            .map_err(PgError::Encoding)?;
+    sqlx::query(
+        "INSERT INTO morpholog.rejections (
+            rejection_id, transformation_name, arguments, actor,
+            kind, rule, invariant_version, reason
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(transformation.name.as_str())
+    .bind(&args_json)
+    .bind(&actor_json)
+    .bind(kind)
+    .bind(rule)
+    .bind(invariant_version)
+    .bind(reason.to_string())
+    .execute(pool)
+    .await
+    .map_err(classify)?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -807,6 +881,90 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
                     retracted_claims: serde_json::from_value(retracted_json)?,
                     emitted_intents: serde_json::from_value(intents_json)?,
                     committed_at,
+                })
+            },
+        )
+        .collect()
+}
+
+/// One row of `morpholog.rejections` decoded into typed runtime
+/// values: who proposed what, and which rule refused it.
+///
+/// Operational evidence, not part of the legitimacy-grade audit
+/// record - written after each rollback, at-most-once. `rule` is the
+/// refusing invariant's name for `kind = "invariant"` and the
+/// rendered gate expression for the gate kinds;
+/// `invariant_version` is `None` for gates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RejectionRow {
+    pub rejection_id: Uuid,
+    pub transformation_name: TransformationName,
+    pub arguments: Vec<EvalValue>,
+    #[serde(with = "morpholog_core::actor_repr")]
+    pub actor: Subject,
+    pub kind: String,
+    pub rule: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invariant_version: Option<i64>,
+    pub reason: String,
+    pub rejected_at: DateTime<Utc>,
+}
+
+/// Return every recorded rejection from `morpholog.rejections`,
+/// ordered by `(rejected_at, rejection_id)` - the same keyset order
+/// coverage replays in.
+pub async fn list_rejection_rows(pool: &PgPool) -> Result<Vec<RejectionRow>, PgError> {
+    type Row = (
+        Uuid,
+        String,
+        serde_json::Value,
+        serde_json::Value,
+        String,
+        String,
+        Option<i64>,
+        String,
+        DateTime<Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT rejection_id, transformation_name, arguments, actor,
+                kind, rule, invariant_version, reason, rejected_at
+         FROM morpholog.rejections
+         ORDER BY rejected_at, rejection_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+
+    rows.into_iter()
+        .map(
+            |(
+                rejection_id,
+                transformation_name,
+                args_json,
+                actor_json,
+                kind,
+                rule,
+                invariant_version,
+                reason,
+                rejected_at,
+            )| {
+                Ok(RejectionRow {
+                    rejection_id,
+                    transformation_name: TransformationName::from(transformation_name),
+                    arguments: serde_json::from_value(args_json)?,
+                    actor: match serde_json::from_value::<EvalValue>(actor_json)? {
+                        EvalValue::Subject(s) => s,
+                        other => {
+                            return Err(PgError::InvalidState(format!(
+                                "rejection actor is not a subject: {other:?}"
+                            )));
+                        }
+                    },
+                    kind,
+                    rule,
+                    invariant_version,
+                    reason,
+                    rejected_at,
                 })
             },
         )
@@ -1761,11 +1919,13 @@ pub enum VerifyOutcome {
     },
 }
 
-/// Replay the audit log through a [`CoverageTracker`] and report,
-/// per invariant of `program`, whether its antecedent ever bound -
-/// the auditor question "which of these rules has ever actually done
-/// work?". See `morpholog_core::coverage` for the verdict semantics
-/// and the committed-history bound that shapes them.
+/// Replay the audit log through a [`CoverageTracker`], then count
+/// the rejection log into it, and report, per invariant of
+/// `program`, whether its antecedent ever bound and whether it ever
+/// refused a real proposal - the auditor questions "which of these
+/// rules has ever actually done work?" and "which has demonstrably
+/// said no?". See `morpholog_core::coverage` for the verdict
+/// semantics and the bounds that shape them.
 ///
 /// One `SERIALIZABLE READ ONLY DEFERRABLE` transaction reads the
 /// whole log: the deferrable mode waits for a safe snapshot and then
@@ -1898,6 +2058,57 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
             break;
         }
     }
+
+    // Second pass: the rejection log, inside the same deferrable
+    // snapshot so refusal counts and committed history describe one
+    // consistent moment. Pure counting - no state folding - but the
+    // same keyset shape, over the index made for it.
+    type RejRow = (Uuid, String, String, String, DateTime<Utc>);
+    let mut rej_cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    loop {
+        let rows: Vec<RejRow> = match &rej_cursor {
+            None => {
+                sqlx::query_as(
+                    "SELECT rejection_id, transformation_name, kind, rule, rejected_at
+                     FROM morpholog.rejections
+                     ORDER BY rejected_at, rejection_id
+                     LIMIT $1",
+                )
+                .bind(CHUNK)
+                .fetch_all(&mut *tx)
+                .await
+            }
+            Some((after_at, after_id)) => {
+                sqlx::query_as(
+                    "SELECT rejection_id, transformation_name, kind, rule, rejected_at
+                     FROM morpholog.rejections
+                     WHERE (rejected_at, rejection_id) > ($2, $3)
+                     ORDER BY rejected_at, rejection_id
+                     LIMIT $1",
+                )
+                .bind(CHUNK)
+                .bind(after_at)
+                .bind(*after_id)
+                .fetch_all(&mut *tx)
+                .await
+            }
+        }
+        .map_err(classify)?;
+        let Some(last) = rows.last() else {
+            break;
+        };
+        rej_cursor = Some((last.4, last.0));
+        let exhausted = (rows.len() as i64) < CHUNK;
+
+        for (rejection_id, transformation_name, kind, rule, _) in rows {
+            let invariant = (kind == REJECTION_KIND_INVARIANT).then_some(rule.as_str());
+            tracker.observe_rejection(invariant, &transformation_name, &rejection_id.to_string());
+        }
+        if exhausted {
+            break;
+        }
+    }
+
     tx.commit().await.map_err(classify)?;
     Ok(tracker.into_report())
 }

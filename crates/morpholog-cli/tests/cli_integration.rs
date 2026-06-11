@@ -35,7 +35,7 @@ async fn reset_db() {
     let pool = PgPool::connect(&database_url())
         .await
         .expect("connect to test DB");
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");
@@ -566,6 +566,70 @@ async fn inspect_audit_returns_one_row_per_committed_transition() {
         rows.as_array().unwrap().len(),
         2,
         "two committed transitions, two audit rows: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
+    reset_db().await;
+
+    // An empty rejection log lists empty and exits zero - listing is
+    // answering, not enforcing.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 0, "empty log: {stdout}");
+
+    // Close the period, then post into it: the require gate refuses
+    // and the refusal is on the record.
+    let (status, ..) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success(), "close_period should commit");
+    let (status, ..) = run_cli(&[
+        "run",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        r#"[
+            {"type":"subject","value":"entry_001"},
+            {"type":"subject","value":"2026-04-15"},
+            {"type":"subject","value":"q1_2026"},
+            {"type":"subject","value":"account_cash"},
+            {"type":"subject","value":"account_revenue"},
+            {"type":"decimal","value":"100"}
+        ]"#,
+    ]);
+    assert!(!status.success(), "posting into a closed period rejects");
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one refusal, one row: {stdout}");
+    let row = &rows[0];
+    assert_eq!(row["transformation_name"], "post_simple_entry");
+    assert_eq!(row["kind"], "require");
+    assert_eq!(
+        row["actor"],
+        serde_json::json!({"type": "subject", "value": "alex"})
+    );
+    assert!(row["rule"].is_string());
+    assert!(
+        row["reason"].as_str().unwrap().contains("require failed"),
+        "the exact envelope reason string is recorded: {row}"
+    );
+    assert!(
+        row.get("invariant_version").is_none(),
+        "gate kinds carry no invariant version and the field is omitted"
     );
 }
 
@@ -2042,6 +2106,16 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
         !stderr.contains("rule at"),
         "no rule-location lines in batch mode; got: {stderr}"
     );
+
+    // The batch's one lawful rejection landed in the rejection log -
+    // batch rows record through the same single site as single runs.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
+    assert!(status.success());
+    let logged: Value = serde_json::from_str(&stdout).unwrap();
+    let logged = logged.as_array().unwrap();
+    assert_eq!(logged.len(), 1, "one rejected row, one log row: {stdout}");
+    assert_eq!(logged[0]["transformation_name"], "post_simple_entry");
+    assert_eq!(logged[0]["actor"]["value"], "jordan");
 }
 
 // --explain-on-reject composes per row: the rejected row's receipt
@@ -2145,8 +2219,12 @@ async fn inspect_coverage_prose_reports_fired_and_never_fired() {
         "declared-but-unused transformations are named; got:\n{stdout}"
     );
     assert!(
-        stdout.contains("rejections never commit"),
-        "the legend states the committed-history bound; got:\n{stdout}"
+        stdout.contains("a floor, not a census"),
+        "the legend states the rejection log's at-most-once bound; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0 recorded rejection(s)"),
+        "the header counts the rejection log; got:\n{stdout}"
     );
 }
 
@@ -2160,6 +2238,7 @@ async fn inspect_coverage_json_carries_the_pinned_field_set() {
     assert!(status.success(), "coverage always exits zero; {stderr}");
     let report: Value = serde_json::from_str(&stdout).expect("coverage --json is JSON");
     assert_eq!(report["transitions_replayed"], 1);
+    assert_eq!(report["rejections_replayed"], 0);
     assert!(report["program"].is_string());
 
     let invariants = report["invariants"].as_array().expect("invariants array");

@@ -24,7 +24,7 @@ async fn test_pool() -> PgPool {
 }
 
 async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
         .execute(pool)
         .await
         .expect("failed to truncate test DB");
@@ -178,4 +178,90 @@ async fn firing_is_counted_per_relevant_transition() {
         Some(close_tid.to_string().as_str()),
         "the close transition must not re-count the balance rule"
     );
+}
+
+// The headline payoff of the rejection log: an always-on prohibition
+// whose enforcement work was structurally invisible in committed
+// history becomes measurable the moment it refuses a real proposal.
+#[tokio::test]
+async fn an_always_on_prohibition_that_refuses_shows_constrained() {
+    use morpholog_surface::parse_program;
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+
+    let source = r#"
+program custody
+
+predicate Held(credit_id: Subject, holder_id: Subject)
+predicate Retired(credit_id: Subject)
+
+invariant retired_is_never_held:
+    not (Retired(c) and Held(c, h))
+
+transformation hold(credit_id, holder_id):
+    admit Held(credit_id, holder_id)
+
+transformation retire(credit_id):
+    admit Retired(credit_id)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+
+    // Sanity: with no history at all, the prohibition is always-on.
+    let report = coverage_replay(&pool, &program).await.unwrap();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "retired_is_never_held")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::AlwaysOn);
+
+    // A held credit commits; retiring it while held is refused.
+    expect_committed(
+        common::propose_pg_with_test_actor(
+            &pool,
+            program.transformation("hold").unwrap(),
+            vec![subj("c1"), subj("h1")],
+            &program.invariants,
+            &program.definitions,
+        )
+        .await
+        .unwrap(),
+    );
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        program.transformation("retire").unwrap(),
+        vec![subj("c1")],
+        &program.invariants,
+        &program.definitions,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+
+    let report = coverage_replay(&pool, &program).await.unwrap();
+    assert_eq!(report.transitions_replayed, 1);
+    assert_eq!(report.rejections_replayed, 1);
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "retired_is_never_held")
+        .unwrap();
+    assert_eq!(
+        inv.verdict,
+        CoverageVerdict::Constrained,
+        "the prohibition's refusal is now visible: {report:?}"
+    );
+    assert_eq!(inv.proposals_refused, 1);
+    assert!(inv.first_refused.is_some());
+
+    let retire = report
+        .transformations
+        .iter()
+        .find(|t| t.transformation == "retire")
+        .unwrap();
+    assert_eq!(retire.transitions, 0);
+    assert_eq!(retire.proposals_refused, 1);
+    assert!(!retire.not_in_programme);
 }

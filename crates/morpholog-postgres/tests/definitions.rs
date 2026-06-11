@@ -65,7 +65,7 @@ async fn test_pool() -> PgPool {
 }
 
 async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
         .execute(pool)
         .await
         .expect("failed to truncate test DB");

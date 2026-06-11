@@ -174,7 +174,7 @@ pub fn explain(program: &Program, transition: &Transition, pre_state: &State) ->
         TracedProposal::Completed {
             outcome: Outcome::Rejected { reason },
             trace,
-        } => verdict_from_rejection(program, &reason, &trace),
+        } => verdict_from_rejection(program, &reason.to_string(), &trace),
     };
 
     Explanation {

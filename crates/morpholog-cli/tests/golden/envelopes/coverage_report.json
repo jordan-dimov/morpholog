@@ -9,20 +9,35 @@
       "verdict": "fired"
     },
     {
+      "first_refused": "r1",
       "invariant": "no_flagged_accounts",
+      "last_refused": "r1",
+      "proposals_refused": 1,
       "transitions_fired": 0,
-      "verdict": "never_fired"
+      "verdict": "constrained"
+    },
+    {
+      "first_refused": "r3",
+      "invariant": "retired_rule",
+      "last_refused": "r3",
+      "not_in_programme": true,
+      "proposals_refused": 1,
+      "transitions_fired": 0,
+      "verdict": "constrained"
     }
   ],
   "program": "envelopes_coverage",
+  "rejections_replayed": 3,
   "transformations": [
     {
+      "proposals_refused": 1,
       "transformation": "open_account",
       "transitions": 0
     },
     {
       "first": "t1",
       "last": "t1",
+      "proposals_refused": 1,
       "transformation": "flag_account",
       "transitions": 1
     },
@@ -30,6 +45,7 @@
       "first": "t2",
       "last": "t2",
       "not_in_programme": true,
+      "proposals_refused": 1,
       "transformation": "renamed_long_ago",
       "transitions": 1
     }

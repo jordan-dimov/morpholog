@@ -277,7 +277,7 @@ pub(crate) fn lower_xor(left: &Prop, right: &Prop) -> Prop {
 /// This is the one place a call's argument-to-parameter translation is
 /// computed; the evaluator, the failure walk, and the missing-claims
 /// walk all build their body context from it.
-fn definition_call_frame(
+pub(crate) fn definition_call_frame(
     def: &Definition,
     args: &[Term],
     ctx: &EvalContext<'_>,

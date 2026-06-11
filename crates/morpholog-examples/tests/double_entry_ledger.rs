@@ -129,7 +129,7 @@ fn unbalanced_entry_rejected_by_invariant() {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(
-        reason.contains("balanced_posted_entry"),
+        reason.to_string().contains("balanced_posted_entry"),
         "got reason: {reason}"
     );
 }
@@ -172,7 +172,10 @@ fn closed_period_rejects_normal_posting() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    assert!(
+        reason.to_string().contains("require"),
+        "got reason: {reason}"
+    );
 }
 
 #[test]
@@ -197,7 +200,10 @@ fn double_close_rejected() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    assert!(
+        reason.to_string().contains("require"),
+        "got reason: {reason}"
+    );
 }
 
 #[test]
@@ -378,5 +384,8 @@ fn cannot_restate_already_restated_entry() {
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("require"), "got reason: {reason}");
+    assert!(
+        reason.to_string().contains("require"),
+        "got reason: {reason}"
+    );
 }

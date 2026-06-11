@@ -280,9 +280,11 @@ fn composite_envelopes_serialize_as_pinned() {
 // so the golden carries the generated invariant's `from` provenance -
 // the one optional field with a special Python mapping (`from` is a
 // Python keyword; the client maps it to `from_clause`). The authored
-// invariant stays never-fired, flag_account is used, open_account is
-// declared-but-unused, and a historical-only name is flagged: every
-// optional field of the shape appears in the golden.
+// invariant is refused once (constrained, with first/last refusal
+// ids), flag_account is used, open_account is declared-but-unused
+// with a gate refusal, and historical-only names are flagged on both
+// the transformation and invariant sides: every optional field of
+// the shape appears in the golden.
 #[test]
 fn coverage_report_serializes_as_pinned() {
     let source = "program envelopes_coverage\n\
@@ -316,6 +318,9 @@ fn coverage_report_serializes_as_pinned() {
     tracker
         .observe(&with_ref, &with_ref, &delta_flag, "t2", "renamed_long_ago")
         .unwrap();
+    tracker.observe_rejection(Some("no_flagged_accounts"), "flag_account", "r1");
+    tracker.observe_rejection(None, "open_account", "r2");
+    tracker.observe_rejection(Some("retired_rule"), "renamed_long_ago", "r3");
     assert_golden("coverage_report.json", &to_value(&tracker.into_report()));
 }
 

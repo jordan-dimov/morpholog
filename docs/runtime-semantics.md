@@ -198,13 +198,32 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 4. Construct CandidateState = Snapshot − Retracted + Asserted.
 5. Evaluate every active invariant against CandidateState.
 6. If any invariant fails: rollback. Nothing commits. No business audit record.
-   No intents. (Failed transformations may be written to an operational
-   rejection log later, outside the governed claim state.)
+   No intents. After the rollback, the refusal is recorded in the
+   operational rejection log (see below).
 7. If all pass: commit claims + audit record + outbox rows in one
    database transaction.
 ```
 
 External side effects fire only after commit, delivered by workers reading the outbox.
+
+**The rejection log is operational evidence, not part of the governed
+claim state.** A refusal's transaction rolls back, so its record cannot
+live inside the transaction that refused: the PG adapter writes one row
+to `morpholog.rejections` in a separate autocommit insert AFTER the
+rollback. That ordering fixes the record's epistemics - at-most-once (a
+crash between rollback and insert loses it), never tamper-grade, never
+consulted by any gate or invariant. The audit log remains the only
+legitimacy-grade record. Each row carries who proposed what and which
+rule refused (kind `invariant`/`require`/`bind` plus the rule name or
+rendered gate expression, taken from the structured rejection reason,
+never parsed back out of the display string). Recording is default-on
+with no flag; a failed insert surfaces as an operational error, not a
+rejected envelope. In-memory `propose()` records nothing (the pure
+kernel does no I/O), and `morpholog explain` records nothing - a
+dry-run diagnosis is not a refused proposal. A refused compensation
+proposal records like any other, under the system actor. Consumers:
+`inspect rejections` lists the rows; `inspect coverage` counts them
+into the `constrained` verdict.
 
 ## Statements: the require / bind_one / let / for quartet
 

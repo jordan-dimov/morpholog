@@ -222,7 +222,7 @@ What is deliberately left open, pending the worked example that forces the shape
 
 - **Argument-level claim selection.** `inspect claims --predicate` (forced by the `examples/etrm_embedder/` worked embedder) reads claims back at predicate granularity; picking one subject's claims out of the result is client-side. A `--where trade=t1`-style filter waits for an example with a book big enough that the predicate-level cut is not enough.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
-- **The remaining `morpholog inspect` output shapes.** The claims shapes (bare and `--named`) are pinned above; `audit`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them.
+- **The remaining `morpholog inspect` output shapes.** The claims shapes (bare and `--named`) are pinned above; `audit`, `rejections`, `outbox`, `derived`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `run` envelope itself is unchanged by that log's existence.)
 The discipline is the same as the rest of Morpholog: ship the contract that an example forces, leave the rest open.
 
 ## The outcome-envelope contract (`schema --result`)

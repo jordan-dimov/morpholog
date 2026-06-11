@@ -197,8 +197,10 @@ class Morpholog:
     def coverage(self) -> envelopes.CoverageReport:
         """Replay the audit log and report which rules have ever
         actually done work - per invariant, whether its condition ever
-        matched anything; per transformation, whether it was ever
-        used. Read-only."""
+        matched anything and whether it ever refused a real proposal
+        (the `constrained` verdict, counted from the operational
+        rejection log); per transformation, whether it was ever used
+        and how often it was refused. Read-only."""
         return envelopes.CoverageReport.from_json(
             self._json(
                 "inspect", "coverage", self.file,

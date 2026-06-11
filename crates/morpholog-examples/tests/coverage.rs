@@ -304,15 +304,123 @@ fn worked_example_shapes_classify_as_documented() {
 #[test]
 fn the_prose_render_carries_verdicts_and_the_legend() {
     let program = parsed();
-    let report = CoverageTracker::new(&program).into_report();
+    let mut tracker = CoverageTracker::new(&program);
+    // The refusal goes to an implication-shaped rule so every verdict
+    // stays represented: ghosts_never_fire stays NEVER FIRED and the
+    // prohibition stays always on.
+    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
+    let report = tracker.into_report();
     let prose = morpholog_core::render_coverage(&report);
     assert!(prose.contains("NEVER FIRED"));
     assert!(prose.contains("always on"));
     assert!(prose.contains("never used"));
+    assert!(prose.contains("CONSTRAINED"));
+    assert!(prose.contains("refused: 1 proposal(s)"));
     assert!(
-        prose.contains("rejections never commit"),
-        "the legend states what committed history cannot show"
+        prose.contains("a floor, not a census"),
+        "the legend states the rejection log's at-most-once bound"
     );
+}
+
+#[test]
+fn a_refusal_beats_fired_and_records_first_and_last_ids() {
+    let program = parsed();
+    let empty = State::from_claims(Vec::new());
+    let mut tracker = CoverageTracker::new(&program);
+    let s1 = State::from_claims(vec![
+        subject_claim("Account", &["a1"]),
+        subject_claim("Flag", &["a1"]),
+    ]);
+    tracker
+        .observe(
+            &s1,
+            &empty,
+            &delta(&["Account", "Flag"]),
+            "t1",
+            "flag_account",
+        )
+        .unwrap();
+    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
+    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r2");
+
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "flagged_accounts_exist")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Constrained);
+    assert_eq!(inv.transitions_fired, 1, "firing stats survive the upgrade");
+    assert_eq!(inv.proposals_refused, 2);
+    assert_eq!(inv.first_refused.as_deref(), Some("r1"));
+    assert_eq!(inv.last_refused.as_deref(), Some("r2"));
+}
+
+// THE headline payoff: an always-on prohibition's enforcement work is
+// invisible in committed history, but the rejection log shows it
+// refusing - the first time such a rule becomes measurable at all.
+#[test]
+fn an_always_on_prohibition_with_a_refusal_is_constrained() {
+    let program = parsed();
+    let mut tracker = CoverageTracker::new(&program);
+    tracker.observe_rejection(Some("no_flag_without_account_ever"), "flag_account", "r1");
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "no_flag_without_account_ever")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Constrained);
+    assert_eq!(inv.proposals_refused, 1);
+    assert_eq!(report.rejections_replayed, 1);
+}
+
+#[test]
+fn a_gate_refusal_counts_for_the_transformation_not_any_invariant() {
+    let program = parsed();
+    let mut tracker = CoverageTracker::new(&program);
+    tracker.observe_rejection(None, "flag_account", "r1");
+    let report = tracker.into_report();
+    assert!(
+        report
+            .invariants
+            .iter()
+            .all(|i| i.verdict != CoverageVerdict::Constrained && i.proposals_refused == 0),
+        "a require/bind refusal belongs to its transformation, not a rule"
+    );
+    let usage = report
+        .transformations
+        .iter()
+        .find(|t| t.transformation == "flag_account")
+        .unwrap();
+    assert_eq!(usage.proposals_refused, 1);
+    assert_eq!(usage.transitions, 0);
+    assert!(!usage.not_in_programme);
+}
+
+#[test]
+fn refusals_naming_undeclared_rules_and_transformations_surface_flagged() {
+    let program = parsed();
+    let mut tracker = CoverageTracker::new(&program);
+    tracker.observe_rejection(Some("retired_rule"), "renamed_long_ago", "r1");
+    let report = tracker.into_report();
+
+    let drifted = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "retired_rule")
+        .expect("a rejection-log-only rule name appears, flagged");
+    assert_eq!(drifted.verdict, CoverageVerdict::Constrained);
+    assert!(drifted.not_in_programme);
+    assert_eq!(drifted.proposals_refused, 1);
+
+    let usage = report
+        .transformations
+        .iter()
+        .find(|t| t.transformation == "renamed_long_ago")
+        .expect("the undeclared transformation appears");
+    assert!(usage.not_in_programme);
+    assert_eq!(usage.proposals_refused, 1);
 }
 
 // REGRESSION (review catch): a pre(...) antecedent's firing
@@ -451,4 +559,127 @@ invariant tautological_guard:
         "the positive call's implication must be collected even though the \
          negative call walked the definition first"
     );
+}
+
+// REGRESSION (review catch): an antecedent extracted from a
+// definition body must be evaluated under the CALL's constraints. A
+// literal argument pins the matching parameter; a claim that matches
+// the raw body but not the call must not count as firing.
+#[test]
+fn a_literal_constrained_define_call_does_not_fire_on_unrelated_claims() {
+    let source = r#"
+program defcall_precision
+
+predicate RiskLevel(case_id: Subject, level: Decimal)
+predicate Reviewed(case_id: Subject)
+
+define reviewed_at(level):
+    RiskLevel(c, level) implies Reviewed(c)
+
+invariant high_risk_is_reviewed:
+    reviewed_at(3)
+
+transformation rate(case_id, level):
+    admit RiskLevel(case_id, level)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+
+    let risk = |case: &str, level: &str| ClaimInstance {
+        predicate: "RiskLevel".into(),
+        args: vec![
+            EvalValue::Subject(Subject::from(case)),
+            EvalValue::Decimal(level.parse().unwrap()),
+        ],
+    };
+    let empty = State::from_claims(vec![]);
+
+    // A level-2 rating matches the definition body's raw antecedent
+    // (RiskLevel(c, level) with level free) but NOT the call
+    // reviewed_at(3) - the invariant has nothing at stake yet.
+    let mut tracker = CoverageTracker::new(&program);
+    let s1 = State::from_claims(vec![risk("case_1", "2")]);
+    tracker
+        .observe(&s1, &empty, &delta(&["RiskLevel"]), "t1", "rate")
+        .unwrap();
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "high_risk_is_reviewed")
+        .unwrap();
+    assert_eq!(
+        inv.verdict,
+        CoverageVerdict::NeverFired,
+        "a claim outside the call's constraint must not fire the rule"
+    );
+
+    // A level-3 rating is what the call asks about: fired.
+    let mut tracker = CoverageTracker::new(&program);
+    let s1 = State::from_claims(vec![risk("case_1", "3")]);
+    tracker
+        .observe(&s1, &empty, &delta(&["RiskLevel"]), "t1", "rate")
+        .unwrap();
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "high_risk_is_reviewed")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Fired);
+    assert_eq!(inv.transitions_fired, 1);
+}
+
+// The call chain composes: an outer define forwards its (literal)
+// argument to an inner define whose body carries the implication.
+// The frames replay outermost-first, so the constraint survives the
+// hop.
+#[test]
+fn a_nested_define_chain_carries_the_call_constraint_through() {
+    let source = r#"
+program defcall_nesting
+
+predicate RiskLevel(case_id: Subject, level: Decimal)
+predicate Reviewed(case_id: Subject)
+
+define reviewed_at(level):
+    RiskLevel(c, level) implies Reviewed(c)
+
+define escalation_policy(threshold):
+    reviewed_at(threshold)
+
+invariant policy_holds:
+    escalation_policy(5)
+
+transformation rate(case_id, level):
+    admit RiskLevel(case_id, level)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+
+    let risk = |case: &str, level: &str| ClaimInstance {
+        predicate: "RiskLevel".into(),
+        args: vec![
+            EvalValue::Subject(Subject::from(case)),
+            EvalValue::Decimal(level.parse().unwrap()),
+        ],
+    };
+    let empty = State::from_claims(vec![]);
+
+    let verdict_for = |level: &str| {
+        let mut tracker = CoverageTracker::new(&program);
+        let s1 = State::from_claims(vec![risk("case_1", level)]);
+        tracker
+            .observe(&s1, &empty, &delta(&["RiskLevel"]), "t1", "rate")
+            .unwrap();
+        let report = tracker.into_report();
+        report
+            .invariants
+            .iter()
+            .find(|i| i.invariant == "policy_holds")
+            .unwrap()
+            .verdict
+    };
+    assert_eq!(verdict_for("4"), CoverageVerdict::NeverFired);
+    assert_eq!(verdict_for("5"), CoverageVerdict::Fired);
 }

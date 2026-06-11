@@ -89,7 +89,7 @@ fn capturing_a_king_is_rejected() {
 
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("exactly_one_black_king"),
+            reason.to_string().contains("exactly_one_black_king"),
             "expected the king-count invariant to reject the capture, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -180,7 +180,7 @@ fn piece_count_drift_is_rejected() {
 
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("piece_count_matches_board"),
+            reason.to_string().contains("piece_count_matches_board"),
             "expected the census invariant to reject the drift, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -250,7 +250,9 @@ fn dropping_the_piece_counter_is_rejected() {
 
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("board_with_pieces_has_a_counter"),
+            reason
+                .to_string()
+                .contains("board_with_pieces_has_a_counter"),
             "expected the presence invariant to reject the dropped counter, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -353,7 +355,9 @@ fn bishop_changing_square_color_is_rejected() {
 
     match outcome {
         Outcome::Rejected { reason } => assert!(
-            reason.contains("bishops_on_opposite_square_colors"),
+            reason
+                .to_string()
+                .contains("bishops_on_opposite_square_colors"),
             "expected the parity invariant to reject the colour change, got: {reason}"
         ),
         Outcome::Accepted { .. } => {
@@ -489,7 +493,7 @@ fn transition_invariant_catches_missing_move_count_bump() {
     match outcome {
         Outcome::Rejected { reason } => {
             assert!(
-                reason.contains("move_count_strictly_increases"),
+                reason.to_string().contains("move_count_strictly_increases"),
                 "expected rejection to name the transition invariant, got: {reason}"
             );
         }

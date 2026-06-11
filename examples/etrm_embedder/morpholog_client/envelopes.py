@@ -392,10 +392,12 @@ class OutboxUpdate:
 
 @dataclass(frozen=True)
 class InvariantCoverage:
-    """Coverage of one invariant: did its condition ever match? The
-    verdicts are bounded by committed history - `fired`, `never_fired`
-    (its condition never matched anything), `always_on` (a prohibition
-    whose work is invisible in committed history)."""
+    """Coverage of one invariant: did its condition ever match, and
+    did it ever refuse a real proposal? The verdicts, strongest
+    first - `constrained` (refused at least one proposal, per the
+    operational rejection log; a floor, not a census), `fired`,
+    `never_fired` (its condition never matched anything), `always_on`
+    (a prohibition with no recorded refusals yet)."""
 
     invariant: str
     verdict: str
@@ -403,6 +405,10 @@ class InvariantCoverage:
     from_clause: str | None = None
     first_fired: str | None = None
     last_fired: str | None = None
+    proposals_refused: int = 0
+    first_refused: str | None = None
+    last_refused: str | None = None
+    not_in_programme: bool = False
 
     @classmethod
     def from_json(cls, payload: object) -> "InvariantCoverage":
@@ -410,7 +416,15 @@ class InvariantCoverage:
             "invariant coverage",
             payload,
             {"invariant", "verdict", "transitions_fired"},
-            {"from", "first_fired", "last_fired"},
+            {
+                "from",
+                "first_fired",
+                "last_fired",
+                "proposals_refused",
+                "first_refused",
+                "last_refused",
+                "not_in_programme",
+            },
         )
         return cls(
             invariant=data["invariant"],
@@ -421,6 +435,10 @@ class InvariantCoverage:
             from_clause=data.get("from"),
             first_fired=data.get("first_fired"),
             last_fired=data.get("last_fired"),
+            proposals_refused=data.get("proposals_refused", 0),
+            first_refused=data.get("first_refused"),
+            last_refused=data.get("last_refused"),
+            not_in_programme=data.get("not_in_programme", False),
         )
 
 
@@ -430,6 +448,7 @@ class TransformationUsage:
     transitions: int
     first: str | None = None
     last: str | None = None
+    proposals_refused: int = 0
     not_in_programme: bool = False
 
     @classmethod
@@ -438,24 +457,27 @@ class TransformationUsage:
             "transformation usage",
             payload,
             {"transformation", "transitions"},
-            {"first", "last", "not_in_programme"},
+            {"first", "last", "proposals_refused", "not_in_programme"},
         )
         return cls(
             transformation=data["transformation"],
             transitions=data["transitions"],
             first=data.get("first"),
             last=data.get("last"),
+            proposals_refused=data.get("proposals_refused", 0),
             not_in_programme=data.get("not_in_programme", False),
         )
 
 
 @dataclass(frozen=True)
 class CoverageReport:
-    """Which rules have ever actually done work, over replayed
-    committed history."""
+    """Which rules have ever actually done work - and which have
+    demonstrably refused - over replayed committed history plus the
+    operational rejection log."""
 
     program: str
     transitions_replayed: int
+    rejections_replayed: int
     invariants: list
     transformations: list
 
@@ -464,11 +486,18 @@ class CoverageReport:
         data = _strict(
             "coverage report",
             payload,
-            {"program", "transitions_replayed", "invariants", "transformations"},
+            {
+                "program",
+                "transitions_replayed",
+                "rejections_replayed",
+                "invariants",
+                "transformations",
+            },
         )
         return cls(
             program=data["program"],
             transitions_replayed=data["transitions_replayed"],
+            rejections_replayed=data["rejections_replayed"],
             invariants=[InvariantCoverage.from_json(i) for i in data["invariants"]],
             transformations=[
                 TransformationUsage.from_json(t) for t in data["transformations"]

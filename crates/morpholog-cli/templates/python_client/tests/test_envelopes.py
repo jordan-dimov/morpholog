@@ -122,9 +122,12 @@ class Coverage(unittest.TestCase):
     def test_the_coverage_report_round_trips_the_golden(self):
         report = envelopes.CoverageReport.from_json(golden("coverage_report.json"))
         self.assertEqual(report.transitions_replayed, 2)
+        self.assertEqual(report.rejections_replayed, 3)
         fired = report.invariants[0]
         self.assertEqual(fired.verdict, "fired")
         self.assertEqual(fired.first_fired, "t1")
+        self.assertEqual(fired.proposals_refused, 0)
+        self.assertIsNone(fired.first_refused)
         # The wire field is `from` (the report's name); Python maps it
         # to `from_clause` because `from` is a keyword - the one
         # mapping wrinkle this golden exists to defend.
@@ -132,12 +135,24 @@ class Coverage(unittest.TestCase):
             fired.from_clause,
             "predicate CurrentRef, current pointer by (account_id)",
         )
-        never = next(i for i in report.invariants if i.verdict == "never_fired")
-        self.assertIsNone(never.from_clause)
+        constrained = next(
+            i for i in report.invariants if i.invariant == "no_flagged_accounts"
+        )
+        self.assertEqual(constrained.verdict, "constrained")
+        self.assertEqual(constrained.proposals_refused, 1)
+        self.assertEqual(constrained.first_refused, "r1")
+        self.assertEqual(constrained.last_refused, "r1")
+        self.assertIsNone(constrained.from_clause)
+        self.assertFalse(constrained.not_in_programme)
+        retired = next(
+            i for i in report.invariants if i.invariant == "retired_rule"
+        )
+        self.assertTrue(retired.not_in_programme)
         unused = next(
             t for t in report.transformations if t.transformation == "open_account"
         )
         self.assertEqual(unused.transitions, 0)
+        self.assertEqual(unused.proposals_refused, 1)
         self.assertFalse(unused.not_in_programme)
         drifted = next(
             t for t in report.transformations if t.transformation == "renamed_long_ago"

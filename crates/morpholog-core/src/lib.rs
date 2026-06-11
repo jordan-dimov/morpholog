@@ -70,8 +70,8 @@ pub use ir::{
 };
 pub use lint::{Lint, lints};
 pub use propose::{
-    BindOneOutcome, ForIterationTrace, Outcome, RequireOutcome, TraceEntry, TracedProposal,
-    Transition, propose, propose_with_trace,
+    BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, TraceEntry,
+    TracedProposal, Transition, propose, propose_with_trace,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
@@ -1147,12 +1147,43 @@ mod tests {
             panic!("expected Rejected");
         };
         assert!(
-            reason.contains("bind_one failed"),
+            reason.to_string().contains("bind_one failed"),
             "reason should start with bind_one failed: {reason}"
         );
         assert!(
-            reason.contains("Policy(policy_id, limit)"),
+            reason.to_string().contains("Policy(policy_id, limit)"),
             "reason should name the expression: {reason}"
+        );
+    }
+
+    /// The Display strings ARE the wire format: every envelope, trace
+    /// entry, and rejection-log row renders the reason through Display,
+    /// so these three strings are pinned byte-exactly. Changing one is
+    /// a contract change, not a wording tweak.
+    #[test]
+    fn rejection_reason_display_strings_are_pinned() {
+        assert_eq!(
+            RejectionReason::Invariant {
+                name: "at_most_one".into(),
+                version: 3,
+            }
+            .to_string(),
+            "invariant `at_most_one` violated",
+            "Display omits the version on purpose"
+        );
+        assert_eq!(
+            RejectionReason::Require {
+                rendered: "Approved(doc)".into(),
+            }
+            .to_string(),
+            "require failed: Approved(doc) did not hold over pre-state"
+        );
+        assert_eq!(
+            RejectionReason::BindNone {
+                rendered: "Policy(policy_id, limit)".into(),
+            }
+            .to_string(),
+            "bind_one failed: Policy(policy_id, limit) matched no candidates"
         );
     }
 
