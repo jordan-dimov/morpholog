@@ -444,7 +444,7 @@ class AuditRow:
             transition_id=data["transition_id"],
             transformation_name=data["transformation_name"],
             arguments=[values.decode_tagged(a) for a in data["arguments"]],
-            actor=values.decode_tagged(data["actor"]),
+            actor=str(values.decode_tagged(data["actor"])),
             invariant_epoch=data["invariant_epoch"],
             invariants_checked=[
                 AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
@@ -481,7 +481,7 @@ class AuditRowNamed:
             transition_id=data["transition_id"],
             transformation_name=data["transformation_name"],
             arguments=[values.decode_tagged(a) for a in data["arguments"]],
-            actor=values.decode_tagged(data["actor"]),
+            actor=str(values.decode_tagged(data["actor"])),
             invariant_epoch=data["invariant_epoch"],
             invariants_checked=[
                 AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
