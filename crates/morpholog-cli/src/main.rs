@@ -129,6 +129,45 @@ enum Command {
     /// claims each record holds that the other does not and exits one.
     /// Read-only; an empty database is trivially consistent.
     Verify(DatabaseArgs),
+
+    /// Generate a typed client for a `.morph` programme, so an embedder
+    /// speaks exactly the contract this binary speaks - the same
+    /// argument that embeds the schema in `init`. The client is a
+    /// projection of the programme, like the schema and the envelopes;
+    /// generating it here is what keeps it from being hand-maintained
+    /// downstream, where it drifts.
+    Generate {
+        #[command(subcommand)]
+        what: GenerateCmd,
+    },
+}
+
+/// Client-generation targets. One language per worked embedder that
+/// forces it; `python-client` is forced by Glasshouse and the worked
+/// embedder example converging on the same hand-written layer.
+#[derive(Subcommand, Debug)]
+pub(crate) enum GenerateCmd {
+    /// Emit a complete, self-contained, stdlib-only Python client
+    /// package (`morpholog_client/`) for the programme: value codecs,
+    /// envelope models, the subprocess adapter, a typed request model
+    /// per transformation, a typed read model per predicate, and a
+    /// typed payload per intent - stamped with the canonical model
+    /// hash and this binary's version. Deterministic: the same binary
+    /// and programme produce byte-identical output, so drift-checking
+    /// is regenerate-and-diff.
+    #[command(name = "python-client")]
+    PythonClient(GeneratePythonClientArgs),
+}
+
+/// Arguments for `generate python-client`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GeneratePythonClientArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    /// Directory to write the `morpholog_client/` package under.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
 }
 
 /// The connection-string flag every database-backed subcommand
@@ -680,6 +719,9 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
+        Command::Generate {
+            what: GenerateCmd::PythonClient(args),
+        } => commands::generate::run(&args),
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
     }
