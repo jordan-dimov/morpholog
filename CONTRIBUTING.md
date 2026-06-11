@@ -52,6 +52,7 @@ cargo audit
 cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support --all-targets --locked
 DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1
+# when python3 is available:
 python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 ```
 
