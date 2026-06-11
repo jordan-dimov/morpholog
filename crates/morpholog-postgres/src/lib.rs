@@ -828,7 +828,7 @@ pub async fn load_scoped_state(
 /// Page size for every keyset read over the replay order - the audit
 /// tail, coverage's two passes, and the chunked replays. One chunk in
 /// memory at a time; hardcoded until a real history forces tuning.
-const REPLAY_CHUNK: i64 = 1024;
+pub const REPLAY_CHUNK: i64 = 1024;
 
 /// The audit table's full column tuple, shared by the fetch-all
 /// helper and the keyset page.
@@ -985,6 +985,74 @@ pub async fn list_audit_rows_page(
     }
     .map_err(classify)?;
     rows.into_iter().map(decode_audit_row).collect()
+}
+
+/// A streaming audit tail: the lossless-resume recipe with its
+/// load-bearing order baked in, so a caller cannot get it wrong.
+/// [`begin_audit_tail`] resolves the resume cursor, computes the
+/// horizon BEFORE the snapshot, then opens one `REPEATABLE READ READ
+/// ONLY` transaction; [`AuditTail::next_page`] pages to the horizon
+/// inside that snapshot. Rows whose writers were in flight when the
+/// horizon was computed are withheld for the next tail, never
+/// skipped - see [`audit_resume_watermark`] for the proof.
+pub struct AuditTail<'p> {
+    tx: Transaction<'p, Postgres>,
+    horizon: DateTime<Utc>,
+    cursor: Option<(DateTime<Utc>, Uuid)>,
+    done: bool,
+}
+
+/// Open an audit tail, optionally resuming strictly after a
+/// previously seen transition (unknown ids are
+/// [`PgError::TransitionNotFound`], never a silent restart from
+/// zero).
+pub async fn begin_audit_tail(
+    pool: &PgPool,
+    after: Option<Uuid>,
+) -> Result<AuditTail<'_>, PgError> {
+    let cursor = match after {
+        Some(tid) => {
+            let mut conn = pool.acquire().await.map_err(classify)?;
+            Some(audit_cursor_for(&mut conn, tid).await?)
+        }
+        None => None,
+    };
+    // Horizon strictly before the snapshot - the ordering the
+    // lossless-resume proof rests on.
+    let horizon = audit_resume_watermark(pool).await?;
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+    Ok(AuditTail {
+        tx,
+        horizon,
+        cursor,
+        done: false,
+    })
+}
+
+impl AuditTail<'_> {
+    /// The next page of transitions, in `(committed_at,
+    /// transition_id)` order; empty when the tail has reached the
+    /// horizon. One page sits in memory at a time.
+    pub async fn next_page(&mut self) -> Result<Vec<AuditRow>, PgError> {
+        if self.done {
+            return Ok(Vec::new());
+        }
+        let page =
+            list_audit_rows_page(&mut self.tx, self.cursor, Some(self.horizon), REPLAY_CHUNK)
+                .await?;
+        match page.last() {
+            Some(last) => {
+                self.cursor = Some((last.committed_at, last.transition_id));
+                self.done = (page.len() as i64) < REPLAY_CHUNK;
+            }
+            None => self.done = true,
+        }
+        Ok(page)
+    }
 }
 
 /// Resolve a transition id to the `(committed_at, transition_id)`

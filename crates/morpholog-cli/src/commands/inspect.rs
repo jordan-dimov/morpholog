@@ -5,7 +5,7 @@
 use anyhow::{Context, anyhow, bail};
 use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
-    PgPool, list_audit_rows, list_claims, list_claims_at, list_claims_at_for_predicates,
+    PgPool, begin_audit_tail, list_claims, list_claims_at, list_claims_at_for_predicates,
     list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
     list_rejection_rows, resolve_transition_at_or_before,
 };
@@ -90,13 +90,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                 None => print_json(&claims),
             }
         }
-        Inspect::Audit(args) => {
-            let pool = connect(&args.database_url).await?;
-            let rows = list_audit_rows(&pool)
-                .await
-                .context("list_audit_rows failed")?;
-            print_json(&rows)
-        }
+        Inspect::Audit(args) => inspect_audit(args).await,
         Inspect::Rejections(args) => {
             let pool = connect(&args.database_url).await?;
             let rows = list_rejection_rows(&pool)
@@ -118,6 +112,74 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         Inspect::Controls(args) => inspect_controls(args),
         Inspect::Coverage(args) => inspect_coverage(args).await,
     }
+}
+
+/// Run `inspect audit`: stream committed transitions as NDJSON, one
+/// per line, in `(committed_at, transition_id)` order - the blessed
+/// tail for downstream projectors.
+///
+/// The lossless-resume recipe (cursor, then horizon, then snapshot)
+/// lives in the adapter's `begin_audit_tail`, with its load-bearing
+/// order baked in; this command is the recipe's stdout. Rows whose
+/// writers were in flight when the horizon was computed are withheld
+/// for the next invocation, never skipped. Constant memory: one page
+/// in flight at a time, one line out per transition.
+async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
+    // With `--named`, the programme is the authority - parsed and
+    // validated before any database work (the claims-arm contract).
+    let named_program = match &args.named {
+        Some(file) => {
+            let parsed = parse_or_exit(file)?;
+            validate_or_exit(&parsed);
+            Some((parsed.program, file))
+        }
+        None => None,
+    };
+    let pool = connect(&args.db.database_url).await?;
+    let mut tail = begin_audit_tail(&pool, args.after)
+        .await
+        .context("opening the audit tail")?;
+    loop {
+        let page = tail.next_page().await.context("reading an audit page")?;
+        if page.is_empty() {
+            break;
+        }
+        for row in page {
+            let line = match &named_program {
+                Some((program, file)) => audit_row_named_json(program, file, &row)?,
+                None => serde_json::to_value(&row)?,
+            };
+            println!("{}", serde_json::to_string(&line)?);
+        }
+    }
+    Ok(())
+}
+
+/// Serialize one audit row with its asserted/retracted claim arrays
+/// decoded by declared field name. Everything else - `arguments`,
+/// `emitted_intents`, the scalar fields - serialises exactly as the
+/// tagged row does: transformation arguments and intent payloads
+/// belong to different vocabularies (parameter kinds, not predicate
+/// declarations), and the contract states the asymmetry rather than
+/// half-inventing a second decoder.
+fn audit_row_named_json(
+    program: &morpholog_core::Program,
+    file: &std::path::Path,
+    row: &morpholog_postgres::AuditRow,
+) -> anyhow::Result<serde_json::Value> {
+    let mut value = serde_json::to_value(row)?;
+    let Some(obj) = value.as_object_mut() else {
+        bail!("an AuditRow serialises as an object");
+    };
+    obj.insert(
+        "asserted_claims".to_string(),
+        serde_json::Value::Array(decode_claims_named(program, file, &row.asserted_claims)?),
+    );
+    obj.insert(
+        "retracted_claims".to_string(),
+        serde_json::Value::Array(decode_claims_named(program, file, &row.retracted_claims)?),
+    );
+    Ok(value)
 }
 
 /// Run `inspect coverage <file.morph>`: replay the audit log through

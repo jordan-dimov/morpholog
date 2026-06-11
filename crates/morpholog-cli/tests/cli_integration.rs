@@ -511,7 +511,7 @@ async fn inspect_claims_as_of_timestamp_resolves_to_the_prior_state() {
     // verbatim also pins that the boundary is inclusive: at the very
     // instant of a commit, that commit's state is what you get.
     let (_s, stdout, _e) = run_cli(&["inspect", "audit"]);
-    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let rows = ndjson(&stdout);
     let first_committed_at = rows[0]["committed_at"]
         .as_str()
         .expect("audit row carries committed_at")
@@ -553,19 +553,122 @@ async fn as_of_timestamp_before_all_commits_errors() {
     );
 }
 
+/// Parse NDJSON output: one JSON value per non-empty line.
+fn ndjson(stdout: &str) -> Vec<Value> {
+    stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("each line is one JSON value"))
+        .collect()
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn inspect_audit_returns_one_row_per_committed_transition() {
+async fn inspect_audit_streams_one_ndjson_line_per_committed_transition() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
     post_balanced_entry("entry_002", 200);
 
     let (status, stdout, _stderr) = run_cli(&["inspect", "audit"]);
     assert!(status.success());
-    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let rows = ndjson(&stdout);
     assert_eq!(
-        rows.as_array().unwrap().len(),
+        rows.len(),
         2,
-        "two committed transitions, two audit rows: {stdout}"
+        "two committed transitions, two lines: {stdout}"
+    );
+    // Every line is a full audit row: the tagged arrays and the
+    // scalar fields ride together.
+    for row in &rows {
+        assert!(row["transition_id"].is_string());
+        assert!(row["asserted_claims"].is_array());
+        assert!(row["committed_at"].is_string());
+        assert_eq!(row["actor"]["type"], "subject");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_audit_after_resumes_strictly_after_the_cursor() {
+    reset_db().await;
+    let t1 = post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 200);
+    post_balanced_entry("entry_003", 300);
+
+    // Resuming from the first transition yields exactly the later
+    // two, in order; the cursor row itself is excluded.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "audit", "--after", &t1.to_string()]);
+    assert!(status.success());
+    let rows = ndjson(&stdout);
+    assert_eq!(rows.len(), 2, "strictly after the cursor: {stdout}");
+
+    // Resuming from the last line's id is an empty tail, exit 0 -
+    // the poll loop's steady state.
+    let last_id = rows[1]["transition_id"].as_str().unwrap().to_string();
+    let (status, stdout, _stderr) = run_cli(&["inspect", "audit", "--after", &last_id]);
+    assert!(status.success(), "an empty tail is not an error");
+    assert!(stdout.trim().is_empty(), "empty tail, empty stdout");
+
+    // An unknown cursor is an error naming the id - never a silent
+    // restart from zero.
+    let unknown = uuid::Uuid::now_v7().to_string();
+    let (status, _stdout, stderr) = run_cli(&["inspect", "audit", "--after", &unknown]);
+    assert!(!status.success());
+    assert!(
+        stderr.contains(&unknown),
+        "the error names the unknown id; got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_audit_named_decodes_claims_and_leaves_arguments_tagged() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "audit", "--named", &ledger_morph()]);
+    assert!(status.success());
+    let rows = ndjson(&stdout);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    // Claims decode by declared field name...
+    let asserted = row["asserted_claims"].as_array().unwrap();
+    assert!(!asserted.is_empty());
+    assert!(
+        asserted.iter().all(|c| c["args"].is_object()),
+        "named claims carry field-keyed args: {row}"
+    );
+    // ...while transformation arguments stay tagged - a different
+    // vocabulary, deliberately not half-decoded.
+    let arguments = row["arguments"].as_array().unwrap();
+    assert!(
+        arguments.iter().all(|a| a["type"].is_string()),
+        "arguments stay tagged: {row}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_audit_named_skew_is_a_hard_error_naming_both_sides() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+
+    // A programme that does not declare the ledger vocabulary: the
+    // named decode must refuse with the skew error, not skip rows.
+    let other = std::env::temp_dir().join("audit_named_skew.morph");
+    std::fs::write(
+        &other,
+        "program unrelated
+
+predicate Solo(only_id: Subject)
+
+         transformation touch(only_id):
+    admit Solo(only_id)
+",
+    )
+    .unwrap();
+    let (status, _stdout, stderr) =
+        run_cli(&["inspect", "audit", "--named", other.to_str().unwrap()]);
+    assert!(!status.success(), "skew must be a hard error");
+    assert!(
+        stderr.contains("skew"),
+        "the error names the skew; got: {stderr}"
     );
 }
 

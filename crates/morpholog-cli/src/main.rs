@@ -327,14 +327,17 @@ pub(crate) enum Inspect {
     /// narrows either read to the named predicates - the targeted query
     /// an embedder uses to read governed state back.
     Claims(InspectClaimsArgs),
-    /// List every committed audit row, in commit order. `--as-of` does
-    /// not apply: the audit table IS the chronological record. For a
-    /// time-bounded view, query `morpholog.audit` directly with the
-    /// same `(committed_at, transition_id) <= target` shape
-    /// `reconstruct_state_at` uses - not `transition_id <= T` alone,
-    /// which selects the wrong rows when commit order and UUID order
-    /// diverge under concurrent commits.
-    Audit(DatabaseArgs),
+    /// Stream committed transitions as NDJSON, one per line, in
+    /// commit order - the blessed tail for downstream projectors.
+    /// `--after <transition_id>` resumes strictly after a previously
+    /// seen transition (lossless: rows whose writers were still in
+    /// flight are withheld until the next invocation, never skipped).
+    /// `--named <file.morph>` decodes the asserted/retracted claim
+    /// arrays by declared field name under that programme's
+    /// authority; `arguments` and `emitted_intents` stay tagged.
+    /// `--as-of` does not apply: the audit table IS the
+    /// chronological record.
+    Audit(InspectAuditArgs),
     /// List recorded rejections, in rejection order: who proposed
     /// what, and which rule refused it. Operational evidence, written
     /// after each rollback at-most-once - the audit table remains the
@@ -394,6 +397,28 @@ pub(crate) struct InspectCoverageArgs {
     /// Emit the structured JSON form instead of prose.
     #[arg(long)]
     pub(crate) json: bool,
+}
+
+/// Arguments for `inspect audit`: the connection flag, an optional
+/// resume cursor, and the optional named decode.
+#[derive(clap::Args, Debug)]
+pub(crate) struct InspectAuditArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// Resume strictly after this transition id (the cursor a
+    /// previous invocation's last line carried). Unknown ids are an
+    /// error, never a silent restart from zero.
+    #[arg(long, value_name = "TRANSITION_ID")]
+    pub(crate) after: Option<uuid::Uuid>,
+
+    /// Decode each transition's asserted/retracted claims by declared
+    /// field name under this `.morph` programme's authority. A
+    /// returned claim whose predicate is undeclared, or whose arity
+    /// disagrees with its declaration, is a hard error naming both
+    /// sides.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) named: Option<PathBuf>,
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
@@ -782,7 +807,7 @@ mod tests {
         };
         match what {
             Inspect::Claims(args) => args.db.database_url,
-            Inspect::Audit(args) => args.database_url,
+            Inspect::Audit(args) => args.db.database_url,
             Inspect::Rejections(args) => args.database_url,
             Inspect::Outbox(args) => args.db.database_url,
             Inspect::Coverage(args) => args.db.database_url,
@@ -1029,9 +1054,10 @@ mod tests {
     }
 
     /// `inspect audit --as-of <uuid>` is rejected by clap because
-    /// `Inspect::Audit` takes `DatabaseArgs` directly, which does not declare
-    /// the `--as-of` flag. Pins the design decision that as-of does
-    /// not apply to the audit subcommand.
+    /// `InspectAuditArgs` does not declare the `--as-of` flag. Pins
+    /// the design decision that as-of does not apply to the audit
+    /// subcommand: the audit table IS the chronological record, and
+    /// the tail's coordinate is `--after`.
     #[test]
     fn inspect_audit_rejects_as_of_flag() {
         let err = Cli::try_parse_from([
