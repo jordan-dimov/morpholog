@@ -28,6 +28,7 @@ pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod outbox;
 pub(crate) mod propose;
+pub(crate) mod refresh;
 pub(crate) mod schema;
 pub(crate) mod verify;
 

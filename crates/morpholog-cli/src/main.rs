@@ -158,6 +158,16 @@ enum Command {
         what: GenerateCmd,
     },
 
+    /// Refresh a kernel-computed read model in the database.
+    ///
+    /// Out-of-band, never on the commit path: an explicit operator step
+    /// (run after a batch, or on a schedule), so read-model freshness
+    /// stays operational rather than slowing every governed transition.
+    Refresh {
+        #[command(subcommand)]
+        what: RefreshCmd,
+    },
+
     /// Drive outbox delivery from a shell or script.
     ///
     /// Lets any external deliverer participate in the lease protocol
@@ -168,6 +178,28 @@ enum Command {
         #[command(subcommand)]
         what: OutboxCmd,
     },
+}
+
+/// Read-model refresh targets. `derived` recomputes every derived claim
+/// with the kernel and publishes it to the `morpholog_read` projection
+/// that derived SQL views read.
+#[derive(Subcommand, Debug)]
+pub(crate) enum RefreshCmd {
+    /// Recompute all derived claims and publish a new generation of the
+    /// `morpholog_read` read model (exact kernel output, never governed
+    /// state). Derived SQL views read this projection; it is as fresh as
+    /// the last refresh.
+    Derived(RefreshDerivedArgs),
+}
+
+/// Arguments for `refresh derived`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct RefreshDerivedArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 /// Client-generation targets. One language per worked embedder that
@@ -854,6 +886,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Generate {
             what: GenerateCmd::Views(args),
         } => commands::generate_views::run(&args),
+        Command::Refresh {
+            what: RefreshCmd::Derived(args),
+        } => commands::refresh::run(&args).await,
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
     }
@@ -1763,5 +1798,32 @@ mod tests {
         };
         assert_eq!(args.schema, "analytics");
         assert_eq!(args.out.as_deref(), Some(std::path::Path::new("views.sql")));
+    }
+
+    #[test]
+    fn refresh_derived_takes_a_file_and_database_url() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "refresh",
+            "derived",
+            "model.morph",
+            "--database-url",
+            "postgres:///morpholog_dev",
+        ]);
+        let Command::Refresh {
+            what: RefreshCmd::Derived(args),
+        } = cli.command
+        else {
+            panic!("expected refresh derived, got {:?}", cli.command);
+        };
+        assert_eq!(args.file, std::path::Path::new("model.morph"));
+        assert_eq!(args.db.database_url, "postgres:///morpholog_dev");
+    }
+
+    #[test]
+    fn refresh_derived_requires_a_file() {
+        let err = Cli::try_parse_from(["morpholog", "refresh", "derived"])
+            .expect_err("missing file should error");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 }
