@@ -127,7 +127,8 @@ impl SourceMap {
     /// Resolve a lint to the source span it concerns.
     pub fn span_for_lint(&self, lint: &Lint) -> Option<Span> {
         match lint {
-            Lint::GateVsInvariant { invariant, .. } => {
+            Lint::GateVsInvariant { invariant, .. }
+            | Lint::UnsuppliedAntecedent { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
         }
