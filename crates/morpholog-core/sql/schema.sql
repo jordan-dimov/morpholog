@@ -146,3 +146,63 @@ CREATE INDEX outbox_due_pending ON outbox (next_attempt_at)
 CREATE INDEX outbox_pending_intent_next_attempt
     ON outbox (intent_type, next_attempt_at)
     WHERE status = 'pending';
+
+
+-- Kernel-computed read model (NOT governed state).
+--
+-- `morpholog_read` holds derived claims materialised by `morpholog
+-- refresh derived`: the exact output of the kernel's `enumerate_derived`,
+-- written here so BI tools can read computed state in plain SQL. These
+-- rows are a discardable, refreshable PROJECTION, never evidence: the
+-- proposal kernel, invariant evaluation, and value lookups never read
+-- this schema. SQL is a projection of kernel-produced values, not a
+-- second evaluator - the same principle as the base-predicate views,
+-- whose interpreter-produced source is `morpholog.claims`.
+--
+-- The projection is GENERATION-based: a refresh builds a new generation
+-- (its own `refresh_id`) without touching the live one, then flips a
+-- single-row active pointer. Readers stay on the prior generation until
+-- the flip commits, so a refresh never blocks or half-updates the read
+-- surface, and the heavy bulk insert is decoupled from the instant
+-- pointer swap.
+CREATE SCHEMA IF NOT EXISTS morpholog_read;
+
+-- `morpholog_read` is a discardable, separately-droppable cache, not
+-- covered by `init`'s day-zero guard (which only checks `morpholog`), so
+-- its tables are created idempotently: re-running this script over a
+-- lingering cache (e.g. after dropping only `morpholog`) must not fail.
+--
+-- One row per refresh generation (steady state: one, the active one).
+-- Freshness is OPERATIONAL metadata: which model produced it, when, and
+-- the audit high-water it reflects. (Deliberately not modelled as
+-- governed claims - this is a read cache.)
+CREATE TABLE IF NOT EXISTS morpholog_read.derived_refreshes (
+    refresh_id      uuid        PRIMARY KEY,
+    model_hash      text        NOT NULL,
+    refreshed_at    timestamptz NOT NULL,
+    source_highwater_transition_id uuid,
+    source_highwater_committed_at  timestamptz,
+    derived_claim_count bigint   NOT NULL
+);
+
+-- The single active generation. A refresh upserts this one row to flip
+-- which generation readers and derived views see.
+CREATE TABLE IF NOT EXISTS morpholog_read.derived_active (
+    singleton  boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    refresh_id uuid    NOT NULL REFERENCES morpholog_read.derived_refreshes (refresh_id)
+);
+
+-- The materialised rows, partitioned by generation. `arguments` is the
+-- kernel's positional value array, tagged-JSONB exactly as
+-- `morpholog.claims.arguments` - so the exact computed value is preserved
+-- and the (future) derived-view layer reuses the base-predicate
+-- extractors unchanged. The PK leads with `refresh_id` so a derived view
+-- filters by the active generation then predicate.
+CREATE TABLE IF NOT EXISTS morpholog_read.derived_claims (
+    refresh_id     uuid  NOT NULL
+                         REFERENCES morpholog_read.derived_refreshes (refresh_id)
+                         ON DELETE CASCADE,
+    predicate_name text  NOT NULL,
+    arguments      jsonb NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
+    PRIMARY KEY (refresh_id, predicate_name, arguments)
+);

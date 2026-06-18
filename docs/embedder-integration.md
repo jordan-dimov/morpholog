@@ -275,7 +275,24 @@ What an embedder needs to know to consume it:
 - **Precision.** `timestamptz`/`interval` are microsecond-resolution; a Morpholog timestamp/duration can carry nanoseconds. The typed columns truncate below a microsecond; `_morpholog_arguments` always holds the exact source, so read it when sub-microsecond exactness matters.
 - **Applying and evolving.** Apply the whole script in one shot - it is transactional, so a failure rolls back rather than leaving a half-built surface. Pipe through `psql -v ON_ERROR_STOP=1` in deployment or CI: without it `psql` continues past a failed statement and exits `0`, so the shell sees success even though the transaction rolled back; `ON_ERROR_STOP=1` makes the shell exit code match the SQL outcome. Across model versions, **appending a predicate field is a compatible `CREATE OR REPLACE`** (the new column appends at the end); **renaming, removing, reordering, or retyping a field is not** - that needs a manual view migration or a `DROP VIEW` first, because `CREATE OR REPLACE VIEW` forbids changing an existing column's name, position, or type.
 - **The catalogue and stale views.** `morpholog_views._morpholog_catalog` carries the programme name, the model hash (the *same* `MODEL_HASH` the Python client stamps - pin CI to it), and the predicate→view inventory. The script never drops anything, so a predicate removed between versions leaves its old view behind; the catalogue is the current intended set, and every generated view carries a `COMMENT ON VIEW` ownership marker, so a consumer can find views no longer in the catalogue. (An explicit `--prune` is deferred.)
-- **Base predicates only.** Derived-claim predicates are computed on demand, not materialized, so they get no view; read them via `morpholog inspect derived`.
+- **Base predicates only.** Derived-claim predicates are computed on demand by the kernel. To read them as SQL, materialise them first with `refresh derived` (below); the base-view generator does not project them.
+
+## The derived read model (`refresh derived`)
+
+Base views project admitted claims. Derived claims are *computed* - so rather than recompute them in SQL (which could not bit-match the kernel's exact decimal/time arithmetic), the kernel computes them and writes the exact result into a read model that SQL can project. SQL is never a second evaluator.
+
+```bash
+morpholog refresh derived <file.morph>   # reads --database-url / $DATABASE_URL
+```
+
+recomputes every derived claim with the kernel and publishes a new generation into the `morpholog_read` schema - the third namespace alongside governed `morpholog` and the `morpholog_views` BI surface. What an embedder needs to know:
+
+- **Out-of-band, by design.** Refresh is never part of `propose` - run it after a batch import or on a schedule (e.g. cron, or after `propose --batch`). Keeping it off the commit path is deliberate: read-model freshness is operational, not part of the governed transition.
+- **As of the last refresh.** The projection reflects state as of the audit high-water recorded at refresh time; it is stale until the next refresh. The kernel's `morpholog inspect derived <file> <Name>` remains the authoritative, always-live read (and the only one that takes `--as-of`). Treat `morpholog_read` as a fast cache, `inspect derived` as ground truth.
+- **Exact, not approximate.** Rows store the kernel's exact computed values as tagged JSONB (the same shape as `morpholog.claims`), so a derived `Decimal`, `Quantity`, or `Duration` is the kernel's value, not a SQL re-derivation.
+- **Never governed state.** Nothing in `propose`, invariant checking, or `value` lookups reads `morpholog_read`. It is a discardable projection: drop and rebuild it freely.
+- **Generation-safe for readers.** A refresh builds a new generation and flips a single-row active pointer; in-flight readers stay on the prior generation until the swap commits, and a failed refresh leaves the previous projection intact. Read the active generation by joining `morpholog_read.derived_claims` to `morpholog_read.derived_active` on `refresh_id` (the forthcoming derived views wrap exactly this).
+- **Scope.** Full refresh, exact, single-threaded - sized for operational stores. Partitioned, incremental, and parallel refresh are deferred; the summary reports source/derived counts and per-phase timings so you can see the cost.
 
 ## Disciplines on the manifest (additive)
 

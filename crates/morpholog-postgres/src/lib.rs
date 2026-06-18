@@ -21,7 +21,8 @@ use morpholog_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Re-export of `sqlx::PgPool` so downstream crates can take the
@@ -1952,6 +1953,183 @@ pub async fn list_derived(
     let state = State::from_claims(claims);
     let rows = enumerate_derived(derived, &state, definitions)?;
     Ok(rows)
+}
+
+/// The outcome of [`refresh_derived`]: what was written, the audit point
+/// the projection reflects, and per-phase timings. Surfaced by
+/// `morpholog refresh derived` so an operator sees the cost of a refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshSummary {
+    pub refresh_id: Uuid,
+    pub model_hash: String,
+    pub derived_predicate_count: usize,
+    pub source_claim_count: usize,
+    pub derived_claim_count: usize,
+    pub source_highwater_transition_id: Option<Uuid>,
+    pub source_highwater_committed_at: Option<DateTime<Utc>>,
+    pub read: Duration,
+    pub compute: Duration,
+    pub write: Duration,
+}
+
+/// Recompute every derived claim with the kernel and publish a new
+/// generation of the `morpholog_read` projection. The exact
+/// `enumerate_derived` output is stored as tagged-JSONB rows, byte-shaped
+/// like `morpholog.claims` - SQL never recomputes a derived value, it
+/// only stores what the kernel produced. A read model, never governed
+/// state: nothing in `propose`, invariant evaluation, or value lookups
+/// reads `morpholog_read`.
+///
+/// Three phases keep the long part (the kernel compute) outside any
+/// transaction:
+///  - **read** (short `REPEATABLE READ` snapshot): the audit high-water
+///    then the scoped claims, one snapshot - so the projection is exactly
+///    "as of `source_highwater`" and the recorded freshness never
+///    overclaims.
+///  - **compute** (no transaction open): the sync kernel builds the rows.
+///  - **write** (one short transaction): insert a new generation
+///    (`refresh_id`), bulk-load its rows, flip the single-row active
+///    pointer, and drop the prior generation. Readers stay on the prior
+///    generation until this commits; a failure rolls back, leaving it
+///    intact.
+///
+/// Full refresh, single-threaded: cost scales with the loaded claims,
+/// intermediate domain matches, and emitted rows. Good for operational
+/// stores; incremental and partitioned refresh are deliberately deferred.
+pub async fn refresh_derived(
+    pool: &PgPool,
+    program: &Program,
+    model_hash: &str,
+) -> Result<RefreshSummary, PgError> {
+    let definitions = &program.definitions;
+    let deriveds = &program.derived_claims;
+
+    let footprint: Vec<String> = deriveds
+        .iter()
+        .flat_map(|d| predicates_referenced_by_derived(d, definitions))
+        .map(|p| p.to_string())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Phase: read. A short snapshot - high-water before the claim read, in
+    // one REPEATABLE READ transaction - then released before the compute.
+    let read_start = Instant::now();
+    let mut read_tx = pool.begin().await.map_err(classify)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *read_tx)
+        .await
+        .map_err(classify)?;
+    let highwater: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT transition_id, committed_at FROM morpholog.audit
+         ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
+    )
+    .fetch_optional(&mut *read_tx)
+    .await
+    .map_err(classify)?;
+    let claim_rows: Vec<(String, serde_json::Value)> = if footprint.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT predicate_name, arguments FROM morpholog.claims
+             WHERE predicate_name = ANY($1)",
+        )
+        .bind(&footprint)
+        .fetch_all(&mut *read_tx)
+        .await
+        .map_err(classify)?
+    };
+    read_tx.commit().await.map_err(classify)?;
+    let hw_tid = highwater.map(|(tid, _)| tid);
+    let hw_at = highwater.map(|(_, at)| at);
+    let source_claim_count = claim_rows.len();
+    let read = read_start.elapsed();
+
+    // Phase: compute. The sync kernel - the sole evaluator - runs with no
+    // transaction held.
+    let compute_start = Instant::now();
+    let state = State::from_claims(decode_claim_rows(claim_rows)?);
+    let mut rows: Vec<ClaimInstance> = Vec::new();
+    for derived in deriveds {
+        rows.extend(enumerate_derived(derived, &state, definitions)?);
+    }
+    let compute = compute_start.elapsed();
+
+    // Phase: write. Build the new generation, flip the active pointer, drop
+    // the old generation - one short transaction, no kernel work.
+    let write_start = Instant::now();
+    let refresh_id = Uuid::now_v7();
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query(
+        "INSERT INTO morpholog_read.derived_refreshes
+            (refresh_id, model_hash, refreshed_at,
+             source_highwater_transition_id, source_highwater_committed_at,
+             derived_claim_count)
+         VALUES ($1, $2, now(), $3, $4, $5)",
+    )
+    .bind(refresh_id)
+    .bind(model_hash)
+    .bind(hw_tid)
+    .bind(hw_at)
+    .bind(rows.len() as i64)
+    .execute(&mut *tx)
+    .await
+    .map_err(classify)?;
+
+    // Bulk insert in one statement (UNNEST of parallel arrays) rather than
+    // a round-trip per row. COPY is the next step if a profile demands it.
+    if !rows.is_empty() {
+        let predicates: Vec<String> = rows.iter().map(|r| r.predicate.to_string()).collect();
+        let arguments: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| serde_json::to_value(&r.args))
+            .collect::<Result<_, _>>()?;
+        sqlx::query(
+            "INSERT INTO morpholog_read.derived_claims (refresh_id, predicate_name, arguments)
+             SELECT $1, p, a FROM UNNEST($2::text[], $3::jsonb[]) AS t(p, a)",
+        )
+        .bind(refresh_id)
+        .bind(&predicates)
+        .bind(&arguments)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+    }
+
+    // Flip the single-row active pointer, then drop every other generation
+    // (cascading its rows). The just-published generation is now the only
+    // one. Safe under MVCC: a reader mid-query keeps its snapshot of the
+    // old generation.
+    sqlx::query(
+        "INSERT INTO morpholog_read.derived_active (singleton, refresh_id)
+         VALUES (true, $1)
+         ON CONFLICT (singleton) DO UPDATE SET refresh_id = EXCLUDED.refresh_id",
+    )
+    .bind(refresh_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(classify)?;
+    sqlx::query("DELETE FROM morpholog_read.derived_refreshes WHERE refresh_id <> $1")
+        .bind(refresh_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+
+    tx.commit().await.map_err(classify)?;
+    let write = write_start.elapsed();
+
+    Ok(RefreshSummary {
+        refresh_id,
+        model_hash: model_hash.to_string(),
+        derived_predicate_count: deriveds.len(),
+        source_claim_count,
+        derived_claim_count: rows.len(),
+        source_highwater_transition_id: hw_tid,
+        source_highwater_committed_at: hw_at,
+        read,
+        compute,
+        write,
+    })
 }
 
 // ===========================================================================
