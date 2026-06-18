@@ -97,13 +97,12 @@ impl std::fmt::Display for ViewRefusal {
                 f,
                 "{owner}: `{name}` exceeds PostgreSQL's 63-byte identifier limit; rename it"
             ),
-            ViewRefusal::ReservedKeyword { owner, name } => write!(
-                f,
-                "{owner}: `{name}` is a SQL reserved word; rename the field"
-            ),
+            ViewRefusal::ReservedKeyword { owner, name } => {
+                write!(f, "{owner}: `{name}` is a SQL reserved word; rename it")
+            }
             ViewRefusal::ReservedPrefix { owner, name } => write!(
                 f,
-                "{owner}: `{name}` uses the reserved `_morpholog_` prefix; rename the field"
+                "{owner}: `{name}` uses the reserved `_morpholog_` prefix; rename it"
             ),
             ViewRefusal::ViewNameCollision { generated, sources } => write!(
                 f,
@@ -336,6 +335,39 @@ fn is_safe_lower_ident(s: &str) -> bool {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// Push every identifier refusal for `name` under `owner`. Applied
+/// identically to a preserved field name and to a generated view name -
+/// so a predicate named `Order` is refused exactly as a field named
+/// `order` would be, and consumers never have to quote a generated name.
+fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) {
+    if name.starts_with(MORPHOLOG_PREFIX) {
+        refusals.push(ViewRefusal::ReservedPrefix {
+            owner,
+            name: name.to_string(),
+        });
+        return;
+    }
+    if !is_safe_lower_ident(name) {
+        refusals.push(ViewRefusal::InvalidIdentifier {
+            owner,
+            name: name.to_string(),
+        });
+        return;
+    }
+    if name.len() > MAX_IDENT_BYTES {
+        refusals.push(ViewRefusal::IdentifierTooLong {
+            owner: owner.clone(),
+            name: name.to_string(),
+        });
+    }
+    if SQL_KEYWORDS.contains(&name.to_ascii_lowercase().as_str()) {
+        refusals.push(ViewRefusal::ReservedKeyword {
+            owner,
+            name: name.to_string(),
+        });
+    }
+}
+
 /// Double-quote a SQL identifier, doubling any embedded quote. Every
 /// identifier in the generated script is quoted, even safe ones, so the
 /// renderer never depends on PostgreSQL's case-folding.
@@ -348,6 +380,17 @@ fn quote_ident(s: &str) -> String {
 /// comment body - goes through here.
 fn quote_literal(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Make a value safe to interpolate into a `--` line comment. A `--`
+/// comment runs to end of line, so a newline in the value would break
+/// out of it - and since `render_views` is public and takes an arbitrary
+/// `model_hash` (and a `Program.name` the kernel does not SQL-validate),
+/// a newline could inject text after the comment. Escape CR and LF.
+fn comment_text(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
 }
 
 /// Render the atomic `CREATE VIEW` script for `program`'s BASE predicates
@@ -399,43 +442,25 @@ fn sweep(schema: &str, base: &[&PredicateDecl]) -> Vec<ViewRefusal> {
     }
 
     for predicate in base {
-        let owner = format!("predicate `{}`", predicate.name);
         for arg in &predicate.args {
-            let field_owner = format!("{owner} field `{}`", arg.name);
-            if arg.name.starts_with(MORPHOLOG_PREFIX) {
-                refusals.push(ViewRefusal::ReservedPrefix {
-                    owner: owner.clone(),
-                    name: arg.name.clone(),
-                });
-                continue;
-            }
-            if !is_safe_lower_ident(&arg.name) {
-                refusals.push(ViewRefusal::InvalidIdentifier {
-                    owner: owner.clone(),
-                    name: arg.name.clone(),
-                });
-                continue;
-            }
-            if SQL_KEYWORDS.contains(&arg.name.to_ascii_lowercase().as_str()) {
-                refusals.push(ViewRefusal::ReservedKeyword {
-                    owner: owner.clone(),
-                    name: arg.name.clone(),
-                });
-            }
-            if arg.name.len() > MAX_IDENT_BYTES {
-                refusals.push(ViewRefusal::IdentifierTooLong {
-                    owner: field_owner,
-                    name: arg.name.clone(),
-                });
-            }
+            check_identifier(
+                format!("predicate `{}` field `{}`", predicate.name, arg.name),
+                &arg.name,
+                &mut refusals,
+            );
         }
+        // The generated view name gets the SAME rules as a field: a
+        // predicate named `Order`, `User`, or `Select` would otherwise
+        // emit a reserved-word view, forcing consumers to quote it -
+        // against the unquoted-read contract. Length and the reserved
+        // `_morpholog_` namespace (which protects `_morpholog_catalog`)
+        // are covered by the same helper.
         let view = snake_case(predicate.name.as_str());
-        if view.len() > MAX_IDENT_BYTES {
-            refusals.push(ViewRefusal::IdentifierTooLong {
-                owner: format!("{owner} (view name)"),
-                name: view,
-            });
-        }
+        check_identifier(
+            format!("predicate `{}` (view name `{view}`)", predicate.name),
+            &view,
+            &mut refusals,
+        );
     }
 
     // snake_case is many-to-one, and Morpholog's duplicate check is on
@@ -468,8 +493,8 @@ fn render(program: &str, schema: &str, model_hash: &str, base: &[&PredicateDecl]
         out,
         "-- Generated by `morpholog generate views` - do not edit."
     );
-    let _ = writeln!(out, "-- programme: {program}");
-    let _ = writeln!(out, "-- model hash: {model_hash}");
+    let _ = writeln!(out, "-- programme: {}", comment_text(program));
+    let _ = writeln!(out, "-- model hash: {}", comment_text(model_hash));
     out.push('\n');
     out.push_str("BEGIN;\n\n");
     let _ = writeln!(out, "CREATE SCHEMA IF NOT EXISTS {};", quote_ident(schema));
@@ -890,5 +915,52 @@ mod tests {
         // A refusal returns Err - there is no String to leak.
         let found = refusals(MIXED, "0bad");
         assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn keyword_view_names_are_refused() {
+        // A predicate named `Order` or `User` snakes to a reserved word;
+        // refuse it so consumers never have to quote the generated view.
+        let src = "program kwviews\n\
+            predicate Order(id: Subject)\n\
+            predicate User(id: Subject)\n\
+            transformation t(id):\n    admit Order(id)\n";
+        let found = refusals(src, "morpholog_views");
+        assert!(found.iter().any(|r| matches!(
+            r,
+            ViewRefusal::ReservedKeyword { name, .. } if name == "order"
+        )));
+        assert!(found.iter().any(|r| matches!(
+            r,
+            ViewRefusal::ReservedKeyword { name, .. } if name == "user"
+        )));
+    }
+
+    #[test]
+    fn morpholog_prefixed_view_name_is_refused() {
+        // A predicate whose snake_case enters the `_morpholog_` namespace
+        // would collide with `_morpholog_catalog`; refuse it. Exercised
+        // via the sweep directly - the surface grammar may not permit such
+        // a predicate name.
+        let p = decl("_morphologThing", &[("id", PredicateArgKind::Subject)]);
+        let found = sweep("morpholog_views", &[&p]);
+        assert!(found.iter().any(|r| matches!(
+            r,
+            ViewRefusal::ReservedPrefix { name, .. } if name == "_morpholog_thing"
+        )));
+    }
+
+    #[test]
+    fn header_values_cannot_break_out_of_the_comment() {
+        // render() is reachable with an arbitrary programme name / hash
+        // through the public API; a newline must not escape the `--`
+        // header comment and inject SQL after it.
+        let sql = render("evil\nDROP TABLE x;", "morpholog_views", "sha256:a\nb", &[]);
+        assert!(
+            !sql.contains("\nDROP TABLE x;"),
+            "a newline escaped the header comment: {sql}"
+        );
+        assert!(sql.contains("evil\\nDROP TABLE x;"));
+        assert!(sql.contains("sha256:a\\nb"));
     }
 }
