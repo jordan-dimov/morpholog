@@ -15,7 +15,9 @@ use std::collections::BTreeSet;
 
 use crate::definitions::DefinitionIndex;
 use crate::disciplines::append_only_predicates;
-use crate::ir::{Discipline, PredicateName, Program, Prop, Term, ValueExpr};
+use crate::ir::{
+    Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Term, ValueExpr,
+};
 
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +41,18 @@ pub enum Lint {
         append_only: String,
         pointer: String,
     },
+
+    /// An authored invariant whose antecedent the current programme
+    /// cannot satisfy on a fresh ledger, because it depends on
+    /// predicates no transformation admits. `missing` lists those
+    /// predicates (collectively the cause - for an `or`, every branch is
+    /// unsupplied; for an `and`, each is a mandatory conjunct). A hint,
+    /// not a proof of a dead rule: persisted or historically admitted
+    /// claims may still match.
+    UnsuppliedAntecedent {
+        invariant: String,
+        missing: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for Lint {
@@ -59,13 +73,35 @@ impl std::fmt::Display for Lint {
                  deliberately; otherwise the check belongs in the admitting \
                  transformation's gate"
             ),
+            Lint::UnsuppliedAntecedent { invariant, missing } => {
+                let names = missing
+                    .iter()
+                    .map(|m| format!("`{m}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "invariant `{invariant}` references predicates the \
+                     current programme never admits in an implication \
+                     antecedent: {names}. On a fresh ledger that \
+                     implication is vacuous; persisted or historically \
+                     admitted claims may still match it, so this is a \
+                     hint - keep them if forward-declared or supplied by \
+                     migration, otherwise check for a typo or a dropped \
+                     transformation"
+                )
+            }
         }
     }
 }
 
 /// Collect every lint finding for a programme. Pure and deterministic:
-/// invariants in declaration order, implications in body order.
+/// one pass over invariants in declaration order, each invariant's
+/// findings emitted before the next invariant's. Within one invariant,
+/// gate findings precede the unsupplied-antecedent finding; ordering by
+/// sub-expression position awaits the node-identified IR.
 pub fn lints(program: &Program) -> Vec<Lint> {
+    let definitions = DefinitionIndex::new(&program.definitions);
     let append_only = append_only_predicates(program);
     let pointers: BTreeSet<PredicateName> = program
         .predicates
@@ -77,11 +113,9 @@ pub fn lints(program: &Program) -> Vec<Lint> {
         })
         .map(|d| d.name.clone())
         .collect();
-    if append_only.is_empty() || pointers.is_empty() {
-        return Vec::new();
-    }
+    let declared = crate::analysis::declared_supplier_predicates(program);
+    let do_gate = !append_only.is_empty() && !pointers.is_empty();
 
-    let definitions = DefinitionIndex::new(&program.definitions);
     let mut out = Vec::new();
     for inv in &program.invariants {
         let mut implications = Vec::new();
@@ -93,35 +127,91 @@ pub fn lints(program: &Program) -> Vec<Lint> {
             &mut Vec::new(),
             &mut implications,
         );
-        for implication in implications {
-            let mut antecedent_refs = BTreeSet::new();
-            positive_claims(
-                implication.antecedent,
-                true,
+        if do_gate {
+            gate_vs_invariant_findings(
+                inv,
+                &implications,
+                &append_only,
+                &pointers,
                 definitions,
-                &mut BTreeSet::new(),
-                &mut antecedent_refs,
+                &mut out,
             );
-            let mut consequent_refs = BTreeSet::new();
-            positive_claims(
-                implication.consequent,
-                true,
-                definitions,
-                &mut BTreeSet::new(),
-                &mut consequent_refs,
-            );
-            for a in antecedent_refs.iter().filter(|p| append_only.contains(*p)) {
-                for q in consequent_refs.iter().filter(|p| pointers.contains(*p)) {
-                    out.push(Lint::GateVsInvariant {
-                        invariant: inv.name.to_string(),
-                        append_only: a.to_string(),
-                        pointer: q.to_string(),
-                    });
-                }
-            }
+        }
+        // A generated discipline invariant is machinery the author cannot
+        // see in source, so it gets no unsupplied-antecedent hint.
+        if inv.origin == InvariantOrigin::Authored {
+            unsupplied_antecedent_findings(inv, &implications, &declared, definitions, &mut out);
         }
     }
     out
+}
+
+/// The revocation-rewrites-history shape: an antecedent positively
+/// referencing an append-only predicate, with a consequent positively
+/// requiring a current-pointer predicate.
+fn gate_vs_invariant_findings(
+    inv: &Invariant,
+    implications: &[CollectedImplication<'_>],
+    append_only: &BTreeSet<PredicateName>,
+    pointers: &BTreeSet<PredicateName>,
+    definitions: DefinitionIndex<'_>,
+    out: &mut Vec<Lint>,
+) {
+    for implication in implications {
+        let mut antecedent_refs = BTreeSet::new();
+        positive_claims(
+            implication.antecedent,
+            true,
+            definitions,
+            &mut BTreeSet::new(),
+            &mut antecedent_refs,
+        );
+        let mut consequent_refs = BTreeSet::new();
+        positive_claims(
+            implication.consequent,
+            true,
+            definitions,
+            &mut BTreeSet::new(),
+            &mut consequent_refs,
+        );
+        for a in antecedent_refs.iter().filter(|p| append_only.contains(*p)) {
+            for q in consequent_refs.iter().filter(|p| pointers.contains(*p)) {
+                out.push(Lint::GateVsInvariant {
+                    invariant: inv.name.to_string(),
+                    append_only: a.to_string(),
+                    pointer: q.to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// An implication whose antecedent the current programme cannot satisfy
+/// on a fresh ledger, because it depends on predicates no transformation
+/// admits. One finding per invariant, naming only the predicates that
+/// genuinely force the result, deduped across its implications.
+fn unsupplied_antecedent_findings(
+    inv: &Invariant,
+    implications: &[CollectedImplication<'_>],
+    declared: &BTreeSet<PredicateName>,
+    definitions: DefinitionIndex<'_>,
+    out: &mut Vec<Lint>,
+) {
+    let mut missing = BTreeSet::new();
+    for implication in implications {
+        if let Some(blockers) =
+            crate::analysis::undeclared_blockers(implication.antecedent, declared, definitions)
+        {
+            missing.extend(blockers);
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    out.push(Lint::UnsuppliedAntecedent {
+        invariant: inv.name.to_string(),
+        missing: missing.iter().map(ToString::to_string).collect(),
+    });
 }
 
 /// One `Defined` call traversed on the way to a collected

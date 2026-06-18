@@ -324,6 +324,136 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
     }
 }
 
+/// The predicates the current programme can admit into state: those
+/// some transformation asserts. The scope is what the *source file* can
+/// put into the candidate state an invariant checks against, not what
+/// state may already hold - persisted, imported, or historically
+/// admitted claims can populate a predicate outside this set, so its
+/// absence here is an authoring signal, not a proof of emptiness.
+///
+/// Derived claims are excluded on purpose: they are read-side
+/// projections, never enumerated into candidate state, so a predicate
+/// produced only as a derived claim has no admitted supplier.
+pub(crate) fn declared_supplier_predicates(program: &Program) -> BTreeSet<PredicateName> {
+    let mut out = BTreeSet::new();
+    for t in &program.transformations {
+        for s in &t.body {
+            collect_asserted(s, &mut out);
+        }
+    }
+    out
+}
+
+/// Every predicate a statement asserts (descending into `For` bodies).
+fn collect_asserted(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
+    match stmt {
+        Stmt::Assert(claim) => {
+            out.insert(claim.predicate.clone());
+        }
+        Stmt::For { body, .. } => {
+            for s in body {
+                collect_asserted(s, out);
+            }
+        }
+        Stmt::Require(_)
+        | Stmt::BindOne(_)
+        | Stmt::Let { .. }
+        | Stmt::LetNewSubject { .. }
+        | Stmt::Retract { .. }
+        | Stmt::Emit(_) => {}
+    }
+}
+
+/// The predicates with no declared supplier that prevent `prop` from
+/// binding on a fresh ledger, or `None` if it could bind there. A
+/// blocker is a predicate the antecedent genuinely requires - a
+/// mandatory conjunct, or every branch of a disjunction - that the
+/// current programme never admits. The result names only predicates
+/// that actually force the answer, so a diagnostic built from it points
+/// at a true cause, not every undeclared predicate in the tree.
+///
+/// "On a fresh ledger" is the honest scope: a predicate with no supplier
+/// is empty against an empty state the programme alone fills, but says
+/// nothing about state already persisted. Negation, implication,
+/// `forall`, and value comparisons stay satisfiable here, so this looks
+/// at predicate positions only.
+pub(crate) fn undeclared_blockers(
+    prop: &Prop,
+    declared: &BTreeSet<PredicateName>,
+    definitions: DefinitionIndex<'_>,
+) -> Option<BTreeSet<PredicateName>> {
+    undeclared_blockers_inner(prop, declared, definitions, &mut BTreeSet::new())
+}
+
+fn undeclared_blockers_inner(
+    prop: &Prop,
+    declared: &BTreeSet<PredicateName>,
+    definitions: DefinitionIndex<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+) -> Option<BTreeSet<PredicateName>> {
+    match prop {
+        Prop::Claim { predicate, .. } => {
+            if declared.contains(predicate) {
+                None
+            } else {
+                Some(BTreeSet::from([predicate.clone()]))
+            }
+        }
+        Prop::Defined { name, .. } => {
+            // Recursion-stack guard; a call blocks iff its body does.
+            if seen.insert(name.clone()) {
+                let blockers = match definitions.get(name) {
+                    Some(def) => undeclared_blockers_inner(&def.body, declared, definitions, seen),
+                    None => None,
+                };
+                seen.remove(name);
+                blockers
+            } else {
+                None
+            }
+        }
+        // A conjunction is blocked if any conjunct is; only the blocked
+        // conjuncts are the cause.
+        Prop::And(props) => {
+            let mut blockers = BTreeSet::new();
+            for p in props {
+                if let Some(b) = undeclared_blockers_inner(p, declared, definitions, seen) {
+                    blockers.extend(b);
+                }
+            }
+            (!blockers.is_empty()).then_some(blockers)
+        }
+        // A disjunction binds if any branch can; it is blocked only when
+        // every branch is, and then all of them are the cause.
+        Prop::Or(props) => {
+            let mut blockers = BTreeSet::new();
+            for p in props {
+                match undeclared_blockers_inner(p, declared, definitions, seen) {
+                    Some(b) => blockers.extend(b),
+                    None => return None,
+                }
+            }
+            (!blockers.is_empty()).then_some(blockers)
+        }
+        Prop::Xor(left, right) => {
+            let l = undeclared_blockers_inner(left, declared, definitions, seen)?;
+            let mut blockers = undeclared_blockers_inner(right, declared, definitions, seen)?;
+            blockers.extend(l);
+            Some(blockers)
+        }
+        Prop::Exists { body, .. } | Prop::Pre(body) => {
+            undeclared_blockers_inner(body, declared, definitions, seen)
+        }
+        Prop::Not(_)
+        | Prop::Implies { .. }
+        | Prop::Forall { .. }
+        | Prop::Eq(_, _)
+        | Prop::Neq(_, _)
+        | Prop::Compare { .. }
+        | Prop::In(_, _) => None,
+    }
+}
+
 // ============================================================
 // Per-transformation argument-kind analysis: the embedder-facing
 // input contract.
@@ -950,5 +1080,118 @@ impl<'a> ParamCollector<'a> {
                 self.observe(name, decl_arg.kind.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod supplier_tests {
+    use super::*;
+    use crate::ir::DerivedClaim;
+    use crate::ir_builder::{assert_, claim, program, transformation};
+
+    // A predicate produced only as a derived claim is read-side, never
+    // admitted into the candidate state invariants check, so it is not
+    // an admitted supplier. (An invariant referencing it is rejected as
+    // undeclared before lints run, so the lint never observes this - but
+    // the supplier set must still not pretend it can be admitted.)
+    #[test]
+    fn a_derived_only_predicate_is_not_an_admitted_supplier() {
+        let prog = program("p")
+            .transformations(vec![transformation(
+                "capture",
+                vec![],
+                vec![assert_("Trade", vec![])],
+            )])
+            .derived_claims(vec![DerivedClaim {
+                predicate: "TradeTotal".into(),
+                keys: vec![],
+                values: vec![],
+                domain: claim("Trade", vec![]),
+            }])
+            .build();
+        let suppliers = declared_supplier_predicates(&prog);
+        assert!(suppliers.contains(&PredicateName::from("Trade")));
+        assert!(!suppliers.contains(&PredicateName::from("TradeTotal")));
+    }
+}
+
+#[cfg(test)]
+mod blocker_tests {
+    use super::*;
+    use crate::ir::Prop;
+    use crate::ir_builder::{and, claim, exists, forall, implies, not, or, pre, value_of, xor};
+
+    fn pset(names: &[&str]) -> BTreeSet<PredicateName> {
+        names.iter().map(|n| PredicateName::from(*n)).collect()
+    }
+
+    fn blockers(prop: &Prop, supplied: &[&str]) -> Option<BTreeSet<PredicateName>> {
+        undeclared_blockers(prop, &pset(supplied), DefinitionIndex::new(&[]))
+    }
+
+    fn p(name: &str) -> Prop {
+        claim(name, vec![])
+    }
+
+    #[test]
+    fn unsupplied_claim_is_a_blocker() {
+        assert_eq!(blockers(&p("Foo"), &[]), Some(pset(&["Foo"])));
+    }
+
+    #[test]
+    fn supplied_claim_may_bind() {
+        assert_eq!(blockers(&p("Foo"), &["Foo"]), None);
+    }
+
+    #[test]
+    fn and_collects_only_dead_conjuncts() {
+        let prop = and(vec![p("Dead"), p("Live")]);
+        assert_eq!(blockers(&prop, &["Live"]), Some(pset(&["Dead"])));
+    }
+
+    #[test]
+    fn and_with_an_optional_dead_or_names_only_the_mandatory_conjunct() {
+        let prop = and(vec![p("Dead"), or(vec![p("Maybe"), p("Live")])]);
+        assert_eq!(blockers(&prop, &["Live"]), Some(pset(&["Dead"])));
+    }
+
+    #[test]
+    fn or_blocks_only_when_every_branch_is_unsupplied() {
+        assert_eq!(
+            blockers(&or(vec![p("A"), p("B")]), &[]),
+            Some(pset(&["A", "B"]))
+        );
+        assert_eq!(blockers(&or(vec![p("A"), p("Live")]), &["Live"]), None);
+    }
+
+    #[test]
+    fn xor_blocks_only_when_neither_side_may_bind() {
+        assert_eq!(blockers(&xor(p("A"), p("Live")), &["Live"]), None);
+        assert_eq!(blockers(&xor(p("A"), p("B")), &[]), Some(pset(&["A", "B"])));
+    }
+
+    #[test]
+    fn exists_and_pre_propagate_their_body() {
+        assert_eq!(blockers(&exists("x", p("A")), &[]), Some(pset(&["A"])));
+        assert_eq!(blockers(&pre(p("A")), &[]), Some(pset(&["A"])));
+    }
+
+    #[test]
+    fn negation_implication_and_forall_never_block() {
+        assert_eq!(blockers(&not(p("A")), &[]), None);
+        assert_eq!(blockers(&implies(p("A"), p("B")), &[]), None);
+        assert_eq!(blockers(&forall("x", p("A"), p("B")), &[]), None);
+    }
+
+    #[test]
+    fn value_position_predicates_are_never_blockers() {
+        let prop = and(vec![
+            p("Dead"),
+            Prop::Eq(
+                Box::new(value_of("ValA", vec![])),
+                Box::new(value_of("ValB", vec![])),
+            ),
+        ]);
+        assert_eq!(blockers(&prop, &[]), Some(pset(&["Dead"])));
     }
 }
