@@ -174,14 +174,22 @@ CREATE SCHEMA IF NOT EXISTS morpholog_read;
 --
 -- One row per refresh generation (steady state: one, the active one).
 -- Freshness is OPERATIONAL metadata: which model produced it, when, and
--- the audit high-water it reflects. (Deliberately not modelled as
--- governed claims - this is a read cache.)
+-- the latest audit transition VISIBLE in the refresh's read snapshot.
+-- (Deliberately not modelled as governed claims - this is a read cache.)
+--
+-- `source_snapshot_*` is a coarse freshness marker, NOT a lossless
+-- audit-resume high-water: `audit.committed_at` is the writer's
+-- transaction-start time while row visibility follows commit order, so a
+-- transaction still in flight when the snapshot is taken - whose
+-- committed_at may sort EARLIER than this marker - is simply excluded and
+-- picked up by the next refresh. A consumer wanting lossless resume reads
+-- the audit log via `inspect audit`, not this column.
 CREATE TABLE IF NOT EXISTS morpholog_read.derived_refreshes (
     refresh_id      uuid        PRIMARY KEY,
     model_hash      text        NOT NULL,
     refreshed_at    timestamptz NOT NULL,
-    source_highwater_transition_id uuid,
-    source_highwater_committed_at  timestamptz,
+    source_snapshot_transition_id uuid,
+    source_snapshot_committed_at  timestamptz,
     derived_claim_count bigint   NOT NULL
 );
 

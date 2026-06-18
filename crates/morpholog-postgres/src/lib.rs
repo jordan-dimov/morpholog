@@ -16,7 +16,8 @@ use morpholog_core::{
     ClaimInstance, CoverageReport, CoverageTracker, Definition, DerivedClaim, EvalError, EvalValue,
     IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, RejectionReason,
     State, Subject, TraceEntry, TracedProposal, Transformation, TransformationName, Transition,
-    enumerate_derived, predicates_referenced_by_derived, propose, propose_with_trace,
+    ValidatedProgram, enumerate_derived, predicates_referenced_by_derived, propose,
+    propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1965,8 +1966,11 @@ pub struct RefreshSummary {
     pub derived_predicate_count: usize,
     pub source_claim_count: usize,
     pub derived_claim_count: usize,
-    pub source_highwater_transition_id: Option<Uuid>,
-    pub source_highwater_committed_at: Option<DateTime<Utc>>,
+    /// The latest audit transition VISIBLE in the refresh snapshot - a
+    /// coarse freshness marker, not a lossless audit-resume coordinate
+    /// (see the field doc on `morpholog_read.derived_refreshes`).
+    pub source_snapshot_transition_id: Option<Uuid>,
+    pub source_snapshot_committed_at: Option<DateTime<Utc>>,
     pub read: Duration,
     pub compute: Duration,
     pub write: Duration,
@@ -1982,10 +1986,14 @@ pub struct RefreshSummary {
 ///
 /// Three phases keep the long part (the kernel compute) outside any
 /// transaction:
-///  - **read** (short `REPEATABLE READ` snapshot): the audit high-water
-///    then the scoped claims, one snapshot - so the projection is exactly
-///    "as of `source_highwater`" and the recorded freshness never
-///    overclaims.
+///  - **read** (short `REPEATABLE READ` snapshot): the latest visible
+///    audit transition then the scoped claims, in one snapshot. The
+///    recorded `source_snapshot_*` is a freshness marker, NOT a lossless
+///    high-water: `audit.committed_at` is transaction-start time while
+///    visibility follows commit order, so a transaction in flight at
+///    snapshot time (whose committed_at may sort earlier) is excluded and
+///    folded in by the next refresh. Lossless resume is `inspect audit`'s
+///    job; this is a discardable cache.
 ///  - **compute** (no transaction open): the sync kernel builds the rows.
 ///  - **write** (one short transaction): insert a new generation
 ///    (`refresh_id`), bulk-load its rows, flip the single-row active
@@ -1996,11 +2004,15 @@ pub struct RefreshSummary {
 /// Full refresh, single-threaded: cost scales with the loaded claims,
 /// intermediate domain matches, and emitted rows. Good for operational
 /// stores; incremental and partitioned refresh are deliberately deferred.
+///
+/// Takes a [`ValidatedProgram`] so a read contract cannot be materialised
+/// for an unvalidated programme by accident, mirroring `render_views`.
 pub async fn refresh_derived(
     pool: &PgPool,
-    program: &Program,
+    program: ValidatedProgram<'_>,
     model_hash: &str,
 ) -> Result<RefreshSummary, PgError> {
+    let program = program.as_program();
     let definitions = &program.definitions;
     let deriveds = &program.derived_claims;
 
@@ -2012,15 +2024,17 @@ pub async fn refresh_derived(
         .into_iter()
         .collect();
 
-    // Phase: read. A short snapshot - high-water before the claim read, in
-    // one REPEATABLE READ transaction - then released before the compute.
+    // Phase: read. One short REPEATABLE READ snapshot - the latest visible
+    // audit transition and the scoped claims share it - then released
+    // before the compute. The marker reflects snapshot visibility, not a
+    // lossless audit order (see the function doc).
     let read_start = Instant::now();
     let mut read_tx = pool.begin().await.map_err(classify)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         .execute(&mut *read_tx)
         .await
         .map_err(classify)?;
-    let highwater: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
+    let latest_visible: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
         "SELECT transition_id, committed_at FROM morpholog.audit
          ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
     )
@@ -2040,8 +2054,8 @@ pub async fn refresh_derived(
         .map_err(classify)?
     };
     read_tx.commit().await.map_err(classify)?;
-    let hw_tid = highwater.map(|(tid, _)| tid);
-    let hw_at = highwater.map(|(_, at)| at);
+    let snapshot_tid = latest_visible.map(|(tid, _)| tid);
+    let snapshot_at = latest_visible.map(|(_, at)| at);
     let source_claim_count = claim_rows.len();
     let read = read_start.elapsed();
 
@@ -2063,14 +2077,14 @@ pub async fn refresh_derived(
     sqlx::query(
         "INSERT INTO morpholog_read.derived_refreshes
             (refresh_id, model_hash, refreshed_at,
-             source_highwater_transition_id, source_highwater_committed_at,
+             source_snapshot_transition_id, source_snapshot_committed_at,
              derived_claim_count)
          VALUES ($1, $2, now(), $3, $4, $5)",
     )
     .bind(refresh_id)
     .bind(model_hash)
-    .bind(hw_tid)
-    .bind(hw_at)
+    .bind(snapshot_tid)
+    .bind(snapshot_at)
     .bind(rows.len() as i64)
     .execute(&mut *tx)
     .await
@@ -2124,8 +2138,8 @@ pub async fn refresh_derived(
         derived_predicate_count: deriveds.len(),
         source_claim_count,
         derived_claim_count: rows.len(),
-        source_highwater_transition_id: hw_tid,
-        source_highwater_committed_at: hw_at,
+        source_snapshot_transition_id: snapshot_tid,
+        source_snapshot_committed_at: snapshot_at,
         read,
         compute,
         write,

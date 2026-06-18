@@ -15,29 +15,33 @@ use crate::commands::{connect, hash::canonical_hash, parse_or_exit, validate_or_
 pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;
     // Validate before touching the database - the same vocabulary gate
-    // `schema`, `hash`, and `generate views` apply.
-    validate_or_exit(&parsed);
+    // `schema`, `hash`, and `generate views` apply - and pass the
+    // validated handle so the read model is only built for a sound
+    // programme.
+    let validated = validate_or_exit(&parsed);
     let model_hash = canonical_hash(&parsed.program);
 
     let pool = connect(&args.db.database_url).await?;
-    let summary = refresh_derived(&pool, &parsed.program, &model_hash).await?;
+    let summary = refresh_derived(&pool, validated, &model_hash).await?;
 
-    let high_water = summary.source_highwater_transition_id.map_or_else(
+    let snapshot = summary.source_snapshot_transition_id.map_or_else(
         || "(no committed transitions)".to_string(),
         |t| t.to_string(),
     );
-    println!(
+    // Summary to stderr, leaving stdout free for future machine-readable
+    // output, matching the generators and batch commands.
+    eprintln!(
         "refreshed {} derived claim(s) from {} derived predicate(s)\n  \
          source claims loaded: {}\n  \
          model: {}\n  \
-         high-water: {}\n  \
+         snapshot through (latest visible transition): {}\n  \
          generation: {}\n  \
          timings: {:?} read / {:?} compute / {:?} write",
         summary.derived_claim_count,
         summary.derived_predicate_count,
         summary.source_claim_count,
         summary.model_hash,
-        high_water,
+        snapshot,
         summary.refresh_id,
         summary.read,
         summary.compute,

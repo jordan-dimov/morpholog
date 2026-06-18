@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS morpholog_read.derived_refreshes (
     refresh_id      uuid        PRIMARY KEY,
     model_hash      text        NOT NULL,
     refreshed_at    timestamptz NOT NULL,
-    source_highwater_transition_id uuid,
-    source_highwater_committed_at  timestamptz,
+    source_snapshot_transition_id uuid,
+    source_snapshot_committed_at  timestamptz,
     derived_claim_count bigint   NOT NULL
 );
 
