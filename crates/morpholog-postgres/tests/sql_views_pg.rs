@@ -100,8 +100,9 @@ async fn seed_fixture(
 }
 
 fn render(p: &Program, schema: &str) -> String {
-    let program: &'static Program = Box::leak(Box::new(p.clone()));
-    render_views(program.validated().unwrap(), schema, SENTINEL_HASH)
+    // `render_views` only borrows `p` for the call, so the caller's
+    // reference is enough - no clone, no leak.
+    render_views(p.validated().unwrap(), schema, SENTINEL_HASH)
         .expect("renders")
         .sql
 }

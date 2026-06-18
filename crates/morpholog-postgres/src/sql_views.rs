@@ -360,7 +360,9 @@ fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) 
             name: name.to_string(),
         });
     }
-    if SQL_KEYWORDS.contains(&name.to_ascii_lowercase().as_str()) {
+    // `name` is already ASCII-lowercase here (it passed
+    // `is_safe_lower_ident`), so no lowercasing allocation is needed.
+    if SQL_KEYWORDS.contains(&name) {
         refusals.push(ViewRefusal::ReservedKeyword {
             owner,
             name: name.to_string(),
@@ -643,7 +645,7 @@ fn render_catalog(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use morpholog_core::{ArgDecl, PredicateDecl, Program};
+    use morpholog_core::{ArgDecl, PredicateDecl};
     use morpholog_surface::parse_program;
 
     fn decl(name: &str, args: &[(&str, PredicateArgKind)]) -> PredicateDecl {
@@ -662,16 +664,12 @@ mod tests {
 
     fn render_ok(src: &str) -> RenderedViews {
         let program = parse_program(src).expect("fixture parses");
-        // Leak so the ValidatedProgram borrow lives for the call; tests
-        // are short-lived processes.
-        let program: &'static Program = Box::leak(Box::new(program));
         let validated = program.validated().expect("fixture validates");
         render_views(validated, "morpholog_views", "sha256:testhash").expect("renders")
     }
 
     fn refusals(src: &str, schema: &str) -> Vec<ViewRefusal> {
         let program = parse_program(src).expect("fixture parses");
-        let program: &'static Program = Box::leak(Box::new(program));
         let validated = program.validated().expect("fixture validates");
         render_views(validated, schema, "sha256:testhash").expect_err("refuses")
     }
@@ -816,8 +814,7 @@ mod tests {
     fn derived_heads_are_excluded() {
         // trade_lifecycle declares TermsTimeline as a predicate AND a
         // derived block; it must not get a view, while base predicates do.
-        let program: &'static Program =
-            Box::leak(Box::new(morpholog_examples::trade_lifecycle::program()));
+        let program = morpholog_examples::trade_lifecycle::program();
         let validated = program.validated().expect("validates");
         let r = render_views(validated, "morpholog_views", "sha256:x").expect("renders");
         assert!(
