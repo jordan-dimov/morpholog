@@ -22,7 +22,7 @@ mod common;
 
 use jiff::{SignedDuration, Timestamp};
 use morpholog_core::{EvalValue, Program, Unit};
-use morpholog_postgres::{PgPool, render_views};
+use morpholog_postgres::{PgPool, refresh_derived, render_views};
 use morpholog_surface::parse_program;
 use rust_decimal::Decimal;
 
@@ -44,6 +44,8 @@ async fn test_pool() -> PgPool {
 async fn reset(pool: &PgPool) {
     sqlx::raw_sql(
         "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE; \
+         TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
+                  morpholog_read.derived_refreshes CASCADE; \
          DROP SCHEMA IF EXISTS morpholog_views CASCADE; \
          DROP SCHEMA IF EXISTS analytics CASCADE;",
     )
@@ -398,4 +400,155 @@ async fn temporal_precision_boundary_holds() {
     .unwrap();
     assert_eq!(distinct_typed, 1, "microsecond column collapses the pair");
     assert_eq!(distinct_raw, 2, "the exact source preserves both");
+}
+
+// ---- derived views over the morpholog_read cache ----
+//
+// A derived view projects the kernel-computed read cache, not
+// `morpholog.claims`. It reads the active generation whose model hash
+// matches the generated surface, so it is empty until `refresh derived`
+// has run for the same programme. The kernel stays the sole evaluator.
+
+const DERIVED_FIXTURE: &str = "program dv\n\
+    predicate Entry(account: Subject, amount: Decimal)\n\
+    predicate AccountTotal(account: Subject, total: Decimal)\n\
+    transformation post(account, amount):\n    admit Entry(account, amount)\n\
+    derived AccountTotal(account):\n    over Entry(account, _)\n    \
+        value total = sum(a | Entry(account, a))\n";
+
+fn derived_fixture() -> Program {
+    let p = parse_program(DERIVED_FIXTURE).expect("dv parses");
+    p.validate().expect("dv validates");
+    p
+}
+
+async fn seed_entry(pool: &PgPool, p: &Program, account: &str, amount: i64) {
+    let post = p.transformation("post").unwrap();
+    let args = vec![
+        EvalValue::Subject(account.into()),
+        EvalValue::Decimal(Decimal::from(amount)),
+    ];
+    let outcome =
+        common::propose_pg_with_test_actor(pool, post, args, &p.invariants, &p.definitions)
+            .await
+            .expect("post proposes");
+    assert!(
+        matches!(
+            outcome,
+            morpholog_postgres::PgProposalOutcome::Committed { .. }
+        ),
+        "post commits: {outcome:?}"
+    );
+}
+
+async fn account_total(pool: &PgPool, account: &str) -> Option<Decimal> {
+    sqlx::query_scalar::<_, Decimal>(
+        "SELECT total FROM morpholog_views.account_total WHERE account = $1",
+    )
+    .bind(account)
+    .fetch_optional(pool)
+    .await
+    .expect("query account_total view")
+}
+
+#[tokio::test]
+async fn derived_view_returns_kernel_rows_after_refresh() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = derived_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    seed_entry(&pool, &p, "a1", 5).await;
+    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&render(&p, "morpholog_views"))
+        .execute(&pool)
+        .await
+        .expect("script applies");
+    assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(15)));
+}
+
+#[tokio::test]
+async fn derived_view_is_empty_before_any_refresh() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = derived_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    // Views applied, but no refresh has published a generation yet.
+    sqlx::raw_sql(&render(&p, "morpholog_views"))
+        .execute(&pool)
+        .await
+        .expect("script applies");
+    assert_eq!(account_total(&pool, "a1").await, None);
+}
+
+#[tokio::test]
+async fn derived_view_is_empty_for_a_mismatched_model_hash() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = derived_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    // The active generation is from a DIFFERENT model than the views are
+    // generated for: the view filters on its own model hash and shows
+    // nothing, rather than projecting another model's rows.
+    refresh_derived(&pool, p.validated().unwrap(), "sha256:another-model")
+        .await
+        .unwrap();
+    sqlx::raw_sql(&render(&p, "morpholog_views"))
+        .execute(&pool)
+        .await
+        .expect("script applies");
+    assert_eq!(account_total(&pool, "a1").await, None);
+    // Refreshing for the matching model surfaces the row.
+    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(10)));
+}
+
+#[tokio::test]
+async fn derived_view_is_not_updatable() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = derived_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&render(&p, "morpholog_views"))
+        .execute(&pool)
+        .await
+        .expect("script applies");
+    let err = sqlx::query("DELETE FROM morpholog_views.account_total")
+        .execute(&pool)
+        .await
+        .expect_err("a write through the derived view must fail");
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("cannot") || msg.contains("updat"),
+        "expected a non-updatable-view error, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn derived_view_reflects_a_new_generation() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = derived_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&render(&p, "morpholog_views"))
+        .execute(&pool)
+        .await
+        .expect("script applies");
+    assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(10)));
+    // A new claim and a new refresh generation: the view follows the
+    // active-generation pointer.
+    seed_entry(&pool, &p, "a1", 7).await;
+    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(17)));
 }
