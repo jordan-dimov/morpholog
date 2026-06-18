@@ -150,9 +150,10 @@ CREATE INDEX outbox_pending_intent_next_attempt
 
 -- Kernel-computed read model (NOT governed state).
 --
--- `morpholog_read` holds derived claims materialised by `morpholog
--- refresh derived`: the exact output of the kernel's `enumerate_derived`,
--- written here so BI tools can read computed state in plain SQL. These
+-- `morpholog_read` holds derived claims materialised by
+-- `morpholog refresh derived`: the exact output of the kernel's
+-- `enumerate_derived`, written so BI tools can read computed state in
+-- plain SQL. These
 -- rows are a discardable, refreshable PROJECTION, never evidence: the
 -- proposal kernel, invariant evaluation, and value lookups never read
 -- this schema. SQL is a projection of kernel-produced values, not a
