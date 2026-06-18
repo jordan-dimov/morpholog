@@ -256,6 +256,27 @@ emits a complete, self-contained `morpholog_client/` package: the value codecs b
 
 The properties that make it a contract rather than a convenience: **stdlib-only** (no dependency treadmill; richer types are the embedder's to build on top), **deterministic** (the same binary and programme produce byte-identical output, so the drift check is regenerate-and-diff), and **whole-run refusal** (a programme whose contract the client cannot carry - a Duration field, a parameter with no single concrete kind, a Python-keyword field name - fails generation with every finding listed and nothing written; no partial packages, no silent mangling). The worked embedder (`examples/etrm_embedder/`) runs on its committed output.
 
+## Reading governed state as SQL (`generate views`)
+
+The Python client is the *write* contract; this is the *read* contract for anything that speaks SQL - BI tools, dashboards, the embedder's own projector.
+
+```bash
+morpholog generate views <file.morph> [--schema morpholog_views] [--out views.sql]
+morpholog generate views x.morph | psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
+```
+
+emits one **atomic** SQL script: `BEGIN;`, a `CREATE SCHEMA IF NOT EXISTS`, one `CREATE OR REPLACE VIEW` per declared **base** predicate over `morpholog.claims`, a `_morpholog_catalog` view, and `COMMIT;`. With `--out` it writes the file; otherwise it prints the script verbatim to stdout (byte-identical, so the pipe-to-`psql` contract holds). Like the Python client, it is **deterministic** (drift check = regenerate-and-diff; a committed golden lives at `examples/10_trade_lifecycle/trade_lifecycle_views.sql`) and **whole-run refusal** (an un-emittable identifier - a SQL reserved word, a non-lowercase or over-63-byte field name, a `_morpholog_`-prefixed field, or two predicates colliding on one snake_case view name - fails with every finding on stderr and nothing written).
+
+What an embedder needs to know to consume it:
+
+- **Schema and naming.** Views land in `morpholog_views` (override with `--schema`), namespaced away from the governed `morpholog` schema. Predicate names become snake_case view names (`TradeSettled` → `trade_settled`), acronym-aware (`PPAContract` → `ppa_contract`); field names are preserved as declared.
+- **Columns.** Provenance first - `_morpholog_asserted_in`, `_morpholog_asserted_at`, and the raw `_morpholog_arguments` (the exact governed JSONB) - then the business fields in declaration order, each cast to its natural PostgreSQL type (Subject→`text`, Decimal→`numeric`, Date→`date`, Timestamp→`timestamptz`, Duration→`interval`, Bool→`boolean`, unit-tagged Quantity→`numeric` over the amount with the unit in a `COMMENT ON COLUMN`). `Collection` and `Any` are exposed as `jsonb` (`Any` as the whole tagged object).
+- **Read-only - an interface, not a boundary.** Each view wraps its source in a `WITH`, which makes it non-updatable: `INSERT`/`UPDATE`/`DELETE` through it fail. This stops accidental writes through the read surface; it is *not* a security control - a role with direct write on `morpholog.claims` still writes. Grant accordingly.
+- **Precision.** `timestamptz`/`interval` are microsecond-resolution; a Morpholog timestamp/duration can carry nanoseconds. The typed columns truncate below a microsecond; `_morpholog_arguments` always holds the exact source, so read it when sub-microsecond exactness matters.
+- **Applying and evolving.** Apply the whole script in one shot - it is transactional, so a failure rolls back rather than leaving a half-built surface. Pipe through `psql -v ON_ERROR_STOP=1` in deployment or CI: without it `psql` continues past a failed statement and exits `0`, so the shell sees success even though the transaction rolled back; `ON_ERROR_STOP=1` makes the shell exit code match the SQL outcome. Across model versions, **appending a predicate field is a compatible `CREATE OR REPLACE`** (the new column appends at the end); **renaming, removing, reordering, or retyping a field is not** - that needs a manual view migration or a `DROP VIEW` first, because `CREATE OR REPLACE VIEW` forbids changing an existing column's name, position, or type.
+- **The catalogue and stale views.** `morpholog_views._morpholog_catalog` carries the programme name, the model hash (the *same* `MODEL_HASH` the Python client stamps - pin CI to it), and the predicate→view inventory. The script never drops anything, so a predicate removed between versions leaves its old view behind; the catalogue is the current intended set, and every generated view carries a `COMMENT ON VIEW` ownership marker, so a consumer can find views no longer in the catalogue. (An explicit `--prune` is deferred.)
+- **Base predicates only.** Derived-claim predicates are computed on demand, not materialized, so they get no view; read them via `morpholog inspect derived`.
+
 ## Disciplines on the manifest (additive)
 
 A predicate declaration may carry claim disciplines (`unique by`,

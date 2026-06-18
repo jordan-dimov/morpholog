@@ -22,6 +22,7 @@ pub(crate) mod args;
 pub(crate) mod check;
 pub(crate) mod explain;
 pub(crate) mod generate;
+pub(crate) mod generate_views;
 pub(crate) mod hash;
 pub(crate) mod init;
 pub(crate) mod inspect;
