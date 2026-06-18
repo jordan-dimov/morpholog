@@ -6,7 +6,10 @@
 //! See `crates/morpholog-core/sql/schema.sql` for the canonical schema
 //! and `docs/scope-and-ambition.md` for the runtime's positioning.
 
+pub mod sql_views;
 pub mod testing;
+
+pub use sql_views::{RenderedViews, ViewRefusal, render_views};
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{

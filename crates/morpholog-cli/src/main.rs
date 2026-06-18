@@ -185,6 +185,32 @@ pub(crate) enum GenerateCmd {
     /// is regenerate-and-diff.
     #[command(name = "python-client")]
     PythonClient(GeneratePythonClientArgs),
+
+    /// Emit a typed, read-only SQL view surface over `morpholog.claims`
+    /// for the programme's base predicates: one `CREATE OR REPLACE VIEW`
+    /// per declared base predicate, columns cast to natural PostgreSQL
+    /// types, plus a model-hash catalogue - all in a single atomic
+    /// (`BEGIN; ... COMMIT;`) script. Non-updatable by construction;
+    /// regenerate-and-diff for drift, like `python-client`. Derived
+    /// claims are read via `inspect derived`, not views.
+    Views(GenerateViewsArgs),
+}
+
+/// Arguments for `generate views`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GenerateViewsArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    /// Schema the views are created in (created with
+    /// `CREATE SCHEMA IF NOT EXISTS`). Namespaced away from the governed
+    /// `morpholog` schema.
+    #[arg(long, default_value = "morpholog_views")]
+    pub(crate) schema: String,
+
+    /// Write the SQL script to this file instead of stdout.
+    #[arg(long)]
+    pub(crate) out: Option<PathBuf>,
 }
 
 /// Arguments for `generate python-client`.
@@ -825,6 +851,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Generate {
             what: GenerateCmd::PythonClient(args),
         } => commands::generate::run(&args),
+        Command::Generate {
+            what: GenerateCmd::Views(args),
+        } => commands::generate_views::run(&args),
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
     }
@@ -1699,5 +1728,40 @@ mod tests {
         let err = Cli::try_parse_from(["morpholog", "schema", "file.morph"])
             .expect_err("missing transformation name should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn generate_views_defaults_to_the_morpholog_views_schema() {
+        let cli = Cli::parse_from(["morpholog", "generate", "views", "model.morph"]);
+        let Command::Generate {
+            what: GenerateCmd::Views(args),
+        } = cli.command
+        else {
+            panic!("expected generate views, got {:?}", cli.command);
+        };
+        assert_eq!(args.schema, "morpholog_views");
+        assert!(args.out.is_none());
+    }
+
+    #[test]
+    fn generate_views_accepts_schema_and_out() {
+        let cli = Cli::parse_from([
+            "morpholog",
+            "generate",
+            "views",
+            "model.morph",
+            "--schema",
+            "analytics",
+            "--out",
+            "views.sql",
+        ]);
+        let Command::Generate {
+            what: GenerateCmd::Views(args),
+        } = cli.command
+        else {
+            panic!("expected generate views, got {:?}", cli.command);
+        };
+        assert_eq!(args.schema, "analytics");
+        assert_eq!(args.out.as_deref(), Some(std::path::Path::new("views.sql")));
     }
 }
