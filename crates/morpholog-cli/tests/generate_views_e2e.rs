@@ -64,18 +64,37 @@ fn generates_an_atomic_view_script_to_stdout() {
     assert!(sql.trim_end().ends_with("COMMIT;"));
 }
 
-// Derived-claim heads are declared predicates but computed on demand;
-// they are read via `inspect derived`, never materialized as a view.
+// A derived-claim head gets a view over the `morpholog_read` cache (one
+// unified read surface), filtered by predicate and the generated model
+// hash, and the catalogue records its kind. Base predicates still read
+// `morpholog.claims`.
 #[test]
-fn derived_heads_get_no_view() {
-    let sql = String::from_utf8(generate_stdout(&trade_lifecycle(), None).stdout).unwrap();
+fn derived_heads_get_a_derived_view_over_the_cache() {
+    let result = generate_stdout(&trade_lifecycle(), None);
+    let sql = String::from_utf8(result.stdout).unwrap();
     assert!(
-        sql.contains("\"trade_settled\""),
-        "base predicates are present"
+        sql.contains("CREATE OR REPLACE VIEW \"morpholog_views\".\"trade_settled\""),
+        "base view over claims"
     );
     assert!(
-        !sql.contains("terms_timeline"),
-        "the derived head TermsTimeline must not get a view"
+        sql.contains("CREATE OR REPLACE VIEW \"morpholog_views\".\"terms_timeline\""),
+        "derived view present"
+    );
+    assert!(sql.contains("FROM morpholog_read.derived_claims c"));
+    assert!(sql.contains("WHERE c.predicate_name = 'TermsTimeline'"));
+    assert!(
+        sql.contains("AND r.model_hash = "),
+        "derived view filters by the generated model hash"
+    );
+    assert!(
+        sql.contains("'terms_timeline', 'derived'"),
+        "catalogue records the derived kind"
+    );
+    // The split is reported on stderr.
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(
+        stderr.contains("base") && stderr.contains("derived"),
+        "got: {stderr}"
     );
 }
 

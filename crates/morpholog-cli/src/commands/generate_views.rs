@@ -39,24 +39,25 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
         }
     };
 
+    let total = rendered.base_view_count + rendered.derived_view_count;
+    let summary = format!(
+        "generated {total} view(s): {} base, {} derived",
+        rendered.base_view_count, rendered.derived_view_count
+    );
     match &args.out {
         Some(path) => {
             std::fs::write(path, &rendered.sql)?;
-            eprintln!(
-                "generated {} view(s) -> {}",
-                rendered.view_count,
-                path.display()
-            );
+            eprintln!("{summary} -> {}", path.display());
         }
         None => {
             // Raw SQL to stdout, byte-identical to the rendered script, so
-            // the pipe-to-psql contract holds. `print!` (not `println!`)
-            // adds no trailing newline beyond the script's own.
+            // the pipe-to-psql contract holds. Write the bytes directly;
+            // the script carries its own trailing newline.
             let stdout = std::io::stdout();
             let mut handle = stdout.lock();
             handle.write_all(rendered.sql.as_bytes())?;
             handle.flush()?;
-            eprintln!("generated {} view(s)", rendered.view_count);
+            eprintln!("{summary}");
         }
     }
     Ok(())
