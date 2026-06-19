@@ -745,7 +745,7 @@ pub enum OutboxUpdate {
 /// A `SELECT *` over the entire table, intended for tests, demos, and
 /// small-state inspection; large states should query SQL directly.
 pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
-    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          ORDER BY asserted_at, predicate_name, arguments::text",
@@ -754,7 +754,7 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     .await
     .map_err(classify)?;
 
-    decode_claim_rows(rows)
+    decode_claim_rows(rows.into_iter().map(|r| (r.predicate_name, r.arguments)).collect())
 }
 
 /// Decode `(predicate_name, arguments)` rows into `ClaimInstance`s -
@@ -789,18 +789,18 @@ pub async fn list_claims_for_predicates(
         return Ok(Vec::new());
     }
 
-    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          WHERE predicate_name = ANY($1)
          ORDER BY asserted_at, predicate_name, arguments::text",
+        predicates,
     )
-    .bind(predicates)
     .fetch_all(pool)
     .await
     .map_err(classify)?;
 
-    decode_claim_rows(rows)
+    decode_claim_rows(rows.into_iter().map(|r| (r.predicate_name, r.arguments)).collect())
 }
 
 /// Load the current scoped pre-state a transformation would see, the
@@ -1069,14 +1069,15 @@ pub async fn audit_cursor_for(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
 ) -> Result<(DateTime<Utc>, Uuid), PgError> {
-    let row: Option<(DateTime<Utc>,)> =
-        sqlx::query_as("SELECT committed_at FROM morpholog.audit WHERE transition_id = $1")
-            .bind(transition_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(classify)?;
+    let row = sqlx::query!(
+        "SELECT committed_at FROM morpholog.audit WHERE transition_id = $1",
+        transition_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(classify)?;
     match row {
-        Some((committed_at,)) => Ok((committed_at, transition_id)),
+        Some(row) => Ok((row.committed_at, transition_id)),
         None => Err(PgError::TransitionNotFound(transition_id)),
     }
 }
@@ -1722,19 +1723,19 @@ pub async fn earliest_pending_retry(
     pool: &PgPool,
     intent_type: &str,
 ) -> Result<Option<DateTime<Utc>>, PgError> {
-    let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
-        "SELECT min(next_attempt_at)
+    let row = sqlx::query!(
+        "SELECT min(next_attempt_at) AS earliest
          FROM morpholog.outbox
          WHERE status='pending'
            AND intent_type=$1
            AND next_attempt_at IS NOT NULL
            AND next_attempt_at > now()",
+        intent_type,
     )
-    .bind(intent_type)
     .fetch_optional(pool)
     .await
     .map_err(classify)?;
-    Ok(row.and_then(|(t,)| t))
+    Ok(row.and_then(|r| r.earliest))
 }
 
 fn lease_duration_to_secs(lease_duration: std::time::Duration) -> Result<i64, PgError> {
@@ -2037,7 +2038,7 @@ pub async fn refresh_derived(
         .execute(&mut *read_tx)
         .await
         .map_err(classify)?;
-    let latest_visible: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
+    let latest_visible = sqlx::query!(
         "SELECT transition_id, committed_at FROM morpholog.audit
          ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
     )
@@ -2047,18 +2048,21 @@ pub async fn refresh_derived(
     let claim_rows: Vec<(String, serde_json::Value)> = if footprint.is_empty() {
         Vec::new()
     } else {
-        sqlx::query_as(
+        sqlx::query!(
             "SELECT predicate_name, arguments FROM morpholog.claims
              WHERE predicate_name = ANY($1)",
+            &footprint[..],
         )
-        .bind(&footprint)
         .fetch_all(&mut *read_tx)
         .await
         .map_err(classify)?
+        .into_iter()
+        .map(|r| (r.predicate_name, r.arguments))
+        .collect()
     };
     read_tx.commit().await.map_err(classify)?;
-    let snapshot_tid = latest_visible.map(|(tid, _)| tid);
-    let snapshot_at = latest_visible.map(|(_, at)| at);
+    let snapshot_tid = latest_visible.as_ref().map(|r| r.transition_id);
+    let snapshot_at = latest_visible.map(|r| r.committed_at);
     let source_claim_count = claim_rows.len();
     let read = read_start.elapsed();
 
@@ -2216,12 +2220,13 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
     if predicates.is_empty() {
         // The "as of this committed transition" contract still
         // requires the target to exist, even with an empty footprint.
-        let target: Option<(Uuid,)> =
-            sqlx::query_as("SELECT transition_id FROM morpholog.audit WHERE transition_id = $1")
-                .bind(transition_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(classify)?;
+        let target = sqlx::query!(
+            "SELECT transition_id FROM morpholog.audit WHERE transition_id = $1",
+            transition_id,
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(classify)?;
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
         return Ok(State::default());
     }
@@ -2292,11 +2297,10 @@ pub enum InitOutcome {
 /// the existence guard would later misread as already-initialised.
 pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
-    let exists: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM pg_namespace WHERE nspname = 'morpholog'")
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(classify)?;
+    let exists = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(classify)?;
     if exists.is_some() {
         return Ok(InitOutcome::AlreadyInitialised);
     }
@@ -2321,17 +2325,17 @@ pub async fn resolve_transition_at_or_before(
     pool: &PgPool,
     at: DateTime<Utc>,
 ) -> Result<Uuid, PgError> {
-    let row: Option<(Uuid,)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT transition_id FROM morpholog.audit
          WHERE committed_at <= $1
          ORDER BY committed_at DESC, transition_id DESC
          LIMIT 1",
+        at,
     )
-    .bind(at)
     .fetch_optional(pool)
     .await
     .map_err(classify)?;
-    row.map(|(tid,)| tid)
+    row.map(|r| r.transition_id)
         .ok_or(PgError::NoTransitionAtOrBefore(at))
 }
 
@@ -2582,7 +2586,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
         .await
         .map_err(classify)?;
 
-    let latest: Option<(Uuid,)> = sqlx::query_as(
+    let latest = sqlx::query!(
         "SELECT transition_id FROM morpholog.audit
          ORDER BY committed_at DESC, transition_id DESC
          LIMIT 1",
@@ -2590,13 +2594,15 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
     .fetch_optional(&mut *tx)
     .await
     .map_err(classify)?;
-    let (transitions,): (i64,) = sqlx::query_as("SELECT count(*) FROM morpholog.audit")
+    // count(*) is never null, but Postgres cannot prove it.
+    let transitions = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
         .fetch_one(&mut *tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify)?
+        .count;
 
     let replayed = match latest {
-        Some((tid,)) => reconstruct_inner(&mut tx, tid, None)
+        Some(row) => reconstruct_inner(&mut tx, row.transition_id, None)
             .await?
             .claims()
             .to_vec(),

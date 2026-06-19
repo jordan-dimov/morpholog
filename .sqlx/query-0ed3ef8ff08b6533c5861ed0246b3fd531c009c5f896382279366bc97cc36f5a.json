@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id FROM morpholog.audit\n         WHERE committed_at <= $1\n         ORDER BY committed_at DESC, transition_id DESC\n         LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0ed3ef8ff08b6533c5861ed0246b3fd531c009c5f896382279366bc97cc36f5a"
+}

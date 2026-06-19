@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT min(next_attempt_at) AS earliest\n         FROM morpholog.outbox\n         WHERE status='pending'\n           AND intent_type=$1\n           AND next_attempt_at IS NOT NULL\n           AND next_attempt_at > now()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "earliest",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "48447d6211dff1ce8a74ef57056d53b96a471cfd7381b4e493c6bb8d1d71eaba"
+}

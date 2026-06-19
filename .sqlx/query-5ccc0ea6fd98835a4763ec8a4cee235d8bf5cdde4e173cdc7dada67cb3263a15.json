@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT predicate_name, arguments FROM morpholog.claims\n             WHERE predicate_name = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "predicate_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "arguments",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5ccc0ea6fd98835a4763ec8a4cee235d8bf5cdde4e173cdc7dada67cb3263a15"
+}
