@@ -62,6 +62,9 @@ fn controls_prose_shows_gates_and_guarantees() {
         "triggered by: Decision",
         "shared: Verified",
         "failure shape:",
+        // The invariant-side inverse: front-line coverage.
+        "Front-line coverage for authored implication-shaped invariants",
+        "front-loaded by:",
     ] {
         assert!(stdout.contains(fragment), "`{fragment}` not in:\n{stdout}");
     }
@@ -141,4 +144,23 @@ fn controls_json_carries_the_structured_matrix() {
             "verify gate has no link: {g}"
         );
     }
+
+    // The invariant-side inverse view: front_line_coverage names the
+    // implication front-loaded by the decide gate.
+    let cov = v["front_line_coverage"]
+        .as_array()
+        .expect("front_line_coverage present");
+    let entry = cov
+        .iter()
+        .find(|i| i["invariant"] == "decision_needs_two_distinct")
+        .expect("the implication invariant is covered");
+    assert!(
+        entry["failure_shape"]
+            .as_str()
+            .unwrap()
+            .contains("and not ("),
+        "{entry}"
+    );
+    assert_eq!(entry["front_loaded_by"][0]["transformation"], "decide");
+    assert_eq!(entry["front_loaded_by"][0]["form"], "require");
 }

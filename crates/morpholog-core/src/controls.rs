@@ -32,6 +32,15 @@
 //! unlinked). The failure mode each link front-loads against is rendered
 //! mechanically as `<antecedent> and not (<consequent>)`.
 //!
+//! The same links read from the invariant's side are the **front-line
+//! coverage** ([`ControlMatrix::front_line_coverage`]), at implication-shape
+//! granularity so partial coverage of a multi-implication invariant stays
+//! visible. Each implication is one of three: front-loaded (a gate exists),
+//! a **backstop** (a transformation can trigger it but no gate front-loads
+//! it - caught only at commit), or **dormant** (no declared transformation
+//! triggers it at all). That three-way reading is the honest answer to
+//! "where is the front line for this standing rule, and where is there none?"
+//!
 //! Deterministic and mechanical, like every legibility surface here:
 //! the words come only from declared names and the formatter, never
 //! generated prose. Deliberately shallow (v0): top-level gates in
@@ -41,7 +50,7 @@
 //! conditions, not admission preconditions, and are deliberately not
 //! lifted out.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -109,15 +118,60 @@ pub struct TransformationControls {
     pub gates: Vec<GateControl>,
 }
 
+/// One gate that front-loads an implication shape, named from the
+/// invariant's side: the same honesty/debug fields as the gate-side
+/// [`GateFrontLoad`], plus which transformation and gate they belong to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct GateRef {
+    pub transformation: String,
+    /// `"require"` or `"bind"`.
+    pub form: String,
+    /// The gate condition, rendered in surface syntax.
+    pub condition: String,
+    /// The predicates this transformation admits that put the invariant
+    /// in play (the antecedent side of the link).
+    pub triggered_by: Vec<String>,
+    /// The predicates the gate and the consequent both reference.
+    pub shared: Vec<String>,
+}
+
+/// The invariant side of the front-loads relation, at **implication-shape
+/// granularity** (an authored invariant with several implications yields
+/// several rows - partial coverage stays visible). Three readings:
+/// `front_loaded_by` non-empty = a front line exists; empty with
+/// `triggered_by_transformations` non-empty = a **backstop** (a
+/// transformation can trigger it, but no gate front-loads it - checked
+/// only at commit); both empty = **dormant** (no declared transformation
+/// currently triggers this implication shape at all).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct InvariantFrontLoad {
+    pub invariant: String,
+    /// `<antecedent> and not (<consequent>)` - the forbidden state this
+    /// implication shape rules out (matches the gate-side `failure_shape`).
+    pub failure_shape: String,
+    /// Transformations that admit a predicate the antecedent rests on -
+    /// the ones that can make this implication relevant.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggered_by_transformations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub front_loaded_by: Vec<GateRef>,
+}
+
 /// The full control matrix: what must be true before each action
-/// (per-transformation gates) and what can never be true (the
-/// invariant guarantees).
+/// (per-transformation gates), what can never be true (the invariant
+/// guarantees), and the invariant-side front-line coverage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ControlMatrix {
     pub program: String,
     pub transformations: Vec<TransformationControls>,
     pub guarantees: Vec<Guarantee>,
+    /// One entry per authored implication-shaped invariant's implication
+    /// (the front-loads relation's domain). See [`InvariantFrontLoad`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub front_line_coverage: Vec<InvariantFrontLoad>,
 }
 
 /// Derive the control matrix from a parsed programme. Pure and
@@ -127,7 +181,7 @@ pub fn controls(program: &Program) -> ControlMatrix {
     let defs = DefinitionIndex::new(&program.definitions);
     let implications = authored_implications(program, defs);
 
-    let transformations = program
+    let transformations: Vec<TransformationControls> = program
         .transformations
         .iter()
         .map(|t| {
@@ -158,10 +212,61 @@ pub fn controls(program: &Program) -> ControlMatrix {
             }
         })
         .collect();
+
+    // Invert the gate front-loads links into the invariant-side view, at
+    // implication-shape granularity (keyed by the rendered failure shape,
+    // which `gate()` copies onto each link). Partial coverage of a
+    // multi-implication invariant stays visible: one row per implication.
+    let mut by_shape: BTreeMap<&str, Vec<GateRef>> = BTreeMap::new();
+    for t in &transformations {
+        for g in &t.gates {
+            for link in &g.front_loads {
+                by_shape
+                    .entry(link.failure_shape.as_str())
+                    .or_default()
+                    .push(GateRef {
+                        transformation: t.transformation.clone(),
+                        form: g.form.clone(),
+                        condition: g.condition.clone(),
+                        triggered_by: link.triggered_by.clone(),
+                        shared: link.shared.clone(),
+                    });
+            }
+        }
+    }
+    // Which transformations admit a predicate each implication's
+    // antecedent rests on - the backstop-vs-dormant distinction.
+    let asserted_by: Vec<(String, BTreeSet<PredicateName>)> = program
+        .transformations
+        .iter()
+        .map(|t| {
+            let mut asserted = BTreeSet::new();
+            predicates_asserted_by(t, &mut asserted);
+            (t.name.to_string(), asserted)
+        })
+        .collect();
+    let front_line_coverage: Vec<InvariantFrontLoad> = implications
+        .iter()
+        .map(|imp| InvariantFrontLoad {
+            invariant: imp.invariant.clone(),
+            failure_shape: imp.failure_shape.clone(),
+            triggered_by_transformations: asserted_by
+                .iter()
+                .filter(|(_, asserted)| !imp.antecedent.is_disjoint(asserted))
+                .map(|(name, _)| name.clone())
+                .collect(),
+            front_loaded_by: by_shape
+                .get(imp.failure_shape.as_str())
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect();
+
     ControlMatrix {
         program: program.name.clone(),
         transformations,
         guarantees: guarantees(program),
+        front_line_coverage,
     }
 }
 
@@ -323,6 +428,34 @@ pub fn render_controls(matrix: &ControlMatrix) -> String {
         out.push_str(&format!("\n  {}:\n    {}\n", g.invariant, g.rule));
         if let Some(forbids) = &g.forbids {
             out.push_str(&format!("    forbids outright: {forbids}\n"));
+        }
+    }
+
+    if !matrix.front_line_coverage.is_empty() {
+        out.push_str("\nFront-line coverage for authored implication-shaped invariants:\n");
+        for inv in &matrix.front_line_coverage {
+            out.push_str(&format!("\n  {}:\n", inv.invariant));
+            out.push_str(&format!("    failure shape: {}\n", inv.failure_shape));
+            if !inv.front_loaded_by.is_empty() {
+                out.push_str("    front-loaded by:\n");
+                for gate in &inv.front_loaded_by {
+                    out.push_str(&format!(
+                        "      - {} {} {}\n",
+                        gate.transformation, gate.form, gate.condition
+                    ));
+                }
+            } else if inv.triggered_by_transformations.is_empty() {
+                out.push_str(
+                    "    dormant: no declared transformation currently triggers \
+                     this implication shape\n",
+                );
+            } else {
+                out.push_str(&format!(
+                    "    backstop: no gate front-loads this implication shape; checked \
+                     only at commit (triggered by: {})\n",
+                    inv.triggered_by_transformations.join(", ")
+                ));
+            }
         }
     }
     out

@@ -216,6 +216,115 @@ fn the_control_matrix_is_deterministic() {
 }
 
 #[test]
+fn front_line_coverage_names_the_invariant_side() {
+    let matrix = controls(&mini());
+    let inv = matrix
+        .front_line_coverage
+        .iter()
+        .find(|i| i.invariant == "decision_rests_on_two_distinct_verifiers")
+        .expect("the implication invariant is in the front-line coverage");
+    assert_eq!(inv.front_loaded_by[0].transformation, "decide");
+    assert_eq!(inv.front_loaded_by[0].form, "require");
+    // The not(...) invariant is outside the relation's domain - not listed.
+    assert!(
+        !matrix
+            .front_line_coverage
+            .iter()
+            .any(|i| i.invariant == "no_free_floating_decisions"),
+        "{matrix:?}"
+    );
+    // Rendered prose surfaces the section.
+    let rendered = render_controls(&matrix);
+    assert!(rendered.contains("Front-line coverage for authored implication-shaped invariants"));
+    assert!(rendered.contains("front-loaded by:"));
+}
+
+#[test]
+fn partial_coverage_of_a_multi_implication_invariant_stays_visible() {
+    // One invariant, two implications: a gate front-loads the first, none
+    // the second. Per-implication granularity must show one front-loaded
+    // and one backstop row - not a single misleading "covered" entry.
+    let p = program("partial")
+        .predicates(vec![
+            predicate("A").subject("x").build(),
+            predicate("B").subject("x").build(),
+            predicate("C").subject("x").build(),
+            predicate("D").subject("x").build(),
+        ])
+        .invariants(vec![invariant(
+            "k",
+            and(vec![
+                implies(claim("A", vec![var("x")]), claim("B", vec![var("x")])),
+                implies(claim("C", vec![var("y")]), claim("D", vec![var("y")])),
+            ]),
+        )])
+        .transformations(vec![morpholog_core::ir_builder::transformation(
+            "t",
+            params(&["x"]),
+            vec![
+                require(claim("B", vec![var("x")])),
+                assert_("A", vec![var("x")]),
+                assert_("C", vec![var("x")]),
+            ],
+        )])
+        .build();
+    assert!(p.validate().is_ok(), "{:?}", p.validate());
+    let rows: Vec<_> = controls(&p)
+        .front_line_coverage
+        .into_iter()
+        .filter(|i| i.invariant == "k")
+        .collect();
+    assert_eq!(rows.len(), 2, "one row per implication: {rows:?}");
+    assert_eq!(
+        rows.iter()
+            .filter(|i| !i.front_loaded_by.is_empty())
+            .count(),
+        1,
+        "A=>B is front-loaded: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|i| i.front_loaded_by.is_empty() && !i.triggered_by_transformations.is_empty())
+            .count(),
+        1,
+        "C=>D is a backstop: {rows:?}"
+    );
+}
+
+#[test]
+fn a_dormant_implication_is_distinguished_from_a_backstop() {
+    // An authored implication whose antecedent no transformation admits is
+    // dormant (untriggered), not a backstop gap - the surface must not make
+    // it sound as urgent as a triggerable-but-unguarded rule.
+    let p = program("dormant")
+        .predicates(vec![
+            predicate("E").subject("x").build(),
+            predicate("F").subject("x").build(),
+        ])
+        .invariants(vec![invariant(
+            "m",
+            implies(claim("E", vec![var("x")]), claim("F", vec![var("x")])),
+        )])
+        .transformations(vec![morpholog_core::ir_builder::transformation(
+            "g",
+            params(&["x"]),
+            vec![assert_("F", vec![var("x")])],
+        )])
+        .build();
+    assert!(p.validate().is_ok(), "{:?}", p.validate());
+    let cov = controls(&p).front_line_coverage;
+    let m = cov
+        .iter()
+        .find(|i| i.invariant == "m")
+        .expect("m is analysable");
+    assert!(m.front_loaded_by.is_empty(), "{m:?}");
+    assert!(
+        m.triggered_by_transformations.is_empty(),
+        "no transformation admits E, so m is dormant: {m:?}"
+    );
+}
+
+#[test]
 fn a_gateless_transformation_renders_its_invariant_only_admission() {
     // A transformation with no require/bind preconditions is governed
     // by the invariants alone; the matrix says so rather than showing

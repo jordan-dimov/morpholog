@@ -49,7 +49,8 @@ pub use analysis::{
     transformation_param_kinds, transformations_asserting,
 };
 pub use controls::{
-    ControlMatrix, GateControl, GateFrontLoad, TransformationControls, controls, render_controls,
+    ControlMatrix, GateControl, GateFrontLoad, GateRef, InvariantFrontLoad, TransformationControls,
+    controls, render_controls,
 };
 pub use coverage::{
     CoverageReport, CoverageTracker, CoverageVerdict, InvariantCoverage, TransformationUsage,
