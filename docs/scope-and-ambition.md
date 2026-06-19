@@ -131,7 +131,7 @@ No bitemporal schema is assumed at the modelling level. The v0 audit log already
 
 ### 4. Actor context on transitions
 
-The actor under whose authority a transition is being proposed is **transition context**, not a transformation parameter. Every `Transition` carries an `actor`; the audit log persists it; an invariant or a `require` can consult it through a reserved `Term::Actor` term without each transformation having to declare it. The shape becomes:
+The actor under whose authority a transition is being proposed is **transition context**, not a transformation parameter. Every `Transition` carries an `actor`; the audit log persists it; a transformation body - a `require` gate or an `admit` - can consult it through a reserved `Term::Actor` term without each transformation having to declare it. (Inside an invariant body it raises `EvalError::UnboundActor`, by design: authority is checked at admission, in `require`, not asserted as a standing rule.) The shape becomes:
 
 ```
 transformation approve_journal(journal):

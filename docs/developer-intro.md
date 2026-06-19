@@ -615,7 +615,7 @@ June?" is usually a week of forensics, not a second and a half.
 
 Your BI tool and your reporting stack speak SQL, not a CLI. So Morpholog hands
 them SQL. `generate views` emits a script of typed views - one per predicate,
-plus one per derived claim - over a read-only schema:
+plus one per declared derived read - over a read-only schema:
 
 ```bash
 morpholog generate views revenue.morph
@@ -790,31 +790,51 @@ Guarantees of `reported_revenue` - states this model makes impossible:
 ```
 
 `inspect controls` turns it around: per transformation, what must already be
-true before the action commits (its gates), beside those guarantees. Where a
-gate pre-checks the very condition an invariant enforces, it draws the line
-between them - naming which front-line gate *front-loads* which standing rule,
-and the failure each guards against. (This model's gates guard different ground
-than its two invariants, so no link is drawn here; the biometric example shows
-one where the verification gate front-loads its standing invariant.)
+true before the action commits (its gates).
+
+```bash
+morpholog inspect controls revenue.morph
+```
+```
+  report_revenue may commit only when:
+    - not CurrentFigure(asset, period, _)
+      consults: CurrentFigure
+
+  correct_revenue may commit only when:
+    - Revenue(asset, period, _, prior_figure_id)
+      consults: Revenue
+    - not Supersedes(_, prior_figure_id)
+      consults: Supersedes
+```
+
+Where a gate pre-checks the very condition an invariant enforces, controls
+draws the line between them - naming which front-line gate *front-loads* which
+standing rule, and the failure each guards against. (This model's gates guard
+different ground than its two invariants, so no link is drawn here; the
+biometric example shows one where the verification gate front-loads its
+standing invariant.)
 
 `inspect coverage` replays the whole audit log and reports which rules have
-ever actually done work:
+ever actually done work. After the report and the correction you ran:
 
 ```bash
 morpholog inspect coverage revenue.morph
 ```
 ```
-  one_figure_in_force_per_period - fired in 1 transition(s)
-  correction_chain_never_forks - NEVER FIRED: its condition never matched anything ...
+  one_figure_in_force_per_period - fired in 2 transition(s)
+  correction_chain_never_forks - fired in 1 transition(s)
 
   report_revenue - 1 transition(s)
-  correct_revenue - never used
+  correct_revenue - 1 transition(s)
+  run_covenant_test - never used
 ```
 
-A rule that has never matched anything is dead text wearing an invariant's
-name - and now it gets named, instead of sitting in the source looking load-bearing.
-(Replay reports what *has* happened, never what *could*; `correction_chain_never_forks`
-is simply waiting for the first correction.)
+`run_covenant_test` shows `never used` because you have not run a covenant
+test yet (that is the first poke below). A transformation or rule that has
+never done any work is dead text wearing a load-bearing name - and now it gets
+named, instead of sitting in the source looking enforced. (Replay reports what
+*has* happened, never what *could*: it cannot prove a rule will never fire,
+only that it has not.)
 
 ## Say the rules on the declarations
 
