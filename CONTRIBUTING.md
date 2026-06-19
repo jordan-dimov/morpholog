@@ -61,7 +61,7 @@ The PG-backed test suites share one schema and truncate it between tests; they m
 
 ### Compile-time-checked SQL
 
-The persistence adapter's queries are `sqlx::query!` / `query_as!` macros, verified against the real schema **at build time**. A normal build needs no database: it reads the committed offline cache in `.sqlx/` (the build runs with `SQLX_OFFLINE=true`, which precommit and CI set for you). A query that drifts from the schema is a compile error, not a runtime surprise.
+The persistence adapter's queries are `sqlx::query!` / `query_as!` macros, verified against the real schema **at build time**. A query that drifts from the schema is a compile error, not a runtime surprise. Every cargo command in this workspace defaults to `SQLX_OFFLINE=true` (via [`.cargo/config.toml`](.cargo/config.toml)), so a plain `cargo build` - and precommit, and CI - reads the committed cache in `.sqlx/` and needs no database.
 
 When you add or change a query, regenerate the cache against a disposable database and commit the result:
 
@@ -70,7 +70,7 @@ DATABASE_URL=postgres:///morpholog_sqlx_prep ./scripts/sqlx-prepare.sh
 git add .sqlx
 ```
 
-The cache's provenance is `crates/morpholog-core/sql/schema.sql` applied to a clean PostgreSQL 17 database (the stated floor). Precommit and CI run `cargo sqlx prepare --workspace --check` against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
+The checked contract is **PostgreSQL 17**, the stated floor: regenerate against a clean PG 17 database when you have one, and CI's PG 17 `cargo sqlx prepare --workspace --check` is the source of truth for floor compatibility. Precommit and CI run that check against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
 
 ## Workspace layout
 

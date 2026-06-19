@@ -20,10 +20,6 @@ jobs:
     name: fmt + clippy + doc
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # sqlx query macros verify against the committed `.sqlx/` cache; this
-    # job has no database, so it must build offline.
-    env:
-      SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v5
 
@@ -92,9 +88,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      # Build against the committed `.sqlx/` cache even though a database
-      # is present; the cache-vs-schema freshness check below runs online.
-      SQLX_OFFLINE: "true"
       # The same rust-lld memory bounds the coverage job carries.
       # Serialising lld caps each link's internal parallelism, but
       # cargo still links several test binaries concurrently, and with
@@ -118,7 +111,7 @@ jobs:
       - name: Apply Morpholog schema
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d postgres -f crates/morpholog-core/sql/schema.sql
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f crates/morpholog-core/sql/schema.sql
 
       # The committed `.sqlx/` cache is generated against the PG 17 floor;
       # check it against the live schema on that matrix entry, so a query
@@ -133,7 +126,7 @@ jobs:
         if: matrix.postgres == 17
         env:
           SQLX_OFFLINE: "false"
-        run: cargo sqlx prepare --workspace --check -- --all-targets --all-features
+        run: cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
 
       # Sync, pure crates - no DB, parallel.
       - name: test (core, parallel)
@@ -185,9 +178,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      # Builds use the committed `.sqlx/` cache; this job builds the CLI
-      # without applying the schema, so it must not reach for the live DB.
-      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v5
@@ -252,9 +242,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      # Build against the committed `.sqlx/` cache; the schema is applied
-      # for the test run, not for compile-time query checking.
-      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v5
@@ -285,7 +272,7 @@ jobs:
       - name: Apply Morpholog schema
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d postgres -f crates/morpholog-core/sql/schema.sql
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f crates/morpholog-core/sql/schema.sql
 
       # Coverage runs the full workspace test suite under llvm-cov.
       # PG-backed tests share one schema and must run serially.

@@ -394,14 +394,15 @@ async fn load_state(
         return Ok(State::default());
     }
 
-    // PredicateName is opaque to sqlx; bind the names as text for the
-    // `predicate_name` text column's `ANY(...)` filter.
-    let scope: Vec<&str> = scope.iter().map(PredicateName::as_str).collect();
+    // PredicateName is opaque to sqlx; bind the names as `text[]` for the
+    // `predicate_name` text column's `ANY(...)` filter (the macro infers
+    // `&[String]` for the array parameter).
+    let scope: Vec<String> = scope.iter().map(|p| p.as_str().to_owned()).collect();
     let rows = sqlx::query!(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          WHERE predicate_name = ANY($1)",
-        &scope as &[&str],
+        &scope[..],
     )
     .fetch_all(&mut **tx)
     .await
