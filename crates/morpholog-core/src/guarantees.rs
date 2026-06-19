@@ -23,6 +23,7 @@ use crate::ir::{Program, Prop};
 /// One guarantee derived from one invariant: the impossible state it
 /// rules out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Guarantee {
     /// The invariant's name.
     pub invariant: String,

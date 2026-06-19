@@ -59,6 +59,7 @@ use crate::lint::{collect_implications, positive_claims};
 /// guarantee and is checked at commit regardless; the gate is the
 /// front-line filter. See the module doc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GateFrontLoad {
     /// The invariant this gate front-loads.
     pub invariant: String,
@@ -82,6 +83,7 @@ pub struct GateFrontLoad {
 /// One precondition on one transformation: a `require` gate or a
 /// `bind` unique-lookup, rendered, with the predicates it consults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GateControl {
     /// `"require"` or `"bind"` - the statement form the precondition
     /// takes. A `require` is a yes/no condition; a `bind` demands
@@ -101,6 +103,7 @@ pub struct GateControl {
 
 /// Every precondition of one transformation, in body order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TransformationControls {
     pub transformation: String,
     pub gates: Vec<GateControl>,
@@ -110,6 +113,7 @@ pub struct TransformationControls {
 /// (per-transformation gates) and what can never be true (the
 /// invariant guarantees).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ControlMatrix {
     pub program: String,
     pub transformations: Vec<TransformationControls>,

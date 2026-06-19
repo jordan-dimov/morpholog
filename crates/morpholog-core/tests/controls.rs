@@ -208,6 +208,14 @@ fn rendered_matrix_shows_the_front_loads_link_and_failure_shape() {
 }
 
 #[test]
+fn the_control_matrix_is_deterministic() {
+    // Links derive from sorted sets and declaration-ordered walks, so two
+    // runs over the same programme are identical - what a compliance
+    // mapping cited rule by rule must be able to rely on.
+    assert_eq!(controls(&mini()), controls(&mini()));
+}
+
+#[test]
 fn a_gateless_transformation_renders_its_invariant_only_admission() {
     // A transformation with no require/bind preconditions is governed
     // by the invariants alone; the matrix says so rather than showing
