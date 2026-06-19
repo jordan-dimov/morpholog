@@ -843,8 +843,6 @@ pub async fn load_scoped_state(
 /// memory at a time; hardcoded until a real history forces tuning.
 const REPLAY_CHUNK: i64 = 1024;
 
-/// The audit table's full column tuple, shared by the fetch-all
-/// helper and the keyset page.
 /// One raw `morpholog.audit` row as `query_as!` decodes it (DB shape
 /// only); turned into a typed [`AuditRow`] by [`decode_audit_row`].
 /// Field order matches the SELECT column order in the listing queries.
@@ -1256,8 +1254,8 @@ pub async fn list_outbox_rows(
     status_filter: Option<&str>,
     intent_type_filter: Option<&str>,
 ) -> Result<Vec<OutboxRow>, PgError> {
-    // `sqlx::query_as` has no optional bind parameters, so each filter
-    // combination is a distinct statement.
+    // The macro needs one literal statement per filter shape, so each
+    // filter combination is a distinct query.
     let rows = match (status_filter, intent_type_filter) {
         (Some(status), Some(intent_type)) => sqlx::query_as!(
             OutboxRowRaw,
