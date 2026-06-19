@@ -309,7 +309,7 @@ pub(crate) fn collect_implications<'a>(
 /// is retracted, which is the opposite of the bug. `Defined` calls
 /// descend into their bodies (with a seen-set, mirroring the analysis
 /// walkers), since a named condition hides its claims behind the call.
-fn positive_claims(
+pub(crate) fn positive_claims(
     prop: &Prop,
     positive: bool,
     definitions: DefinitionIndex<'_>,

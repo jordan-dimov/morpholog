@@ -344,6 +344,18 @@ pub(crate) fn declared_supplier_predicates(program: &Program) -> BTreeSet<Predic
     out
 }
 
+/// Every predicate a transformation's body asserts (`admit`), descending
+/// into `for` bodies. Used by the control matrix to decide which
+/// invariants a transformation could trigger.
+pub(crate) fn predicates_asserted_by(
+    transformation: &crate::ir::Transformation,
+    out: &mut BTreeSet<PredicateName>,
+) {
+    for stmt in &transformation.body {
+        collect_asserted(stmt, out);
+    }
+}
+
 /// Every predicate a statement asserts (descending into `For` bodies).
 fn collect_asserted(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
     match stmt {

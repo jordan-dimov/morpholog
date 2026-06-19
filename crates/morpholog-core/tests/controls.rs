@@ -112,6 +112,97 @@ fn rendered_matrix_reads_as_the_auditor_view() {
 }
 
 #[test]
+fn a_gate_front_loads_the_invariant_it_pre_checks() {
+    let matrix = controls(&mini());
+    let decide = &matrix.transformations[0];
+
+    // The require gate (body order: after the bind) demands the two
+    // distinct verifications the standing invariant enforces, so it
+    // front-loads that invariant through the shared MatchVerified.
+    let require_gate = &decide.gates[1];
+    assert_eq!(require_gate.form, "require");
+    assert_eq!(require_gate.front_loads.len(), 1, "{require_gate:?}");
+    let link = &require_gate.front_loads[0];
+    assert_eq!(link.invariant, "decision_rests_on_two_distinct_verifiers");
+    assert_eq!(link.shared, vec!["MatchVerified"]);
+    // The failure mode is rendered mechanically as `A and not (C)`, and
+    // is present even though this implication-shaped invariant has no
+    // `Guarantee::forbids` (only the `not(..)` shape populates that).
+    assert!(matrix.guarantees[0].forbids.is_none());
+    assert!(
+        link.failure_shape.contains("Decision"),
+        "{}",
+        link.failure_shape
+    );
+    assert!(
+        link.failure_shape.contains("and not ("),
+        "{}",
+        link.failure_shape
+    );
+
+    // The bind looks up MatchRecorded - disjoint from the invariant's
+    // consequent (MatchVerified) - so it front-loads nothing.
+    assert!(
+        decide.gates[0].front_loads.is_empty(),
+        "{:?}",
+        decide.gates[0]
+    );
+}
+
+#[test]
+fn a_shared_predicate_with_unrelated_arguments_still_links_as_syntactic() {
+    // The relation is predicate-name overlap, not entailment: a gate and
+    // an invariant consequent that both mention `Standing` link even when
+    // the arguments are unrelated. That is honest only because the surface
+    // calls it a shared predicate / front-loads, never a proof. This test
+    // pins the no-overclaim behaviour, not a desirable precise link.
+    let p = program("syntactic_overlap")
+        .predicates(vec![
+            predicate("Thing").subject("t").build(),
+            predicate("Standing").subject("x").build(),
+        ])
+        .invariants(vec![invariant(
+            "thing_needs_standing",
+            implies(
+                claim("Thing", vec![var("t")]),
+                claim("Standing", vec![var("t")]),
+            ),
+        )])
+        .transformations(vec![morpholog_core::ir_builder::transformation(
+            "make_thing",
+            params(&["t", "other"]),
+            vec![
+                require(claim("Standing", vec![var("other")])),
+                assert_("Thing", vec![var("t")]),
+            ],
+        )])
+        .build();
+    assert!(p.validate().is_ok(), "{:?}", p.validate());
+    let gate = &controls(&p).transformations[0].gates[0];
+    assert_eq!(
+        gate.front_loads.len(),
+        1,
+        "predicate overlap links even with unrelated args"
+    );
+    assert_eq!(gate.front_loads[0].shared, vec!["Standing"]);
+}
+
+#[test]
+fn rendered_matrix_shows_the_front_loads_link_and_failure_shape() {
+    let rendered = render_controls(&controls(&mini()));
+    for fragment in [
+        "front-loads invariant `decision_rests_on_two_distinct_verifiers`",
+        "shared: MatchVerified",
+        "failure shape:",
+    ] {
+        assert!(
+            rendered.contains(fragment),
+            "`{fragment}` not in:\n{rendered}"
+        );
+    }
+}
+
+#[test]
 fn a_gateless_transformation_renders_its_invariant_only_admission() {
     // A transformation with no require/bind preconditions is governed
     // by the invariants alone; the matrix says so rather than showing
