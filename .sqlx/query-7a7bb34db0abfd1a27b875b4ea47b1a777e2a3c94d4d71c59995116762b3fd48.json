@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "one",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7a7bb34db0abfd1a27b875b4ea47b1a777e2a3c94d4d71c59995116762b3fd48"
+}

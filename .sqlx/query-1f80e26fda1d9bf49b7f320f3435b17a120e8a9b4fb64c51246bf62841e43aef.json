@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE morpholog.outbox\n         SET compensation_transition_id=$2\n         WHERE intent_id=$1\n           AND status='failed'\n           AND compensation_transition_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f80e26fda1d9bf49b7f320f3435b17a120e8a9b4fb64c51246bf62841e43aef"
+}

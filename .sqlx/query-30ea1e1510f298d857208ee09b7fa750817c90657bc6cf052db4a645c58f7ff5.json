@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                kind, rule, invariant_version, reason, rejected_at\n         FROM morpholog.rejections\n         ORDER BY rejected_at, rejection_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rejection_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "transformation_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "arguments",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "actor",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "rule",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "invariant_version",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "rejected_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "30ea1e1510f298d857208ee09b7fa750817c90657bc6cf052db4a645c58f7ff5"
+}

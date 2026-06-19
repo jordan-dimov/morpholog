@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT predicate_name, arguments\n                     FROM morpholog.claims\n                     WHERE (predicate_name, arguments) > ($2, $3)\n                     ORDER BY predicate_name, arguments\n                     LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "predicate_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "arguments",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "532908e67cab1344c885e11ca66a1e443f2396ca47ec494c48027387b68f2165"
+}

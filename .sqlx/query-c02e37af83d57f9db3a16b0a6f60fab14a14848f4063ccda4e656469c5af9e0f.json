@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM morpholog_read.derived_refreshes WHERE refresh_id <> $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c02e37af83d57f9db3a16b0a6f60fab14a14848f4063ccda4e656469c5af9e0f"
+}

@@ -1,0 +1,114 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE morpholog.outbox\n         SET status='compensation_in_progress',\n             locked_by=$1,\n             lock_expires_at=now() + ($2::bigint * interval '1 second')\n         WHERE intent_id = (\n             SELECT intent_id\n             FROM morpholog.outbox\n             WHERE intent_id=$3\n               AND status='failed'\n               AND compensation_transition_id IS NULL\n             FOR UPDATE SKIP LOCKED\n         )\n         RETURNING intent_id, transition_id, intent_type, arguments,\n                   idempotency_key, status, attempt_count, enqueued_at,\n                   last_attempt_at, delivered_at, failed_at, failure_reason,\n                   next_attempt_at, compensation_transition_id, locked_by,\n                   lock_expires_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "intent_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "transition_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "intent_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "arguments",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "idempotency_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "attempt_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "enqueued_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "last_attempt_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "delivered_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "failed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "failure_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "next_attempt_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "compensation_transition_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 14,
+        "name": "locked_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "lock_expires_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8db2d462fbbb6adc1dfbcbb2439e7f90c473854252fa8e56f6270f1ef6df1494"
+}

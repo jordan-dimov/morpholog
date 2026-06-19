@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id, asserted_claims, retracted_claims, committed_at\n                     FROM morpholog.audit\n                     WHERE (committed_at, transition_id) <= ($1, $2)\n                     ORDER BY committed_at, transition_id\n                     LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "asserted_claims",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "retracted_claims",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "committed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c9bfd513918f7d660e434143f0a60aeec7707d5a4081f93d505a89743892861b"
+}

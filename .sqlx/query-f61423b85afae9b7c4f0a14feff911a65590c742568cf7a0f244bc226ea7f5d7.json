@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog_read.derived_refreshes\n            (refresh_id, model_hash, refreshed_at,\n             source_snapshot_transition_id, source_snapshot_committed_at,\n             derived_claim_count)\n         VALUES ($1, $2, now(), $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f61423b85afae9b7c4f0a14feff911a65590c742568cf7a0f244bc226ea7f5d7"
+}
