@@ -837,45 +837,39 @@ const REPLAY_CHUNK: i64 = 1024;
 
 /// The audit table's full column tuple, shared by the fetch-all
 /// helper and the keyset page.
-type AuditRowTuple = (
-    Uuid,
-    String,
-    serde_json::Value,
-    serde_json::Value,
-    i32,
-    serde_json::Value,
-    serde_json::Value,
-    serde_json::Value,
-    serde_json::Value,
-    DateTime<Utc>,
-);
+/// One raw `morpholog.audit` row as `query_as!` decodes it (DB shape
+/// only); turned into a typed [`AuditRow`] by [`decode_audit_row`].
+/// Field order matches the SELECT column order in the listing queries.
+struct AuditRowRaw {
+    transition_id: Uuid,
+    transformation_name: String,
+    arguments: serde_json::Value,
+    actor: serde_json::Value,
+    invariant_epoch: i32,
+    invariants_checked: serde_json::Value,
+    asserted_claims: serde_json::Value,
+    retracted_claims: serde_json::Value,
+    emitted_intents: serde_json::Value,
+    committed_at: DateTime<Utc>,
+}
 
-const AUDIT_COLUMNS: &str = "transition_id, transformation_name, arguments, actor,
-                invariant_epoch, invariants_checked,
-                asserted_claims, retracted_claims, emitted_intents,
-                committed_at";
+/// The audit columns, in the order [`AuditRowRaw`]'s fields and the
+/// listing queries' SELECTs share. Inlined as a literal in each
+/// `query_as!` (macros cannot interpolate a runtime column list); kept
+/// here as the one place that documents the canonical order.
+//   transition_id, transformation_name, arguments, actor,
+//   invariant_epoch, invariants_checked,
+//   asserted_claims, retracted_claims, emitted_intents, committed_at
 
-fn decode_audit_row(row: AuditRowTuple) -> Result<AuditRow, PgError> {
-    let (
-        transition_id,
-        transformation_name,
-        args_json,
-        actor_json,
-        invariant_epoch,
-        invariants_checked_json,
-        asserted_json,
-        retracted_json,
-        intents_json,
-        committed_at,
-    ) = row;
+fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     Ok(AuditRow {
-        transition_id,
-        transformation_name: TransformationName::from(transformation_name),
-        arguments: serde_json::from_value(args_json)?,
+        transition_id: row.transition_id,
+        transformation_name: TransformationName::from(row.transformation_name),
+        arguments: serde_json::from_value(row.arguments)?,
         // Decode the tagged actor JSON and extract the subject,
         // erroring at this boundary if the column somehow holds a
         // non-subject value.
-        actor: match serde_json::from_value::<EvalValue>(actor_json)? {
+        actor: match serde_json::from_value::<EvalValue>(row.actor)? {
             EvalValue::Subject(s) => s,
             other => {
                 return Err(PgError::InvalidState(format!(
@@ -883,12 +877,12 @@ fn decode_audit_row(row: AuditRowTuple) -> Result<AuditRow, PgError> {
                 )));
             }
         },
-        invariant_epoch,
-        invariants_checked: serde_json::from_value(invariants_checked_json)?,
-        asserted_claims: serde_json::from_value(asserted_json)?,
-        retracted_claims: serde_json::from_value(retracted_json)?,
-        emitted_intents: serde_json::from_value(intents_json)?,
-        committed_at,
+        invariant_epoch: row.invariant_epoch,
+        invariants_checked: serde_json::from_value(row.invariants_checked)?,
+        asserted_claims: serde_json::from_value(row.asserted_claims)?,
+        retracted_claims: serde_json::from_value(row.retracted_claims)?,
+        emitted_intents: serde_json::from_value(row.emitted_intents)?,
+        committed_at: row.committed_at,
     })
 }
 
@@ -905,11 +899,14 @@ fn decode_audit_row(row: AuditRowTuple) -> Result<AuditRow, PgError> {
 /// [`list_audit_rows_page`] under [`audit_resume_watermark`], which
 /// is what `inspect audit` streams.
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
-    let rows: Vec<AuditRowTuple> = sqlx::query_as(&format!(
-        "SELECT {AUDIT_COLUMNS}
+    let rows = sqlx::query_as!(
+        AuditRowRaw,
+        "SELECT transition_id, transformation_name, arguments, actor,
+                invariant_epoch, invariants_checked,
+                asserted_claims, retracted_claims, emitted_intents, committed_at
          FROM morpholog.audit
          ORDER BY committed_at, transition_id"
-    ))
+    )
     .fetch_all(pool)
     .await
     .map_err(classify)?;
@@ -932,58 +929,70 @@ pub async fn list_audit_rows_page(
     horizon: Option<DateTime<Utc>>,
     limit: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
-    let rows: Vec<AuditRowTuple> = match (&cursor, &horizon) {
+    let rows = match (&cursor, &horizon) {
         (None, None) => {
-            sqlx::query_as(&format!(
-                "SELECT {AUDIT_COLUMNS}
+            sqlx::query_as!(
+                AuditRowRaw,
+                "SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at
                  FROM morpholog.audit
                  ORDER BY committed_at, transition_id
-                 LIMIT $1"
-            ))
-            .bind(limit)
+                 LIMIT $1",
+                limit,
+            )
             .fetch_all(&mut *conn)
             .await
         }
         (Some((at, id)), None) => {
-            sqlx::query_as(&format!(
-                "SELECT {AUDIT_COLUMNS}
+            sqlx::query_as!(
+                AuditRowRaw,
+                "SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                  ORDER BY committed_at, transition_id
-                 LIMIT $1"
-            ))
-            .bind(limit)
-            .bind(at)
-            .bind(*id)
+                 LIMIT $1",
+                limit,
+                at,
+                *id,
+            )
             .fetch_all(&mut *conn)
             .await
         }
         (None, Some(h)) => {
-            sqlx::query_as(&format!(
-                "SELECT {AUDIT_COLUMNS}
+            sqlx::query_as!(
+                AuditRowRaw,
+                "SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at
                  FROM morpholog.audit
                  WHERE committed_at < $2
                  ORDER BY committed_at, transition_id
-                 LIMIT $1"
-            ))
-            .bind(limit)
-            .bind(*h)
+                 LIMIT $1",
+                limit,
+                *h,
+            )
             .fetch_all(&mut *conn)
             .await
         }
         (Some((at, id)), Some(h)) => {
-            sqlx::query_as(&format!(
-                "SELECT {AUDIT_COLUMNS}
+            sqlx::query_as!(
+                AuditRowRaw,
+                "SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                    AND committed_at < $4
                  ORDER BY committed_at, transition_id
-                 LIMIT $1"
-            ))
-            .bind(limit)
-            .bind(at)
-            .bind(*id)
-            .bind(*h)
+                 LIMIT $1",
+                limit,
+                at,
+                *id,
+                *h,
+            )
             .fetch_all(&mut *conn)
             .await
         }

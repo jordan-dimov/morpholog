@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                invariant_epoch, invariants_checked,\n                asserted_claims, retracted_claims, emitted_intents, committed_at\n         FROM morpholog.audit\n         ORDER BY committed_at, transition_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "transformation_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "arguments",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "actor",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "invariant_epoch",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "invariants_checked",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "asserted_claims",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "retracted_claims",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "emitted_intents",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "committed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e2a750761e48d56d8d2287d16d7821fd0d1feb8397a36810de1667ca9b202009"
+}
