@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE morpholog.outbox\n         SET status='failed',\n             compensation_transition_id=$3,\n             locked_by=NULL,\n             lock_expires_at=NULL\n         WHERE intent_id=$1\n           AND status='compensation_in_progress'\n           AND locked_by=$2\n           AND lock_expires_at > now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "42b071f25c0527e334672b13bf45b40f88dc13534e0748328f1cf23c07a6c7e6"
+}

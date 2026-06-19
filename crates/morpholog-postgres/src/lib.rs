@@ -1242,11 +1242,20 @@ pub async fn list_rejection_rows(pool: &PgPool) -> Result<Vec<RejectionRow>, PgE
 ///
 /// For other statuses or intent-type filtering, use [`list_outbox_rows`].
 pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
-    let rows: Vec<OutboxRowRaw> = sqlx::query_as(OUTBOX_SELECT_ALL_COLUMNS)
-        .bind("pending")
-        .fetch_all(pool)
-        .await
-        .map_err(classify)?;
+    let rows = sqlx::query_as!(
+        OutboxRowRaw,
+        "SELECT intent_id, transition_id, intent_type, arguments,
+                idempotency_key, status, attempt_count, enqueued_at,
+                last_attempt_at, delivered_at, failed_at, failure_reason,
+                next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
+         FROM morpholog.outbox
+         WHERE status = $1
+         ORDER BY enqueued_at, intent_id",
+        "pending",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
     rows.into_iter().map(decode_outbox_row).collect()
 }
 
@@ -1264,47 +1273,56 @@ pub async fn list_outbox_rows(
 ) -> Result<Vec<OutboxRow>, PgError> {
     // `sqlx::query_as` has no optional bind parameters, so each filter
     // combination is a distinct statement.
-    let rows: Vec<OutboxRowRaw> = match (status_filter, intent_type_filter) {
-        (Some(status), Some(intent_type)) => sqlx::query_as(
+    let rows = match (status_filter, intent_type_filter) {
+        (Some(status), Some(intent_type)) => sqlx::query_as!(
+            OutboxRowRaw,
             "SELECT intent_id, transition_id, intent_type, arguments,
                     idempotency_key, status, attempt_count, enqueued_at,
                     last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by,
-                    lock_expires_at
+                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
              FROM morpholog.outbox
              WHERE status = $1 AND intent_type = $2
              ORDER BY enqueued_at, intent_id",
+            status,
+            intent_type,
         )
-        .bind(status)
-        .bind(intent_type)
         .fetch_all(pool)
         .await
         .map_err(classify)?,
-        (Some(status), None) => sqlx::query_as(OUTBOX_SELECT_ALL_COLUMNS)
-            .bind(status)
-            .fetch_all(pool)
-            .await
-            .map_err(classify)?,
-        (None, Some(intent_type)) => sqlx::query_as(
+        (Some(status), None) => sqlx::query_as!(
+            OutboxRowRaw,
             "SELECT intent_id, transition_id, intent_type, arguments,
                     idempotency_key, status, attempt_count, enqueued_at,
                     last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by,
-                    lock_expires_at
+                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
+             FROM morpholog.outbox
+             WHERE status = $1
+             ORDER BY enqueued_at, intent_id",
+            status,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(classify)?,
+        (None, Some(intent_type)) => sqlx::query_as!(
+            OutboxRowRaw,
+            "SELECT intent_id, transition_id, intent_type, arguments,
+                    idempotency_key, status, attempt_count, enqueued_at,
+                    last_attempt_at, delivered_at, failed_at, failure_reason,
+                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
              FROM morpholog.outbox
              WHERE intent_type = $1
              ORDER BY enqueued_at, intent_id",
+            intent_type,
         )
-        .bind(intent_type)
         .fetch_all(pool)
         .await
         .map_err(classify)?,
-        (None, None) => sqlx::query_as(
+        (None, None) => sqlx::query_as!(
+            OutboxRowRaw,
             "SELECT intent_id, transition_id, intent_type, arguments,
                     idempotency_key, status, attempt_count, enqueued_at,
                     last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by,
-                    lock_expires_at
+                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
              FROM morpholog.outbox
              ORDER BY enqueued_at, intent_id",
         )
@@ -1315,73 +1333,46 @@ pub async fn list_outbox_rows(
     rows.into_iter().map(decode_outbox_row).collect()
 }
 
-/// Single source of truth for the outbox column list so the
-/// `OutboxRowRaw` tuple, `decode_outbox_row`, and the SQL evolve
-/// together.
-const OUTBOX_SELECT_ALL_COLUMNS: &str = "SELECT intent_id, transition_id, intent_type, arguments,
-            idempotency_key, status, attempt_count, enqueued_at,
-            last_attempt_at, delivered_at, failed_at, failure_reason,
-            next_attempt_at, compensation_transition_id, locked_by,
-            lock_expires_at
-     FROM morpholog.outbox
-     WHERE status = $1
-     ORDER BY enqueued_at, intent_id";
-
-type OutboxRowRaw = (
-    Uuid,                  // intent_id
-    Uuid,                  // transition_id
-    String,                // intent_type
-    serde_json::Value,     // arguments
-    String,                // idempotency_key
-    String,                // status
-    i32,                   // attempt_count
-    DateTime<Utc>,         // enqueued_at
-    Option<DateTime<Utc>>, // last_attempt_at
-    Option<DateTime<Utc>>, // delivered_at
-    Option<DateTime<Utc>>, // failed_at
-    Option<String>,        // failure_reason
-    Option<DateTime<Utc>>, // next_attempt_at
-    Option<Uuid>,          // compensation_transition_id
-    Option<String>,        // locked_by
-    Option<DateTime<Utc>>, // lock_expires_at
-);
+/// One raw `morpholog.outbox` row as `query_as!` decodes it (DB shape
+/// only); turned into a typed [`OutboxRow`] by [`decode_outbox_row`].
+/// Field order matches the SELECT column order in the queries below.
+struct OutboxRowRaw {
+    intent_id: Uuid,
+    transition_id: Uuid,
+    intent_type: String,
+    arguments: serde_json::Value,
+    idempotency_key: String,
+    status: String,
+    attempt_count: i32,
+    enqueued_at: DateTime<Utc>,
+    last_attempt_at: Option<DateTime<Utc>>,
+    delivered_at: Option<DateTime<Utc>>,
+    failed_at: Option<DateTime<Utc>>,
+    failure_reason: Option<String>,
+    next_attempt_at: Option<DateTime<Utc>>,
+    compensation_transition_id: Option<Uuid>,
+    locked_by: Option<String>,
+    lock_expires_at: Option<DateTime<Utc>>,
+}
 
 fn decode_outbox_row(row: OutboxRowRaw) -> Result<OutboxRow, PgError> {
-    let (
-        intent_id,
-        transition_id,
-        intent_type,
-        args_json,
-        idempotency_key,
-        status,
-        attempt_count,
-        enqueued_at,
-        last_attempt_at,
-        delivered_at,
-        failed_at,
-        failure_reason,
-        next_attempt_at,
-        compensation_transition_id,
-        locked_by,
-        lock_expires_at,
-    ) = row;
     Ok(OutboxRow {
-        intent_id,
-        transition_id,
-        intent_type,
-        arguments: serde_json::from_value(args_json)?,
-        idempotency_key,
-        status,
-        attempt_count,
-        enqueued_at,
-        last_attempt_at,
-        delivered_at,
-        failed_at,
-        failure_reason,
-        next_attempt_at,
-        compensation_transition_id,
-        locked_by,
-        lock_expires_at,
+        intent_id: row.intent_id,
+        transition_id: row.transition_id,
+        intent_type: row.intent_type,
+        arguments: serde_json::from_value(row.arguments)?,
+        idempotency_key: row.idempotency_key,
+        status: row.status,
+        attempt_count: row.attempt_count,
+        enqueued_at: row.enqueued_at,
+        last_attempt_at: row.last_attempt_at,
+        delivered_at: row.delivered_at,
+        failed_at: row.failed_at,
+        failure_reason: row.failure_reason,
+        next_attempt_at: row.next_attempt_at,
+        compensation_transition_id: row.compensation_transition_id,
+        locked_by: row.locked_by,
+        lock_expires_at: row.lock_expires_at,
     })
 }
 
@@ -1413,7 +1404,7 @@ pub async fn mark_outbox_delivered(
     intent_id: Uuid,
     worker_id: &str,
 ) -> Result<OutboxUpdate, PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET status='delivered',
              delivered_at=now(),
@@ -1423,9 +1414,9 @@ pub async fn mark_outbox_delivered(
          WHERE intent_id=$1
            AND locked_by=$2
            AND lock_expires_at > now()",
+        intent_id,
+        worker_id,
     )
-    .bind(intent_id)
-    .bind(worker_id)
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -1462,7 +1453,7 @@ pub async fn mark_outbox_transient_attempt(
     worker_id: &str,
     next_attempt_at: DateTime<Utc>,
 ) -> Result<OutboxUpdate, PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET status='pending',
              attempt_count=attempt_count+1,
@@ -1473,10 +1464,10 @@ pub async fn mark_outbox_transient_attempt(
          WHERE intent_id=$1
            AND locked_by=$2
            AND lock_expires_at > now()",
+        intent_id,
+        worker_id,
+        next_attempt_at,
     )
-    .bind(intent_id)
-    .bind(worker_id)
-    .bind(next_attempt_at)
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -1501,7 +1492,7 @@ pub async fn mark_outbox_failed(
     worker_id: &str,
     reason: &str,
 ) -> Result<OutboxUpdate, PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET status='failed',
              failed_at=now(),
@@ -1513,10 +1504,10 @@ pub async fn mark_outbox_failed(
          WHERE intent_id=$1
            AND locked_by=$2
            AND lock_expires_at > now()",
+        intent_id,
+        worker_id,
+        reason,
     )
-    .bind(intent_id)
-    .bind(worker_id)
-    .bind(reason)
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -1565,15 +1556,15 @@ pub async fn record_compensation(
     intent_id: Uuid,
     compensation_transition_id: Uuid,
 ) -> Result<(), PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET compensation_transition_id=$2
          WHERE intent_id=$1
            AND status='failed'
            AND compensation_transition_id IS NULL",
+        intent_id,
+        compensation_transition_id,
     )
-    .bind(intent_id)
-    .bind(compensation_transition_id)
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -1643,11 +1634,12 @@ pub async fn claim_pending_outbox_row(
     claim_before: DateTime<Utc>,
 ) -> Result<Option<OutboxRow>, PgError> {
     let lease_secs = lease_duration_to_secs(lease_duration)?;
-    let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
+    let row_opt = sqlx::query_as!(
+        OutboxRowRaw,
         "UPDATE morpholog.outbox
          SET status='in_progress',
              locked_by=$1,
-             lock_expires_at=now() + ($2 * interval '1 second')
+             lock_expires_at=now() + ($2::bigint * interval '1 second')
          WHERE intent_id = (
              SELECT intent_id
              FROM morpholog.outbox
@@ -1667,11 +1659,11 @@ pub async fn claim_pending_outbox_row(
                    last_attempt_at, delivered_at, failed_at, failure_reason,
                    next_attempt_at, compensation_transition_id, locked_by,
                    lock_expires_at",
+        worker_id,
+        lease_secs,
+        intent_type,
+        claim_before,
     )
-    .bind(worker_id)
-    .bind(lease_secs)
-    .bind(intent_type)
-    .bind(claim_before)
     .fetch_optional(pool)
     .await
     .map_err(classify)?;
@@ -1696,7 +1688,7 @@ pub async fn release_outbox_claim(
     intent_id: Uuid,
     worker_id: &str,
 ) -> Result<OutboxUpdate, PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET status='pending',
              locked_by=NULL,
@@ -1704,9 +1696,9 @@ pub async fn release_outbox_claim(
          WHERE intent_id=$1
            AND locked_by=$2
            AND lock_expires_at > now()",
+        intent_id,
+        worker_id,
     )
-    .bind(intent_id)
-    .bind(worker_id)
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -1800,11 +1792,12 @@ pub async fn begin_compensation(
     lease_duration: std::time::Duration,
 ) -> Result<Option<OutboxRow>, PgError> {
     let lease_secs = lease_duration_to_secs(lease_duration)?;
-    let row_opt: Option<OutboxRowRaw> = sqlx::query_as(
+    let row_opt = sqlx::query_as!(
+        OutboxRowRaw,
         "UPDATE morpholog.outbox
          SET status='compensation_in_progress',
              locked_by=$1,
-             lock_expires_at=now() + ($2 * interval '1 second')
+             lock_expires_at=now() + ($2::bigint * interval '1 second')
          WHERE intent_id = (
              SELECT intent_id
              FROM morpholog.outbox
@@ -1818,10 +1811,10 @@ pub async fn begin_compensation(
                    last_attempt_at, delivered_at, failed_at, failure_reason,
                    next_attempt_at, compensation_transition_id, locked_by,
                    lock_expires_at",
+        worker_id,
+        lease_secs,
+        intent_id,
     )
-    .bind(worker_id)
-    .bind(lease_secs)
-    .bind(intent_id)
     .fetch_optional(pool)
     .await
     .map_err(classify)?;
@@ -1848,7 +1841,7 @@ pub async fn complete_compensation(
     worker_id: &str,
     compensation_transition_id: Uuid,
 ) -> Result<OutboxUpdate, PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET status='failed',
              compensation_transition_id=$3,
@@ -1858,10 +1851,10 @@ pub async fn complete_compensation(
            AND status='compensation_in_progress'
            AND locked_by=$2
            AND lock_expires_at > now()",
+        intent_id,
+        worker_id,
+        compensation_transition_id,
     )
-    .bind(intent_id)
-    .bind(worker_id)
-    .bind(compensation_transition_id)
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -1899,7 +1892,7 @@ pub async fn mark_compensation_failed(
     worker_id: &str,
     reason: &str,
 ) -> Result<OutboxUpdate, PgError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "UPDATE morpholog.outbox
          SET status='compensation_failed',
              failure_reason=$3,
@@ -1909,10 +1902,10 @@ pub async fn mark_compensation_failed(
            AND status='compensation_in_progress'
            AND locked_by=$2
            AND lock_expires_at > now()",
+        intent_id,
+        worker_id,
+        reason,
     )
-    .bind(intent_id)
-    .bind(worker_id)
-    .bind(reason)
     .execute(pool)
     .await
     .map_err(classify)?;
