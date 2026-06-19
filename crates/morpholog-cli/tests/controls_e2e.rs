@@ -59,6 +59,8 @@ fn controls_prose_shows_gates_and_guarantees() {
         "decision_needs_two_distinct",
         // The cross-link: the decide gate front-loads the standing rule.
         "front-loads invariant `decision_needs_two_distinct`",
+        "triggered by: Decision",
+        "shared: Verified",
         "failure shape:",
     ] {
         assert!(stdout.contains(fragment), "`{fragment}` not in:\n{stdout}");
@@ -97,6 +99,14 @@ fn controls_json_carries_the_structured_matrix() {
     let require_gate = gates.iter().find(|g| g["form"] == "require").unwrap();
     let link = &require_gate["front_loads"][0];
     assert_eq!(link["invariant"], "decision_needs_two_distinct");
+    assert!(
+        link["triggered_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "Decision"),
+        "{link}"
+    );
     assert!(
         link["shared"]
             .as_array()

@@ -60,6 +60,11 @@ fn biometric_two_verifications_gate_front_loads_its_standing_invariant() {
         .find(|l| l.invariant == "decision_rests_on_two_distinct_prior_verifications")
         .expect("the decision gate front-loads its standing invariant");
     assert!(
+        link.triggered_by
+            .contains(&"IdentificationDecision".to_string()),
+        "{link:?}"
+    );
+    assert!(
         link.shared.contains(&"MatchVerified".to_string()),
         "{link:?}"
     );

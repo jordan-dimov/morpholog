@@ -124,6 +124,9 @@ fn a_gate_front_loads_the_invariant_it_pre_checks() {
     assert_eq!(require_gate.front_loads.len(), 1, "{require_gate:?}");
     let link = &require_gate.front_loads[0];
     assert_eq!(link.invariant, "decision_rests_on_two_distinct_verifiers");
+    // Both sides of the correspondence: the admitted predicate that puts
+    // the invariant in play, and the shared consequent predicate.
+    assert_eq!(link.triggered_by, vec!["Decision"]);
     assert_eq!(link.shared, vec!["MatchVerified"]);
     // The failure mode is rendered mechanically as `A and not (C)`, and
     // is present even though this implication-shaped invariant has no
@@ -184,6 +187,7 @@ fn a_shared_predicate_with_unrelated_arguments_still_links_as_syntactic() {
         1,
         "predicate overlap links even with unrelated args"
     );
+    assert_eq!(gate.front_loads[0].triggered_by, vec!["Thing"]);
     assert_eq!(gate.front_loads[0].shared, vec!["Standing"]);
 }
 
@@ -192,6 +196,7 @@ fn rendered_matrix_shows_the_front_loads_link_and_failure_shape() {
     let rendered = render_controls(&controls(&mini()));
     for fragment in [
         "front-loads invariant `decision_rests_on_two_distinct_verifiers`",
+        "triggered by: Decision",
         "shared: MatchVerified",
         "failure shape:",
     ] {

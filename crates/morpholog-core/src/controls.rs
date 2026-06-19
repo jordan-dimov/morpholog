@@ -12,22 +12,25 @@
 //! It also draws the cross-link the two questions share: which gate
 //! **front-loads** which invariant. A gate front-loads an invariant when
 //! this transformation can trigger that invariant (it admits a predicate
-//! the invariant's antecedent rests on) and the gate positively requires
-//! a predicate the invariant's consequent also requires - so the gate
-//! pre-checks, at action time, a condition the invariant enforces over
-//! committed state. This is a syntactic *correspondence*, not a proof of
-//! entailment: a gate checks bound arguments in the pre-state, the
-//! invariant is the standing guarantee over the candidate state and is
-//! checked at commit regardless, other transformations exist, and a
-//! shared predicate name need not mean the same business condition. The
-//! map says "this `require` is the front line for that rule", never "this
+//! the invariant's antecedent rests on) and the gate positively
+//! references a predicate the invariant's consequent also references - so
+//! the gate pre-checks, at action time, a condition the invariant
+//! enforces over committed state. This is a syntactic *correspondence*,
+//! not a proof of entailment: a gate checks bound arguments in the
+//! pre-state, the invariant is the standing guarantee over the candidate
+//! state and is checked at commit regardless, other transformations
+//! exist, and a shared predicate name need not mean the same business
+//! condition (`positive_claims` collects polarity-positive references,
+//! including across an `or`, which is weaker than "requires"). The map
+//! says "this `require` is the front line for that rule", never "this
 //! gate makes that rule unbreakable" - the same honesty boundary as the
-//! unsupplied-antecedent lint. The shared
-//! predicates are surfaced so the reader sees the nuance (a gate may be
-//! stronger or weaker than the invariant; a consequent with no positive
-//! predicate - a `sum(..) <= ..` cap - is correctly left unlinked). The
-//! failure mode each link front-loads against is rendered mechanically as
-//! `<antecedent> and not (<consequent>)`.
+//! unsupplied-antecedent lint. Each link names both sides: the predicate
+//! this transformation admits that triggers the invariant, and the shared
+//! consequent predicate (surfaced so the reader sees the nuance - a gate
+//! may be stronger or weaker than the invariant; a consequent with no
+//! positive predicate - a `sum(..) <= ..` cap - is correctly left
+//! unlinked). The failure mode each link front-loads against is rendered
+//! mechanically as `<antecedent> and not (<consequent>)`.
 //!
 //! Deterministic and mechanical, like every legibility surface here:
 //! the words come only from declared names and the formatter, never
@@ -51,16 +54,20 @@ use crate::lint::{collect_implications, positive_claims};
 
 /// One invariant a gate **front-loads**: the gate pre-checks, at action
 /// time, a condition the invariant enforces over committed state. This
-/// is a syntactic *correspondence* through shared positive predicates,
-/// not a proof of entailment - the invariant is the standing guarantee
-/// and is checked at commit regardless; the gate is the front-line
-/// filter. See the module doc.
+/// is a syntactic *correspondence* through shared positive predicate
+/// references, not a proof of entailment - the invariant is the standing
+/// guarantee and is checked at commit regardless; the gate is the
+/// front-line filter. See the module doc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GateProtection {
+pub struct GateFrontLoad {
     /// The invariant this gate front-loads.
     pub invariant: String,
-    /// The predicates the gate and the invariant's consequent both
-    /// positively require - the overlap that makes the correspondence,
+    /// The predicates this transformation admits that the invariant's
+    /// antecedent rests on - why the invariant is in play here at all,
+    /// sorted. The antecedent side of the correspondence.
+    pub triggered_by: Vec<String>,
+    /// The predicates referenced positively by both the gate and the
+    /// invariant's consequent - the overlap that makes the correspondence,
     /// sorted. The reader checks the nuance (a gate may be stronger or
     /// weaker than its invariant; sharing a predicate name is not proof
     /// the same business condition is meant).
@@ -85,11 +92,11 @@ pub struct GateControl {
     /// The claim predicates this precondition consults, sorted - the
     /// evidence an auditor checks the condition against.
     pub consults: Vec<String>,
-    /// The invariants this gate front-loads (see [`GateProtection`]).
+    /// The invariants this gate front-loads (see [`GateFrontLoad`]).
     /// Empty for a gate with no standing-rule counterpart - e.g. an
     /// authority gate, where the doctrine is action-time-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub front_loads: Vec<GateProtection>,
+    pub front_loads: Vec<GateFrontLoad>,
 }
 
 /// Every precondition of one transformation, in body order.
@@ -226,20 +233,27 @@ fn gate(
     let mut consults = BTreeSet::new();
     predicates_referenced_by_prop(prop, definitions, &mut consults);
 
-    // What the gate positively requires - the signature we match against
-    // each triggerable invariant's consequent.
+    // The predicates the gate references positively - the signature we
+    // match against each triggerable invariant's consequent.
     let mut gate_sig = BTreeSet::new();
     positive_claims(prop, true, defs, &mut BTreeSet::new(), &mut gate_sig);
 
-    // A gate front-loads an invariant when this transformation can
-    // trigger it (asserts a predicate in its antecedent) AND the gate
-    // requires a predicate the invariant's consequent also requires. One
-    // link per matched implication, in invariant-declaration then
-    // discovery order.
+    // A gate front-loads an invariant when this transformation can trigger
+    // it (admits a predicate the antecedent rests on) AND the gate
+    // references a predicate the invariant's consequent also references.
+    // One link per matched implication, naming both sides, in
+    // invariant-declaration then discovery order.
     let front_loads = implications
         .iter()
-        .filter(|imp| !imp.antecedent.is_disjoint(asserted))
         .filter_map(|imp| {
+            let triggered_by: Vec<String> = imp
+                .antecedent
+                .intersection(asserted)
+                .map(ToString::to_string)
+                .collect();
+            if triggered_by.is_empty() {
+                return None;
+            }
             let shared: Vec<String> = gate_sig
                 .intersection(&imp.consequent)
                 .map(ToString::to_string)
@@ -247,8 +261,9 @@ fn gate(
             if shared.is_empty() {
                 return None;
             }
-            Some(GateProtection {
+            Some(GateFrontLoad {
                 invariant: imp.invariant.clone(),
+                triggered_by,
                 shared,
                 failure_shape: imp.failure_shape.clone(),
             })
@@ -289,11 +304,12 @@ pub fn render_controls(matrix: &ControlMatrix) -> String {
                 out.push_str(&format!("      consults: {}\n", g.consults.join(", ")));
             }
             for p in &g.front_loads {
-                out.push_str(&format!("      front-loads invariant `{}`", p.invariant));
-                if !p.shared.is_empty() {
-                    out.push_str(&format!(" (shared: {})", p.shared.join(", ")));
-                }
-                out.push('\n');
+                out.push_str(&format!("      front-loads invariant `{}`\n", p.invariant));
+                out.push_str(&format!(
+                    "        triggered by: {}\n",
+                    p.triggered_by.join(", ")
+                ));
+                out.push_str(&format!("        shared: {}\n", p.shared.join(", ")));
                 out.push_str(&format!("        failure shape: {}\n", p.failure_shape));
             }
         }
