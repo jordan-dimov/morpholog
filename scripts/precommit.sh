@@ -18,6 +18,11 @@
 
 set -euo pipefail
 
+# sqlx query macros verify against the committed `.sqlx/` offline cache,
+# so every cargo step below builds with no database. Freshness against
+# the live schema is checked separately when DATABASE_URL is set.
+export SQLX_OFFLINE=true
+
 step() {
     printf '\n=== %s ===\n' "$1"
 }
@@ -63,6 +68,16 @@ cargo test \
     -p morpholog-surface \
     -p morpholog-test-support \
     --all-targets --locked
+
+step 'sqlx offline cache freshness (cargo sqlx prepare --check)'
+if [ -z "${DATABASE_URL:-}" ]; then
+    echo '  DATABASE_URL not set; skipping (CI checks the cache against the schema).'
+elif ! command -v sqlx >/dev/null 2>&1; then
+    echo '  sqlx-cli not installed; skipping. Install it with:'
+    echo '    cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls'
+else
+    SQLX_OFFLINE=false cargo sqlx prepare --workspace --check -- --all-targets --all-features
+fi
 
 step 'async / PG-backed test suites (morpholog-cli / postgres / outbox / bench smoke)'
 if [ -z "${DATABASE_URL:-}" ]; then

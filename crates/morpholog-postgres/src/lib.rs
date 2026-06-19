@@ -397,21 +397,21 @@ async fn load_state(
     // PredicateName is opaque to sqlx; bind the names as text for the
     // `predicate_name` text column's `ANY(...)` filter.
     let scope: Vec<&str> = scope.iter().map(PredicateName::as_str).collect();
-    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          WHERE predicate_name = ANY($1)",
+        &scope as &[&str],
     )
-    .bind(&scope)
     .fetch_all(&mut **tx)
     .await
     .map_err(classify)?;
 
     let mut claims = Vec::with_capacity(rows.len());
-    for (predicate, args_json) in rows {
-        let args: Vec<EvalValue> = serde_json::from_value(args_json)?;
+    for row in rows {
+        let args: Vec<EvalValue> = serde_json::from_value(row.arguments)?;
         claims.push(ClaimInstance {
-            predicate: PredicateName::from(predicate),
+            predicate: PredicateName::from(row.predicate_name),
             args,
         });
     }
@@ -560,14 +560,14 @@ async fn write_accepted(
     // idempotent no-op).
     for claim in asserted_claims {
         let args_json: serde_json::Value = serde_json::to_value(&claim.args)?;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
              VALUES ($1, $2, $3)
              ON CONFLICT (predicate_name, arguments) DO NOTHING",
+            claim.predicate.as_str(),
+            args_json,
+            transition_id,
         )
-        .bind(claim.predicate.as_str())
-        .bind(&args_json)
-        .bind(transition_id)
         .execute(&mut **tx)
         .await
         .map_err(classify)?;
@@ -1123,20 +1123,23 @@ pub async fn audit_resume_watermark(pool: &PgPool) -> Result<DateTime<Utc>, PgEr
     // count rides along: a session this role cannot see renders its
     // query text as the literal '<insufficient privilege>' and hides
     // `xact_start`, which would silently corrupt the minimum.
-    let (horizon, hidden): (DateTime<Utc>, i64) = sqlx::query_as(
-        "SELECT coalesce(min(xact_start), now()),
-                count(*) FILTER (WHERE query = '<insufficient privilege>')
-         FROM pg_stat_activity
-         WHERE datname = current_database()
-           AND pid <> pg_backend_pid()",
+    // `horizon!`: coalesce(_, now()) can never be null. `hidden!`:
+    // count(*) can never be null. The `!` overrides tell sqlx what the
+    // aggregate expressions guarantee but cannot prove.
+    let row = sqlx::query!(
+        r#"SELECT coalesce(min(xact_start), now()) AS "horizon!",
+                  count(*) FILTER (WHERE query = '<insufficient privilege>') AS "hidden!"
+           FROM pg_stat_activity
+           WHERE datname = current_database()
+             AND pid <> pg_backend_pid()"#,
     )
     .fetch_one(pool)
     .await
     .map_err(classify)?;
-    if hidden > 0 {
-        return Err(PgError::StatVisibility { hidden });
+    if row.hidden > 0 {
+        return Err(PgError::StatVisibility { hidden: row.hidden });
     }
-    Ok(horizon)
+    Ok(row.horizon)
 }
 
 /// One row of `morpholog.rejections` decoded into typed runtime
@@ -2098,13 +2101,13 @@ pub async fn refresh_derived(
             .iter()
             .map(|r| serde_json::to_value(&r.args))
             .collect::<Result<_, _>>()?;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO morpholog_read.derived_claims (refresh_id, predicate_name, arguments)
              SELECT $1, p, a FROM UNNEST($2::text[], $3::jsonb[]) AS t(p, a)",
+            refresh_id,
+            &predicates,
+            &arguments,
         )
-        .bind(refresh_id)
-        .bind(&predicates)
-        .bind(&arguments)
         .execute(&mut *tx)
         .await
         .map_err(classify)?;

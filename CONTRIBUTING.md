@@ -7,6 +7,7 @@ Notes for developers working on the codebase. For the project's framing and work
 - **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
 - **PostgreSQL 17+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
+- **`sqlx-cli`** (only when adding or changing a SQL query): the adapter's queries are compile-time-checked against the schema via a committed offline cache, and regenerating it uses the version-matched CLI: `cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls`. A normal build needs neither the CLI nor a database (see below).
 - **Python 3** (optional): the precommit script runs the generated-client template tests, and (with `DATABASE_URL`) the worked embedder end to end; both are skipped with a note when `python3` is absent. CI pins the generated client's declared floor; any local Python 3 is a smoke test.
 
 No Docker. No additional system dependencies.
@@ -57,6 +58,19 @@ python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 ```
 
 The PG-backed test suites share one schema and truncate it between tests; they must run serially (`--test-threads=1`). The `morpholog-bench` entry is its N=1 compatibility smoke test, not a scale run.
+
+### Compile-time-checked SQL
+
+The persistence adapter's queries are `sqlx::query!` / `query_as!` macros, verified against the real schema **at build time**. A normal build needs no database: it reads the committed offline cache in `.sqlx/` (the build runs with `SQLX_OFFLINE=true`, which precommit and CI set for you). A query that drifts from the schema is a compile error, not a runtime surprise.
+
+When you add or change a query, regenerate the cache against a disposable database and commit the result:
+
+```bash
+DATABASE_URL=postgres:///morpholog_sqlx_prep ./scripts/sqlx-prepare.sh
+git add .sqlx
+```
+
+The cache's provenance is `crates/morpholog-core/sql/schema.sql` applied to a clean PostgreSQL 17 database (the stated floor). Precommit and CI run `cargo sqlx prepare --workspace --check` against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
 
 ## Workspace layout
 
