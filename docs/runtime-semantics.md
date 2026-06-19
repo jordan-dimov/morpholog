@@ -128,7 +128,7 @@ Statement
   bind_one Prop                  -- unique lookup; replaces bindings with match
   let name = ValueExpr           -- value-producing binding
   let name = new Subject()       -- generates a fresh UUIDv7
-  assert Claim
+  assert Claim                   -- IR name; the surface verb is `admit`
   retract Pred(args...)          -- pattern-based; idempotent on zero matches
   for binding in collection: list of Statements  -- iteration; body is scoped
   emit Intent

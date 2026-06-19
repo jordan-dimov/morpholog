@@ -31,7 +31,7 @@ many rows and many tables. It can do exact decimal arithmetic. It can say "for
 all", "there exists", "the sum of". Those are the rules a `CHECK` constraint
 cannot express - the ones that live in application code today, and drift.
 
-**Now imagine the database had only one door for writes.** In Morpholog, state
+**The database has only one door for writes.** In Morpholog, state
 changes one way and one way only: you propose a change - some records to add,
 some to remove - and the runtime checks every invariant against the result. If
 anything would break, nothing happens, and the database is byte-for-byte what
@@ -393,16 +393,13 @@ the retrofit looks like this:
   hand. One bare `UPDATE` from any of them and the version history is quietly
   wrong. This is the guide's opening problem again, multiplied.
 
-None of this is exotic, by the way. The data-warehouse world has a name for
-part of it (slowly changing dimensions); the SQL standard has temporal tables.
-The cost is not inventing the techniques. The cost is that you are now the
-integrator of all of them at once, forever, in every code path that writes.
-
-Each piece is a place to get it subtly wrong, and the classic bug is the worst
-kind: it is silent. Someone reruns last quarter's report a year later, the
-effective-dating join is off by one boundary condition, and the report
-confidently shows 1200 where it should show 1000. Nothing errors. You find out
-in an audit.
+None of this is exotic - the warehouse world calls part of it slowly changing
+dimensions, the SQL standard has temporal tables. The cost is not inventing the
+techniques; it is that you are now the integrator of all of them at once,
+forever, in every code path that writes, and each is a place to get it silently
+wrong. Someone reruns last quarter's report a year later, the effective-dating
+join is off by one boundary condition, and it confidently shows 1200 where it
+should show 1000. Nothing errors. You find out in an audit.
 
 Now watch Morpholog do the whole thing.
 
@@ -614,6 +611,40 @@ log, and the replay is scoped to the predicates the view actually touches
 And consider what the alternative costs today: "what did the books say in
 June?" is usually a week of forensics, not a second and a half.
 
+### Reading governed state as SQL
+
+Your BI tool and your reporting stack speak SQL, not a CLI. So Morpholog hands
+them SQL. `generate views` emits a script of typed views - one per predicate,
+plus one per derived claim - over a read-only schema:
+
+```bash
+morpholog generate views revenue.morph
+```
+```sql
+-- View for base predicate `Revenue`.
+CREATE OR REPLACE VIEW "morpholog_views"."revenue" AS ...
+-- View for derived predicate `CurrentRevenue`.
+CREATE OR REPLACE VIEW "morpholog_views"."current_revenue" AS ...
+```
+
+The base-predicate views read live claims directly. The derived views read a
+cache the kernel fills, because a derived value (the exact decimal, the
+nanosecond instant) is computed by the kernel and SQL must not become a second
+evaluator that rounds it differently. You populate the cache out of band:
+
+```bash
+morpholog refresh derived revenue.morph
+```
+```
+refreshed 1 derived claim(s) from 1 derived predicate(s)
+  model: sha256:3056ed72...
+```
+
+Each refresh stamps the rules' hash, and the derived view shows rows only for a
+cache built from the *same* rules - so a stale or mismatched refresh reads as
+empty, never as a wrong number. The discipline holds on both sides: the kernel
+is the only thing that evaluates, and SQL only projects what it produced.
+
 ## Where this fits in your stack
 
 Morpholog is not your whole system. You drove it through its CLI just now,
@@ -621,9 +652,9 @@ with JSON arguments - and that is exactly how a real service embeds it. Your
 Python or TypeScript backend calls the `morpholog` binary as a subprocess.
 `morpholog schema` tells you the argument shape. `--args-named` takes the same
 JSON the schema describes - it looks just like an API request body. `morpholog
-run` commits, `morpholog explain` tells you why something was refused, and the
-outbox delivers the notifications each commit emits. No FFI, no generated
-client, no Rust toolchain in your app.
+propose` commits, `morpholog explain` tells you why something was refused, and
+the outbox delivers the notifications each commit emits. No FFI, no Rust
+toolchain in your app.
 
 Which brings us back to those `emit` lines you have been ignoring. Remember
 that the bank lives in its own systems - so when the figure was corrected,
@@ -669,14 +700,22 @@ exactly this pattern, driving a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
 contract in [`embedder-integration.md`](embedder-integration.md).
 
-Let's be honest about that snippet, though: a subprocess call is plumbing, and
-it reads like plumbing. What makes it tolerable is that it is *small* plumbing
-around a stable contract - the JSON going in and the receipt coming out are
-the real interface, and they are the same for every language. A native Python
-client that wraps the contract (`morpholog.propose(...)` returning a typed
-receipt, refusals as values) may well come later. It would change how the call
-looks, not what it means - anything you build against the receipt shape today
-carries over unchanged.
+That snippet is plumbing, and it reads like plumbing. So you do not have to
+write it: the binary generates a typed client from your own programme.
+
+```bash
+morpholog generate python-client revenue.morph --out ./revclient
+```
+```
+generated ./revclient/morpholog_client (3 transformations, 5 predicates, 3 intents)
+```
+
+What lands is a small, dependency-free package - a request model per
+transformation, envelope parsing, refusals as values - stamped with the hash of
+the rules it was built against, so the client and the binary cannot silently
+speak different contracts. The subprocess call above is still what runs
+underneath; the generated client is the ergonomic face over the same stable
+JSON, regenerated whenever the rules change.
 
 So the division of labour is: your UI, your analytics, your market data, your
 dashboards - all of it stays in the tools you already use. Morpholog owns the one
@@ -729,6 +768,53 @@ things to try with the program you already have:
 The gate refusals each trace to a `require` line you can point at in
 `revenue.morph`; the sloppy one traces to the invariant itself - and
 `morpholog explain` points at both kinds.
+
+## Auditing the rules
+
+So far you have read the *records* back. You can also read the *rules* back -
+the question an auditor or a controller asks before trusting the system at all:
+what does it forbid, what does it check, and is any of it dead text? Three
+commands answer that, straight off the same rules that decide admission.
+
+`inspect guarantees` lists what the model makes impossible:
+
+```bash
+morpholog inspect guarantees revenue.morph
+```
+```
+Guarantees of `reported_revenue` - states this model makes impossible:
+
+  one_figure_in_force_per_period
+    rule: (CurrentFigure(asset, period, a) and CurrentFigure(asset, period, b)) implies (a = b)
+  ...
+```
+
+`inspect controls` turns it around: per transformation, what must already be
+true before the action commits (its gates), beside those guarantees. Where a
+gate pre-checks the very condition an invariant enforces, it draws the line
+between them - naming which front-line gate *front-loads* which standing rule,
+and the failure each guards against. (This model's gates guard different ground
+than its two invariants, so no link is drawn here; the biometric example shows
+one where the verification gate front-loads its standing invariant.)
+
+`inspect coverage` replays the whole audit log and reports which rules have
+ever actually done work:
+
+```bash
+morpholog inspect coverage revenue.morph
+```
+```
+  one_figure_in_force_per_period - fired in 1 transition(s)
+  correction_chain_never_forks - NEVER FIRED: its condition never matched anything ...
+
+  report_revenue - 1 transition(s)
+  correct_revenue - never used
+```
+
+A rule that has never matched anything is dead text wearing an invariant's
+name - and now it gets named, instead of sitting in the source looking load-bearing.
+(Replay reports what *has* happened, never what *could*; `correction_chain_never_forks`
+is simply waiting for the first correction.)
 
 ## Say the rules on the declarations
 
@@ -879,6 +965,9 @@ that fired, with a caret on its line.
   generated rather than written.
 - The project [`README`](../README.md) - the wider pitch and the list of
   questions Morpholog is built to answer.
+- [`scope-and-ambition.md`](scope-and-ambition.md) and
+  [`roadmap.md`](roadmap.md) - what Morpholog is for, what it must never
+  become, and what is coming next.
 
 ### The complete `revenue.morph`
 

@@ -19,7 +19,7 @@ The whole product:
 3. Every transformation must preserve every active **invariant**.
 4. Therefore bad state cannot be committed.
 
-A corollary worth stating outright, because much of the value now lives there: since admissibility is decided by the invariants and not by whatever produced the proposal, the proposer does not have to be trusted. A person, a solver, a heuristic, a model, a genetic search - each only suggests a candidate next state; the runtime admits or refuses it on the same terms. This is what lets a business put untrusted intelligence to work: admissibility is enforced outside the intelligence, not entrusted to it.
+A corollary that has become the centre of the bet, not a footnote to it: since admissibility is decided by the invariants and not by whatever produced the proposal, **the proposer does not have to be trusted.** A person, a solver, a heuristic, a model, an agent, a genetic search - each only suggests a candidate next state; the runtime admits or refuses it on the same terms, and explains the refusal in the model's own vocabulary so the proposer can repair and retry. This is the thing that gets harder, not easier, as more of what proposes change is software you did not write and cannot audit line by line. Morpholog's answer is to stop trying to trust the proposer: legitimacy is enforced *outside* the intelligence, never asked *of* it. That is what lets a business put untrusted intelligence to work on the records that matter.
 
 Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class constructs over it - the rules and the actions. The other declarations a programme carries (`predicate`, `intent`, `define`, `derived`) are vocabulary, body grammar, and read-side, in the supporting tier below; none is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
 
@@ -112,7 +112,7 @@ This is the smallest possible step toward making claim vocabulary at scale manag
 
 A named, read-only computation over admitted claims - a trial balance, a running total, a report row - declared alongside the rules and computed by the same kernel, so a read can never show what an invariant would refuse. This single construct subsumes most of what other systems call "projections" or "read models": phase/lifecycle naming, balances and totals, current pointers re-expressed as derivable, report rows. It is how Morpholog owns the read side without becoming a query engine - the read side is a governed artefact, not a free query surface.
 
-**Status:** the first cut landed with the double-entry ledger's trial balance (`DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, computed on demand). Materialisation, invalidation, recursion, and visibility to invariants are deferred; see [`design-history.md`](design-history.md).
+**Status:** landed, and now materialised. The first cut arrived with the double-entry ledger's trial balance (`DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, computed on demand). Materialisation followed as a kernel-computed read cache - `refresh derived` enumerates through the kernel and stores the rows in a `morpholog_read` schema, and `generate views` emits typed SQL views (base predicates and derived) over them, so BI reads governed numbers as ordinary tables without the kernel becoming a query engine. The kernel stays the sole evaluator; SQL only projects. Recursion and visibility to invariants are still deferred; see [`design-history.md`](design-history.md).
 
 ### 3. As-of, as a single operator
 
@@ -127,20 +127,22 @@ This single primitive collapses the four temporal notions that ETRM and accounti
 
 No bitemporal schema is assumed at the modelling level. The v0 audit log already contains enough information to define as-of semantics by replay; performance may later require snapshots or materialised histories, but those are *implementation strategies* rather than *semantic primitives*. The semantics is "evaluate against the state that existed at T"; how to do that efficiently is a separate, contained question.
 
+**Status:** landed by replay. Reads and derived claims take `--as-of`, naming either a transition id or an RFC 3339 timestamp, and the kernel reconstructs the state that existed at that point from the audit log - no bitemporal columns in any schema. Snapshots and materialised histories remain the deferred optimisation, exactly as the semantics/strategy split above predicted.
+
 ### 4. Actor context on transitions
 
 The actor under whose authority a transition is being proposed is **transition context**, not a transformation parameter. Every `Transition` carries an `actor`; the audit log persists it; an invariant or a `require` can consult it through a reserved `Term::Actor` term without each transformation having to declare it. The shape becomes:
 
 ```
 transformation approve_journal(journal):
-    require HasRole($actor, finance_controller)
+    require HasRole(actor, finance_controller)
     require not Posted(journal)
-    assert JournalApproved(journal, $actor)
+    admit JournalApproved(journal, actor)
 ```
 
 Authority, delegation, approval limits, and segregation-of-duties are then modelled as claims (`HasRole(actor, role)`, `ApprovalAuthorityFor(actor, amount_cap)`, `DelegatedBy(delegate, delegator, scope)`), and invariants over those claims. No RBAC subsystem. No middleware. Two pieces working together: the affordance to consult "who proposed this" at *admission time* (`require` checks inside a transformation body, against the actor of the proposed transition), and the discipline to express authority itself as governed claims that invariants can constrain (consistency of the authority record, not its application to any specific proposal).
 
-The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation primitive `Term::Actor` followed, forced by the actor-authority worked example (now part of [`approval_controls`](../examples/04_approval_controls/)). Inside a `require` or an `assert`, `$actor` resolves to the actor of the proposing transition. Inside an invariant body, it raises `EvalError::UnboundActor` - the require-vs-invariant doctrine made enforceable by the runtime rather than convention.
+The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation primitive `Term::Actor` followed, forced by the actor-authority worked example (now part of [`approval_controls`](../examples/04_approval_controls/)). Inside a `require` or an `admit`, `actor` resolves to the actor of the proposing transition. Inside an invariant body, it raises `EvalError::UnboundActor` - the require-vs-invariant doctrine made enforceable by the runtime rather than convention.
 
 ### What is not in this list
 
