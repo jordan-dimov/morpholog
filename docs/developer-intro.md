@@ -510,9 +510,9 @@ That is not a string you grepped out of a stack trace. It is the exact missing
 claim and the named transformations that could supply it - structured enough
 that a program (or an AI agent proposing changes) can read the refusal, repair
 its proposal, and try again. And when the caller is a service rather than a
-person at a terminal, you do not need the second command: `morpholog propose
---explain-on-reject` attaches this same account to the rejection receipt
-itself, computed against the very state that refused.
+person at a terminal, you do not need the separate command:
+`morpholog propose --explain-on-reject` attaches this same account to the
+rejection receipt itself, computed against the very state that refused.
 
 ## What just happened
 
@@ -651,10 +651,10 @@ Morpholog is not your whole system. You drove it through its CLI just now,
 with JSON arguments - and that is exactly how a real service embeds it. Your
 Python or TypeScript backend calls the `morpholog` binary as a subprocess.
 `morpholog schema` tells you the argument shape. `--args-named` takes the same
-JSON the schema describes - it looks just like an API request body. `morpholog
-propose` commits, `morpholog explain` tells you why something was refused, and
-the outbox delivers the notifications each commit emits. No FFI, no Rust
-toolchain in your app.
+JSON the schema describes - it looks just like an API request body.
+`morpholog propose` commits, `morpholog explain` tells you why something was
+refused, and the outbox delivers the notifications each commit emits. No FFI,
+no Rust toolchain in your app.
 
 Which brings us back to those `emit` lines you have been ignoring. Remember
 that the bank lives in its own systems - so when the figure was corrected,
@@ -773,8 +773,8 @@ The gate refusals each trace to a `require` line you can point at in
 
 So far you have read the *records* back. You can also read the *rules* back -
 the question an auditor or a controller asks before trusting the system at all:
-what does it forbid, what does it check, and is any of it dead text? Three
-commands answer that, straight off the same rules that decide admission.
+what does it forbid, what does it check, and is any of it dead text? Reading
+the rules back answers that, straight off the same rules that decide admission.
 
 `inspect guarantees` lists what the model makes impossible:
 
@@ -810,9 +810,9 @@ morpholog inspect controls revenue.morph
 Where a gate pre-checks the very condition an invariant enforces, controls
 draws the line between them - naming which front-line gate *front-loads* which
 standing rule, and the failure each guards against. (This model's gates guard
-different ground than its two invariants, so no link is drawn here; the
-biometric example shows one where the verification gate front-loads its
-standing invariant.)
+different ground than its invariants, so no link is drawn here; the biometric
+example shows one where the verification gate front-loads its standing
+invariant.)
 
 `inspect coverage` replays the whole audit log and reports which rules have
 ever actually done work. After the report and the correction you ran:
@@ -979,10 +979,10 @@ that fired, with a caret on its line.
 - [`embedder-integration.md`](embedder-integration.md) - when you are ready to
   drive Morpholog from an application rather than a terminal: the pinned
   contract this guide's `propose()` sketch was secretly following, batch
-  import for many transitions in one call, and `morpholog generate
-  python-client` - one command that emits a complete, typed, dependency-free
-  Python client for your own programme, so the subprocess plumbing is
-  generated rather than written.
+  import for many transitions in one call, and
+  `morpholog generate python-client` - one command that emits a complete,
+  typed, dependency-free Python client for your own programme, so the
+  subprocess plumbing is generated rather than written.
 - The project [`README`](../README.md) - the wider pitch and the list of
   questions Morpholog is built to answer.
 - [`scope-and-ambition.md`](scope-and-ambition.md) and
