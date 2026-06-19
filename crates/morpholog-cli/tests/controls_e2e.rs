@@ -57,6 +57,11 @@ fn controls_prose_shows_gates_and_guarantees() {
         "a != b",
         "Always (invariants):",
         "decision_needs_two_distinct",
+        // The cross-link: the decide gate front-loads the standing rule.
+        "front-loads invariant `decision_needs_two_distinct`",
+        "triggered by: Decision",
+        "shared: Verified",
+        "failure shape:",
     ] {
         assert!(stdout.contains(fragment), "`{fragment}` not in:\n{stdout}");
     }
@@ -87,4 +92,53 @@ fn controls_json_carries_the_structured_matrix() {
     assert_eq!(gates[0]["consults"][0], "Match");
     assert!(gates.iter().any(|g| g["form"] == "require"));
     assert!(!v["guarantees"].as_array().unwrap().is_empty());
+
+    // The require gate front-loads the standing invariant; the bind, whose
+    // lookup is disjoint from the consequent, carries no link (the field is
+    // omitted when empty).
+    let require_gate = gates.iter().find(|g| g["form"] == "require").unwrap();
+    let link = &require_gate["front_loads"][0];
+    assert_eq!(link["invariant"], "decision_needs_two_distinct");
+    assert!(
+        link["triggered_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "Decision"),
+        "{link}"
+    );
+    assert!(
+        link["shared"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "Verified"),
+        "{link}"
+    );
+    assert!(
+        link["failure_shape"]
+            .as_str()
+            .unwrap()
+            .contains("and not (")
+    );
+    assert!(
+        gates[0].get("front_loads").is_none(),
+        "empty front_loads is omitted: {}",
+        gates[0]
+    );
+
+    // `verify` admits Verified, which no invariant antecedent rests on, so
+    // its gate front-loads nothing.
+    let verify = v["transformations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["transformation"] == "verify")
+        .expect("verify present");
+    for g in verify["gates"].as_array().unwrap() {
+        assert!(
+            g.get("front_loads").is_none(),
+            "verify gate has no link: {g}"
+        );
+    }
 }
