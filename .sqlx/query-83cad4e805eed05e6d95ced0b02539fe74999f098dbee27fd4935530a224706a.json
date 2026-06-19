@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.outbox (\n                intent_id, transition_id, intent_type, arguments, idempotency_key\n             ) VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "83cad4e805eed05e6d95ced0b02539fe74999f098dbee27fd4935530a224706a"
+}

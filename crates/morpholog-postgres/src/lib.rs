@@ -495,20 +495,20 @@ async fn write_rejection(
     let actor_json: serde_json::Value =
         serde_json::to_value(EvalValue::Subject(transition.actor.clone()))
             .map_err(PgError::Encoding)?;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO morpholog.rejections (
             rejection_id, transformation_name, arguments, actor,
             kind, rule, invariant_version, reason
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        Uuid::now_v7(),
+        transformation.name.as_str(),
+        args_json,
+        actor_json,
+        kind,
+        rule,
+        invariant_version,
+        reason.to_string(),
     )
-    .bind(Uuid::now_v7())
-    .bind(transformation.name.as_str())
-    .bind(&args_json)
-    .bind(&actor_json)
-    .bind(kind)
-    .bind(rule)
-    .bind(invariant_version)
-    .bind(reason.to_string())
     .execute(pool)
     .await
     .map_err(classify)?;
@@ -539,11 +539,11 @@ async fn write_accepted(
             continue;
         }
         let args_json: serde_json::Value = serde_json::to_value(&claim.args)?;
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "DELETE FROM morpholog.claims WHERE predicate_name = $1 AND arguments = $2",
+            claim.predicate.as_str(),
+            args_json,
         )
-        .bind(claim.predicate.as_str())
-        .bind(&args_json)
         .execute(&mut **tx)
         .await
         .map_err(classify)?;
@@ -582,27 +582,26 @@ async fn write_accepted(
             version: inv.version,
         })
         .collect();
-    sqlx::query(
+    // Serialise the actor via the tagged `EvalValue::Subject` so the
+    // `actor` column keeps its v0 shape (`#[serde(with = "actor_repr")]`
+    // does not apply when the field is serialised directly, only through
+    // `Transition`).
+    sqlx::query!(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        transition_id,
+        transformation.name.as_str(),
+        serde_json::to_value(&transition.args)?,
+        serde_json::to_value(EvalValue::Subject(transition.actor.clone()))?,
+        1_i32,
+        serde_json::to_value(&checked)?,
+        serde_json::to_value(asserted_claims)?,
+        serde_json::to_value(retracted_claims)?,
+        serde_json::to_value(emitted_intents)?,
     )
-    .bind(transition_id)
-    .bind(transformation.name.as_str())
-    .bind(serde_json::to_value(&transition.args)?)
-    // Serialise via the tagged `EvalValue::Subject` so the `actor` column
-    // keeps its v0 shape (`#[serde(with = "actor_repr")]` does not apply
-    // when the field is serialised directly, only through `Transition`).
-    .bind(serde_json::to_value(EvalValue::Subject(
-        transition.actor.clone(),
-    ))?)
-    .bind(1_i32)
-    .bind(serde_json::to_value(&checked)?)
-    .bind(serde_json::to_value(asserted_claims)?)
-    .bind(serde_json::to_value(retracted_claims)?)
-    .bind(serde_json::to_value(emitted_intents)?)
     .execute(&mut **tx)
     .await
     .map_err(classify)?;
@@ -612,16 +611,16 @@ async fn write_accepted(
         let intent_id = Uuid::now_v7();
         let idempotency_key = compute_idempotency_key(transition_id, intent)?;
         let args_json: serde_json::Value = serde_json::to_value(&intent.args)?;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO morpholog.outbox (
                 intent_id, transition_id, intent_type, arguments, idempotency_key
              ) VALUES ($1, $2, $3, $4, $5)",
+            intent_id,
+            transition_id,
+            intent.name.as_str(),
+            args_json,
+            idempotency_key,
         )
-        .bind(intent_id)
-        .bind(transition_id)
-        .bind(intent.name.as_str())
-        .bind(&args_json)
-        .bind(&idempotency_key)
         .execute(&mut **tx)
         .await
         .map_err(classify)?;
@@ -2078,18 +2077,18 @@ pub async fn refresh_derived(
     let write_start = Instant::now();
     let refresh_id = Uuid::now_v7();
     let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO morpholog_read.derived_refreshes
             (refresh_id, model_hash, refreshed_at,
              source_snapshot_transition_id, source_snapshot_committed_at,
              derived_claim_count)
          VALUES ($1, $2, now(), $3, $4, $5)",
+        refresh_id,
+        model_hash,
+        snapshot_tid,
+        snapshot_at,
+        rows.len() as i64,
     )
-    .bind(refresh_id)
-    .bind(model_hash)
-    .bind(snapshot_tid)
-    .bind(snapshot_at)
-    .bind(rows.len() as i64)
     .execute(&mut *tx)
     .await
     .map_err(classify)?;
@@ -2118,20 +2117,22 @@ pub async fn refresh_derived(
     // (cascading its rows). The just-published generation is now the only
     // one. Safe under MVCC: a reader mid-query keeps its snapshot of the
     // old generation.
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO morpholog_read.derived_active (singleton, refresh_id)
          VALUES (true, $1)
          ON CONFLICT (singleton) DO UPDATE SET refresh_id = EXCLUDED.refresh_id",
+        refresh_id,
     )
-    .bind(refresh_id)
     .execute(&mut *tx)
     .await
     .map_err(classify)?;
-    sqlx::query("DELETE FROM morpholog_read.derived_refreshes WHERE refresh_id <> $1")
-        .bind(refresh_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
+    sqlx::query!(
+        "DELETE FROM morpholog_read.derived_refreshes WHERE refresh_id <> $1",
+        refresh_id,
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(classify)?;
 
     tx.commit().await.map_err(classify)?;
     let write = write_start.elapsed();
