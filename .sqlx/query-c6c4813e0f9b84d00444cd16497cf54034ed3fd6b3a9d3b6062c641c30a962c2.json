@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(min(xact_start), now()) AS \"horizon!\",\n                  count(*) FILTER (WHERE query = '<insufficient privilege>') AS \"hidden!\"\n           FROM pg_stat_activity\n           WHERE datname = current_database()\n             AND pid <> pg_backend_pid()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "horizon!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "hidden!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "c6c4813e0f9b84d00444cd16497cf54034ed3fd6b3a9d3b6062c641c30a962c2"
+}

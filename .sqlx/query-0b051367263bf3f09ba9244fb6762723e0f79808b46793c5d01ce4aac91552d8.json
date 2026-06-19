@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog_read.derived_claims (refresh_id, predicate_name, arguments)\n             SELECT $1, p, a FROM UNNEST($2::text[], $3::jsonb[]) AS t(p, a)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b051367263bf3f09ba9244fb6762723e0f79808b46793c5d01ce4aac91552d8"
+}

@@ -1,0 +1,9 @@
+# sqlx query macros verify against the committed `.sqlx/` offline cache, so
+# every cargo invocation in this workspace builds with no database by default
+# - a plain `cargo build`, precommit, and CI all read the cache, not a live DB.
+#
+# Cache regeneration (`scripts/sqlx-prepare.sh`) and the CI/precommit freshness
+# check set a real `SQLX_OFFLINE=false`, which takes precedence over this
+# `[env]` default and makes those steps verify against the live schema.
+[env]
+SQLX_OFFLINE = "true"
