@@ -754,7 +754,11 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     .await
     .map_err(classify)?;
 
-    decode_claim_rows(rows.into_iter().map(|r| (r.predicate_name, r.arguments)).collect())
+    decode_claim_rows(
+        rows.into_iter()
+            .map(|r| (r.predicate_name, r.arguments))
+            .collect(),
+    )
 }
 
 /// Decode `(predicate_name, arguments)` rows into `ClaimInstance`s -
@@ -800,7 +804,11 @@ pub async fn list_claims_for_predicates(
     .await
     .map_err(classify)?;
 
-    decode_claim_rows(rows.into_iter().map(|r| (r.predicate_name, r.arguments)).collect())
+    decode_claim_rows(
+        rows.into_iter()
+            .map(|r| (r.predicate_name, r.arguments))
+            .collect(),
+    )
 }
 
 /// Load the current scoped pre-state a transformation would see, the
@@ -853,10 +861,10 @@ struct AuditRowRaw {
     committed_at: DateTime<Utc>,
 }
 
-/// The audit columns, in the order [`AuditRowRaw`]'s fields and the
-/// listing queries' SELECTs share. Inlined as a literal in each
-/// `query_as!` (macros cannot interpolate a runtime column list); kept
-/// here as the one place that documents the canonical order.
+// The audit columns, in the order `AuditRowRaw`'s fields and the listing
+// queries' SELECTs share. Inlined as a literal in each `query_as!`
+// (macros cannot interpolate a runtime column list); this note is the
+// one place that records the canonical order:
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at
@@ -1179,18 +1187,7 @@ pub struct RejectionRow {
 /// ordered by `(rejected_at, rejection_id)` - the same keyset order
 /// coverage replays in.
 pub async fn list_rejection_rows(pool: &PgPool) -> Result<Vec<RejectionRow>, PgError> {
-    type Row = (
-        Uuid,
-        String,
-        serde_json::Value,
-        serde_json::Value,
-        String,
-        String,
-        Option<i64>,
-        String,
-        DateTime<Utc>,
-    );
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT rejection_id, transformation_name, arguments, actor,
                 kind, rule, invariant_version, reason, rejected_at
          FROM morpholog.rejections
@@ -1201,38 +1198,26 @@ pub async fn list_rejection_rows(pool: &PgPool) -> Result<Vec<RejectionRow>, PgE
     .map_err(classify)?;
 
     rows.into_iter()
-        .map(
-            |(
-                rejection_id,
-                transformation_name,
-                args_json,
-                actor_json,
-                kind,
-                rule,
-                invariant_version,
-                reason,
-                rejected_at,
-            )| {
-                Ok(RejectionRow {
-                    rejection_id,
-                    transformation_name: TransformationName::from(transformation_name),
-                    arguments: serde_json::from_value(args_json)?,
-                    actor: match serde_json::from_value::<EvalValue>(actor_json)? {
-                        EvalValue::Subject(s) => s,
-                        other => {
-                            return Err(PgError::InvalidState(format!(
-                                "rejection actor is not a subject: {other:?}"
-                            )));
-                        }
-                    },
-                    kind,
-                    rule,
-                    invariant_version,
-                    reason,
-                    rejected_at,
-                })
-            },
-        )
+        .map(|row| {
+            Ok(RejectionRow {
+                rejection_id: row.rejection_id,
+                transformation_name: TransformationName::from(row.transformation_name),
+                arguments: serde_json::from_value(row.arguments)?,
+                actor: match serde_json::from_value::<EvalValue>(row.actor)? {
+                    EvalValue::Subject(s) => s,
+                    other => {
+                        return Err(PgError::InvalidState(format!(
+                            "rejection actor is not a subject: {other:?}"
+                        )));
+                    }
+                },
+                kind: row.kind,
+                rule: row.rule,
+                invariant_version: row.invariant_version,
+                reason: row.reason,
+                rejected_at: row.rejected_at,
+            })
+        })
         .collect()
 }
 
@@ -2411,40 +2396,42 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
     // sit in memory at once - only one chunk of rows does. The cursor
     // is the same (committed_at, transition_id) tuple every replay
     // path orders by.
-    type Row = (
-        Uuid,
-        String,
-        serde_json::Value,
-        serde_json::Value,
-        DateTime<Utc>,
-    );
+    struct Row {
+        transition_id: Uuid,
+        transformation_name: String,
+        asserted_claims: serde_json::Value,
+        retracted_claims: serde_json::Value,
+        committed_at: DateTime<Utc>,
+    }
     let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
     loop {
         let rows: Vec<Row> = match &cursor {
             None => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    Row,
                     "SELECT transition_id, transformation_name,
                             asserted_claims, retracted_claims, committed_at
                      FROM morpholog.audit
                      ORDER BY committed_at, transition_id
                      LIMIT $1",
+                    REPLAY_CHUNK,
                 )
-                .bind(REPLAY_CHUNK)
                 .fetch_all(&mut *tx)
                 .await
             }
             Some((after_at, after_id)) => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    Row,
                     "SELECT transition_id, transformation_name,
                             asserted_claims, retracted_claims, committed_at
                      FROM morpholog.audit
                      WHERE (committed_at, transition_id) > ($2, $3)
                      ORDER BY committed_at, transition_id
                      LIMIT $1",
+                    REPLAY_CHUNK,
+                    after_at,
+                    *after_id,
                 )
-                .bind(REPLAY_CHUNK)
-                .bind(after_at)
-                .bind(*after_id)
                 .fetch_all(&mut *tx)
                 .await
             }
@@ -2453,10 +2440,17 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
         let Some(last) = rows.last() else {
             break;
         };
-        cursor = Some((last.4, last.0));
+        cursor = Some((last.committed_at, last.transition_id));
         let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
 
-        for (transition_id, transformation_name, asserted_json, retracted_json, _) in rows {
+        for row in rows {
+            let Row {
+                transition_id,
+                transformation_name,
+                asserted_claims: asserted_json,
+                retracted_claims: retracted_json,
+                ..
+            } = row;
             let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
             let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
             let delta: std::collections::BTreeSet<PredicateName> = retracted
@@ -2515,32 +2509,40 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
     // snapshot so refusal counts and committed history describe one
     // consistent moment. Pure counting - no state folding - but the
     // same keyset shape, over the index made for it.
-    type RejRow = (Uuid, String, String, String, DateTime<Utc>);
+    struct RejRow {
+        rejection_id: Uuid,
+        transformation_name: String,
+        kind: String,
+        rule: String,
+        rejected_at: DateTime<Utc>,
+    }
     let mut rej_cursor: Option<(DateTime<Utc>, Uuid)> = None;
     loop {
         let rows: Vec<RejRow> = match &rej_cursor {
             None => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    RejRow,
                     "SELECT rejection_id, transformation_name, kind, rule, rejected_at
                      FROM morpholog.rejections
                      ORDER BY rejected_at, rejection_id
                      LIMIT $1",
+                    REPLAY_CHUNK,
                 )
-                .bind(REPLAY_CHUNK)
                 .fetch_all(&mut *tx)
                 .await
             }
             Some((after_at, after_id)) => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    RejRow,
                     "SELECT rejection_id, transformation_name, kind, rule, rejected_at
                      FROM morpholog.rejections
                      WHERE (rejected_at, rejection_id) > ($2, $3)
                      ORDER BY rejected_at, rejection_id
                      LIMIT $1",
+                    REPLAY_CHUNK,
+                    after_at,
+                    *after_id,
                 )
-                .bind(REPLAY_CHUNK)
-                .bind(after_at)
-                .bind(*after_id)
                 .fetch_all(&mut *tx)
                 .await
             }
@@ -2549,12 +2551,16 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
         let Some(last) = rows.last() else {
             break;
         };
-        rej_cursor = Some((last.4, last.0));
+        rej_cursor = Some((last.rejected_at, last.rejection_id));
         let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
 
-        for (rejection_id, transformation_name, kind, rule, _) in rows {
-            let invariant = (kind == REJECTION_KIND_INVARIANT).then_some(rule.as_str());
-            tracker.observe_rejection(invariant, &transformation_name, &rejection_id.to_string());
+        for row in rows {
+            let invariant = (row.kind == REJECTION_KIND_INVARIANT).then_some(row.rule.as_str());
+            tracker.observe_rejection(
+                invariant,
+                &row.transformation_name,
+                &row.rejection_id.to_string(),
+            );
         }
         if exhausted {
             break;
@@ -2615,32 +2621,38 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
     // helpers' (asserted_at, ...) contract is not needed - and the
     // claims table never has to fit in memory beyond the diff's own
     // accumulation.
+    struct ClaimRow {
+        predicate_name: String,
+        arguments: serde_json::Value,
+    }
     let mut rows: Vec<(String, serde_json::Value)> = Vec::new();
     let mut claims_cursor: Option<(String, serde_json::Value)> = None;
     loop {
-        let page: Vec<(String, serde_json::Value)> = match &claims_cursor {
+        let page: Vec<ClaimRow> = match &claims_cursor {
             None => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    ClaimRow,
                     "SELECT predicate_name, arguments
                      FROM morpholog.claims
                      ORDER BY predicate_name, arguments
                      LIMIT $1",
+                    REPLAY_CHUNK,
                 )
-                .bind(REPLAY_CHUNK)
                 .fetch_all(&mut *tx)
                 .await
             }
             Some((pred, args)) => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    ClaimRow,
                     "SELECT predicate_name, arguments
                      FROM morpholog.claims
                      WHERE (predicate_name, arguments) > ($2, $3)
                      ORDER BY predicate_name, arguments
                      LIMIT $1",
+                    REPLAY_CHUNK,
+                    pred,
+                    args,
                 )
-                .bind(REPLAY_CHUNK)
-                .bind(pred)
-                .bind(args)
                 .fetch_all(&mut *tx)
                 .await
             }
@@ -2649,9 +2661,9 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
         let Some(last) = page.last() else {
             break;
         };
-        claims_cursor = Some((last.0.clone(), last.1.clone()));
+        claims_cursor = Some((last.predicate_name.clone(), last.arguments.clone()));
         let exhausted = (page.len() as i64) < REPLAY_CHUNK;
-        rows.extend(page);
+        rows.extend(page.into_iter().map(|r| (r.predicate_name, r.arguments)));
         if exhausted {
             break;
         }
@@ -2759,39 +2771,46 @@ async fn reconstruct_inner(
     // pages inside the caller's snapshot keep memory at one chunk
     // regardless of log length - the same shape as every other
     // replay-order read.
-    type Row = (Uuid, serde_json::Value, serde_json::Value, DateTime<Utc>);
+    struct Row {
+        transition_id: Uuid,
+        asserted_claims: serde_json::Value,
+        retracted_claims: serde_json::Value,
+        committed_at: DateTime<Utc>,
+    }
     let mut replay = ReplaySet::new();
     let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
     loop {
         let rows: Vec<Row> = match &cursor {
             None => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    Row,
                     "SELECT transition_id, asserted_claims, retracted_claims, committed_at
                      FROM morpholog.audit
                      WHERE (committed_at, transition_id) <= ($1, $2)
                      ORDER BY committed_at, transition_id
                      LIMIT $3",
+                    target_committed_at,
+                    target_transition_id,
+                    REPLAY_CHUNK,
                 )
-                .bind(target_committed_at)
-                .bind(target_transition_id)
-                .bind(REPLAY_CHUNK)
                 .fetch_all(&mut *conn)
                 .await
             }
             Some((after_at, after_id)) => {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    Row,
                     "SELECT transition_id, asserted_claims, retracted_claims, committed_at
                      FROM morpholog.audit
                      WHERE (committed_at, transition_id) <= ($1, $2)
                        AND (committed_at, transition_id) > ($4, $5)
                      ORDER BY committed_at, transition_id
                      LIMIT $3",
+                    target_committed_at,
+                    target_transition_id,
+                    REPLAY_CHUNK,
+                    after_at,
+                    *after_id,
                 )
-                .bind(target_committed_at)
-                .bind(target_transition_id)
-                .bind(REPLAY_CHUNK)
-                .bind(after_at)
-                .bind(*after_id)
                 .fetch_all(&mut *conn)
                 .await
             }
@@ -2800,12 +2819,12 @@ async fn reconstruct_inner(
         let Some(last) = rows.last() else {
             break;
         };
-        cursor = Some((last.3, last.0));
+        cursor = Some((last.committed_at, last.transition_id));
         let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
 
-        for (_, asserted_json, retracted_json, _) in rows {
-            let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
-            let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
+        for row in rows {
+            let asserted: Vec<ClaimInstance> = serde_json::from_value(row.asserted_claims)?;
+            let retracted: Vec<ClaimInstance> = serde_json::from_value(row.retracted_claims)?;
 
             // Within each transition: retractions first, then
             // assertions. Matches build_candidate_state in the kernel.

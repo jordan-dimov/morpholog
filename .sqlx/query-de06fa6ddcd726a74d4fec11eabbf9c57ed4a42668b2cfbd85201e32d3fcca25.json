@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rejection_id, transformation_name, kind, rule, rejected_at\n                     FROM morpholog.rejections\n                     ORDER BY rejected_at, rejection_id\n                     LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rejection_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "transformation_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "rule",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "rejected_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "de06fa6ddcd726a74d4fec11eabbf9c57ed4a42668b2cfbd85201e32d3fcca25"
+}

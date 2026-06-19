@@ -1065,11 +1065,14 @@ fn outcome_summary(outcome: &PgProposalOutcome) -> String {
 mod smoke {
     //! Minimal-size compatibility smoke test: runs every scenario once
     //! against the configured database, asserting only that each
-    //! completes - never a timing. It exists to catch schema or API
-    //! drift in the bench's hand-written SQL (the kind that silently
+    //! completes - never a timing. The persistence adapter's own
+    //! query/schema drift is now a compile error (its queries are
+    //! `sqlx::query!` macros checked against the committed `.sqlx/`
+    //! cache); this catches behavioural drift in the scenarios and drift
+    //! in the bench's *own* hand-written SQL (the kind that silently
     //! broke the as-of fixture when `morpholog.audit` gained its NOT
-    //! NULL `actor` column) on the next PG-backed test run, rather
-    //! than the next time someone runs the scale bench by hand.
+    //! NULL `actor` column) on the next PG-backed test run, rather than
+    //! the next time someone runs the scale bench by hand.
     //!
     //! Gated on `DATABASE_URL`: skips (passes) when unset, so the pure
     //! workspace stays green without a database. A single test runs
