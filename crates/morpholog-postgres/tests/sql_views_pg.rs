@@ -36,7 +36,7 @@ const SENTINEL_HASH: &str =
 /// reset rather than sharing `common::reset_db_and_read_cache`.
 async fn reset(pool: &PgPool) {
     sqlx::raw_sql(
-        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE; \
+        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE; \
          TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE; \
          DROP SCHEMA IF EXISTS morpholog_views CASCADE; \

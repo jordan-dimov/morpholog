@@ -15,9 +15,11 @@ pub use sqlx::PgPool;
 
 mod as_of;
 mod audit;
+mod checkpoints;
 mod claims;
 mod derived;
 mod error;
+mod merkle;
 mod outbox;
 mod propose;
 mod rejections;
@@ -32,6 +34,9 @@ pub use as_of::{
 pub use audit::{
     AuditRow, AuditTail, audit_cursor_for, audit_resume_watermark, begin_audit_tail,
     list_audit_rows, list_audit_rows_page,
+};
+pub use checkpoints::{
+    Checkpoint, CheckpointOutcome, TreeVerification, create_checkpoint, verify_audit_tree,
 };
 pub use claims::{list_claims, list_claims_for_predicates, load_scoped_state};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};

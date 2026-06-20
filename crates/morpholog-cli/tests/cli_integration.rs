@@ -35,7 +35,7 @@ async fn reset_db() {
     let pool = PgPool::connect(&database_url())
         .await
         .expect("connect to test DB");
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");
@@ -417,8 +417,15 @@ async fn verify_is_consistent_after_normal_commits() {
     let (status, stdout, stderr) = run_cli(&["verify"]);
     assert!(status.success(), "verify should exit zero; {stderr}");
     let outcome: Value = serde_json::from_str(&stdout).expect("verify output is JSON");
-    assert_eq!(outcome["status"], "consistent", "got: {stdout}");
-    assert_eq!(outcome["transitions"], 2, "two commits replayed: {stdout}");
+    assert_eq!(outcome["replay"]["status"], "consistent", "got: {stdout}");
+    assert_eq!(
+        outcome["replay"]["transitions"], 2,
+        "two commits replayed: {stdout}"
+    );
+    assert_eq!(
+        outcome["tree"]["status"], "intact",
+        "no checkpoints is still an intact tree: {stdout}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -427,8 +434,9 @@ async fn verify_on_empty_database_is_consistent() {
     let (status, stdout, _stderr) = run_cli(&["verify"]);
     assert!(status.success(), "empty database is trivially consistent");
     let outcome: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(outcome["status"], "consistent");
-    assert_eq!(outcome["transitions"], 0);
+    assert_eq!(outcome["replay"]["status"], "consistent");
+    assert_eq!(outcome["replay"]["transitions"], 0);
+    assert_eq!(outcome["tree"]["status"], "intact");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -480,9 +488,11 @@ async fn verify_detects_an_out_of_band_edit() {
     let (status, stdout, _stderr) = run_cli(&["verify"]);
     assert!(!status.success(), "divergence must exit non-zero");
     let outcome: Value = serde_json::from_str(&stdout).expect("verify output is JSON");
-    assert_eq!(outcome["status"], "divergent", "got: {stdout}");
-    let unjustified = outcome["only_in_claims_table"].as_array().unwrap();
-    let missing = outcome["only_in_replay"].as_array().unwrap();
+    assert_eq!(outcome["replay"]["status"], "divergent", "got: {stdout}");
+    let unjustified = outcome["replay"]["only_in_claims_table"]
+        .as_array()
+        .unwrap();
+    let missing = outcome["replay"]["only_in_replay"].as_array().unwrap();
     assert!(
         unjustified
             .iter()
@@ -495,6 +505,37 @@ async fn verify_detects_an_out_of_band_edit() {
             .any(|c| c["predicate"] == "JournalEntry" && c["args"][0]["value"] == "entry_001"),
         "the original claim must be reported as missing: {stdout}"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn checkpoint_then_verify_against_the_anchor() {
+    reset_db().await;
+    post_balanced_entry("c1", 100);
+    post_balanced_entry("c2", 200);
+
+    // `checkpoint` prints the checkpoint as JSON - the external anchor.
+    let (status, cp_stdout, stderr) = run_cli(&["checkpoint"]);
+    assert!(status.success(), "checkpoint should succeed; {stderr}");
+    let cp: Value = serde_json::from_str(&cp_stdout).expect("checkpoint output is JSON");
+    assert_eq!(cp["status"], "created");
+    assert_eq!(cp["tree_size"], 2, "two committed rows: {cp_stdout}");
+    assert!(
+        cp["root_hash"].as_str().unwrap().starts_with("sha256:"),
+        "root is a self-describing hash: {cp_stdout}"
+    );
+
+    // Save it and verify the tree against it.
+    let anchor = std::env::temp_dir().join(format!("morpholog_anchor_{}.json", std::process::id()));
+    std::fs::write(&anchor, &cp_stdout).unwrap();
+    let (status, stdout, stderr) = run_cli(&["verify", "--anchor-file", anchor.to_str().unwrap()]);
+    std::fs::remove_file(&anchor).ok();
+    assert!(
+        status.success(),
+        "verify against a fresh anchor should pass; {stderr}\n{stdout}"
+    );
+    let outcome: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(outcome["tree"]["status"], "intact", "got: {stdout}");
+    assert_eq!(outcome["tree"]["checkpoints"], 1);
 }
 
 // ============================================================

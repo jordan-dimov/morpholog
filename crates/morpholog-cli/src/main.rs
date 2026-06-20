@@ -122,7 +122,22 @@ enum Command {
     /// exits zero, divergent prints the claims each record holds that
     /// the other does not and exits one. Read-only; an empty database
     /// is trivially consistent.
-    Verify(DatabaseArgs),
+    ///
+    /// Also recomputes the audit Merkle tree against its checkpoints
+    /// (tamper evidence). Pass `--anchor-file` with a checkpoint saved
+    /// earlier by `checkpoint` to detect a coordinated edit of the audit
+    /// log and the checkpoint table - the only check an attacker with
+    /// full database access cannot defeat.
+    Verify(VerifyArgs),
+
+    /// Record a tamper-evident checkpoint over the audit log.
+    ///
+    /// Computes the RFC 6962 Merkle root of the committed audit prefix
+    /// and chains it onto the previous checkpoint. Prints the checkpoint
+    /// as JSON - save it outside the database as an anchor: a later
+    /// `verify --anchor-file` against it catches any rewrite of the log,
+    /// even one that also rewrites the checkpoint table.
+    Checkpoint(DatabaseArgs),
 
     /// Print a stable fingerprint of a programme's rules.
     ///
@@ -264,6 +279,21 @@ pub(crate) struct DatabaseArgs {
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     pub(crate) database_url: String,
+}
+
+/// Arguments for `verify`: the connection plus an optional external
+/// checkpoint anchor to verify the audit tree against.
+#[derive(clap::Args, Debug)]
+pub(crate) struct VerifyArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// Path to a checkpoint JSON file (as printed by `checkpoint`), held
+    /// outside the database. The audit tree is verified to still match
+    /// it - the check a coordinated rewrite of audit + checkpoints cannot
+    /// pass. Omit to verify only internal checkpoint consistency.
+    #[arg(long)]
+    pub(crate) anchor_file: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent
@@ -880,6 +910,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
+        Command::Checkpoint(args) => commands::checkpoint::run(args).await,
         Command::Generate {
             what: GenerateCmd::PythonClient(args),
         } => commands::generate::run(&args),

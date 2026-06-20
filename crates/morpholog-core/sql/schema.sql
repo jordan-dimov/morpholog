@@ -54,6 +54,50 @@ CREATE TABLE audit (
 CREATE INDEX audit_committed_at ON audit (committed_at, transition_id);
 
 
+-- Tamper-evident checkpoints over the audit log: a signed-tree-head
+-- style commitment to a prefix of the log. Each checkpoint records the
+-- RFC 6962 Merkle root of the first `tree_size` audit rows (in
+-- (committed_at, transition_id) order). The prefix is bounded by the
+-- audit resume watermark, so it is append-only-stable: no later writer
+-- can insert inside an already-checkpointed prefix. The checkpoints
+-- themselves form a hash chain (`checkpoint_hash` commits to the prior
+-- one), so forging one historical root requires re-forging every later
+-- checkpoint - and any externally-published root makes even that
+-- detectable. The audit log stays untouched; leaves are recomputed.
+CREATE TABLE audit_checkpoints (
+    checkpoint_id         uuid         PRIMARY KEY,        -- UUIDv7
+    -- Number of audit rows this checkpoint commits to (the RFC 6962
+    -- tree size), counted in the canonical (committed_at, transition_id)
+    -- order, watermark-bounded. UNIQUE: one root per prefix length, so
+    -- two checkpoint runs cannot record diverging roots at the same size.
+    tree_size             bigint       NOT NULL UNIQUE CHECK (tree_size >= 0),
+    -- The Merkle Tree Hash of those rows, rendered `sha256:<hex>`.
+    root_hash             text         NOT NULL CHECK (root_hash ~ '^sha256:[0-9a-f]{64}$'),
+    -- The prior checkpoint's `checkpoint_hash` (NULL for genesis). UNIQUE
+    -- + the FK make the checkpoints a strict linked list: at most one
+    -- child per parent, every parent real.
+    prev_checkpoint_hash  text         UNIQUE REFERENCES audit_checkpoints (checkpoint_hash),
+    -- SHA-256 over (tree_size, root_hash, prev_checkpoint_hash),
+    -- rendered `sha256:<hex>` - this checkpoint's identity in the chain.
+    checkpoint_hash       text         NOT NULL UNIQUE CHECK (checkpoint_hash ~ '^sha256:[0-9a-f]{64}$'),
+    -- The resume-watermark horizon the prefix was bounded by, and the
+    -- last covered row's coordinates (NULL at tree_size 0). Diagnostic
+    -- only - the root is the cryptographic commitment - but they make an
+    -- operator's incident report legible.
+    covered_until         timestamptz  NOT NULL,
+    last_transition_id    uuid,
+    last_committed_at     timestamptz,
+    created_at            timestamptz  NOT NULL DEFAULT now()
+);
+
+-- At most one genesis checkpoint (the single chain root). A plain UNIQUE
+-- on prev_checkpoint_hash permits many NULLs, so the single-genesis rule
+-- needs its own partial index.
+CREATE UNIQUE INDEX audit_checkpoints_one_genesis
+    ON audit_checkpoints ((prev_checkpoint_hash IS NULL))
+    WHERE prev_checkpoint_hash IS NULL;
+
+
 -- Operational log of refused proposals. A rejection's transaction
 -- rolls back, so its record is written AFTERWARDS in a separate
 -- autocommit insert: at-most-once (a crash between rollback and

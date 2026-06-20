@@ -33,7 +33,7 @@ pub async fn test_pool() -> PgPool {
 /// Truncate the governed `morpholog.*` tables - the default reset every
 /// integration test runs on entry.
 pub async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE")
         .execute(pool)
         .await
         .expect("failed to truncate test DB");
@@ -44,7 +44,7 @@ pub async fn reset_db(pool: &PgPool) {
 /// this the default reset - everything else uses [`reset_db`].
 pub async fn reset_db_and_read_cache(pool: &PgPool) {
     sqlx::raw_sql(
-        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE; \
+        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE; \
          TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE;",
     )

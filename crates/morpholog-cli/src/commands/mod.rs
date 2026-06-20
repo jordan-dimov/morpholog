@@ -22,6 +22,7 @@ use std::path::Path;
 
 pub(crate) mod args;
 pub(crate) mod check;
+pub(crate) mod checkpoint;
 pub(crate) mod explain;
 pub(crate) mod generate;
 pub(crate) mod generate_views;
