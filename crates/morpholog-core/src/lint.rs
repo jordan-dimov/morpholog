@@ -13,11 +13,10 @@
 
 use std::collections::BTreeSet;
 
+use crate::compiled::CompiledProgram;
 use crate::definitions::DefinitionIndex;
 use crate::disciplines::append_only_predicates;
-use crate::ir::{
-    Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Term, ValueExpr,
-};
+use crate::ir::{Discipline, Invariant, InvariantOrigin, PredicateName, Prop, Term, ValueExpr};
 
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,8 +99,9 @@ impl std::fmt::Display for Lint {
 /// findings emitted before the next invariant's. Within one invariant,
 /// gate findings precede the unsupplied-antecedent finding; ordering by
 /// sub-expression position awaits the node-identified IR.
-pub fn lints(program: &Program) -> Vec<Lint> {
-    let definitions = DefinitionIndex::new(&program.definitions);
+pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
+    let program = compiled.program();
+    let definitions = compiled.definition_index();
     let append_only = append_only_predicates(program);
     let pointers: BTreeSet<PredicateName> = program
         .predicates

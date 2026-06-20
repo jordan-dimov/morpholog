@@ -10,7 +10,7 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{Definition, EvalValue, Invariant, Subject, Transformation, Transition};
+use morpholog_core::{CompiledProgram, EvalValue, Program, Subject, Transformation, Transition};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, PgTracedOutcome, propose_against_pg,
     propose_against_pg_with_trace,
@@ -77,32 +77,36 @@ pub use morpholog_test_support::{
     test_actor, test_transition,
 };
 
-/// Convenience for tests that previously called `propose_against_pg`
-/// with the old `(pool, transformation, args, invariants)` shape.
-/// Constructs the `Transition` with `test_actor()` and forwards.
-pub async fn propose_pg_with_test_actor(
-    pool: &PgPool,
-    transformation: &Transformation,
-    args: Vec<EvalValue>,
-    invariants: &[Invariant],
-    definitions: &[Definition],
-) -> Result<PgProposalOutcome, PgError> {
-    let transition = test_transition(transformation, args);
-    propose_against_pg(pool, transformation, &transition, invariants, definitions).await
+/// Compile a test programme (validates + indexes). The facade-based
+/// propose path now takes a `&CompiledProgram`; tests build one from an
+/// example's `program()` and reuse it across that test's proposals.
+pub fn compiled(program: Program) -> CompiledProgram {
+    CompiledProgram::new(program).expect("test programme is valid")
 }
 
-/// `propose_pg_with_test_actor` plus structured trace. Wraps the
-/// new `propose_against_pg_with_trace` and uses the shared
+/// Convenience for tests: build the `Transition` with `test_actor()` and
+/// propose through the `CompiledProgram` facade. `transformation` names
+/// the transition; the programme's rule slices come from `compiled`.
+pub async fn propose_pg_with_test_actor(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    transformation: &Transformation,
+    args: Vec<EvalValue>,
+) -> Result<PgProposalOutcome, PgError> {
+    let transition = test_transition(transformation, args);
+    propose_against_pg(pool, compiled, &transition).await
+}
+
+/// `propose_pg_with_test_actor` plus structured trace. Uses the shared
 /// `test_actor()` for tests that don't model authority.
 pub async fn propose_pg_with_trace_using_test_actor(
     pool: &PgPool,
+    compiled: &CompiledProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
-    invariants: &[Invariant],
-    definitions: &[Definition],
 ) -> Result<PgTracedOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg_with_trace(pool, transformation, &transition, invariants, definitions).await
+    propose_against_pg_with_trace(pool, compiled, &transition).await
 }
 
 /// Variant that lets the caller supply an explicit actor. Used by
@@ -110,16 +114,15 @@ pub async fn propose_pg_with_trace_using_test_actor(
 /// transition.
 pub async fn propose_pg_as(
     pool: &PgPool,
+    compiled: &CompiledProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,
-    invariants: &[Invariant],
-    definitions: &[Definition],
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args,
         actor: actor.into(),
     };
-    propose_against_pg(pool, transformation, &transition, invariants, definitions).await
+    propose_against_pg(pool, compiled, &transition).await
 }

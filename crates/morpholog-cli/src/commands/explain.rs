@@ -46,14 +46,9 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     )?;
 
     let pool = connect(&args.db.database_url).await?;
-    let state = load_scoped_state(
-        &pool,
-        transformation,
-        &compiled.program().invariants,
-        &compiled.program().definitions,
-    )
-    .await
-    .context("failed to load scoped pre-state")?;
+    let state = load_scoped_state(&pool, &compiled, transformation)
+        .await
+        .context("failed to load scoped pre-state")?;
 
     let transition = Transition {
         transformation_name: transformation.name.clone(),

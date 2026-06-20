@@ -14,7 +14,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{ClaimInstance, Definition, EvalValue, Invariant};
+use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_examples::trade_lifecycle;
 use morpholog_postgres::{PgPool, list_derived, list_derived_at};
 use rust_decimal::Decimal;
@@ -23,14 +23,6 @@ use uuid::Uuid;
 mod common;
 use common::{date, dec, subj};
 use common::{expect_committed, reset_db, test_pool};
-
-fn invariants() -> Vec<Invariant> {
-    trade_lifecycle::all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    trade_lifecycle::definitions()
-}
 
 /// The effective-time read: from a set of `TermsTimeline` rows for a
 /// trade, the quantity in force on `target` - the version with the latest
@@ -65,6 +57,7 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
+            &common::compiled(trade_lifecycle::program()),
             &trade_lifecycle::capture_trade(),
             vec![
                 subj("t1"),
@@ -76,8 +69,6 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
                 date("2026-01-15"),
                 dec(50),
             ],
-            &invariants(),
-            &definitions(),
         )
         .await
         .unwrap(),
@@ -86,10 +77,9 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     let _ = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
+            &common::compiled(trade_lifecycle::program()),
             &trade_lifecycle::grant_confirm_authority(),
             vec![subj("mo"), subj("power")],
-            &invariants(),
-            &definitions(),
         )
         .await
         .unwrap(),
@@ -98,6 +88,7 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     let tid2 = expect_committed(
         common::propose_pg_as(
             pool,
+            &common::compiled(trade_lifecycle::program()),
             &trade_lifecycle::amend_trade_terms(),
             vec![
                 subj("t1"),
@@ -108,8 +99,6 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
                 date("2026-02-01"),
             ],
             "mo",
-            &invariants(),
-            &definitions(),
         )
         .await
         .unwrap(),

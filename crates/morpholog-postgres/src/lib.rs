@@ -13,11 +13,11 @@ pub use sql_views::{RenderedViews, ViewRefusal, render_views};
 
 use chrono::{DateTime, Utc};
 use morpholog_core::{
-    ClaimInstance, CoverageReport, CoverageTracker, Definition, DerivedClaim, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, Program, RejectionReason,
-    State, Subject, TraceEntry, TracedProposal, Transformation, TransformationName, Transition,
-    ValidatedProgram, enumerate_derived, predicates_referenced_by_derived, propose,
-    propose_with_trace,
+    ClaimInstance, CompiledProgram, CoverageReport, CoverageTracker, Definition, DerivedClaim,
+    EvalError, EvalValue, IntentInstance, Invariant, InvariantName, Outcome, PredicateName,
+    Program, RejectionReason, State, Subject, TraceEntry, TracedProposal, Transformation,
+    TransformationName, Transition, ValidatedProgram, enumerate_derived,
+    predicates_referenced_by_derived, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -105,6 +105,12 @@ pub enum PgError {
          the role the writers use, or grant pg_read_all_stats"
     )]
     StatVisibility { hidden: i64 },
+    /// A [`Transition`] named a transformation the compiled programme
+    /// does not declare. Surfaced by the `propose_against_pg*` facade
+    /// when it resolves `transition.transformation_name` against the
+    /// [`CompiledProgram`].
+    #[error("no transformation named `{name}` in the programme")]
+    UnknownTransformation { name: TransformationName },
 }
 
 /// The result of proposing a transformation against PostgreSQL.
@@ -154,6 +160,41 @@ pub enum PgProposalOutcome {
 /// persisted to the `morpholog.audit.actor` column.
 pub async fn propose_against_pg(
     pool: &PgPool,
+    compiled: &CompiledProgram,
+    transition: &Transition,
+) -> Result<PgProposalOutcome, PgError> {
+    let (transformation, invariants, definitions) = resolve(compiled, transition)?;
+    propose_against_pg_inner(pool, transformation, transition, invariants, definitions).await
+}
+
+/// Resolve the pieces the kernel needs from a compiled programme and the
+/// transition naming its transformation: the transformation itself (by
+/// name, O(1)) plus the programme's invariants and definitions. An
+/// unknown name is the one new error path the facade introduces; because
+/// the lookup is by the transition's own name, the kernel's
+/// `transformation.name == transition.transformation_name` check is then
+/// a tautology.
+fn resolve<'a>(
+    compiled: &'a CompiledProgram,
+    transition: &Transition,
+) -> Result<(&'a Transformation, &'a [Invariant], &'a [Definition]), PgError> {
+    let transformation = compiled
+        .transformation(&transition.transformation_name)
+        .ok_or_else(|| PgError::UnknownTransformation {
+            name: transition.transformation_name.clone(),
+        })?;
+    Ok((
+        transformation,
+        &compiled.program().invariants,
+        &compiled.program().definitions,
+    ))
+}
+
+/// The decomposed propose primitive, shared by the public facade and the
+/// compensation path (which proposes from a [`CompensationSpec`]'s own
+/// transformation/invariants/definitions, not a [`CompiledProgram`]).
+async fn propose_against_pg_inner(
+    pool: &PgPool,
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
@@ -163,7 +204,7 @@ pub async fn propose_against_pg(
     // plus a free hand-off (the scoped state is moved, never cloned,
     // and only on rejection), so the SERIALIZABLE-setup ritual lives
     // in one fewer place.
-    let result = propose_against_pg_with_rejection_state(
+    let result = propose_against_pg_with_rejection_state_inner(
         pool,
         transformation,
         transition,
@@ -198,6 +239,22 @@ pub struct RejectionStateOutcome {
 /// read. `None` on commit: an admitted change needs no admissibility
 /// diagnosis, and the happy path stays free of the hand-off.
 pub async fn propose_against_pg_with_rejection_state(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    transition: &Transition,
+) -> Result<RejectionStateOutcome, PgError> {
+    let (transformation, invariants, definitions) = resolve(compiled, transition)?;
+    propose_against_pg_with_rejection_state_inner(
+        pool,
+        transformation,
+        transition,
+        invariants,
+        definitions,
+    )
+    .await
+}
+
+async fn propose_against_pg_with_rejection_state_inner(
     pool: &PgPool,
     transformation: &Transformation,
     transition: &Transition,
@@ -264,6 +321,16 @@ pub enum PgTracedOutcome {
 ///   happen outside the kernel call and have no kernel trace to
 ///   preserve.
 pub async fn propose_against_pg_with_trace(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    transition: &Transition,
+) -> Result<PgTracedOutcome, PgError> {
+    let (transformation, invariants, definitions) = resolve(compiled, transition)?;
+    propose_against_pg_with_trace_inner(pool, transformation, transition, invariants, definitions)
+        .await
+}
+
+async fn propose_against_pg_with_trace_inner(
     pool: &PgPool,
     transformation: &Transformation,
     transition: &Transition,
@@ -883,16 +950,24 @@ pub async fn list_claims_for_predicates(
 ///
 /// Used by `morpholog explain` to run the kernel in-memory against live
 /// state without opening a write transaction.
+///
+/// `transformation` is passed explicitly (rather than resolved by name,
+/// as the `propose_against_pg*` facade does) because `explain` has not
+/// built a transition at this point. It must belong to `compiled`: the
+/// scope is computed from its body together with `compiled`'s invariants
+/// and definitions, so an unrelated transformation would scope the read
+/// to the wrong predicates.
 pub async fn load_scoped_state(
     pool: &PgPool,
+    compiled: &CompiledProgram,
     transformation: &Transformation,
-    invariants: &[Invariant],
-    definitions: &[Definition],
 ) -> Result<State, PgError> {
-    let scope: Vec<String> = compute_load_scope(transformation, invariants, definitions)
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect();
+    let program = compiled.program();
+    let scope: Vec<String> =
+        compute_load_scope(transformation, &program.invariants, &program.definitions)
+            .into_iter()
+            .map(|p| p.to_string())
+            .collect();
     let claims = list_claims_for_predicates(pool, &scope).await?;
     Ok(State::from_claims(claims))
 }
@@ -3211,7 +3286,7 @@ where
                 args,
                 actor: system_actor(),
             };
-            let outcome = propose_against_pg(
+            let outcome = propose_against_pg_inner(
                 pool,
                 &spec.transformation,
                 &compensation_transition,

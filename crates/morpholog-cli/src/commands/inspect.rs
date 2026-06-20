@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::commands::args::eval_value_to_bare_json;
 
-use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{compile_or_exit, connect, parse_or_exit, print_json, validate_or_exit};
 use crate::{AsOf, Inspect};
 
 /// Resolve an `--as-of` argument to a concrete transition id,
@@ -325,8 +325,8 @@ fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> 
 /// no database. Prose by default; `--json` emits the structured form.
 fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;
-    validate_or_exit(&parsed);
-    let matrix = morpholog_core::controls(&parsed.program);
+    let compiled = compile_or_exit(&parsed);
+    let matrix = morpholog_core::controls(&compiled);
     if args.json {
         print_json(&matrix)
     } else {
@@ -340,15 +340,14 @@ fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
 /// `--json` emits the structured form.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;
-    validate_or_exit(&parsed);
-    let program = &parsed.program;
-    let guarantees = morpholog_core::guarantees(program);
+    let compiled = compile_or_exit(&parsed);
+    let guarantees = morpholog_core::guarantees(&compiled);
     if args.json {
         print_json(&guarantees)
     } else {
         println!(
             "{}",
-            morpholog_core::render_guarantees(&program.name, &guarantees)
+            morpholog_core::render_guarantees(&compiled.program().name, &guarantees)
         );
         Ok(())
     }

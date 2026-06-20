@@ -1,8 +1,8 @@
 //! `morpholog check` - parse + validate + lint a `.morph` source file.
 
 use crate::CheckArgs;
-use crate::commands::{ParsedSource, parse_or_exit, print_json, render_validation_error};
-use morpholog_core::Program;
+use crate::commands::{ParsedSource, compile_or_exit, parse_or_exit, print_json};
+use morpholog_core::{CompiledProgram, Program};
 use morpholog_surface::{Diagnostic, line_col, parse_program_with_sources};
 use serde::Serialize;
 use std::path::Path;
@@ -31,15 +31,9 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
 
     let parsed = parse_or_exit(&args.file)?;
+    let compiled = compile_or_exit(&parsed);
 
-    if let Err(errors) = parsed.program.validate() {
-        for err in &errors {
-            render_validation_error(err, &parsed);
-        }
-        std::process::exit(1);
-    }
-
-    let lints = morpholog_core::lints(&parsed.program);
+    let lints = morpholog_core::lints(&compiled);
     if !lints.is_empty() {
         for lint in &lints {
             render_lint(lint, args.strict, &parsed);
@@ -231,26 +225,33 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
             }
         }
         Ok((program, map)) => {
-            if let Err(errors) = program.validate() {
-                failed = true;
-                for err in &errors {
-                    findings.push(JsonDiagnostic::new(
-                        "error",
-                        err.to_string(),
-                        map.span_for_error(err),
-                        &source,
-                    ));
+            // Constructing the `CompiledProgram` is the validation gate:
+            // `Err` carries the same errors `program.validate()` would, and
+            // `Ok` is the compiled programme the lints run against - so the
+            // programme is validated once, not twice.
+            match CompiledProgram::new(program) {
+                Err(errors) => {
+                    failed = true;
+                    for err in &errors {
+                        findings.push(JsonDiagnostic::new(
+                            "error",
+                            err.to_string(),
+                            map.span_for_error(err),
+                            &source,
+                        ));
+                    }
                 }
-            } else {
-                for lint in &morpholog_core::lints(&program) {
-                    let severity = if args.strict { "error" } else { "hint" };
-                    failed |= args.strict;
-                    findings.push(JsonDiagnostic::new(
-                        severity,
-                        lint.to_string(),
-                        map.span_for_lint(lint),
-                        &source,
-                    ));
+                Ok(compiled) => {
+                    for lint in &morpholog_core::lints(&compiled) {
+                        let severity = if args.strict { "error" } else { "hint" };
+                        failed |= args.strict;
+                        findings.push(JsonDiagnostic::new(
+                            severity,
+                            lint.to_string(),
+                            map.span_for_lint(lint),
+                            &source,
+                        ));
+                    }
                 }
             }
         }

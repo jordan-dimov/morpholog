@@ -45,6 +45,7 @@ use common::{reset_db, test_pool};
 async fn commit_post_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj(entry_id),
@@ -54,8 +55,6 @@ async fn commit_post_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
             subj("account_revenue"),
             dec(100),
         ],
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();

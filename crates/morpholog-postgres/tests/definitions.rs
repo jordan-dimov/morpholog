@@ -57,7 +57,7 @@ fn shipping_program() -> Program {
 
 async fn run(pool: &PgPool, p: &Program, transformation: &str, item: &str) -> PgProposalOutcome {
     let t = p.transformation(transformation).unwrap();
-    common::propose_pg_with_test_actor(pool, t, vec![subj(item)], &p.invariants, &p.definitions)
+    common::propose_pg_with_test_actor(pool, &common::compiled(p.clone()), t, vec![subj(item)])
         .await
         .expect("propose_against_pg should not error")
 }

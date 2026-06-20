@@ -77,10 +77,9 @@ async fn an_invariant_rejection_writes_one_structured_row() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post,
         vec![subj("e1"), dec(100)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("first post commits");
@@ -88,10 +87,9 @@ async fn an_invariant_rejection_writes_one_structured_row() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post,
         vec![subj("e1"), dec(999)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("rejection is a lawful outcome, not an error");
@@ -133,10 +131,9 @@ async fn a_require_rejection_records_the_gate_kind_and_rendered_rule() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post_approved,
         vec![subj("e1"), dec(100)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("rejection is a lawful outcome");
@@ -159,10 +156,9 @@ async fn a_bind_rejection_records_the_bind_kind() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         repost,
         vec![subj("missing"), dec(5)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("rejection is a lawful outcome");
@@ -186,19 +182,17 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     // A commit records nothing here - it records in audit.
     let _ = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post,
         vec![subj("e1"), dec(1)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("commits");
     let _ = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post,
         vec![subj("e2"), dec(2)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("commits");
@@ -212,7 +206,12 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
         vec![],
         vec![bind_one(claim("Entry", vec![var("eid"), var("amt")]))],
     );
-    common::propose_pg_with_test_actor(&pool, &sweep, vec![], &p.invariants, &p.definitions)
+    // `sweep` must live in the proposed programme for the facade to reach
+    // the kernel (an unknown name would error before evaluation), so add
+    // it to the fixture programme.
+    let mut with_sweep = fixture();
+    with_sweep.transformations.push(sweep.clone());
+    common::propose_pg_with_test_actor(&pool, &common::compiled(with_sweep), &sweep, vec![])
         .await
         .expect_err("two candidates must surface a kernel error");
 
@@ -241,7 +240,21 @@ async fn a_pg_layer_error_writes_no_rejection_row() {
             emit("Ping", vec![lit_subj("p")]),
         ],
     );
-    common::propose_pg_with_test_actor(&pool, &double_emit, vec![], &[], &[])
+    let prog = {
+        use morpholog_core::ir_builder::program;
+        use morpholog_core::{ArgDecl, IntentDecl, PredicateArgKind};
+        program("dup_emit")
+            .intents(vec![IntentDecl {
+                name: "Ping".into(),
+                args: vec![ArgDecl {
+                    name: "p".into(),
+                    kind: PredicateArgKind::Subject,
+                }],
+            }])
+            .transformations(vec![double_emit.clone()])
+            .build()
+    };
+    common::propose_pg_with_test_actor(&pool, &common::compiled(prog), &double_emit, vec![])
         .await
         .expect_err("duplicate intents must error");
 
@@ -257,10 +270,9 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post_approved,
         vec![subj("t1"), dec(1)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("rejection is lawful");
@@ -276,15 +288,10 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
     // The explain-on-reject path goes through with_rejection_state -
     // one call, one row, no double recording.
     let transition = test_transition(post_approved, vec![subj("t2"), dec(2)]);
-    let result = propose_against_pg_with_rejection_state(
-        &pool,
-        post_approved,
-        &transition,
-        &p.invariants,
-        &p.definitions,
-    )
-    .await
-    .expect("rejection is lawful");
+    let result =
+        propose_against_pg_with_rejection_state(&pool, &common::compiled(p.clone()), &transition)
+            .await
+            .expect("rejection is lawful");
     assert!(matches!(result.outcome, PgProposalOutcome::Rejected { .. }));
     assert!(
         result.rejection_state.is_some(),
@@ -304,10 +311,9 @@ async fn sequential_rejections_each_record_in_replay_order() {
     for (t, eid) in [(post_approved, "a"), (repost, "b"), (post_approved, "c")] {
         let outcome = common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(p.clone()),
             t,
             vec![subj(eid), dec(1)],
-            &p.invariants,
-            &p.definitions,
         )
         .await
         .expect("rejection is lawful");

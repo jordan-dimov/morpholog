@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use crate::definitions::DefinitionIndex;
 use crate::ir::{
     Definition, DefinitionName, DerivedClaim, IntentDecl, IntentName, Invariant, InvariantName,
     PredicateDecl, PredicateName, Program, Transformation, TransformationName,
@@ -126,5 +127,14 @@ impl CompiledProgram {
         self.derived_claims
             .get(predicate)
             .map(|&i| &self.program.derived_claims[i])
+    }
+
+    /// The definition index over this programme's definitions - one place
+    /// the analysis walkers source it from. The index borrows the
+    /// definitions slice, so this constructs it on demand rather than
+    /// caching (a cached `DefinitionIndex<'_>` would be self-referential);
+    /// it centralises the construction, it does not eliminate it.
+    pub(crate) fn definition_index(&self) -> DefinitionIndex<'_> {
+        DefinitionIndex::new(&self.program.definitions)
     }
 }

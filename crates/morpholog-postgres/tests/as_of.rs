@@ -37,13 +37,12 @@ use common::{expect_committed, reset_db, test_pool};
 /// at 200, restate entry_001 to 150. Returns the three captured
 /// `transition_id`s in order. Used by most of the tests below.
 async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
-    let invariants = double_entry_ledger::all_invariants();
-    let definitions = double_entry_ledger::definitions();
     let period = subj("p_as_of");
 
     let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_001"),
@@ -53,8 +52,6 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
                 subj("account_revenue"),
                 dec(100),
             ],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),
@@ -63,6 +60,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let tid2 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_002"),
@@ -72,8 +70,6 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
                 subj("account_revenue"),
                 dec(200),
             ],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),
@@ -82,6 +78,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let tid3 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::restate_entry(),
             vec![
                 subj("entry_001_v2"),
@@ -92,8 +89,6 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
                 subj("account_revenue"),
                 dec(150),
             ],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),
@@ -320,11 +315,10 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     // IndependentlyVerifiedRevenue claim and a new audit row, none of
     // which the trial-balance derived references. Capture the new
     // tid; ask for the trial balance as of THIS tid.
-    let invariants = verified_revenue::all_invariants();
-    let definitions = verified_revenue::definitions();
     let new_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(verified_revenue::program()),
             &verified_revenue::admit_independent_verification(),
             vec![
                 subj("noise_asset"),
@@ -332,8 +326,6 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
                 dec(7),
                 subj("noise_ver"),
             ],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),
@@ -438,9 +430,6 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let invariants = verified_revenue::all_invariants();
-
-    let definitions = verified_revenue::definitions();
     let asset = subj("asset_a");
     let period = subj("p_2026_04");
 
@@ -448,10 +437,9 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(verified_revenue::program()),
             &verified_revenue::admit_independent_verification(),
             vec![asset.clone(), period.clone(), dec(92), subj("ver_001")],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),
@@ -463,10 +451,9 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let tid2 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(verified_revenue::program()),
             &verified_revenue::correct_independent_verification(),
             vec![asset, period, dec(91), subj("ver_002"), subj("ver_001")],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),

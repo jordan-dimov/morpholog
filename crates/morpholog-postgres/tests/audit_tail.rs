@@ -39,10 +39,9 @@ fn fixture() -> Program {
 async fn post(pool: &PgPool, p: &Program, entry: &str) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,
+        &common::compiled(p.clone()),
         p.transformation("post").unwrap(),
         vec![subj(entry), dec(1)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("post commits");
