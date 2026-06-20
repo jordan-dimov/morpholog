@@ -119,6 +119,7 @@ pub enum PgError {
 ///
 /// `Serialize` uses serde's internally-tagged representation so the
 /// CLI can emit outcomes directly as JSON with a `status` discriminant.
+#[must_use = "a proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum PgProposalOutcome {
@@ -162,7 +163,7 @@ pub async fn propose_against_pg(
     // plus a free hand-off (the scoped state is moved, never cloned,
     // and only on rejection), so the SERIALIZABLE-setup ritual lives
     // in one fewer place.
-    let (outcome, _) = propose_against_pg_with_rejection_state(
+    let result = propose_against_pg_with_rejection_state(
         pool,
         transformation,
         transition,
@@ -170,7 +171,22 @@ pub async fn propose_against_pg(
         definitions,
     )
     .await?;
-    Ok(outcome)
+    Ok(result.outcome)
+}
+
+/// What [`propose_against_pg_with_rejection_state`] returns: the
+/// commit-or-reject outcome, and the pre-state the kernel evaluated -
+/// present only on rejection, since that is the snapshot a same-snapshot
+/// explanation needs (`None` on commit).
+///
+/// `#[must_use]` on the struct, not just on `PgProposalOutcome`: the
+/// attribute has to be on the type the caller actually receives, or a
+/// dropped result (the dangerous case - a refusal treated as a commit)
+/// slips through. A bare tuple would not carry the inner attribute.
+#[must_use = "the proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
+pub struct RejectionStateOutcome {
+    pub outcome: PgProposalOutcome,
+    pub rejection_state: Option<State>,
 }
 
 /// [`propose_against_pg`], additionally returning the scoped
@@ -187,7 +203,7 @@ pub async fn propose_against_pg_with_rejection_state(
     transition: &Transition,
     invariants: &[Invariant],
     definitions: &[Definition],
-) -> Result<(PgProposalOutcome, Option<State>), PgError> {
+) -> Result<RejectionStateOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *tx)
@@ -200,7 +216,10 @@ pub async fn propose_against_pg_with_rejection_state(
     let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
     let pg_outcome =
         finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
-    Ok((pg_outcome, rejection_state))
+    Ok(RejectionStateOutcome {
+        outcome: pg_outcome,
+        rejection_state,
+    })
 }
 
 /// Three-way outcome returned by [`propose_against_pg_with_trace`].
@@ -213,6 +232,7 @@ pub async fn propose_against_pg_with_rejection_state(
 /// kernel before the error is raised is **not** discarded: a kernel
 /// error mid-transformation is exactly the case where the trace is
 /// most valuable for debugging.
+#[must_use = "a traced proposal outcome carries the commit/reject result (a dropped `Rejected` silently treats a refused change as committed) and the diagnostic trace"]
 #[derive(Debug, Clone)]
 pub enum PgTracedOutcome {
     /// Kernel ran to a normal outcome (Committed or Rejected) and
@@ -727,6 +747,7 @@ pub struct OutboxRow {
 /// sees [`OutboxUpdate::LeaseLost`] and can log, retry-after-reclaim,
 /// or move on.
 #[doc(hidden)]
+#[must_use = "an outbox update outcome must be inspected; `LeaseLost` means the requested state change did not apply"]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum OutboxUpdate {
     /// The row was updated as requested.

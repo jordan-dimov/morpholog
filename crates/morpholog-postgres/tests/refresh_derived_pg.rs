@@ -71,14 +71,15 @@ fn ts(s: &str) -> EvalValue {
 
 async fn seed_entry(pool: &PgPool, p: &Program, account: &str, amount: i64) {
     let post = p.transformation("post").unwrap();
-    common::propose_pg_with_test_actor(pool, post, vec![subj(account), dec(amount)], &[], &[])
-        .await
-        .expect("post commits");
+    let _ =
+        common::propose_pg_with_test_actor(pool, post, vec![subj(account), dec(amount)], &[], &[])
+            .await
+            .expect("post commits");
 }
 
 async fn seed_span(pool: &PgPool, p: &Program, item: &str, started: &str, ended: &str) {
     let record = p.transformation("record").unwrap();
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         pool,
         record,
         vec![subj(item), ts(started), ts(ended)],

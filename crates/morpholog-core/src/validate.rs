@@ -107,11 +107,12 @@ pub enum ValidationContext {
 /// collects every error rather than failing fast, so a programme
 /// migration that adds declarations sees the full work list rather
 /// than fixing one site, re-running, and discovering the next.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValidationError {
     /// A predicate or intent referenced somewhere in the programme
     /// is not declared. Strict mode: every reference must have a
     /// declaration.
+    #[error("undeclared {vocabulary} `{name}` referenced in {context}")]
     Undeclared {
         vocabulary: VocabularyKind,
         name: String,
@@ -119,6 +120,9 @@ pub enum ValidationError {
     },
     /// A predicate or intent reference passes a different number of
     /// arguments than the declaration calls for.
+    #[error(
+        "{vocabulary} `{name}` declared with arity {expected} but referenced with {actual} args in {context}"
+    )]
     ArityMismatch {
         vocabulary: VocabularyKind,
         name: String,
@@ -128,6 +132,7 @@ pub enum ValidationError {
     },
     /// Two declarations in the same vocabulary share a name. Even
     /// if both agree on arity, the duplicate is a modelling bug.
+    #[error("duplicate {vocabulary} declaration for `{name}`")]
     DuplicateDecl {
         vocabulary: VocabularyKind,
         name: String,
@@ -136,6 +141,9 @@ pub enum ValidationError {
     /// kind declared for that position. Surfaces things like
     /// `Policy(amount, 100)` where the first position is declared
     /// `Subject`, or a date literal flowing into a `Decimal` slot.
+    #[error(
+        "{vocabulary} `{name}` arg #{position} expects {expected} but received {actual} in {context}"
+    )]
     ArgKindMismatch {
         vocabulary: VocabularyKind,
         name: String,
@@ -150,6 +158,7 @@ pub enum ValidationError {
     /// `For` over a Decimal value - the kernel raises these as
     /// `EvalError::TypeMismatch` at runtime; this validator
     /// surfaces them at authoring time.
+    #[error("{operator} expects {expected} operand(s) but received {actual} in {context}")]
     OperandKindMismatch {
         operator: &'static str,
         expected: PredicateArgKind,
@@ -161,6 +170,7 @@ pub enum ValidationError {
     /// durations). The rule matrix is deliberately small: decimals
     /// support every operator; instants shift by durations and
     /// difference into durations; durations add, subtract, and cap.
+    #[error("no arithmetic rule for {left} {operator} {right} in {context}")]
     NoArithRule {
         operator: &'static str,
         left: PredicateArgKind,
@@ -172,6 +182,7 @@ pub enum ValidationError {
     /// "expected" side - both kinds are equally constrained by the
     /// other. `Subject == Decimal` is a kind error, not a silent
     /// coercion to false.
+    #[error("{operator} operands must have the same kind; got {left} vs {right} in {context}")]
     EqualityKindMismatch {
         operator: &'static str,
         left: PredicateArgKind,
@@ -182,6 +193,9 @@ pub enum ValidationError {
     /// kind that is not compatible with the first. `amount` bound
     /// from a `Decimal` slot and then used in a `Subject` slot is
     /// the canonical case.
+    #[error(
+        "variable `{variable}` was first constrained to {previous} but later used as {new} in {context}"
+    )]
     VariableKindConflict {
         variable: String,
         previous: PredicateArgKind,
@@ -194,6 +208,9 @@ pub enum ValidationError {
     /// time; the check surfaces it earlier. `actor` resolves only
     /// inside transformation bodies - authority checks belong in a
     /// `require`, not an invariant.
+    #[error(
+        "`actor` is not available in {context}; it resolves only inside transformation bodies, so authority checks belong in a `require`"
+    )]
     ActorNotAvailable { context: ValidationContext },
     /// A body in this context nests deeper than the validator's fixed
     /// maximum depth. The recursive evaluator and check walk descend
@@ -201,6 +218,7 @@ pub enum ValidationError {
     /// expression or `for`-statement chain would exhaust the stack
     /// during `propose`. Validation rejects it first, which is why
     /// untrusted IR must be validated before it is proposed.
+    #[error("nesting in {context} exceeds the maximum depth of {}", MAX_EXPR_DEPTH)]
     NestingTooDeep { context: ValidationContext },
     /// A variable was used in a position that demands a bound value
     /// (an `admit`/`retract`/`emit` argument, a comparator or
@@ -211,6 +229,9 @@ pub enum ValidationError {
     /// `require` does not export its matches to later statements.
     /// The kernel raises `EvalError::UnboundVariable` for this at
     /// evaluation time.
+    #[error(
+        "variable `{variable}` is used in {context} but nothing binds it; a `require` match does not export its bindings to later statements"
+    )]
     UnboundVariable {
         variable: String,
         context: ValidationContext,
@@ -220,10 +241,17 @@ pub enum ValidationError {
     /// reference `name(args)` resolves to exactly one of them - so a
     /// collision would let adding a definition silently change what
     /// existing text means.
+    #[error(
+        "definition `{name}` collides with predicate `{name}`; the two share the reference namespace in rule bodies, so a reference could mean either - rename one"
+    )]
     DefinitionNameCollision { name: String },
     /// Definitions reference each other in a cycle. A definition is a
     /// named proposition expanded at evaluation; a cycle would never
     /// terminate. `names` carries one cycle's members in sorted order.
+    #[error(
+        "definitions reference each other in a cycle ({}); a definition must expand to claims and conditions, never back to itself",
+        .names.join(", ")
+    )]
     DefinitionCycle { names: Vec<String> },
     /// A reference names a definition where a predicate is required:
     /// a hand-built `Prop::Claim` that skipped resolution, or an
@@ -233,6 +261,9 @@ pub enum ValidationError {
     /// value lookup; hand-built IR constructs body calls as
     /// `Prop::Defined` (via `ir_builder::defined`) or runs
     /// [`crate::resolve_defined_calls`] before validating.
+    #[error(
+        "`{name}` names a definition where a predicate is required, in {context}; a definition is a condition - callable in rule bodies, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
+    )]
     UnresolvedDefinitionCall {
         name: String,
         context: ValidationContext,
@@ -243,6 +274,9 @@ pub enum ValidationError {
     /// error, since nothing could ever give it a value. (A parameter
     /// the body *uses* without binding is fine - it is a use-only
     /// parameter, required bound at every call site.)
+    #[error(
+        "parameter `{parameter}` of definition `{definition}` is not referenced by the definition body; remove it or reference it in a condition"
+    )]
     ParameterNotReferenced {
         definition: String,
         parameter: String,
@@ -251,6 +285,9 @@ pub enum ValidationError {
     /// parameter is one binding slot in the call frame; a duplicate
     /// would let the later argument silently overwrite the earlier
     /// one during frame construction.
+    #[error(
+        "definition `{definition}` declares parameter `{parameter}` more than once; each parameter is one binding slot"
+    )]
     DuplicateParameter {
         definition: String,
         parameter: String,
@@ -260,23 +297,39 @@ pub enum ValidationError {
     /// invariant; a body that read pre-state would break that. Wrap the
     /// *call* in `pre(...)` instead - the context swap applies to the
     /// body's evaluation.
+    #[error(
+        "pre(...) is used in {context}, but definitions are context-free and carry no pre-state; wrap the call in pre(...) at the use site instead"
+    )]
     PreNotAvailable { context: ValidationContext },
     /// A discipline clause names a field its predicate does not have.
+    #[error(
+        "a discipline on predicate `{predicate}` names field `{field}`, which the declaration does not have"
+    )]
     DisciplineUnknownField { predicate: String, field: String },
     /// A `unique by` / `current pointer by` clause whose key set leaves
     /// nothing to determine: zero fields, or every field a key (claims
     /// are a set - two identical claims are already one claim).
+    #[error(
+        "a uniqueness discipline on `{predicate}` needs at least one key field and at least one field for the keys to determine; keying every field adds nothing, because claims are a set and two identical claims are already one claim"
+    )]
     DisciplineVacuousKeys { predicate: String },
     /// The same discipline clause declared twice on one predicate.
+    #[error("predicate `{predicate}` declares the same discipline clause twice")]
     DisciplineDuplicateClause { predicate: String },
     /// `append only` and `current pointer by` on the same predicate: a
     /// current pointer must be retractable to move, which is the exact
     /// opposite commitment.
+    #[error(
+        "`{predicate}` is declared both `append only` and `current pointer`; a pointer must be retractable to move, which is the opposite commitment - drop one"
+    )]
     DisciplinePointerCannotBeAppendOnly { predicate: String },
     /// A `superseded via` clause whose lineage predicate cannot carry
     /// the supersession chain: undeclared, not exactly two arguments
     /// in the `(successor, prior)` convention, or itself declared a
     /// current pointer.
+    #[error(
+        "`superseded via {lineage}` on `{pointer}`: {reason} (a lineage predicate has exactly two arguments, successor then prior, and is not itself a pointer)"
+    )]
     DisciplineLineageUnfit {
         pointer: String,
         lineage: String,
@@ -285,11 +338,17 @@ pub enum ValidationError {
     /// `superseded via` on a predicate that is not declared a current
     /// pointer: supersession history is the pointer's history, so the
     /// clause would be a dangling doctrine phrase anywhere else.
+    #[error(
+        "`superseded via` on `{predicate}`, which is not declared `current pointer by (...)`; supersession history is the pointer's history - declare the pointer, or drop the clause"
+    )]
     DisciplineSupersededWithoutPointer { predicate: String },
     /// A transformation retracts a predicate that is append-only
     /// (declared, or the lineage of a `superseded via`). Ordinary
     /// programmes correct append-only claims by supersession or
     /// exception claims, never retraction.
+    #[error(
+        "{context} retracts `{predicate}`, which is append only; corrections are admitted as supersessions or exception claims, never by retracting the record"
+    )]
     RetractsAppendOnly {
         predicate: String,
         context: ValidationContext,
@@ -298,6 +357,9 @@ pub enum ValidationError {
     /// invariant in the programme: the IR was hand-built and
     /// `lower_disciplines` was never run (the parser runs it), so the
     /// declared commitment would be silently unenforced.
+    #[error(
+        "a discipline on `{predicate}` implies the generated invariant `{invariant}`, which this programme does not carry; run `lower_disciplines` before validating (the parser does this) so the declared commitment is actually enforced"
+    )]
     DisciplineNotLowered {
         predicate: String,
         invariant: String,
@@ -322,197 +384,6 @@ impl std::fmt::Display for ValidationContext {
         }
     }
 }
-
-impl std::fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ValidationError::Undeclared {
-                vocabulary,
-                name,
-                context,
-            } => write!(
-                f,
-                "undeclared {vocabulary} `{name}` referenced in {context}"
-            ),
-            ValidationError::ArityMismatch {
-                vocabulary,
-                name,
-                expected,
-                actual,
-                context,
-            } => write!(
-                f,
-                "{vocabulary} `{name}` declared with arity {expected} \
-                 but referenced with {actual} args in {context}"
-            ),
-            ValidationError::DuplicateDecl { vocabulary, name } => {
-                write!(f, "duplicate {vocabulary} declaration for `{name}`")
-            }
-            ValidationError::ArgKindMismatch {
-                vocabulary,
-                name,
-                position,
-                expected,
-                actual,
-                context,
-            } => write!(
-                f,
-                "{vocabulary} `{name}` arg #{position} expects {expected} but \
-                 received {actual} in {context}"
-            ),
-            ValidationError::OperandKindMismatch {
-                operator,
-                expected,
-                actual,
-                context,
-            } => write!(
-                f,
-                "{operator} expects {expected} operand(s) but received {actual} in {context}"
-            ),
-            ValidationError::NoArithRule {
-                operator,
-                left,
-                right,
-                context,
-            } => write!(
-                f,
-                "no arithmetic rule for {left} {operator} {right} in {context}"
-            ),
-            ValidationError::EqualityKindMismatch {
-                operator,
-                left,
-                right,
-                context,
-            } => write!(
-                f,
-                "{operator} operands must have the same kind; got {left} vs {right} in {context}"
-            ),
-            ValidationError::VariableKindConflict {
-                variable,
-                previous,
-                new,
-                context,
-            } => write!(
-                f,
-                "variable `{variable}` was first constrained to {previous} but later \
-                 used as {new} in {context}"
-            ),
-            ValidationError::ActorNotAvailable { context } => write!(
-                f,
-                "`actor` is not available in {context}; it resolves only inside \
-                 transformation bodies, so authority checks belong in a `require`"
-            ),
-            ValidationError::NestingTooDeep { context } => write!(
-                f,
-                "nesting in {context} exceeds the maximum depth of {MAX_EXPR_DEPTH}"
-            ),
-            ValidationError::UnboundVariable { variable, context } => write!(
-                f,
-                "variable `{variable}` is used in {context} but nothing binds it; \
-                 a `require` match does not export its bindings to later statements"
-            ),
-            ValidationError::DefinitionNameCollision { name } => write!(
-                f,
-                "definition `{name}` collides with predicate `{name}`; the two share \
-                 the reference namespace in rule bodies, so a reference could mean \
-                 either - rename one"
-            ),
-            ValidationError::DefinitionCycle { names } => write!(
-                f,
-                "definitions reference each other in a cycle ({}); a definition \
-                 must expand to claims and conditions, never back to itself",
-                names.join(", ")
-            ),
-            ValidationError::UnresolvedDefinitionCall { name, context } => write!(
-                f,
-                "`{name}` names a definition where a predicate is required, in \
-                 {context}; a definition is a condition - callable in rule \
-                 bodies, never an `admit`/`retract`/`emit` target or a `value` \
-                 lookup (hand-built body calls use `ir_builder::defined` or \
-                 `resolve_defined_calls`)"
-            ),
-            ValidationError::ParameterNotReferenced {
-                definition,
-                parameter,
-            } => write!(
-                f,
-                "parameter `{parameter}` of definition `{definition}` is not \
-                 referenced by the definition body; remove it or reference it \
-                 in a condition"
-            ),
-            ValidationError::DuplicateParameter {
-                definition,
-                parameter,
-            } => write!(
-                f,
-                "definition `{definition}` declares parameter `{parameter}` \
-                 more than once; each parameter is one binding slot"
-            ),
-            ValidationError::PreNotAvailable { context } => write!(
-                f,
-                "pre(...) is used in {context}, but definitions are context-free \
-                 and carry no pre-state; wrap the call in pre(...) at the use \
-                 site instead"
-            ),
-            ValidationError::DisciplineUnknownField { predicate, field } => write!(
-                f,
-                "a discipline on predicate `{predicate}` names field `{field}`, \
-                 which the declaration does not have"
-            ),
-            ValidationError::DisciplineVacuousKeys { predicate } => write!(
-                f,
-                "a uniqueness discipline on `{predicate}` needs at least one key \
-                 field and at least one field for the keys to determine; keying \
-                 every field adds nothing, because claims are a set and two \
-                 identical claims are already one claim"
-            ),
-            ValidationError::DisciplineDuplicateClause { predicate } => write!(
-                f,
-                "predicate `{predicate}` declares the same discipline clause twice"
-            ),
-            ValidationError::DisciplinePointerCannotBeAppendOnly { predicate } => write!(
-                f,
-                "`{predicate}` is declared both `append only` and `current \
-                 pointer`; a pointer must be retractable to move, which is the \
-                 opposite commitment - drop one"
-            ),
-            ValidationError::DisciplineLineageUnfit {
-                pointer,
-                lineage,
-                reason,
-            } => write!(
-                f,
-                "`superseded via {lineage}` on `{pointer}`: {reason} (a lineage \
-                 predicate has exactly two arguments, successor then prior, and \
-                 is not itself a pointer)"
-            ),
-            ValidationError::DisciplineSupersededWithoutPointer { predicate } => write!(
-                f,
-                "`superseded via` on `{predicate}`, which is not declared \
-                 `current pointer by (...)`; supersession history is the \
-                 pointer's history - declare the pointer, or drop the clause"
-            ),
-            ValidationError::RetractsAppendOnly { predicate, context } => write!(
-                f,
-                "{context} retracts `{predicate}`, which is append only; \
-                 corrections are admitted as supersessions or exception \
-                 claims, never by retracting the record"
-            ),
-            ValidationError::DisciplineNotLowered {
-                predicate,
-                invariant,
-            } => write!(
-                f,
-                "a discipline on `{predicate}` implies the generated invariant \
-                 `{invariant}`, which this programme does not carry; run \
-                 `lower_disciplines` before validating (the parser does this) \
-                 so the declared commitment is actually enforced"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ValidationError {}
 
 /// Strict programme validation. Two contributions merge into one
 /// `Vec<ValidationError>`: the name-level duplicate-declaration

@@ -30,38 +30,49 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 /// expression or transformation was structurally ill-formed and cannot
 /// be run. Distinct from lawful business rejection
 /// ([`crate::Outcome::Rejected`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EvalError {
     /// A variable was referenced before being bound by a parameter,
     /// `let`, `for`, or `exists` binding.
+    #[error("unbound variable: {0}")]
     UnboundVariable(String),
     /// An expression demanded an operand of one kind but received
     /// another (e.g. arithmetic on a subject, membership on a non-
     /// collection, etc.).
+    #[error("type mismatch: {0}")]
     TypeMismatch(String),
     /// `ValueExpr::ValueOf(predicate, args)` matched zero claims and no
     /// `default` was supplied.
+    #[error("value({0}, _): zero matches")]
     ValueOfZeroMatches(String),
     /// `ValueExpr::ValueOf(predicate, args)` matched more than one claim;
     /// the functional-lookup contract requires exactly one match.
+    #[error("value({0}, _): multiple matches")]
     ValueOfMultipleMatches(String),
     /// `Term::Actor` was referenced with no transition in scope (the
     /// evaluator was called with `actor = None`): invariant or
     /// derived-claim bodies, which evaluate against admitted state, not
     /// a proposing transition. Authority checks belong in `require`, not
     /// invariants; this error makes that doctrine enforceable.
+    #[error(
+        "Term::Actor referenced with no transition in scope (likely used outside a transformation body - e.g., inside an invariant or derived-claim body; authority checks belong in `require`)"
+    )]
     UnboundActor,
     /// `Prop::Pre` was reached with no pre-state in scope: derived-claim
     /// bodies, transformation `require`s, the inner of nested `pre`, or
     /// an `EvalContext` built with `pre_state: None`. Phrased about
     /// evaluation context, not AST position, so future contexts that
     /// carry both states share the primitive without IR change.
+    #[error(
+        "Prop::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
+    )]
     PreStateUnavailable,
     /// An `ArithOp::Div` or `ArithOp::Mod` evaluated with a zero divisor.
     /// A rule that divides (or takes a remainder) by zero cannot be
     /// evaluated, so it surfaces here rather than producing a value; the
     /// proposal is rejected (or the derived read errors). Gates avoid this
     /// by cross-multiplying with `Mul`.
+    #[error("division by zero")]
     DivisionByZero,
     /// A `Prop::Defined` call named a definition the evaluation context
     /// does not carry. Unlike an unmatched predicate (which lawfully
@@ -69,39 +80,11 @@ pub enum EvalError {
     /// integrity error: there is no body to expand. `Program::validate`
     /// catches this at authoring time; the runtime error is the backstop
     /// for unvalidated IR.
+    #[error(
+        "call to definition `{0}` but the evaluation context carries no such definition; validate the programme before proposing"
+    )]
     UnknownDefinition(String),
 }
-
-impl std::fmt::Display for EvalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EvalError::UnboundVariable(name) => write!(f, "unbound variable: {name}"),
-            EvalError::TypeMismatch(msg) => write!(f, "type mismatch: {msg}"),
-            EvalError::ValueOfZeroMatches(p) => {
-                write!(f, "value({p}, _): zero matches")
-            }
-            EvalError::ValueOfMultipleMatches(p) => {
-                write!(f, "value({p}, _): multiple matches")
-            }
-            EvalError::UnboundActor => write!(
-                f,
-                "Term::Actor referenced with no transition in scope (likely used outside a transformation body - e.g., inside an invariant or derived-claim body; authority checks belong in `require`)"
-            ),
-            EvalError::PreStateUnavailable => write!(
-                f,
-                "Prop::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
-            ),
-            EvalError::DivisionByZero => write!(f, "division by zero"),
-            EvalError::UnknownDefinition(name) => write!(
-                f,
-                "call to definition `{name}` but the evaluation context carries \
-                 no such definition; validate the programme before proposing"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for EvalError {}
 
 /// Evaluator context: state(s), bindings, optional actor. Threaded
 /// through `find_matches`, `eval_value`, and the helpers that recurse

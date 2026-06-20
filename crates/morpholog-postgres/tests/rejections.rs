@@ -202,7 +202,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     let post = p.transformation("post").unwrap();
 
     // A commit records nothing here - it records in audit.
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         post,
         vec![subj("e1"), dec(1)],
@@ -211,7 +211,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     )
     .await
     .expect("commits");
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         post,
         vec![subj("e2"), dec(2)],
@@ -294,7 +294,7 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
     // The explain-on-reject path goes through with_rejection_state -
     // one call, one row, no double recording.
     let transition = test_transition(post_approved, vec![subj("t2"), dec(2)]);
-    let (outcome, state) = propose_against_pg_with_rejection_state(
+    let result = propose_against_pg_with_rejection_state(
         &pool,
         post_approved,
         &transition,
@@ -303,8 +303,11 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
     )
     .await
     .expect("rejection is lawful");
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
-    assert!(state.is_some(), "the rejecting state is handed back");
+    assert!(matches!(result.outcome, PgProposalOutcome::Rejected { .. }));
+    assert!(
+        result.rejection_state.is_some(),
+        "the rejecting state is handed back"
+    );
     assert_eq!(rejection_rows(&pool).await.len(), 2);
 }
 

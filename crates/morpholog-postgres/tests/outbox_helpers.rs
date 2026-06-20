@@ -238,7 +238,7 @@ async fn record_compensation_links_compensation_to_failed_row() {
     reset_db(&pool).await;
     let intent_id = enqueue_one_pending(&pool).await;
     force_lease(&pool, intent_id, "worker_a", 30).await;
-    mark_outbox_failed(&pool, intent_id, "worker_a", "test")
+    let _ = mark_outbox_failed(&pool, intent_id, "worker_a", "test")
         .await
         .unwrap();
 
@@ -301,7 +301,7 @@ async fn record_compensation_errors_on_double_record() {
     reset_db(&pool).await;
     let intent_id = enqueue_one_pending(&pool).await;
     force_lease(&pool, intent_id, "worker_a", 30).await;
-    mark_outbox_failed(&pool, intent_id, "worker_a", "test")
+    let _ = mark_outbox_failed(&pool, intent_id, "worker_a", "test")
         .await
         .unwrap();
 

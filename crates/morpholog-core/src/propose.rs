@@ -48,6 +48,7 @@ pub struct Transition {
 
 /// The result of proposing a transformation. Either the candidate state is
 /// admissible (Accepted) or some predicate or invariant rejected it.
+#[must_use = "a proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Accepted {
@@ -114,6 +115,7 @@ pub(crate) enum StmtOutcome {
 /// each statement and invariant check produces one entry, and a
 /// rejecting `require`/`bind_one` carries a `failing_sub_expression`
 /// (see [`RequireOutcome`]).
+#[must_use = "a traced proposal carries the outcome (a dropped `Rejected` silently treats a refused change as committed) and the diagnostic trace"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TracedProposal {
     /// The transformation ran to a normal outcome (Accepted or

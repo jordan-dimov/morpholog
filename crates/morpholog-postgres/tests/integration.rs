@@ -1328,7 +1328,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     reset_db(&pool).await;
 
     // Two committed transformations in causal order: post then close.
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1344,7 +1344,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     )
     .await
     .unwrap();
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
@@ -1406,7 +1406,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1422,7 +1422,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     )
     .await
     .unwrap();
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
@@ -1469,7 +1469,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
     let definitions = double_entry_ledger::definitions();
     // Entry 1: cash debit 100, revenue credit 100.
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1488,7 +1488,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
     // Entry 2: cash debit 50, revenue credit 50. Same accounts, so the
     // two rows accumulate rather than producing four distinct rows.
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![
@@ -1579,7 +1579,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
     // Real ledger fixture: 1 entry, 2 journal lines.
     let invariants = double_entry_ledger::all_invariants();
     let definitions = double_entry_ledger::definitions();
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         &double_entry_ledger::post_simple_entry(),
         vec![

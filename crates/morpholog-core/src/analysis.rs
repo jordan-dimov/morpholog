@@ -525,23 +525,12 @@ pub enum ParamKind {
 /// Programme-level validation errors do not appear here: the API
 /// takes a [`ValidatedProgram`], so the type system rules out the
 /// invalid-programme case before this function runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AnalysisError {
     /// No transformation declared with that name.
+    #[error("unknown transformation `{name}`")]
     UnknownTransformation { name: TransformationName },
 }
-
-impl std::fmt::Display for AnalysisError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AnalysisError::UnknownTransformation { name } => {
-                write!(f, "unknown transformation `{name}`")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AnalysisError {}
 
 /// Compute the embedder-facing input contract for one transformation:
 /// the resolved [`ParamKind`] for every parameter, in declaration
