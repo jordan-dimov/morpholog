@@ -3,10 +3,9 @@
 //!
 //! A [`Program`] is parsed, then validated, then read from - and callers
 //! reach into it with linear scans (`Program::transformation(name)` and
-//! friends) and rebuild definition indices ad hoc. `CompiledProgram`
-//! owns a validated programme and builds those lookups once, so the
-//! orchestration layer has a single, indexed model object to source
-//! from.
+//! friends). `CompiledProgram` owns a validated programme and builds
+//! those by-name lookups once, so the orchestration layer has a single,
+//! indexed model object to source from.
 //!
 //! It does **not** replace [`ValidatedProgram`]. That stays the cheap,
 //! borrowed proof-of-validity handle the analysis API consumes;
@@ -29,8 +28,8 @@ use crate::ir::{
 use crate::validate::{ValidatedProgram, ValidationError};
 
 /// Index each item to the position of the *first* occurrence of its key,
-/// matching the `iter().find()` semantics the `Program::*` lookups have
-/// (duplicates are a validation error, rejected before this runs).
+/// so a lookup matches the `iter().find()` semantics the `Program::*`
+/// lookups have, whether or not validation rejects the duplicate.
 fn position_index<T, K: Eq + Hash>(items: &[T], key: impl Fn(&T) -> K) -> HashMap<K, usize> {
     let mut map = HashMap::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
@@ -59,10 +58,11 @@ impl CompiledProgram {
     /// `CompiledProgram` *is* the validation gate: the error case is the
     /// same `Vec<ValidationError>` [`Program::validate`] returns.
     ///
-    /// Indices map each name to the position of the first declaration
-    /// with that name, matching the `iter().find()` semantics the
-    /// `Program::*` lookups have today (duplicate declarations are a
-    /// validation error, so `new` rejects them before indexing matters).
+    /// Each accessor resolves to the first declaration with that name,
+    /// matching the `iter().find()` semantics the `Program::*` lookups
+    /// have today. Validation rejects duplicate predicates, intents, and
+    /// definitions; for the rest the first-occurrence rule is what the
+    /// index guarantees.
     pub fn new(program: Program) -> Result<Self, Vec<ValidationError>> {
         program.validate()?;
         Ok(Self {
