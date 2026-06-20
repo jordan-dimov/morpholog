@@ -11,69 +11,21 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+use common::{commit_simple_entry, reset_db, test_pool};
+
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::{Subject, Transition};
-use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
-    Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome, ProcessOutcome,
-    propose_against_pg,
+    Deliverer, DeliveryOutcome, OutboxRow, PgPool, ProcessOutcome,
     testing::{AlwaysDelivers, AlwaysTransient},
 };
-use morpholog_test_support::{dec, subj};
-use uuid::Uuid;
 
 // ============================================================
 // Test infrastructure
 // ============================================================
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-outbox integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
-
-async fn commit_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
-    let transformation = double_entry_ledger::post_simple_entry();
-    let transition = Transition {
-        transformation_name: transformation.name.clone(),
-        args: vec![
-            subj(entry_id),
-            subj("d_2026_05_17"),
-            subj("p_drain"),
-            subj(&format!("cash_{entry_id}")),
-            subj(&format!("revenue_{entry_id}")),
-            dec(100),
-        ],
-        actor: Subject::from("outbox_test"),
-    };
-    let outcome = propose_against_pg(
-        pool,
-        &transformation,
-        &transition,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
-    )
-    .await
-    .unwrap();
-    match outcome {
-        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("setup rejected: {reason}"),
-    }
-}
 
 const INTENT_TYPE: &str = "JournalEntryPosted";
 const LEASE: Duration = Duration::from_secs(30);
@@ -102,9 +54,9 @@ async fn drain_returns_empty_vec_when_no_rows_available() {
 async fn drain_processes_all_available_rows_in_one_pass() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let _ = commit_simple_entry(&pool, "entry_001").await;
-    let _ = commit_simple_entry(&pool, "entry_002").await;
-    let _ = commit_simple_entry(&pool, "entry_003").await;
+    let _ = commit_simple_entry(&pool, "entry_001", "p_drain").await;
+    let _ = commit_simple_entry(&pool, "entry_002", "p_drain").await;
+    let _ = commit_simple_entry(&pool, "entry_003", "p_drain").await;
 
     let outcomes =
         process_available_outbox_rows(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers, None)
@@ -131,8 +83,8 @@ async fn drain_processes_all_available_rows_in_one_pass() {
 async fn drain_does_not_redeliver_transient_row_in_same_pass() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let _ = commit_simple_entry(&pool, "entry_001").await;
-    let _ = commit_simple_entry(&pool, "entry_002").await;
+    let _ = commit_simple_entry(&pool, "entry_001", "p_drain").await;
+    let _ = commit_simple_entry(&pool, "entry_002", "p_drain").await;
     // Transient deliverer pushes next_attempt_at into the future,
     // so after both rows are processed once they should both be
     // back in `pending` but not due. The drain must terminate
@@ -179,8 +131,8 @@ async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
     // the new next_attempt_at is > pass_start.
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let _ = commit_simple_entry(&pool, "entry_001").await;
-    let _ = commit_simple_entry(&pool, "entry_002").await;
+    let _ = commit_simple_entry(&pool, "entry_001", "p_drain").await;
+    let _ = commit_simple_entry(&pool, "entry_002", "p_drain").await;
 
     struct SubsecondTransient;
     impl Deliverer for SubsecondTransient {
@@ -219,8 +171,8 @@ async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
 async fn drain_continues_through_lease_lost_outcomes() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let _ = commit_simple_entry(&pool, "entry_lost").await;
-    let _ = commit_simple_entry(&pool, "entry_ok").await;
+    let _ = commit_simple_entry(&pool, "entry_lost", "p_drain").await;
+    let _ = commit_simple_entry(&pool, "entry_ok", "p_drain").await;
     let pool_for_deliverer = pool.clone();
 
     /// First call expires its own lease before returning Delivered;

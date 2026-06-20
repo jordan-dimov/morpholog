@@ -129,7 +129,7 @@ pub fn format_program(p: &Program) -> String {
 
 /// Render a single [`PredicateDecl`] as one line:
 /// `predicate Name(arg1: Kind, arg2: Kind)`.
-pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
+pub(crate) fn format_predicate_decl(decl: &PredicateDecl) -> String {
     let args: Vec<String> = decl
         .args
         .iter()
@@ -153,7 +153,7 @@ pub fn format_predicate_decl(decl: &PredicateDecl) -> String {
 
 /// Render a single [`crate::IntentDecl`] as one line:
 /// `intent Name(arg1: Kind, arg2: Kind)`.
-pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
+pub(crate) fn format_intent_decl(decl: &crate::IntentDecl) -> String {
     let args: Vec<String> = decl
         .args
         .iter()
@@ -164,7 +164,7 @@ pub fn format_intent_decl(decl: &crate::IntentDecl) -> String {
 
 /// Render a [`Definition`] in the invariant block shape:
 /// `define name(params):` with the body indented.
-pub fn format_definition(def: &Definition) -> String {
+pub(crate) fn format_definition(def: &Definition) -> String {
     let params: Vec<String> = def.parameters.iter().map(ToString::to_string).collect();
     let mut out = String::new();
     out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
@@ -174,7 +174,7 @@ pub fn format_definition(def: &Definition) -> String {
     out
 }
 
-pub fn format_invariant(inv: &Invariant) -> String {
+pub(crate) fn format_invariant(inv: &Invariant) -> String {
     let mut out = String::new();
     // Surface has no version syntax in v0; the IR's `version` field
     // defaults to 1 and the formatter omits it.
@@ -185,7 +185,7 @@ pub fn format_invariant(inv: &Invariant) -> String {
     out
 }
 
-pub fn format_transformation(t: &Transformation) -> String {
+pub(crate) fn format_transformation(t: &Transformation) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "transformation {}({}):\n",
@@ -203,7 +203,7 @@ pub fn format_transformation(t: &Transformation) -> String {
     out
 }
 
-pub fn format_derived_claim(d: &DerivedClaim) -> String {
+pub(crate) fn format_derived_claim(d: &DerivedClaim) -> String {
     // The surface grammar requires at least one `value` clause; an
     // empty `values` Vec would format to text the parser refuses.
     // The kernel doesn't enforce this today, so panic with a clear

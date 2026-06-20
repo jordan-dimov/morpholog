@@ -19,6 +19,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use common::test_pool;
 
 use jiff::{SignedDuration, Timestamp};
 use morpholog_core::{EvalValue, Program, Unit};
@@ -29,18 +30,10 @@ use rust_decimal::Decimal;
 const SENTINEL_HASH: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-/// Truncate governed state and drop the generated view schema, so each
-/// test starts from a clean surface.
+/// This suite's reset is unique - beyond the governed tables and the
+/// derived cache it must drop the generated `morpholog_views` (and the
+/// `analytics` schema a test renames into), so it keeps its own local
+/// reset rather than sharing `common::reset_db_and_read_cache`.
 async fn reset(pool: &PgPool) {
     sqlx::raw_sql(
         "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE; \

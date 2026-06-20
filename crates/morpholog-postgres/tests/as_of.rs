@@ -15,7 +15,7 @@
 use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_examples::{double_entry_ledger, verified_revenue};
 use morpholog_postgres::{
-    PgError, PgPool, PgProposalOutcome, list_claims, list_claims_at, list_derived, list_derived_at,
+    PgError, PgPool, list_claims, list_claims_at, list_derived, list_derived_at,
     reconstruct_state_at,
 };
 use rust_decimal::Decimal;
@@ -23,41 +23,16 @@ use uuid::Uuid;
 
 mod common;
 use common::{dec, subj};
+use common::{expect_committed, reset_db, test_pool};
 
 // ============================================================
 // Test infrastructure
 // ============================================================
 
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
-
 /// Unwrap a `Committed` outcome and return its `transition_id`,
 /// panicking if the transformation rejected. Each step of the chain
 /// is required to commit; a rejection is a fixture or kernel bug,
 /// not a business outcome.
-fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
-    match outcome {
-        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => {
-            panic!("expected Committed; got Rejected({reason})")
-        }
-    }
-}
-
 /// Three-step ledger fixture: post entry_001 at 100, post entry_002
 /// at 200, restate entry_001 to 150. Returns the three captured
 /// `transition_id`s in order. Used by most of the tests below.

@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use common::{reset_db, test_pool};
 
 use chrono::{DateTime, Utc};
 use common::{dec, subj};
@@ -33,25 +34,6 @@ fn fixture() -> Program {
     let p = parse_program(FIXTURE).expect("parses");
     p.validate().expect("validates");
     p
-}
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query(
-        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE",
-    )
-    .execute(pool)
-    .await
-    .expect("failed to truncate test DB");
 }
 
 async fn post(pool: &PgPool, p: &Program, entry: &str) -> Uuid {

@@ -26,27 +26,11 @@ use uuid::Uuid;
 
 mod common;
 use common::{claim_instance, dec, intent_instance, subj};
+use common::{reset_db, test_pool};
 
 // ============================================================
 // Test infrastructure
 // ============================================================
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev or postgres://postgres:postgres@localhost:5432/postgres)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
 
 async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
     // Pre-state claims need a non-null `asserted_in`; a fixed nil UUID

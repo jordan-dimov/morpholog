@@ -19,27 +19,11 @@ use uuid::Uuid;
 
 mod common;
 use common::{dec, subj};
+use common::{reset_db, test_pool};
 
 // ============================================================
 // Test infrastructure
 // ============================================================
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
 
 /// Commit one ledger entry and return the resulting outbox row's
 /// `intent_id`. The row is in `status='pending'` with no lease

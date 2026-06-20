@@ -9,69 +9,21 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+use common::{commit_simple_entry, reset_db, test_pool};
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use morpholog_core::{Subject, Transition};
-use morpholog_examples::double_entry_ledger;
 use morpholog_outbox::OutboxWorker;
 use morpholog_outbox::testing::{FixedJitter, MockClock};
-use morpholog_postgres::{
-    Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome, propose_against_pg,
-    testing::AlwaysDelivers,
-};
-use morpholog_test_support::{dec, subj};
+use morpholog_postgres::{Deliverer, DeliveryOutcome, OutboxRow, testing::AlwaysDelivers};
 use tokio::sync::watch;
 
 // ============================================================
 // Test infrastructure
 // ============================================================
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-outbox integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
-
-async fn commit_simple_entry(pool: &PgPool, entry_id: &str) {
-    let transformation = double_entry_ledger::post_simple_entry();
-    let transition = Transition {
-        transformation_name: transformation.name.clone(),
-        args: vec![
-            subj(entry_id),
-            subj("d_2026_05_17"),
-            subj("p_worker"),
-            subj(&format!("cash_{entry_id}")),
-            subj(&format!("revenue_{entry_id}")),
-            dec(100),
-        ],
-        actor: Subject::from("outbox_test"),
-    };
-    let outcome = propose_against_pg(
-        pool,
-        &transformation,
-        &transition,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
-    )
-    .await
-    .unwrap();
-    if let PgProposalOutcome::Rejected { reason } = outcome {
-        panic!("setup rejected: {reason}");
-    }
-}
 
 const INTENT_TYPE: &str = "JournalEntryPosted";
 
@@ -133,8 +85,8 @@ async fn worker_returns_immediately_when_shutdown_is_set_at_start() {
 async fn worker_drains_pending_rows_and_then_observes_shutdown() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_simple_entry(&pool, "entry_001").await;
-    commit_simple_entry(&pool, "entry_002").await;
+    commit_simple_entry(&pool, "entry_001", "p_worker").await;
+    commit_simple_entry(&pool, "entry_002", "p_worker").await;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let shutdown_tx = Arc::new(shutdown_tx);
@@ -233,7 +185,7 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
     reset_db(&pool).await;
     // Pre-load enough rows that both workers can make progress.
     for i in 0..6 {
-        commit_simple_entry(&pool, &format!("entry_{i:03}")).await;
+        commit_simple_entry(&pool, &format!("entry_{i:03}"), "p_worker").await;
     }
 
     let (shutdown_tx, shutdown_rx_a) = watch::channel(false);
@@ -302,7 +254,7 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
     // Generous offsets: 30s + 5min base + shutdown-after-first-
     // sleep means the test cannot race past next_attempt_at even
     // on a slow CI box.
-    commit_simple_entry(&pool, "entry_001").await;
+    commit_simple_entry(&pool, "entry_001", "p_worker").await;
     let future_retry = Utc::now() + ChronoDuration::seconds(30);
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$1 WHERE intent_type=$2")
         .bind(future_retry)

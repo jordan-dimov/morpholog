@@ -17,6 +17,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use common::{reset_db_and_read_cache, test_pool};
 
 use morpholog_core::{ClaimInstance, DerivedClaim, EvalValue, PredicateName, Program};
 use morpholog_postgres::{PgPool, list_derived, refresh_derived};
@@ -26,28 +27,6 @@ use common::{dec, subj};
 
 const SENTINEL_HASH: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-/// Clean governed state and the read model, so each test starts fresh.
-async fn reset(pool: &PgPool) {
-    sqlx::raw_sql(
-        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE; \
-         TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
-                  morpholog_read.derived_refreshes CASCADE;",
-    )
-    .execute(pool)
-    .await
-    .expect("reset");
-}
 
 const FIXTURE: &str = "program cache_fixture\n\
     predicate Entry(account: Subject, amount: Decimal)\n\
@@ -150,7 +129,7 @@ async fn assert_cache_matches_kernel(pool: &PgPool, p: &Program, name: &str) {
 #[tokio::test]
 async fn cache_matches_the_kernel_for_each_derived() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 10).await;
     seed_entry(&pool, &p, "a1", 5).await;
@@ -177,7 +156,7 @@ async fn cache_matches_the_kernel_for_each_derived() {
 #[tokio::test]
 async fn refresh_is_idempotent() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 10).await;
     seed_entry(&pool, &p, "a2", 3).await;
@@ -196,7 +175,7 @@ async fn refresh_is_idempotent() {
 #[tokio::test]
 async fn a_changed_source_is_reflected_after_refresh() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 10).await;
     refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
@@ -216,7 +195,7 @@ async fn a_changed_source_is_reflected_after_refresh() {
 #[tokio::test]
 async fn no_source_claims_is_a_lawful_empty_projection() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
 
     let summary = refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
@@ -243,7 +222,7 @@ async fn no_source_claims_is_a_lawful_empty_projection() {
 #[tokio::test]
 async fn each_refresh_publishes_one_generation() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 1).await;
 
@@ -274,7 +253,7 @@ async fn each_refresh_publishes_one_generation() {
 #[tokio::test]
 async fn propose_does_not_touch_the_read_model() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 10).await;
     refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
@@ -298,7 +277,7 @@ async fn propose_does_not_touch_the_read_model() {
 #[tokio::test]
 async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
     let pool = test_pool().await;
-    reset(&pool).await;
+    reset_db_and_read_cache(&pool).await;
     let p = fixture();
 
     // An in-flight writer: its transaction-start (and so its audit row's

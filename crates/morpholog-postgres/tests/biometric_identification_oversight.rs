@@ -21,24 +21,8 @@ use uuid::Uuid;
 
 mod common;
 use common::{propose_pg_as, subj};
+use common::{reset_db, test_pool};
 use morpholog_test_support::ts;
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
 
 /// Commit a transformation as `actor`, asserting it landed and
 /// returning the transition id (so a later step can address it as-of).
