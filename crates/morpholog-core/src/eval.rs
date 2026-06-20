@@ -22,7 +22,7 @@ use std::str::FromStr;
 use crate::definitions::DefinitionIndex;
 use crate::ir::{
     ArithOp, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop, Subject,
-    Term, Value, ValueExpr,
+    Term, Value, ValueExpr, Var,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
@@ -635,18 +635,14 @@ pub(crate) fn matching_claims(
         Candidates::Indexed(bucket) => {
             for &i in bucket {
                 let claim = state.claim_at(i);
-                if claim.args.len() == args.len()
-                    && unify_args(args, &claim.args, base, actor).is_some()
-                {
+                if claim.args.len() == args.len() && claim_matches(args, &claim.args, base, actor) {
                     out.push(claim.clone());
                 }
             }
         }
         Candidates::All => {
             for claim in state.claims_for_name(predicate) {
-                if claim.args.len() == args.len()
-                    && unify_args(args, &claim.args, base, actor).is_some()
-                {
+                if claim.args.len() == args.len() && claim_matches(args, &claim.args, base, actor) {
                     out.push(claim.clone());
                 }
             }
@@ -655,23 +651,34 @@ pub(crate) fn matching_claims(
     Ok(out)
 }
 
-pub(crate) fn unify_args(
-    patterns: &[Term],
-    values: &[EvalValue],
+/// Structural pattern match without allocating an environment: returns
+/// the new variable bindings as borrowed references, or `None` on a
+/// mismatch. A repeated variable within one pattern binds consistently -
+/// checked against `base`, then the bindings made so far. The literal and
+/// actor arms are pure read-only checks. Shared by [`unify_args`] (which
+/// builds the environment) and [`claim_matches`] (which only asks whether
+/// a match exists), so the two cannot drift.
+fn match_args<'a>(
+    patterns: &'a [Term],
+    values: &'a [EvalValue],
     base: &Bindings,
     actor: Option<&Subject>,
-) -> Option<Bindings> {
-    let mut b = base.clone();
+) -> Option<Vec<(&'a Var, &'a EvalValue)>> {
+    let mut new: Vec<(&Var, &EvalValue)> = Vec::new();
     for (p, v) in patterns.iter().zip(values.iter()) {
         match p {
             Term::Wildcard => {}
             Term::Var(name) => {
-                if let Some(existing) = b.get(name) {
+                if let Some(existing) = base.get(name) {
                     if existing != v {
                         return None;
                     }
+                } else if let Some((_, existing)) = new.iter().find(|(k, _)| *k == name) {
+                    if *existing != v {
+                        return None;
+                    }
                 } else {
-                    b.insert(name.clone(), v.clone());
+                    new.push((name, v));
                 }
             }
             Term::Literal(Value::Decimal(s)) => {
@@ -718,7 +725,37 @@ pub(crate) fn unify_args(
             },
         }
     }
+    Some(new)
+}
+
+/// Unify `patterns` against `values`, extending `base` with the new
+/// bindings. The environment map is cloned **once, only on a verified
+/// match** - a mismatch allocates nothing.
+pub(crate) fn unify_args(
+    patterns: &[Term],
+    values: &[EvalValue],
+    base: &Bindings,
+    actor: Option<&Subject>,
+) -> Option<Bindings> {
+    let new = match_args(patterns, values, base, actor)?;
+    let mut b = base.clone();
+    for (name, v) in new {
+        b.insert(name.clone(), v.clone());
+    }
     Some(b)
+}
+
+/// Whether `patterns` unify against `values` under `base`, without
+/// building the environment - the allocation-free guard for the lookup
+/// paths (`matching_claims`, `ValueOf`) that need only a yes/no, never the
+/// resulting bindings. Shares [`match_args`] with [`unify_args`].
+pub(crate) fn claim_matches(
+    patterns: &[Term],
+    values: &[EvalValue],
+    base: &Bindings,
+    actor: Option<&Subject>,
+) -> bool {
+    match_args(patterns, values, base, actor).is_some()
 }
 
 pub(crate) fn find_conjunction(
@@ -1053,7 +1090,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     for &i in bucket {
                         let claim = ctx.state.claim_at(i);
                         if claim.args.len() == args.len()
-                            && unify_args(args, &claim.args, ctx.bindings, ctx.actor).is_some()
+                            && claim_matches(args, &claim.args, ctx.bindings, ctx.actor)
                         {
                             multiple |= matched.is_some();
                             matched = Some(&claim.args[pos]);
@@ -1063,7 +1100,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 Candidates::All => {
                     for claim in ctx.state.claims_for_name(predicate) {
                         if claim.args.len() == args.len()
-                            && unify_args(args, &claim.args, ctx.bindings, ctx.actor).is_some()
+                            && claim_matches(args, &claim.args, ctx.bindings, ctx.actor)
                         {
                             multiple |= matched.is_some();
                             matched = Some(&claim.args[pos]);
@@ -1395,6 +1432,44 @@ mod tests {
         dec, div, max, min, modulo, mul, subj, term, value_of, value_of_with_default, wildcard,
     };
     use crate::state::{ClaimInstance, State};
+
+    /// `claim_matches` and `unify_args` share `match_args`, so they must
+    /// agree on every verdict; `unify_args` must additionally extend the
+    /// base with exactly the new bindings. Pins that the allocation-free
+    /// boolean path cannot drift from the binding-producing one.
+    #[test]
+    fn claim_matches_agrees_with_unify_args_and_extends_base() {
+        let s = |x: &str| EvalValue::Subject(Subject::from(x));
+        let var = |x: &str| Term::Var(Var::from(x));
+        let lit = |x: &str| Term::Literal(Value::Subject(x.into()));
+        let actor = Subject::from("alice");
+        let mut base = Bindings::new();
+        base.insert(Var::from("known"), s("k"));
+
+        let cases: Vec<(Vec<Term>, Vec<EvalValue>, bool)> = vec![
+            (vec![var("x"), var("y")], vec![s("a"), s("b")], true), // fresh vars
+            (vec![var("x"), var("x")], vec![s("a"), s("a")], true), // repeated var, consistent
+            (vec![var("x"), var("x")], vec![s("a"), s("b")], false), // repeated var, conflict
+            (vec![lit("a")], vec![s("a")], true),                   // literal match
+            (vec![lit("a")], vec![s("b")], false),                  // literal mismatch
+            (vec![Term::Wildcard], vec![s("z")], true),             // wildcard
+            (vec![Term::Actor], vec![s("alice")], true),            // actor match
+            (vec![Term::Actor], vec![s("bob")], false),             // actor mismatch
+            (vec![var("known")], vec![s("k")], true),               // agrees with base
+            (vec![var("known")], vec![s("other")], false),          // conflicts with base
+        ];
+        for (pats, vals, expect) in cases {
+            let m = claim_matches(&pats, &vals, &base, Some(&actor));
+            let u = unify_args(&pats, &vals, &base, Some(&actor));
+            assert_eq!(m, u.is_some(), "verdicts disagree on {pats:?}");
+            assert_eq!(m, expect, "wrong verdict on {pats:?}");
+        }
+
+        // A match extends the base with the new binding and keeps base entries.
+        let u = unify_args(&[var("x")], &[s("a")], &base, Some(&actor)).unwrap();
+        assert_eq!(u.get(&Var::from("x")), Some(&s("a")));
+        assert_eq!(u.get(&Var::from("known")), Some(&s("k")));
+    }
 
     // Evaluate a literal-only value expression against empty state/bindings.
     fn eval_lit(e: &ValueExpr) -> Result<EvalValue, EvalError> {
