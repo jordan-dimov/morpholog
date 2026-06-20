@@ -225,26 +225,33 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
             }
         }
         Ok((program, map)) => {
-            if let Err(errors) = program.validate() {
-                failed = true;
-                for err in &errors {
-                    findings.push(JsonDiagnostic::new(
-                        "error",
-                        err.to_string(),
-                        map.span_for_error(err),
-                        &source,
-                    ));
+            // Constructing the `CompiledProgram` is the validation gate:
+            // `Err` carries the same errors `program.validate()` would, and
+            // `Ok` is the compiled programme the lints run against - so the
+            // programme is validated once, not twice.
+            match CompiledProgram::new(program) {
+                Err(errors) => {
+                    failed = true;
+                    for err in &errors {
+                        findings.push(JsonDiagnostic::new(
+                            "error",
+                            err.to_string(),
+                            map.span_for_error(err),
+                            &source,
+                        ));
+                    }
                 }
-            } else if let Ok(compiled) = CompiledProgram::new(program.clone()) {
-                for lint in &morpholog_core::lints(&compiled) {
-                    let severity = if args.strict { "error" } else { "hint" };
-                    failed |= args.strict;
-                    findings.push(JsonDiagnostic::new(
-                        severity,
-                        lint.to_string(),
-                        map.span_for_lint(lint),
-                        &source,
-                    ));
+                Ok(compiled) => {
+                    for lint in &morpholog_core::lints(&compiled) {
+                        let severity = if args.strict { "error" } else { "hint" };
+                        failed |= args.strict;
+                        findings.push(JsonDiagnostic::new(
+                            severity,
+                            lint.to_string(),
+                            map.span_for_lint(lint),
+                            &source,
+                        ));
+                    }
                 }
             }
         }

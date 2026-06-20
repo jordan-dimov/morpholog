@@ -950,6 +950,13 @@ pub async fn list_claims_for_predicates(
 ///
 /// Used by `morpholog explain` to run the kernel in-memory against live
 /// state without opening a write transaction.
+///
+/// `transformation` is passed explicitly (rather than resolved by name,
+/// as the `propose_against_pg*` facade does) because `explain` has not
+/// built a transition at this point. It must belong to `compiled`: the
+/// scope is computed from its body together with `compiled`'s invariants
+/// and definitions, so an unrelated transformation would scope the read
+/// to the wrong predicates.
 pub async fn load_scoped_state(
     pool: &PgPool,
     compiled: &CompiledProgram,
