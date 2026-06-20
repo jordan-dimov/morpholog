@@ -18,7 +18,7 @@ use morpholog_postgres::{
 use crate::ProposeArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
-    ParsedSource, connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
+    ParsedSource, compile_or_exit, connect, lookup_transformation, parse_or_exit, print_json,
 };
 
 pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
@@ -30,11 +30,10 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     //    validation failure so a malformed programme never reaches
     //    the proposal path. The returned `ValidatedProgram` handle
     //    threads through to the codec so it does not re-validate.
-    let validated = validate_or_exit(&parsed);
-    let program = &parsed.program;
+    let compiled = compile_or_exit(&parsed);
 
     if let Some(batch_path) = &args.batch {
-        return run_batch(&args, program, &validated, batch_path).await;
+        return run_batch(&args, &compiled, batch_path).await;
     }
 
     // 3. Resolve the transformation. Clap guarantees it is present
@@ -45,7 +44,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         // panic path in the binary.
         anyhow::bail!("a transformation name is required outside --batch");
     };
-    let transformation = lookup_transformation(program, transformation_name, &args.file)?;
+    let transformation = lookup_transformation(&compiled, transformation_name, &args.file)?;
 
     // 4. Decode --args or --args-named into `Vec<EvalValue>`. Clap
     //    has already enforced exactly-one-of via `conflicts_with` +
@@ -57,7 +56,12 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         (None, Some(named)) => CliArgs::Named(named.as_str()),
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
-    let eval_args = decode_args(&validated, transformation, &args.file, codec_input)?;
+    let eval_args = decode_args(
+        &compiled.validated(),
+        transformation,
+        &args.file,
+        codec_input,
+    )?;
 
     // 5. Connect and propose. Same retry caveat as `propose`:
     //    `PgError::SerializationFailure` is the caller's to retry.
@@ -76,8 +80,8 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             &pool,
             transformation,
             &transition,
-            &program.invariants,
-            &program.definitions,
+            &compiled.program().invariants,
+            &compiled.program().definitions,
         )
         .await
         .context("propose_against_pg_with_trace failed")?;
@@ -116,14 +120,14 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             &pool,
             transformation,
             &transition,
-            &program.invariants,
-            &program.definitions,
+            &compiled.program().invariants,
+            &compiled.program().definitions,
         )
         .await
         .context("propose_against_pg_with_rejection_state failed")?;
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
-                let explanation = explain(program, &transition, &state);
+                let explanation = explain(compiled.program(), &transition, &state);
                 print_json(&serde_json::json!({
                     "status": "rejected",
                     "reason": reason,
@@ -139,8 +143,8 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             &pool,
             transformation,
             &transition,
-            &program.invariants,
-            &program.definitions,
+            &compiled.program().invariants,
+            &compiled.program().definitions,
         )
         .await
         .context("propose_against_pg failed")?;
@@ -226,8 +230,7 @@ fn classify_pg_error(err: morpholog_postgres::PgError) -> BatchRowError {
 /// receipts.
 async fn run_batch(
     args: &ProposeArgs,
-    program: &morpholog_core::Program,
-    validated: &morpholog_core::ValidatedProgram<'_>,
+    compiled: &morpholog_core::CompiledProgram,
     batch_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     let input = if batch_path == std::path::Path::new("-") {
@@ -249,7 +252,7 @@ async fn run_batch(
         }
         rows += 1;
         let row = line_no + 1;
-        let receipt = match batch_row_outcome(args, program, validated, &pool, line).await {
+        let receipt = match batch_row_outcome(args, compiled, &pool, line).await {
             Ok(mut envelope) => {
                 match envelope.get("status").and_then(|s| s.as_str()) {
                     Some("committed") => committed += 1,
@@ -294,15 +297,14 @@ async fn run_batch(
 /// from the pinned single-run contract.
 async fn batch_row_outcome(
     args: &ProposeArgs,
-    program: &morpholog_core::Program,
-    validated: &morpholog_core::ValidatedProgram<'_>,
+    compiled: &morpholog_core::CompiledProgram,
     pool: &morpholog_postgres::PgPool,
     line: &str,
 ) -> Result<serde_json::Value, BatchRowError> {
     let row: BatchRow = serde_json::from_str(line)
         .context("malformed batch row")
         .map_err(BatchRowError::Row)?;
-    let transformation = lookup_transformation(program, &row.transformation, &args.file)
+    let transformation = lookup_transformation(compiled, &row.transformation, &args.file)
         .map_err(BatchRowError::Row)?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
@@ -320,8 +322,13 @@ async fn batch_row_outcome(
             )));
         }
     };
-    let eval_args = decode_args(validated, transformation, &args.file, codec_input)
-        .map_err(BatchRowError::Row)?;
+    let eval_args = decode_args(
+        &compiled.validated(),
+        transformation,
+        &args.file,
+        codec_input,
+    )
+    .map_err(BatchRowError::Row)?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
@@ -336,13 +343,13 @@ async fn batch_row_outcome(
             pool,
             transformation,
             &transition,
-            &program.invariants,
-            &program.definitions,
+            &compiled.program().invariants,
+            &compiled.program().definitions,
         )
         .await
         .map_err(classify_pg_error)?;
         if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
-            let explanation = explain(program, &transition, &state);
+            let explanation = explain(compiled.program(), &transition, &state);
             return Ok(serde_json::json!({
                 "status": "rejected",
                 "reason": reason,
@@ -357,8 +364,8 @@ async fn batch_row_outcome(
             pool,
             transformation,
             &transition,
-            &program.invariants,
-            &program.definitions,
+            &compiled.program().invariants,
+            &compiled.program().definitions,
         )
         .await
         .map_err(classify_pg_error)?;

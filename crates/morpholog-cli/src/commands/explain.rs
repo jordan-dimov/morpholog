@@ -20,19 +20,16 @@ use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
 use crate::commands::args::{CliArgs, decode_args};
-use crate::commands::{
-    connect, lookup_transformation, parse_or_exit, print_json, validate_or_exit,
-};
+use crate::commands::{compile_or_exit, connect, lookup_transformation, parse_or_exit, print_json};
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same parse + validate front-end as `propose`: a malformed programme
-    // never reaches the explanation path. The returned
-    // `ValidatedProgram` handle threads through to the codec.
+    // never reaches the explanation path. The compiled programme is the
+    // one model object the lookup, codec, and rule slices source from.
     let parsed = parse_or_exit(&args.file)?;
-    let validated = validate_or_exit(&parsed);
-    let program = &parsed.program;
+    let compiled = compile_or_exit(&parsed);
 
-    let transformation = lookup_transformation(program, &args.transformation, &args.file)?;
+    let transformation = lookup_transformation(&compiled, &args.transformation, &args.file)?;
 
     // Decode --args or --args-named via the same shared codec `propose`
     // uses, so the two paths cannot drift on what is a valid input.
@@ -41,14 +38,19 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         (None, Some(named)) => CliArgs::Named(named.as_str()),
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
-    let eval_args = decode_args(&validated, transformation, &args.file, codec_input)?;
+    let eval_args = decode_args(
+        &compiled.validated(),
+        transformation,
+        &args.file,
+        codec_input,
+    )?;
 
     let pool = connect(&args.db.database_url).await?;
     let state = load_scoped_state(
         &pool,
         transformation,
-        &program.invariants,
-        &program.definitions,
+        &compiled.program().invariants,
+        &compiled.program().definitions,
     )
     .await
     .context("failed to load scoped pre-state")?;
@@ -59,7 +61,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         actor: Subject::from(args.actor.clone()),
     };
 
-    let explanation = explain(program, &transition, &state);
+    let explanation = explain(compiled.program(), &transition, &state);
     if args.json {
         print_json(&explanation)
     } else {
