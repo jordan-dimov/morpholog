@@ -376,32 +376,37 @@ enum TxIsolation {
 }
 
 impl TxIsolation {
-    fn sql(self) -> &'static str {
+    /// The full `SET TRANSACTION` statement as a `'static` literal, so
+    /// the per-transaction setup allocates nothing (the level is part of
+    /// the constant, not interpolated at runtime).
+    fn set_statement(self) -> &'static str {
         match self {
-            TxIsolation::Serializable => "SERIALIZABLE",
-            TxIsolation::SerializableReadOnlyDeferrable => "SERIALIZABLE READ ONLY DEFERRABLE",
-            TxIsolation::RepeatableRead => "REPEATABLE READ",
-            TxIsolation::RepeatableReadReadOnly => "REPEATABLE READ READ ONLY",
+            TxIsolation::Serializable => "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+            TxIsolation::SerializableReadOnlyDeferrable => {
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE"
+            }
+            TxIsolation::RepeatableRead => "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            TxIsolation::RepeatableReadReadOnly => {
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            }
         }
     }
 }
 
 /// Begin a transaction and set its isolation level - the ritual every
 /// adapter entry point opens with, in one auditable place. The `SET`
-/// stays raw control SQL (not a `query!` macro); the level cannot be an
-/// arbitrary string because [`TxIsolation`] is closed.
+/// stays raw control SQL (not a `query!` macro); the statement is a
+/// `'static` literal because [`TxIsolation`] is closed, so this hot path
+/// allocates nothing.
 async fn begin_isolated_tx(
     pool: &PgPool,
     isolation: TxIsolation,
 ) -> Result<Transaction<'_, Postgres>, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query(&format!(
-        "SET TRANSACTION ISOLATION LEVEL {}",
-        isolation.sql()
-    ))
-    .execute(&mut *tx)
-    .await
-    .map_err(classify)?;
+    sqlx::query(isolation.set_statement())
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
     Ok(tx)
 }
 
