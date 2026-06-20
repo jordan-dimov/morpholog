@@ -214,15 +214,16 @@ pub fn controls(program: &Program) -> ControlMatrix {
         .collect();
 
     // Invert the gate front-loads links into the invariant-side view, at
-    // implication-shape granularity (keyed by the rendered failure shape,
-    // which `gate()` copies onto each link). Partial coverage of a
+    // implication-shape granularity. Keyed by (invariant, failure shape) -
+    // not the shape alone, so two invariants that happen to render the same
+    // implication shape keep separate front-loaders. Partial coverage of a
     // multi-implication invariant stays visible: one row per implication.
-    let mut by_shape: BTreeMap<&str, Vec<GateRef>> = BTreeMap::new();
+    let mut by_shape: BTreeMap<(&str, &str), Vec<GateRef>> = BTreeMap::new();
     for t in &transformations {
         for g in &t.gates {
             for link in &g.front_loads {
                 by_shape
-                    .entry(link.failure_shape.as_str())
+                    .entry((link.invariant.as_str(), link.failure_shape.as_str()))
                     .or_default()
                     .push(GateRef {
                         transformation: t.transformation.clone(),
@@ -256,7 +257,7 @@ pub fn controls(program: &Program) -> ControlMatrix {
                 .map(|(name, _)| name.clone())
                 .collect(),
             front_loaded_by: by_shape
-                .get(imp.failure_shape.as_str())
+                .get(&(imp.invariant.as_str(), imp.failure_shape.as_str()))
                 .cloned()
                 .unwrap_or_default(),
         })

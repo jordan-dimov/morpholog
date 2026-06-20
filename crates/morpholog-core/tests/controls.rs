@@ -325,6 +325,53 @@ fn a_dormant_implication_is_distinguished_from_a_backstop() {
 }
 
 #[test]
+fn two_invariants_with_the_same_failure_shape_keep_separate_front_loaders() {
+    // The inversion keys on (invariant, failure_shape), not the shape
+    // alone. Two invariants with identical bodies render the same failure
+    // shape; one gate front-loads both. Shape-only keying would collect
+    // the gate ref twice and list a duplicate on each row - this pins one
+    // ref per invariant.
+    let p = program("same_shape")
+        .predicates(vec![
+            predicate("A").subject("x").build(),
+            predicate("B").subject("x").build(),
+        ])
+        .invariants(vec![
+            invariant(
+                "i1",
+                implies(claim("A", vec![var("x")]), claim("B", vec![var("x")])),
+            ),
+            invariant(
+                "i2",
+                implies(claim("A", vec![var("x")]), claim("B", vec![var("x")])),
+            ),
+        ])
+        .transformations(vec![morpholog_core::ir_builder::transformation(
+            "t",
+            params(&["x"]),
+            vec![
+                require(claim("B", vec![var("x")])),
+                assert_("A", vec![var("x")]),
+            ],
+        )])
+        .build();
+    assert!(p.validate().is_ok(), "{:?}", p.validate());
+    let cov = controls(&p).front_line_coverage;
+    for name in ["i1", "i2"] {
+        let row = cov
+            .iter()
+            .find(|i| i.invariant == name)
+            .unwrap_or_else(|| panic!("{name} present"));
+        assert_eq!(
+            row.front_loaded_by.len(),
+            1,
+            "exactly one front-loader, not a duplicate from the other invariant: {row:?}"
+        );
+        assert_eq!(row.front_loaded_by[0].transformation, "t");
+    }
+}
+
+#[test]
 fn a_gateless_transformation_renders_its_invariant_only_admission() {
     // A transformation with no require/bind preconditions is governed
     // by the invariants alone; the matrix says so rather than showing
