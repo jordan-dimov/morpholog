@@ -45,15 +45,18 @@ pub struct Checkpoint {
     pub checkpoint_hash: String,
 }
 
-/// Outcome of [`create_checkpoint`].
+/// Outcome of [`create_checkpoint`]. Both variants carry a full
+/// [`Checkpoint`] flattened under a `status` tag, so the command's output
+/// is *always* a usable anchor: `checkpoint > anchor.json` is safe even on
+/// a no-op run (it re-prints the current head rather than a stub).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum CheckpointOutcome {
     /// A new checkpoint was recorded over a longer prefix.
     Created(Checkpoint),
-    /// The stable prefix has not grown since the latest checkpoint, so
-    /// there was nothing new to commit to.
-    NoNewRows { tree_size: i64 },
+    /// The stable prefix had not grown since the latest checkpoint; the
+    /// existing head is returned unchanged.
+    NoNewRows(Checkpoint),
 }
 
 /// Result of verifying the audit tree against its checkpoints.
@@ -182,9 +185,7 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         && tree_size <= p.tree_size
     {
         tx.rollback().await.map_err(classify)?;
-        return Ok(CheckpointOutcome::NoNewRows {
-            tree_size: p.tree_size,
-        });
+        return Ok(CheckpointOutcome::NoNewRows(p.clone()));
     }
 
     let prev_hash = prev.as_ref().map(|p| p.checkpoint_hash.clone());
@@ -222,11 +223,11 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
 }
 
 /// Verify the audit tree against its checkpoints. Reads under
-/// `SERIALIZABLE READ ONLY DEFERRABLE`. Three checks, strongest last:
-/// every checkpoint's root recomputes from the current log; the
-/// checkpoint chain is internally consistent (hash + `prev` links); and,
-/// if `anchor` is supplied, the stored checkpoint at the anchor's size
-/// matches the externally held copy.
+/// `SERIALIZABLE READ ONLY DEFERRABLE`. Checks, strongest last: every
+/// checkpoint's root recomputes from the current log; the checkpoint
+/// chain is internally consistent (hash + `prev` links); and, if `anchor`
+/// is supplied, the stored checkpoint at the anchor's size matches the
+/// externally held copy.
 pub async fn verify_audit_tree(
     pool: &PgPool,
     anchor: Option<Checkpoint>,

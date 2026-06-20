@@ -40,7 +40,7 @@ async fn commit_entry(pool: &PgPool, id: &str) {
 async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
     match create_checkpoint(pool).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows { .. } => {
+        other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")
         }
     }
@@ -77,7 +77,7 @@ async fn checkpoint_verifies_then_catches_an_audit_edit() {
     // Edit an audit row's content directly - the coordinated-edit an
     // honest replay alone cannot see, since claims could be edited to
     // match. The recomputed root no longer matches the checkpoint.
-    sqlx::query("UPDATE morpholog.audit SET transformation_name = 'tampered' WHERE transition_id = (SELECT transition_id FROM morpholog.audit ORDER BY committed_at LIMIT 1)")
+    sqlx::query("UPDATE morpholog.audit SET transformation_name = 'tampered' WHERE transition_id = (SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id LIMIT 1)")
         .execute(&pool)
         .await
         .unwrap();
@@ -115,11 +115,14 @@ async fn checkpoint_chain_extends_and_old_prefix_stays_stable() {
         TreeVerification::Intact { .. }
     ));
 
-    // No new rows -> no-op, not a forked checkpoint.
-    assert!(matches!(
-        create_checkpoint(&pool).await.unwrap(),
-        CheckpointOutcome::NoNewRows { tree_size: 3 }
-    ));
+    // No new rows -> no-op returning the unchanged head (a usable anchor),
+    // not a forked checkpoint.
+    let noop = create_checkpoint(&pool).await.unwrap();
+    let CheckpointOutcome::NoNewRows(head) = noop else {
+        panic!("expected NoNewRows, got {noop:?}");
+    };
+    assert_eq!(head.tree_size, 3);
+    assert_eq!(head, second, "the no-op returns the current head unchanged");
 }
 
 #[tokio::test]
@@ -157,7 +160,7 @@ async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
 
     // Attacker edits the log AND rebuilds the checkpoint chain to match -
     // the same tree_size, a new self-consistent root.
-    sqlx::query("UPDATE morpholog.audit SET transformation_name = 'tampered' WHERE transition_id = (SELECT transition_id FROM morpholog.audit ORDER BY committed_at LIMIT 1)")
+    sqlx::query("UPDATE morpholog.audit SET transformation_name = 'tampered' WHERE transition_id = (SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id LIMIT 1)")
         .execute(&pool)
         .await
         .unwrap();

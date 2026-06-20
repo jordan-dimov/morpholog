@@ -196,6 +196,19 @@ mod tests {
         assert_eq!(merkle_root(&[a, b]), node_hash(&a, &b));
     }
 
+    /// A frozen root over leaves `"a"` and `"b"`, computed independently
+    /// with `sha256sum` (not these functions): a regression in the leaf
+    /// or node hashing changes it. Pins byte-compatibility with the RFC
+    /// 6962 construction, not just internal self-consistency.
+    #[test]
+    fn frozen_two_leaf_root_matches_an_independent_sha256() {
+        let root = merkle_root(&[leaf_hash(b"a"), leaf_hash(b"b")]);
+        assert_eq!(
+            render_hash(&root),
+            "sha256:b137985ff484fb600db93107c77b0365c80d78f5b429ded0fd97361d077999eb"
+        );
+    }
+
     /// Leaf and node prefixes differ, so a leaf can never collide with an
     /// interior node over the same bytes.
     #[test]

@@ -525,10 +525,11 @@ async fn checkpoint_then_verify_against_the_anchor() {
     );
 
     // Save it and verify the tree against it.
-    let anchor = std::env::temp_dir().join(format!("morpholog_anchor_{}.json", std::process::id()));
-    std::fs::write(&anchor, &cp_stdout).unwrap();
-    let (status, stdout, stderr) = run_cli(&["verify", "--anchor-file", anchor.to_str().unwrap()]);
-    std::fs::remove_file(&anchor).ok();
+    // A unique temp file, auto-cleaned, so concurrent runs cannot collide.
+    let mut anchor = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
+    let (status, stdout, stderr) =
+        run_cli(&["verify", "--anchor-file", anchor.path().to_str().unwrap()]);
     assert!(
         status.success(),
         "verify against a fresh anchor should pass; {stderr}\n{stdout}"
