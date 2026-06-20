@@ -109,7 +109,10 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         // (pure, in-memory) runs against it - never a second read
         // that could describe different state than the one that
         // refused.
-        let (outcome, rejection_state) = propose_against_pg_with_rejection_state(
+        let morpholog_postgres::RejectionStateOutcome {
+            outcome,
+            rejection_state,
+        } = propose_against_pg_with_rejection_state(
             &pool,
             transformation,
             &transition,
@@ -326,7 +329,10 @@ async fn batch_row_outcome(
     };
 
     if args.explain_on_reject {
-        let (outcome, rejection_state) = propose_against_pg_with_rejection_state(
+        let morpholog_postgres::RejectionStateOutcome {
+            outcome,
+            rejection_state,
+        } = propose_against_pg_with_rejection_state(
             pool,
             transformation,
             &transition,
