@@ -1190,6 +1190,70 @@ mod tests {
         );
     }
 
+    /// The kernel error enums moved from hand-rolled `Display` to
+    /// `thiserror`'s derive. These pins prove the messages stayed
+    /// byte-for-byte identical across that conversion - covering each
+    /// tricky formatting class: a plain variant, a field-interpolated
+    /// tuple, a `\`-continued long string, named struct fields with a
+    /// nested `Display`, and a joined-expression message.
+    #[test]
+    fn eval_error_display_strings_are_pinned() {
+        assert_eq!(EvalError::DivisionByZero.to_string(), "division by zero");
+        assert_eq!(
+            EvalError::UnboundVariable("amount".into()).to_string(),
+            "unbound variable: amount"
+        );
+        assert_eq!(
+            EvalError::UnknownDefinition("two_distinct".into()).to_string(),
+            "call to definition `two_distinct` but the evaluation context carries \
+             no such definition; validate the programme before proposing"
+        );
+    }
+
+    #[test]
+    fn validation_error_display_strings_are_pinned() {
+        use crate::{ValidationContext, ValidationError, VocabularyKind};
+        assert_eq!(
+            ValidationError::Undeclared {
+                vocabulary: VocabularyKind::Predicate,
+                name: "Approved".into(),
+                context: ValidationContext::Invariant {
+                    name: "at_most_one".into(),
+                },
+            }
+            .to_string(),
+            "undeclared predicate `Approved` referenced in invariant `at_most_one`"
+        );
+        assert_eq!(
+            ValidationError::DefinitionCycle {
+                names: vec!["a".into(), "b".into()],
+            }
+            .to_string(),
+            "definitions reference each other in a cycle (a, b); a definition \
+             must expand to claims and conditions, never back to itself"
+        );
+        assert_eq!(
+            ValidationError::DisciplinePointerCannotBeAppendOnly {
+                predicate: "CurrentFigure".into(),
+            }
+            .to_string(),
+            "`CurrentFigure` is declared both `append only` and `current \
+             pointer`; a pointer must be retractable to move, which is the \
+             opposite commitment - drop one"
+        );
+    }
+
+    #[test]
+    fn analysis_error_display_string_is_pinned() {
+        assert_eq!(
+            crate::analysis::AnalysisError::UnknownTransformation {
+                name: "settle_trade".into(),
+            }
+            .to_string(),
+            "unknown transformation `settle_trade`"
+        );
+    }
+
     /// `bind_one` against two matching claims surfaces a kernel error,
     /// not a lawful rejection: the programme expected unique state but
     /// admitted ambiguous state.

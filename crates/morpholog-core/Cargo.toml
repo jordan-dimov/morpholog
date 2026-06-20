@@ -12,6 +12,7 @@ uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jiff = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 morpholog-test-support = { path = "../morpholog-test-support" }

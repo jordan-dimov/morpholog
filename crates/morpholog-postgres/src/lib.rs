@@ -119,6 +119,7 @@ pub enum PgError {
 ///
 /// `Serialize` uses serde's internally-tagged representation so the
 /// CLI can emit outcomes directly as JSON with a `status` discriminant.
+#[must_use = "a proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum PgProposalOutcome {
@@ -213,6 +214,7 @@ pub async fn propose_against_pg_with_rejection_state(
 /// kernel before the error is raised is **not** discarded: a kernel
 /// error mid-transformation is exactly the case where the trace is
 /// most valuable for debugging.
+#[must_use = "a traced proposal outcome carries the commit/reject result (a dropped `Rejected` silently treats a refused change as committed) and the diagnostic trace"]
 #[derive(Debug, Clone)]
 pub enum PgTracedOutcome {
     /// Kernel ran to a normal outcome (Committed or Rejected) and
@@ -727,6 +729,7 @@ pub struct OutboxRow {
 /// sees [`OutboxUpdate::LeaseLost`] and can log, retry-after-reclaim,
 /// or move on.
 #[doc(hidden)]
+#[must_use = "an outbox update outcome must be inspected; `LeaseLost` means the requested state change did not apply"]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum OutboxUpdate {
     /// The row was updated as requested.

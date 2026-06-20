@@ -202,7 +202,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     let post = p.transformation("post").unwrap();
 
     // A commit records nothing here - it records in audit.
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         post,
         vec![subj("e1"), dec(1)],
@@ -211,7 +211,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     )
     .await
     .expect("commits");
-    common::propose_pg_with_test_actor(
+    let _ = common::propose_pg_with_test_actor(
         &pool,
         post,
         vec![subj("e2"), dec(2)],

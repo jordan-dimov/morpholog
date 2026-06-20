@@ -102,7 +102,7 @@ async fn enqueue_then_fail(pool: &PgPool, entry_id: &str) -> Uuid {
     .execute(pool)
     .await
     .unwrap();
-    mark_outbox_failed(pool, intent_id, "delivery_worker", "test failure")
+    let _ = mark_outbox_failed(pool, intent_id, "delivery_worker", "test failure")
         .await
         .unwrap();
     intent_id
@@ -219,7 +219,7 @@ async fn begin_compensation_returns_none_when_compensation_already_recorded() {
         .unwrap()
         .expect("first claim succeeds");
     let comp_tid = commit_compensation_transformation(&pool, "a").await;
-    complete_compensation(&pool, intent_id, "comp_worker_a", comp_tid)
+    let _ = complete_compensation(&pool, intent_id, "comp_worker_a", comp_tid)
         .await
         .unwrap();
 
