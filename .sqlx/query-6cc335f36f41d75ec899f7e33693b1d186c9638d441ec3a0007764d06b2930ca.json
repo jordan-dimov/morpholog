@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash\n         FROM morpholog.audit_checkpoints\n         ORDER BY tree_size DESC\n         LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tree_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "root_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "prev_checkpoint_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "checkpoint_hash",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "6cc335f36f41d75ec899f7e33693b1d186c9638d441ec3a0007764d06b2930ca"
+}
