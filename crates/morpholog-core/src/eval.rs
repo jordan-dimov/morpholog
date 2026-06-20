@@ -658,12 +658,20 @@ pub(crate) fn matching_claims(
 /// actor arms are pure read-only checks. Shared by [`unify_args`] (which
 /// builds the environment) and [`claim_matches`] (which only asks whether
 /// a match exists), so the two cannot drift.
+///
+/// Owns the same-arity invariant: a pattern and value list of different
+/// lengths never match. As the single matcher, it holds this itself
+/// rather than trusting every caller to pre-check (the `zip` below would
+/// otherwise prefix-match).
 fn match_args<'a>(
     patterns: &'a [Term],
     values: &'a [EvalValue],
     base: &Bindings,
     actor: Option<&Subject>,
 ) -> Option<Vec<(&'a Var, &'a EvalValue)>> {
+    if patterns.len() != values.len() {
+        return None;
+    }
     let mut new: Vec<(&Var, &EvalValue)> = Vec::new();
     for (p, v) in patterns.iter().zip(values.iter()) {
         match p {
@@ -729,8 +737,9 @@ fn match_args<'a>(
 }
 
 /// Unify `patterns` against `values`, extending `base` with the new
-/// bindings. The environment map is cloned **once, only on a verified
-/// match** - a mismatch allocates nothing.
+/// bindings. The `base` environment map is cloned **once, only on a
+/// verified match** - a mismatch never clones it (though `match_args` may
+/// still use small scratch storage before failing).
 pub(crate) fn unify_args(
     patterns: &[Term],
     values: &[EvalValue],
@@ -746,9 +755,11 @@ pub(crate) fn unify_args(
 }
 
 /// Whether `patterns` unify against `values` under `base`, without
-/// building the environment - the allocation-free guard for the lookup
-/// paths (`matching_claims`, `ValueOf`) that need only a yes/no, never the
-/// resulting bindings. Shares [`match_args`] with [`unify_args`].
+/// building the `Bindings` environment - the guard for the lookup paths
+/// (`matching_claims`, `ValueOf`) that need only a yes/no, never the
+/// resulting bindings. It never clones the base map (it uses small scratch
+/// storage for fresh-variable consistency). Shares [`match_args`] with
+/// [`unify_args`].
 pub(crate) fn claim_matches(
     patterns: &[Term],
     values: &[EvalValue],
@@ -1457,6 +1468,7 @@ mod tests {
             (vec![Term::Actor], vec![s("bob")], false),             // actor mismatch
             (vec![var("known")], vec![s("k")], true),               // agrees with base
             (vec![var("known")], vec![s("other")], false),          // conflicts with base
+            (vec![var("x"), var("y")], vec![s("a")], false),        // arity mismatch never matches
         ];
         for (pats, vals, expect) in cases {
             let m = claim_matches(&pats, &vals, &base, Some(&actor));
