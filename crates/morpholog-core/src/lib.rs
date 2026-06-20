@@ -28,6 +28,7 @@ pub mod ir_builder;
 
 pub mod analysis;
 mod check;
+mod compiled;
 mod controls;
 mod coverage;
 mod definitions;
@@ -48,6 +49,7 @@ pub use analysis::{
     predicates_referenced_by_prop, predicates_referenced_by_stmt, predicates_referenced_by_value,
     transformation_param_kinds, transformations_asserting,
 };
+pub use compiled::CompiledProgram;
 pub use controls::{
     ControlMatrix, GateControl, GateFrontLoad, GateRef, InvariantFrontLoad, TransformationControls,
     controls, render_controls,

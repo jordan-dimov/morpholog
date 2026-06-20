@@ -12,7 +12,9 @@
 //! the bottom of this file.
 
 use anyhow::{Context, anyhow};
-use morpholog_core::{Program, Transformation, ValidatedProgram, ValidationError};
+use morpholog_core::{
+    CompiledProgram, Program, Transformation, TransformationName, ValidatedProgram, ValidationError,
+};
 use morpholog_postgres::PgPool;
 use morpholog_surface::{Diagnostic, SourceMap, parse_program_with_sources};
 use serde::Serialize;
@@ -106,27 +108,48 @@ pub(crate) fn validate_or_exit(parsed: &ParsedSource) -> ValidatedProgram<'_> {
     }
 }
 
-/// Resolve a transformation by name against a parsed programme, the
+/// Like [`validate_or_exit`], but returns the owned, indexed
+/// [`CompiledProgram`] - one model object the command sources its
+/// transformation lookups, analysis handle ([`CompiledProgram::validated`]),
+/// and rule slices from. Clones the parsed programme once (negligible,
+/// one-time per invocation). Used by the by-name-lookup paths (`propose`,
+/// `explain`); the analysis-only commands keep `validate_or_exit`.
+pub(crate) fn compile_or_exit(parsed: &ParsedSource) -> CompiledProgram {
+    match CompiledProgram::new(parsed.program.clone()) {
+        Ok(compiled) => compiled,
+        Err(errors) => {
+            for err in &errors {
+                render_validation_error(err, parsed);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Resolve a transformation by name against a compiled programme, the
 /// not-found error naming every transformation the file does declare.
 /// Shared by `propose` and `explain` so the lookup error (and any future
 /// "did you mean?" refinement) cannot drift between them.
 pub(crate) fn lookup_transformation<'a>(
-    program: &'a Program,
+    compiled: &'a CompiledProgram,
     name: &str,
     file: &Path,
 ) -> anyhow::Result<&'a Transformation> {
-    program.transformation(name).ok_or_else(|| {
-        let available = program
-            .transformations
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        anyhow!(
-            "transformation `{name}` not found in `{}`. Available: {available}",
-            file.display(),
-        )
-    })
+    compiled
+        .transformation(&TransformationName::from(name))
+        .ok_or_else(|| {
+            let available = compiled
+                .program()
+                .transformations
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "transformation `{name}` not found in `{}`. Available: {available}",
+                file.display(),
+            )
+        })
 }
 
 /// Open a PostgreSQL connection pool. Shared by every subcommand that
