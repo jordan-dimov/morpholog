@@ -16,38 +16,13 @@
 
 use morpholog_core::{ClaimInstance, Definition, EvalValue, Invariant};
 use morpholog_examples::trade_lifecycle;
-use morpholog_postgres::{PgPool, PgProposalOutcome, list_derived, list_derived_at};
+use morpholog_postgres::{PgPool, list_derived, list_derived_at};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
 mod common;
 use common::{date, dec, subj};
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-postgres integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&url)
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
-
-async fn reset_db(pool: &PgPool) {
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
-        .execute(pool)
-        .await
-        .expect("failed to truncate test DB");
-}
-
-fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
-    match outcome {
-        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => {
-            panic!("expected Committed; got Rejected({reason})")
-        }
-    }
-}
+use common::{expect_committed, reset_db, test_pool};
 
 fn invariants() -> Vec<Invariant> {
     trade_lifecycle::all_invariants()

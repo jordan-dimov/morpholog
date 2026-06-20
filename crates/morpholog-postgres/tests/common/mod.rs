@@ -15,6 +15,54 @@ use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, PgTracedOutcome, propose_against_pg,
     propose_against_pg_with_trace,
 };
+use uuid::Uuid;
+
+/// Connect to the integration-test database named by `DATABASE_URL`.
+/// These suites share one schema and TRUNCATE it on entry, so point
+/// `DATABASE_URL` at a disposable database (`postgres:///morpholog_dev`).
+pub async fn test_pool() -> PgPool {
+    let url = std::env::var("DATABASE_URL").expect(
+        "DATABASE_URL must be set for morpholog-postgres integration tests \
+         (e.g. postgres:///morpholog_dev)",
+    );
+    PgPool::connect(&url)
+        .await
+        .expect("failed to connect to PostgreSQL test database")
+}
+
+/// Truncate the governed `morpholog.*` tables - the default reset every
+/// integration test runs on entry.
+pub async fn reset_db(pool: &PgPool) {
+    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE")
+        .execute(pool)
+        .await
+        .expect("failed to truncate test DB");
+}
+
+/// `reset_db` plus the `morpholog_read.*` derived cache. **Only** for the
+/// tests that exercise the derived read cache or SQL views; do not make
+/// this the default reset - everything else uses [`reset_db`].
+pub async fn reset_db_and_read_cache(pool: &PgPool) {
+    sqlx::raw_sql(
+        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.rejections CASCADE; \
+         TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
+                  morpholog_read.derived_refreshes CASCADE;",
+    )
+    .execute(pool)
+    .await
+    .expect("reset");
+}
+
+/// Unwrap a committed outcome's transition id, panicking on rejection -
+/// the common shape for tests that set up state they expect to commit.
+pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
+    match outcome {
+        PgProposalOutcome::Committed { transition_id, .. } => transition_id,
+        PgProposalOutcome::Rejected { reason } => {
+            panic!("expected Committed; got Rejected({reason})")
+        }
+    }
+}
 
 // Re-export the test-support surface so per-test files can `use
 // common::{subj, dec, ...};` rather than depending on

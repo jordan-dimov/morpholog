@@ -204,11 +204,7 @@ pub async fn propose_against_pg_with_rejection_state(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<RejectionStateOutcome, PgError> {
-    let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
+    let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
 
     let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
@@ -274,11 +270,7 @@ pub async fn propose_against_pg_with_trace(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<PgTracedOutcome, PgError> {
-    let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
+    let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
 
     let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
@@ -370,6 +362,52 @@ fn is_serialization_failure_code(code: Option<&str>) -> bool {
 /// Is this SQLSTATE the PostgreSQL `unique_violation` code (`23505`)?
 fn is_unique_violation_code(code: Option<&str>) -> bool {
     code == Some("23505")
+}
+
+/// The transaction isolation levels the adapter opens. A closed enum,
+/// not a `&str`, so the concurrency contract cannot be set to an
+/// arbitrary level - every isolation the adapter uses is named here.
+#[derive(Debug, Clone, Copy)]
+enum TxIsolation {
+    Serializable,
+    SerializableReadOnlyDeferrable,
+    RepeatableRead,
+    RepeatableReadReadOnly,
+}
+
+impl TxIsolation {
+    /// The full `SET TRANSACTION` statement as a `'static` literal, so
+    /// the per-transaction setup allocates nothing (the level is part of
+    /// the constant, not interpolated at runtime).
+    fn set_statement(self) -> &'static str {
+        match self {
+            TxIsolation::Serializable => "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+            TxIsolation::SerializableReadOnlyDeferrable => {
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE"
+            }
+            TxIsolation::RepeatableRead => "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            TxIsolation::RepeatableReadReadOnly => {
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            }
+        }
+    }
+}
+
+/// Begin a transaction and set its isolation level - the ritual every
+/// adapter entry point opens with, in one auditable place. The `SET`
+/// stays raw control SQL (not a `query!` macro); the statement is a
+/// `'static` literal because [`TxIsolation`] is closed, so this hot path
+/// allocates nothing.
+async fn begin_isolated_tx(
+    pool: &PgPool,
+    isolation: TxIsolation,
+) -> Result<Transaction<'_, Postgres>, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    sqlx::query(isolation.set_statement())
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+    Ok(tx)
 }
 
 /// Maps a `sqlx::Error` to a [`PgError`], recognising SQLSTATE 40001
@@ -1061,11 +1099,7 @@ pub async fn begin_audit_tail(
     // Horizon strictly before the snapshot - the ordering the
     // lossless-resume proof rests on.
     let horizon = audit_resume_watermark(pool).await?;
-    let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
+    let tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     Ok(AuditTail {
         tx,
         horizon,
@@ -2039,11 +2073,7 @@ pub async fn refresh_derived(
     // before the compute. The marker reflects snapshot visibility, not a
     // lossless audit order (see the function doc).
     let read_start = Instant::now();
-    let mut read_tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *read_tx)
-        .await
-        .map_err(classify)?;
+    let mut read_tx = begin_isolated_tx(pool, TxIsolation::RepeatableRead).await?;
     let latest_visible = sqlx::query!(
         "SELECT transition_id, committed_at FROM morpholog.audit
          ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
@@ -2395,11 +2425,7 @@ pub enum VerifyOutcome {
 /// scaling family as `verify` and as-of replay - an offline auditor
 /// command, not a hot path.
 pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<CoverageReport, PgError> {
-    let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
+    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
     let mut tracker = CoverageTracker::new(program);
     let needs_pre = tracker.needs_pre_state();
@@ -2607,11 +2633,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
 /// The divergence buckets are sorted by `(predicate, args)` so the
 /// operator-facing report is deterministic across runs.
 pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
-    let mut tx = pool.begin().await.map_err(classify)?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
+    let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
 
     let latest = sqlx::query!(
         "SELECT transition_id FROM morpholog.audit
