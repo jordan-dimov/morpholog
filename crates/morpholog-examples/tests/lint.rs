@@ -14,7 +14,7 @@ use morpholog_surface::parse_program;
 fn lints_of(source: &str) -> Vec<Lint> {
     let program = parse_program(source).expect("programme should parse");
     program.validate().expect("programme should validate");
-    lints(&program)
+    lints(&compiled(&program))
 }
 
 /// The predicate list of the single unsupplied-antecedent finding, or
@@ -45,6 +45,12 @@ transformation record(d, doc):
 invariant decisions_need_live_mandate:
     Decision(d, doc) implies CurrentMandate(doc, _)
 "#;
+
+/// Build a CompiledProgram for the analysis entry points, which now
+/// take `&CompiledProgram`.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
+    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+}
 
 #[test]
 fn an_append_only_antecedent_requiring_a_pointer_fires_with_both_names() {
@@ -144,7 +150,7 @@ invariant decisions_need_live_mandate:
 #[test]
 fn every_worked_example_is_lint_clean() {
     for (name, program) in tests_common_all_programs() {
-        let found = lints(&program);
+        let found = lints(&compiled(&program));
         assert!(found.is_empty(), "{name} should be lint-clean: {found:?}");
     }
 }

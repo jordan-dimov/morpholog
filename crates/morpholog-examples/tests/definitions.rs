@@ -95,6 +95,13 @@ fn club_with_sponsor() -> (Program, State) {
 // hands the binding out through the `sponsor` argument, and the
 // admitted claim carries it. The caller never sees the body's
 // internals - only the projected argument.
+
+/// Build a CompiledProgram for the analysis entry points, which now
+/// take `&CompiledProgram`.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
+    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+}
+
 #[test]
 fn bind_through_a_call_projects_the_generator_argument_out() {
     let (p, state) = club_with_sponsor();
@@ -555,7 +562,7 @@ invariant flagged_items_recorded:
 
 #[test]
 fn inspect_controls_lists_predicates_consulted_through_definitions() {
-    let matrix = morpholog_core::controls(&clinical_trial_enrolment::program());
+    let matrix = morpholog_core::controls(&compiled(&clinical_trial_enrolment::program()));
     let randomise = matrix
         .transformations
         .iter()

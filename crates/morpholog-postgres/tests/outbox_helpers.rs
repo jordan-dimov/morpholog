@@ -29,10 +29,9 @@ use common::{reset_db, test_pool};
 /// `intent_id`. The row is in `status='pending'` with no lease
 /// held.
 async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
-    let invariants = double_entry_ledger::all_invariants();
-    let definitions = double_entry_ledger::definitions();
     let outcome = common::propose_pg_with_test_actor(
         pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -42,8 +41,6 @@ async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
             subj("account_revenue"),
             dec(100),
         ],
-        &invariants,
-        &definitions,
     )
     .await
     .unwrap();
@@ -232,6 +229,7 @@ async fn record_compensation_links_compensation_to_failed_row() {
     // outbox-spike compensation shape.
     let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001_reversal"),
@@ -241,8 +239,6 @@ async fn record_compensation_links_compensation_to_failed_row() {
             subj("account_cash"),
             dec(100),
         ],
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -293,6 +289,7 @@ async fn record_compensation_errors_on_double_record() {
     // the FK.
     let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001_reversal"),
@@ -302,8 +299,6 @@ async fn record_compensation_errors_on_double_record() {
             subj("account_cash"),
             dec(100),
         ],
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();
@@ -324,6 +319,7 @@ async fn record_compensation_errors_on_double_record() {
     // silently overwrite.
     let comp_outcome_b = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001_reversal_b"),
@@ -333,8 +329,6 @@ async fn record_compensation_errors_on_double_record() {
             subj("account_cash"),
             dec(50),
         ],
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();

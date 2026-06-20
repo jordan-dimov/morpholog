@@ -42,10 +42,9 @@ async fn a_generated_invariant_rejects_durably_and_signs_the_audit_row() {
     // commitment, named in the permanent record.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post,
         vec![subj("e1"), dec(100)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("propose should not error");
@@ -65,10 +64,9 @@ async fn a_generated_invariant_rejects_durably_and_signs_the_audit_row() {
     // audit row.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(p.clone()),
         post,
         vec![subj("e1"), dec(999)],
-        &p.invariants,
-        &p.definitions,
     )
     .await
     .expect("propose should not error");

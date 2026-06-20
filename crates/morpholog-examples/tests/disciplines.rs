@@ -77,6 +77,13 @@ fn registry_with_figure() -> (Program, State) {
 // `unique by`: a second figure under the same id, carrying different
 // content, is refused - and the refusal names the generated invariant,
 // the name an audit row would carry.
+
+/// Build a CompiledProgram for the analysis entry points, which now
+/// take `&CompiledProgram`.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
+    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+}
+
 #[test]
 fn a_duplicate_under_unique_by_is_refused_with_the_generated_name() {
     let (p, state) = registry_with_figure();
@@ -399,7 +406,7 @@ predicate Chain(successor: Subject, prior: Subject)
 #[test]
 fn generated_invariants_appear_in_guarantees() {
     let p = parsed(REGISTRY);
-    let guarantees = morpholog_core::guarantees(&p);
+    let guarantees = morpholog_core::guarantees(&compiled(&p));
     let names: Vec<&str> = guarantees.iter().map(|g| g.invariant.as_str()).collect();
     for expected in [
         "figure_unique_by_figure_id",

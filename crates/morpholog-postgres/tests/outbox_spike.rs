@@ -20,7 +20,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{Definition, EvalValue, IntentInstance, Invariant, Transformation};
+use morpholog_core::{EvalValue, IntentInstance, Transformation};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{PgPool, PgProposalOutcome, list_audit_rows, list_pending_outbox};
 use uuid::Uuid;
@@ -80,8 +80,6 @@ fn mock_deliverer_always_fails_nonretryably(_intent: &IntentInstance) -> Deliver
 struct SpikeCompensation {
     transformation: Transformation,
     args: Vec<EvalValue>,
-    invariants: Vec<Invariant>,
-    definitions: Vec<Definition>,
 }
 
 // ============================================================
@@ -170,10 +168,9 @@ async fn process_one_pending(
             if let Some(comp) = compensation {
                 let outcome = common::propose_pg_with_test_actor(
                     pool,
+                    &common::compiled(double_entry_ledger::program()),
                     &comp.transformation,
                     comp.args,
-                    &comp.invariants,
-                    &comp.definitions,
                 )
                 .await?;
                 match outcome {
@@ -207,9 +204,6 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let invariants = double_entry_ledger::all_invariants();
-
-    let definitions = double_entry_ledger::definitions();
     let period = subj("p_spike");
 
     // 1. Commit the original transformation: post entry_001 with
@@ -218,6 +212,7 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     let tid_commit = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_001"),
@@ -227,8 +222,6 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
                 subj("account_revenue"),
                 dec(100),
             ],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),
@@ -254,8 +247,6 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
             subj("account_cash"),    // now the credit side
             dec(100),
         ],
-        invariants: invariants.clone(),
-        definitions: double_entry_ledger::definitions(),
     };
 
     // 4. Process the pending row with a deliverer that always
@@ -325,14 +316,12 @@ async fn outbox_spike_marks_delivered_on_success() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let invariants = double_entry_ledger::all_invariants();
-
-    let definitions = double_entry_ledger::definitions();
     // 1. Commit a transformation. Same shape as the failure test;
     //    the difference is the deliverer below.
     let _tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_001"),
@@ -342,8 +331,6 @@ async fn outbox_spike_marks_delivered_on_success() {
                 subj("account_revenue"),
                 dec(100),
             ],
-            &invariants,
-            &definitions,
         )
         .await
         .unwrap(),

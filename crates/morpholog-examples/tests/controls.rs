@@ -16,6 +16,12 @@ use morpholog_examples::{
     approval_controls, biometric_identification_oversight as bio, trade_lifecycle,
 };
 
+/// Build a CompiledProgram for the analysis entry points, which now
+/// take `&CompiledProgram`.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
+    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+}
+
 #[test]
 fn every_example_front_loads_link_names_a_declared_invariant() {
     for program in all_programs() {
@@ -24,7 +30,7 @@ fn every_example_front_loads_link_names_a_declared_invariant() {
             .iter()
             .map(|i| i.name.to_string())
             .collect();
-        for t in &controls(&program).transformations {
+        for t in &controls(&compiled(&program)).transformations {
             for link in t.gates.iter().flat_map(|g| &g.front_loads) {
                 assert!(
                     declared.contains(&link.invariant),
@@ -47,7 +53,7 @@ fn every_example_front_loads_link_names_a_declared_invariant() {
 
 #[test]
 fn biometric_two_verifications_gate_front_loads_its_standing_invariant() {
-    let matrix = controls(&bio::program());
+    let matrix = controls(&compiled(&bio::program()));
     let decide = matrix
         .transformations
         .iter()
@@ -76,7 +82,7 @@ fn trade_terms_gate_front_loads_the_backstop_not_the_quantity_cap() {
     // `settled_date_has_effective_terms`. The quantity cap is a
     // `sum(..) <= qty` consequent with no positively-required predicate,
     // so it is honestly NOT front-loaded - the gate does not pre-check it.
-    let matrix = controls(&trade_lifecycle::program());
+    let matrix = controls(&compiled(&trade_lifecycle::program()));
     let settle = matrix
         .transformations
         .iter()
@@ -103,7 +109,7 @@ fn approval_authority_gates_front_load_nothing() {
     // Authority is an action-time gate with no standing-invariant
     // counterpart (revoking it does not invalidate past approvals), so the
     // map draws no front-loads link - the correct doctrine, not a gap.
-    let matrix = controls(&approval_controls::program());
+    let matrix = controls(&compiled(&approval_controls::program()));
     let links = matrix
         .transformations
         .iter()
@@ -119,7 +125,7 @@ fn trade_front_line_coverage_separates_front_loaded_from_backstop() {
     // settle gate, while the quantity cap (a sum(..) <= qty consequent) is
     // a true backstop - triggered by transformations, but no gate
     // front-loads it.
-    let cov = controls(&trade_lifecycle::program()).front_line_coverage;
+    let cov = controls(&compiled(&trade_lifecycle::program())).front_line_coverage;
     let backstop = cov
         .iter()
         .find(|i| i.invariant == "settled_within_effective_terms")
@@ -151,7 +157,7 @@ fn every_front_line_coverage_row_names_a_declared_invariant() {
             .iter()
             .map(|i| i.name.to_string())
             .collect();
-        for row in &controls(&program).front_line_coverage {
+        for row in &controls(&compiled(&program)).front_line_coverage {
             assert!(
                 declared.contains(&row.invariant),
                 "program `{}`: coverage names undeclared invariant `{}`",

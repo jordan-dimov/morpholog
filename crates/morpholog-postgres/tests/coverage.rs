@@ -18,6 +18,7 @@ async fn post_entry(pool: &PgPool, entry: &str, amount: i64) -> Uuid {
     expect_committed(
         common::propose_pg_with_test_actor(
             pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj(entry),
@@ -27,8 +28,6 @@ async fn post_entry(pool: &PgPool, entry: &str, amount: i64) -> Uuid {
                 subj("account_revenue"),
                 dec(amount),
             ],
-            &double_entry_ledger::all_invariants(),
-            &double_entry_ledger::definitions(),
         )
         .await
         .unwrap(),
@@ -129,10 +128,9 @@ async fn firing_is_counted_per_relevant_transition() {
     let close_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(double_entry_ledger::program()),
             &double_entry_ledger::close_period(),
             vec![subj("p_coverage")],
-            &double_entry_ledger::all_invariants(),
-            &double_entry_ledger::definitions(),
         )
         .await
         .unwrap(),
@@ -196,20 +194,18 @@ transformation retire(credit_id):
     expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
+            &common::compiled(program.clone()),
             program.transformation("hold").unwrap(),
             vec![subj("c1"), subj("h1")],
-            &program.invariants,
-            &program.definitions,
         )
         .await
         .unwrap(),
     );
     let outcome = common::propose_pg_with_test_actor(
         &pool,
+        &common::compiled(program.clone()),
         program.transformation("retire").unwrap(),
         vec![subj("c1")],
-        &program.invariants,
-        &program.definitions,
     )
     .await
     .unwrap();

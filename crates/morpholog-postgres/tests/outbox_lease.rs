@@ -31,10 +31,9 @@ use common::{reset_db, test_pool};
 /// the resulting outbox row's `intent_id`. The row is in
 /// `status='pending'`, no lease held, no `next_attempt_at`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
-    let invariants = double_entry_ledger::all_invariants();
-    let definitions = double_entry_ledger::definitions();
     let outcome = common::propose_pg_with_test_actor(
         pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj(entry_id),
@@ -44,8 +43,6 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
             subj(&format!("account_revenue_{entry_id}")),
             dec(100),
         ],
-        &invariants,
-        &definitions,
     )
     .await
     .unwrap();

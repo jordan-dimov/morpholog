@@ -42,8 +42,8 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    Definition, EvalValue, Invariant, State, Subject, Transformation, Transition,
-    enumerate_derived, predicates_referenced_by_derived,
+    CompiledProgram, EvalValue, State, Subject, Transformation, Transition, enumerate_derived,
+    predicates_referenced_by_derived,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
@@ -336,15 +336,11 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
         ],
         actor: Subject::from("bench"),
     };
-    let outcome = propose_against_pg(
-        &pool,
-        &transformation,
-        &transition,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
-    )
-    .await
-    .context("propose_against_pg")?;
+    let compiled = CompiledProgram::new(double_entry_ledger::program())
+        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let outcome = propose_against_pg(&pool, &compiled, &transition)
+        .await
+        .context("propose_against_pg")?;
     println!("  propose_one:    {:>8} ms", t.elapsed().as_millis());
     println!("  outcome:        {}", outcome_summary(&outcome));
 
@@ -686,7 +682,8 @@ async fn contend_worker(
         // in the ledger workload here partitions by *predicate*.
         let predicate = format!("Bench_{}", worker_id % periods);
         let transformation = synthetic_bump(&predicate);
-        let invariants: Vec<Invariant> = vec![];
+        let compiled = CompiledProgram::new(synthetic_program(&predicate))
+            .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
         for op in 0..ops {
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
@@ -696,10 +693,8 @@ async fn contend_worker(
             let label = format!("disjoint worker {worker_id} op {op}");
             one_op(
                 &pool,
-                &transformation,
+                &compiled,
                 &transition,
-                &invariants,
-                &[],
                 max_retries,
                 &label,
                 &mut tally,
@@ -708,7 +703,8 @@ async fn contend_worker(
         }
     } else {
         let transformation = double_entry_ledger::post_simple_entry();
-        let invariants = double_entry_ledger::all_invariants();
+        let compiled = CompiledProgram::new(double_entry_ledger::program())
+            .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
         let period = format!("p_contend_{}", worker_id % periods);
         for op in 0..ops {
             let transition = Transition {
@@ -726,10 +722,8 @@ async fn contend_worker(
             let label = format!("ledger worker {worker_id} op {op}");
             one_op(
                 &pool,
-                &transformation,
+                &compiled,
                 &transition,
-                &invariants,
-                &double_entry_ledger::definitions(),
                 max_retries,
                 &label,
                 &mut tally,
@@ -745,20 +739,17 @@ async fn contend_worker(
 /// `max_retries` (then counts as `failed`); any other error is drift,
 /// not contention, and propagates as `Err` so a real run and the smoke
 /// test fail loudly instead of banking it as an expected outcome.
-#[allow(clippy::too_many_arguments)]
 async fn one_op(
     pool: &PgPool,
-    transformation: &Transformation,
+    compiled: &CompiledProgram,
     transition: &Transition,
-    invariants: &[Invariant],
-    definitions: &[Definition],
     max_retries: usize,
     label: &str,
     tally: &mut Tally,
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, transformation, transition, invariants, definitions).await {
+        match propose_against_pg(pool, compiled, transition).await {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());
@@ -801,6 +792,17 @@ fn synthetic_bump(predicate: &str) -> Transformation {
             b::assert_(predicate, vec![b::var("item")]),
         ],
     )
+}
+
+/// A minimal valid programme wrapping [`synthetic_bump`] so it can be
+/// proposed through the `CompiledProgram` facade: the bumped predicate
+/// declared, plus the bump transformation.
+fn synthetic_program(predicate: &str) -> morpholog_core::Program {
+    use morpholog_core::ir_builder as b;
+    b::program(&format!("synthetic_{predicate}"))
+        .predicates(vec![b::predicate(predicate).subject("item").build()])
+        .transformations(vec![synthetic_bump(predicate)])
+        .build()
 }
 
 /// Fabricate `n` audit rows via direct SQL. Each row carries a

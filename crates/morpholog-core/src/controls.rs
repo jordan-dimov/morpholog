@@ -55,6 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::{predicates_asserted_by, predicates_referenced_by_prop};
+use crate::compiled::CompiledProgram;
 use crate::definitions::DefinitionIndex;
 use crate::format;
 use crate::guarantees::{Guarantee, guarantees};
@@ -177,8 +178,9 @@ pub struct ControlMatrix {
 /// Derive the control matrix from a parsed programme. Pure and
 /// mechanical: one entry per transformation in declaration order,
 /// gates in body order, plus the invariant guarantees.
-pub fn controls(program: &Program) -> ControlMatrix {
-    let defs = DefinitionIndex::new(&program.definitions);
+pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
+    let program = compiled.program();
+    let defs = compiled.definition_index();
     let implications = authored_implications(program, defs);
 
     let transformations: Vec<TransformationControls> = program
@@ -266,7 +268,7 @@ pub fn controls(program: &Program) -> ControlMatrix {
     ControlMatrix {
         program: program.name.clone(),
         transformations,
-        guarantees: guarantees(program),
+        guarantees: guarantees(compiled),
         front_line_coverage,
     }
 }

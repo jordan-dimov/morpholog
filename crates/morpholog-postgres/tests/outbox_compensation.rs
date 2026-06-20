@@ -36,10 +36,9 @@ use common::{reset_db, test_pool};
 /// Commit one ledger entry with the supplied `entry_id` and return
 /// the resulting outbox row's `intent_id`.
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
-    let invariants = double_entry_ledger::all_invariants();
-    let definitions = double_entry_ledger::definitions();
     let outcome = common::propose_pg_with_test_actor(
         pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj(entry_id),
@@ -49,8 +48,6 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
             subj(&format!("revenue_{entry_id}")),
             dec(100),
         ],
-        &invariants,
-        &definitions,
     )
     .await
     .unwrap();
@@ -99,6 +96,7 @@ async fn enqueue_then_fail(pool: &PgPool, entry_id: &str) -> Uuid {
 async fn commit_compensation_transformation(pool: &PgPool, suffix: &str) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,
+        &common::compiled(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj(&format!("compensation_{suffix}")),
@@ -110,8 +108,6 @@ async fn commit_compensation_transformation(pool: &PgPool, suffix: &str) -> Uuid
             subj(&format!("cash_{suffix}_target")),
             dec(100),
         ],
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     )
     .await
     .unwrap();

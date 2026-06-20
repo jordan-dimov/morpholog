@@ -8,7 +8,7 @@ use morpholog_core::ir_builder::{
     and, assert_, bind_one, claim, for_, implies, invariant, neq, not, params, predicate, program,
     require, var,
 };
-use morpholog_core::{controls, render_controls};
+use morpholog_core::{CompiledProgram, Program, controls, render_controls};
 
 /// A miniature of the two-person rule: a decision gated on two
 /// distinct verifications, with a bind, a require, and an invariant -
@@ -65,11 +65,17 @@ fn mini() -> morpholog_core::Program {
         .build()
 }
 
+/// Build a CompiledProgram from a freshly-built programme for the
+/// analysis entry points, which now take `&CompiledProgram`.
+fn cc(p: &Program) -> CompiledProgram {
+    CompiledProgram::new(p.clone()).expect("fixture is valid")
+}
+
 #[test]
 fn matrix_carries_gates_in_body_order_with_consulted_predicates() {
     let p = mini();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let matrix = controls(&p);
+    let matrix = controls(&cc(&p));
     assert_eq!(matrix.program, "mini_controls");
     assert_eq!(matrix.transformations.len(), 1);
     let decide = &matrix.transformations[0];
@@ -93,7 +99,7 @@ fn matrix_carries_gates_in_body_order_with_consulted_predicates() {
 
 #[test]
 fn rendered_matrix_reads_as_the_auditor_view() {
-    let rendered = render_controls(&controls(&mini()));
+    let rendered = render_controls(&controls(&cc(&mini())));
     for fragment in [
         "Controls for `mini_controls`",
         "Before each action (gates):",
@@ -113,7 +119,7 @@ fn rendered_matrix_reads_as_the_auditor_view() {
 
 #[test]
 fn a_gate_front_loads_the_invariant_it_pre_checks() {
-    let matrix = controls(&mini());
+    let matrix = controls(&cc(&mini()));
     let decide = &matrix.transformations[0];
 
     // The require gate (body order: after the bind) demands the two
@@ -181,7 +187,7 @@ fn a_shared_predicate_with_unrelated_arguments_still_links_as_syntactic() {
         )])
         .build();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let gate = &controls(&p).transformations[0].gates[0];
+    let gate = &controls(&cc(&p)).transformations[0].gates[0];
     assert_eq!(
         gate.front_loads.len(),
         1,
@@ -193,7 +199,7 @@ fn a_shared_predicate_with_unrelated_arguments_still_links_as_syntactic() {
 
 #[test]
 fn rendered_matrix_shows_the_front_loads_link_and_failure_shape() {
-    let rendered = render_controls(&controls(&mini()));
+    let rendered = render_controls(&controls(&cc(&mini())));
     for fragment in [
         "front-loads invariant `decision_rests_on_two_distinct_verifiers`",
         "triggered by: Decision",
@@ -212,12 +218,12 @@ fn the_control_matrix_is_deterministic() {
     // Links derive from sorted sets and declaration-ordered walks, so two
     // runs over the same programme are identical - what a compliance
     // mapping cited rule by rule must be able to rely on.
-    assert_eq!(controls(&mini()), controls(&mini()));
+    assert_eq!(controls(&cc(&mini())), controls(&cc(&mini())));
 }
 
 #[test]
 fn front_line_coverage_names_the_invariant_side() {
-    let matrix = controls(&mini());
+    let matrix = controls(&cc(&mini()));
     let inv = matrix
         .front_line_coverage
         .iter()
@@ -269,7 +275,7 @@ fn partial_coverage_of_a_multi_implication_invariant_stays_visible() {
         )])
         .build();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let rows: Vec<_> = controls(&p)
+    let rows: Vec<_> = controls(&cc(&p))
         .front_line_coverage
         .into_iter()
         .filter(|i| i.invariant == "k")
@@ -312,7 +318,7 @@ fn a_dormant_implication_is_distinguished_from_a_backstop() {
         )])
         .build();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let cov = controls(&p).front_line_coverage;
+    let cov = controls(&cc(&p)).front_line_coverage;
     let m = cov
         .iter()
         .find(|i| i.invariant == "m")
@@ -356,7 +362,7 @@ fn two_invariants_with_the_same_failure_shape_keep_separate_front_loaders() {
         )])
         .build();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let cov = controls(&p).front_line_coverage;
+    let cov = controls(&cc(&p)).front_line_coverage;
     for name in ["i1", "i2"] {
         let row = cov
             .iter()
@@ -384,7 +390,7 @@ fn a_gateless_transformation_renders_its_invariant_only_admission() {
             vec![assert_("Note", vec![var("note")])],
         )])
         .build();
-    let matrix = controls(&p);
+    let matrix = controls(&cc(&p));
     assert!(matrix.transformations[0].gates.is_empty());
     let rendered = render_controls(&matrix);
     assert!(
@@ -428,7 +434,7 @@ fn gates_inside_a_for_body_are_not_lifted_as_preconditions() {
             ],
         )])
         .build();
-    let matrix = controls(&p);
+    let matrix = controls(&cc(&p));
     let process = &matrix.transformations[0];
     // Only the top-level require is a gate; the in-loop `Allowed`
     // check is not lifted.

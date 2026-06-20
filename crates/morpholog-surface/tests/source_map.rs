@@ -47,6 +47,12 @@ fn text_at(span: std::ops::Range<usize>) -> &'static str {
     &SOURCE[span]
 }
 
+/// Build a CompiledProgram for the analysis entry points, which now
+/// take `&CompiledProgram`.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
+    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+}
+
 #[test]
 fn every_declaration_kind_is_mapped() {
     let (_, map) = parsed();
@@ -218,7 +224,7 @@ fn findings_against_generated_invariants_resolve_to_none() {
 #[test]
 fn a_lint_resolves_to_its_invariant() {
     let (program, map) = parsed();
-    let found = lints(&program);
+    let found = lints(&compiled(&program));
     assert_eq!(found.len(), 1, "the trip shape is deliberate: {found:?}");
     let span = map.span_for_lint(&found[0]).expect("authored invariant");
     assert!(text_at(span).starts_with("invariant postings_need_label"));

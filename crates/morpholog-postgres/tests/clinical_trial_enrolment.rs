@@ -16,7 +16,7 @@
 
 use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_examples::clinical_trial_enrolment::{
-    self as cte, ROLE_RANDOMISE_PARTICIPANT, all_invariants, randomise_participant,
+    self as cte, ROLE_RANDOMISE_PARTICIPANT, randomise_participant,
 };
 use morpholog_postgres::{PgPool, PgProposalOutcome, list_claims, list_pending_outbox};
 use uuid::Uuid;
@@ -30,7 +30,7 @@ use common::{reset_db, test_pool};
 /// state in tables; no value returned). Panics on rejection.
 async fn commit(pool: &PgPool, t: &morpholog_core::Transformation, args: Vec<EvalValue>) -> Uuid {
     let outcome =
-        common::propose_pg_with_test_actor(pool, t, args, &all_invariants(), &cte::definitions())
+        common::propose_pg_with_test_actor(pool, &common::compiled(cte::program()), t, args)
             .await
             .expect("propose_against_pg should not error");
     match outcome {
@@ -131,6 +131,7 @@ async fn randomise_participant_happy_path_through_pg() {
     // a different actor would reject here.
     let outcome = common::propose_pg_as(
         &pool,
+        &common::compiled(cte::program()),
         &randomise_participant(),
         vec![
             subj(participant),
@@ -139,8 +140,6 @@ async fn randomise_participant_happy_path_through_pg() {
             date(randomised_on),
         ],
         investigator,
-        &all_invariants(),
-        &cte::definitions(),
     )
     .await
     .expect("propose_against_pg must not error");
