@@ -651,9 +651,9 @@ pub(crate) fn matching_claims(
     Ok(out)
 }
 
-/// Structural pattern match without allocating an environment: returns
-/// the new variable bindings as borrowed references, or `None` on a
-/// mismatch. A repeated variable within one pattern binds consistently -
+/// Structural pattern match that never clones the `Bindings` environment:
+/// returns the new variable bindings as borrowed references (collected in
+/// small scratch storage), or `None` on a mismatch. A repeated variable within one pattern binds consistently -
 /// checked against `base`, then the bindings made so far. The literal and
 /// actor arms are pure read-only checks. Shared by [`unify_args`] (which
 /// builds the environment) and [`claim_matches`] (which only asks whether
@@ -1446,8 +1446,8 @@ mod tests {
 
     /// `claim_matches` and `unify_args` share `match_args`, so they must
     /// agree on every verdict; `unify_args` must additionally extend the
-    /// base with exactly the new bindings. Pins that the allocation-free
-    /// boolean path cannot drift from the binding-producing one.
+    /// base with exactly the new bindings. Pins that the boolean path
+    /// cannot drift from the binding-producing one.
     #[test]
     fn claim_matches_agrees_with_unify_args_and_extends_base() {
         let s = |x: &str| EvalValue::Subject(Subject::from(x));
