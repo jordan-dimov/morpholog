@@ -112,3 +112,56 @@ fn approval_authority_gates_front_load_nothing() {
         .count();
     assert_eq!(links, 0, "authority gates have no invariant to front-load");
 }
+
+#[test]
+fn trade_front_line_coverage_separates_front_loaded_from_backstop() {
+    // The invariant-side view: the terms backstop is front-loaded by the
+    // settle gate, while the quantity cap (a sum(..) <= qty consequent) is
+    // a true backstop - triggered by transformations, but no gate
+    // front-loads it.
+    let cov = controls(&trade_lifecycle::program()).front_line_coverage;
+    let backstop = cov
+        .iter()
+        .find(|i| i.invariant == "settled_within_effective_terms")
+        .expect("the quantity cap is an authored implication invariant");
+    assert!(backstop.front_loaded_by.is_empty(), "{backstop:?}");
+    assert!(
+        !backstop.triggered_by_transformations.is_empty(),
+        "settle_trade triggers it, so it is a backstop not dormant: {backstop:?}"
+    );
+
+    let front = cov
+        .iter()
+        .find(|i| i.invariant == "settled_date_has_effective_terms")
+        .expect("the terms backstop is an authored implication invariant");
+    assert!(
+        front
+            .front_loaded_by
+            .iter()
+            .any(|g| g.transformation == "settle_trade"),
+        "{front:?}"
+    );
+}
+
+#[test]
+fn every_front_line_coverage_row_names_a_declared_invariant() {
+    for program in all_programs() {
+        let declared: BTreeSet<String> = program
+            .invariants
+            .iter()
+            .map(|i| i.name.to_string())
+            .collect();
+        for row in &controls(&program).front_line_coverage {
+            assert!(
+                declared.contains(&row.invariant),
+                "program `{}`: coverage names undeclared invariant `{}`",
+                program.name,
+                row.invariant,
+            );
+            assert!(
+                !row.failure_shape.is_empty(),
+                "every row renders its failure shape"
+            );
+        }
+    }
+}
