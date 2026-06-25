@@ -139,6 +139,20 @@ enum Command {
     /// even one that also rewrites the checkpoint table.
     Checkpoint(DatabaseArgs),
 
+    /// Export and verify portable evidence packs over the audit log.
+    ///
+    /// `export` writes a complete, checkpointed prefix of the log (its
+    /// rows, the checkpoint chain, a thin manifest) as JSON; `verify`
+    /// checks one offline - recomputing the Merkle root and matching it
+    /// against the pack's checkpoints and an external anchor - with no
+    /// database access at all. A pack carries the full audit prefix
+    /// (actors, arguments, claims, intents): it is not selective
+    /// disclosure and may hold confidential business data.
+    Evidence {
+        #[command(subcommand)]
+        what: EvidenceCmd,
+    },
+
     /// Print a stable fingerprint of a programme's rules.
     ///
     /// SHA-256 over the canonical (formatter-rendered) source, as
@@ -292,6 +306,52 @@ pub(crate) struct VerifyArgs {
     /// outside the database. The audit tree is verified to still match
     /// it - the check a coordinated rewrite of audit + checkpoints cannot
     /// pass. Omit to verify only internal checkpoint consistency.
+    #[arg(long)]
+    pub(crate) anchor_file: Option<std::path::PathBuf>,
+}
+
+/// Evidence-pack subcommands. `export` is database-backed; `verify` is
+/// deliberately offline - it takes no connection string, only files.
+#[derive(clap::Subcommand, Debug)]
+pub(crate) enum EvidenceCmd {
+    /// Export a complete-prefix evidence pack as JSON (redirect to a
+    /// file). Covers the latest checkpoint, or the checkpoint at
+    /// `--tree-size N`. Refuses if there is no such checkpoint.
+    Export(EvidenceExportArgs),
+
+    /// Verify a pack offline, with no database. Recomputes the Merkle
+    /// root from the pack's rows and checks it against the pack's
+    /// checkpoints, and against an external `--anchor-file` if given.
+    /// Exit one on any tamper, divergence, or malformed pack.
+    Verify(EvidenceVerifyArgs),
+}
+
+/// Arguments for `evidence export`: the connection plus an optional exact
+/// checkpoint size to cover.
+#[derive(clap::Args, Debug)]
+pub(crate) struct EvidenceExportArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// Cover the checkpoint whose `tree_size` equals this value, instead
+    /// of the latest. Must match an existing checkpoint exactly - a later
+    /// checkpoint does not prove an arbitrary earlier prefix until
+    /// consistency proofs exist.
+    #[arg(long)]
+    pub(crate) tree_size: Option<i64>,
+}
+
+/// Arguments for `evidence verify`: a pack file and an optional external
+/// anchor. No connection string - the offline guarantee is in the shape.
+#[derive(clap::Args, Debug)]
+pub(crate) struct EvidenceVerifyArgs {
+    /// Path to a pack JSON file (as printed by `evidence export`).
+    pub(crate) pack_file: std::path::PathBuf,
+
+    /// Path to a checkpoint JSON file (as printed by `checkpoint`), held
+    /// outside the database. The pack's covering checkpoint is verified to
+    /// match it - the check a coordinated rewrite cannot pass. Omit to
+    /// verify only the pack's internal consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
 }
@@ -911,6 +971,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
         Command::Checkpoint(args) => commands::checkpoint::run(args).await,
+        Command::Evidence { what } => commands::evidence::run(what).await,
         Command::Generate {
             what: GenerateCmd::PythonClient(args),
         } => commands::generate::run(&args),

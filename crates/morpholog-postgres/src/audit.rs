@@ -3,7 +3,7 @@ use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Subject, TransformationName};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 /// One row of `morpholog.audit` decoded into typed runtime values.
@@ -11,7 +11,7 @@ use uuid::Uuid;
 /// Each row corresponds to exactly one committed transformation. The
 /// JSONB columns are decoded through the same codec that wrote them,
 /// so the round-trip is exact for any value the kernel can represent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditRow {
     pub transition_id: Uuid,
     pub transformation_name: TransformationName,

@@ -70,6 +70,10 @@ pub enum PgError {
     /// [`morpholog_core::CompiledProgram`].
     #[error("no transformation named `{name}` in the programme")]
     UnknownTransformation { name: TransformationName },
+    /// `export_pack` found no checkpoint to cover the requested prefix -
+    /// the chain is empty, or no checkpoint exists at the requested size.
+    #[error("no checkpoint to export; run `checkpoint` first (or pass an existing --tree-size)")]
+    NoCheckpoint,
 }
 /// Is this SQLSTATE the PostgreSQL serialization-failure code
 /// (`40001`) returned by SSI when a SERIALIZABLE transaction cannot be
