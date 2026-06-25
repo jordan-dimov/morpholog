@@ -18,13 +18,16 @@ use sqlx::PgPool;
 /// claims into a `ReplaySet`, and asks the scorer whether the candidate's
 /// invariants would have refused that commit. Commits nothing.
 pub async fn score_candidate(pool: &PgPool, program: &Program) -> Result<CandidateScore, PgError> {
-    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
+    // Reject an unscorable candidate before opening any transaction, so
+    // the "reject before database work" doctrine holds at the adapter, not
+    // only the CLI.
     let mut scorer = match CandidateScorer::new(program) {
         Ok(scorer) => scorer,
         // A pre(...) candidate is unscorable under v1, not a kernel fault.
         Err(e @ ScoreError::PreUnsupported(_)) => return Err(PgError::InvalidState(e.to_string())),
         Err(ScoreError::Eval(inner)) => return Err(PgError::Kernel(inner)),
     };
+    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let mut replay = ReplaySet::new();
     // The state before each transition; the empty state for the first.
     let mut pre_state = State::from_claims(Vec::new());

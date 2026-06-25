@@ -91,6 +91,11 @@ pub struct CandidateScore {
 pub struct InvariantScore {
     pub invariant: String,
     pub version: u32,
+    /// Whether the invariant held on the empty initial state. A candidate
+    /// that is `initially_holds: false` with `would_refuse: 0` was violated
+    /// from the start and never recovered - distinct from a vacuously-held
+    /// candidate, which a discovery loop would otherwise read alike.
+    pub initially_holds: bool,
     pub would_refuse: u64,
     /// The `transition_id`s of the fresh violations, in replay order. The
     /// harness joins these against its own labels. Small for a good
@@ -109,6 +114,9 @@ pub struct CandidateScorer<'p> {
     program_hash: String,
     invariants: &'p [Invariant],
     definitions: &'p [Definition],
+    /// Whether each invariant held on the empty initial state, reported as
+    /// `initially_holds`.
+    initially_held: Vec<bool>,
     /// Whether each invariant held entering the next transition. Seeded on
     /// the empty pre-state; carried forward so each transition costs one
     /// evaluation per invariant (valid because v1 rejects `pre(...)`, so
@@ -137,6 +145,7 @@ impl<'p> CandidateScorer<'p> {
             program_hash: canonical_hash(program),
             invariants: &program.invariants,
             definitions: &program.definitions,
+            initially_held: held.clone(),
             held,
             refused,
             transitions: 0,
@@ -167,10 +176,12 @@ impl<'p> CandidateScorer<'p> {
         let invariants = self
             .invariants
             .iter()
+            .zip(self.initially_held)
             .zip(self.refused)
-            .map(|(inv, refused)| InvariantScore {
+            .map(|((inv, initially_holds), refused)| InvariantScore {
                 invariant: inv.name.to_string(),
                 version: inv.version,
+                initially_holds,
                 would_refuse: refused.len() as u64,
                 refused_transitions: refused,
             })
@@ -279,6 +290,26 @@ mod tests {
             Err(e) => panic!("expected PreUnsupported, got {e:?}"),
             Ok(_) => panic!("expected PreUnsupported, got a scorer"),
         }
+    }
+
+    #[test]
+    fn initially_holds_distinguishes_violated_from_start_from_vacuous() {
+        // `NeedsRequired` is violated on the empty state (nothing Required
+        // exists); `NoFlag` holds vacuously. Both can show would_refuse 0,
+        // so the flag is what tells them apart.
+        let needs = invariant(
+            "NeedsRequired",
+            exists("x", claim("Required", vec![var("x")])),
+        );
+        let violated = CandidateScorer::new(&program_with(vec![needs]))
+            .unwrap()
+            .into_report();
+        assert!(!violated.invariants[0].initially_holds);
+
+        let vacuous = CandidateScorer::new(&no_flag_program())
+            .unwrap()
+            .into_report();
+        assert!(vacuous.invariants[0].initially_holds);
     }
 
     #[test]

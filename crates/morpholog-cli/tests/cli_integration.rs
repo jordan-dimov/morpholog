@@ -645,6 +645,35 @@ async fn evaluate_scores_a_candidate_against_history() {
     assert_eq!(inv["would_refuse"], 1, "got: {stdout}");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_rejects_a_pre_candidate_before_connecting() {
+    // A transition-relational candidate (uses pre(...)): v1 cannot score it.
+    let candidate = "program candidate\n\n\
+         predicate Flag(x: Subject)\n\n\
+         invariant uses_pre:\n    Flag(a) implies pre(Flag(a))\n";
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut f, candidate.as_bytes()).unwrap();
+
+    // A deliberately unreachable database: if the CLI connected before
+    // checking, the failure would be a connection error, not the pre
+    // rejection. The rejection must come first.
+    let output = Command::new(morpholog_bin())
+        .args([
+            "evaluate",
+            f.path().to_str().unwrap(),
+            "--database-url",
+            "postgres://nonexistent.invalid:1/nope",
+        ])
+        .output()
+        .expect("spawn morpholog binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("pre(...)"),
+        "expected the pre(...) rejection, got: {stderr}"
+    );
+}
+
 // ============================================================
 // `--as-of` with a timestamp
 // ============================================================
