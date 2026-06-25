@@ -13,7 +13,10 @@ use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
 use crate::txn::{TxIsolation, begin_isolated_tx};
-use morpholog_core::{CandidateScore, CandidateScorer, EvalError, Program, ScoreError, State};
+use morpholog_core::{
+    BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, EvalError, Program,
+    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, State,
+};
 use sqlx::PgPool;
 
 /// Construct the scorer, mapping its refusal of an unscorable candidate
@@ -119,4 +122,50 @@ pub fn score_candidate_against_pack(
     fold_rows(&mut replay, &mut pre_state, &mut scorer, rows)?;
 
     Ok(scorer.into_report())
+}
+
+/// Score one candidate against many packs in a single call - the discovery
+/// search is candidates x cases, so this collapses the per-case process
+/// spawn and parses the candidate once. Each pack is verified and scored
+/// exactly as [`score_candidate_against_pack`] does (a fresh `CandidateScorer`
+/// per pack, since it is stateful); a pack that fails (does not verify,
+/// kernel error) becomes a `Failed` case and the batch continues. The
+/// candidate is validated once up front so a `pre(...)` or otherwise
+/// unscorable candidate fails the whole call with one error rather than N
+/// identical case failures. Offline; no pool. The win is amortising the
+/// process spawn, not the per-pack `CandidateScorer::new`.
+pub fn score_candidate_against_packs(
+    program: &Program,
+    named_packs: &[(String, EvidencePack)],
+) -> Result<BatchScore, PgError> {
+    // Whole-batch candidate rejection (pre(...) / invalid scorer seed); each
+    // pack then builds its own fresh scorer inside score_candidate_against_pack.
+    let _ = build_scorer(program)?;
+
+    let cases = named_packs
+        .iter()
+        .map(|(name, pack)| {
+            let outcome = match score_candidate_against_pack(program, pack, None) {
+                Ok(score) => CaseOutcome::Scored {
+                    transitions_replayed: score.transitions_replayed,
+                    invariants: score.invariants,
+                },
+                Err(e) => CaseOutcome::Failed {
+                    error: e.to_string(),
+                },
+            };
+            CaseResult {
+                pack: name.clone(),
+                outcome,
+            }
+        })
+        .collect();
+
+    Ok(BatchScore {
+        score_format_version: SCORE_FORMAT_VERSION,
+        semantics: SCORE_SEMANTICS.to_string(),
+        program: program.name.clone(),
+        program_hash: morpholog_core::format::canonical_hash(program),
+        cases,
+    })
 }

@@ -724,6 +724,94 @@ async fn evaluate_against_a_pack_needs_no_database() {
     assert!(stderr.contains("does not verify"), "got: {stderr}");
 }
 
+const CANDIDATE_NO_ENTRIES: &str = "program candidate\n\n\
+     predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)\n\n\
+     invariant no_entries:\n    not (exists e: JournalEntry(e, _, _))\n";
+
+/// Build a one-firm-year pack and write it to `dir/<name>.json`.
+async fn write_case_pack(dir: &std::path::Path, name: &str, amount: i64) {
+    reset_db().await;
+    post_balanced_entry(name, amount);
+    let (s, _, e) = run_cli(&["checkpoint"]);
+    assert!(s.success(), "checkpoint {name}: {e}");
+    let (s, pack, e) = run_cli(&["evidence", "export"]);
+    assert!(s.success(), "export {name}: {e}");
+    std::fs::write(dir.join(format!("{name}.json")), pack).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_packs_batches_offline_sorted_by_file_name() {
+    let dir = tempfile::tempdir().unwrap();
+    // Build three packs in non-sorted creation order.
+    write_case_pack(dir.path(), "c", 100).await;
+    write_case_pack(dir.path(), "a", 200).await;
+    write_case_pack(dir.path(), "b", 300).await;
+
+    let mut candfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut candfile, CANDIDATE_NO_ENTRIES.as_bytes()).unwrap();
+
+    // No --database-url: batch scoring is offline.
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "evaluate",
+        candfile.path().to_str().unwrap(),
+        "--packs",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "batch evaluate should pass with no DB; {stderr}\n{stdout}"
+    );
+    let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
+    assert_eq!(report["semantics"], "fresh_state_violation_v1");
+    let cases = report["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 3);
+    // Deterministic, by file name, regardless of creation order.
+    assert_eq!(cases[0]["pack"], "a.json");
+    assert_eq!(cases[1]["pack"], "b.json");
+    assert_eq!(cases[2]["pack"], "c.json");
+    assert_eq!(cases[0]["status"], "scored");
+    assert_eq!(cases[0]["invariants"][0]["would_refuse"], 1, "{stdout}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_packs_aborts_on_an_unparseable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write_case_pack(dir.path(), "a", 100).await;
+    // A junk file in the controlled packs directory aborts the batch.
+    std::fs::write(dir.path().join("b.json"), "{ not a pack }").unwrap();
+
+    let mut candfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut candfile, CANDIDATE_NO_ENTRIES.as_bytes()).unwrap();
+
+    let (status, _stdout, stderr) = run_cli_no_db(&[
+        "evaluate",
+        candfile.path().to_str().unwrap(),
+        "--packs",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert!(!status.success(), "an unparseable pack file must abort");
+    assert!(stderr.contains("parsing pack file"), "got: {stderr}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_packs_with_anchor_file_is_a_usage_error() {
+    // --anchor-file requires --pack (single), so pairing it with --packs is
+    // a clap error, before any work.
+    let (status, _stdout, stderr) = run_cli_no_db(&[
+        "evaluate",
+        "/nonexistent/candidate.morph",
+        "--packs",
+        "/nonexistent/dir",
+        "--anchor-file",
+        "/nonexistent/anchor.json",
+    ]);
+    assert!(!status.success(), "anchors are single-pack only");
+    assert!(
+        stderr.contains("--pack") || stderr.contains("anchor"),
+        "got: {stderr}"
+    );
+}
+
 // ============================================================
 // `--as-of` with a timestamp
 // ============================================================

@@ -8,8 +8,11 @@
 use std::path::Path;
 
 use anyhow::Context;
-use morpholog_core::{CandidateScore, Program, invariants_using_pre};
-use morpholog_postgres::{Checkpoint, EvidencePack, score_candidate, score_candidate_against_pack};
+use morpholog_core::{BatchScore, CandidateScore, Program, invariants_using_pre};
+use morpholog_postgres::{
+    Checkpoint, EvidencePack, score_candidate, score_candidate_against_pack,
+    score_candidate_against_packs,
+};
 
 use crate::EvaluateArgs;
 use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
@@ -18,7 +21,7 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;
     validate_or_exit(&parsed);
 
-    // Fail fast in either mode, before any database or pack work: v1 scores
+    // Fail fast in every mode, before any database or pack work: v1 scores
     // state invariants only, so a transition-relational candidate is
     // rejected here rather than after the work.
     let pre = invariants_using_pre(&parsed.program);
@@ -31,6 +34,12 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
+    // Batch over a directory of packs: a single JSON report, offline.
+    if let Some(dir) = &args.packs {
+        let report = score_against_packs(&parsed.program, dir)?;
+        return print_json(&report);
+    }
+
     let report = match &args.pack {
         Some(pack_path) => {
             score_against_pack(&parsed.program, pack_path, args.anchor_file.as_deref())?
@@ -38,8 +47,8 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
         None => {
             let url = args.database_url.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "provide --database-url (or set DATABASE_URL), or --pack <file> \
-                     to score offline against an evidence pack"
+                    "provide --database-url (or set DATABASE_URL), --pack <file>, or \
+                     --packs <dir> to score offline against evidence packs"
                 )
             })?;
             let pool = connect(url).await?;
@@ -49,6 +58,50 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
         }
     };
     print_json(&report)
+}
+
+/// Score the candidate against every `*.json` evidence pack in `dir`, in one
+/// process, offline. Packs are taken in file-name order (deterministic). A
+/// file that cannot be read or parsed aborts the batch - the packs directory
+/// is controlled input - whereas a genuine pack that does not verify is a
+/// per-case failure inside the report.
+fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchScore> {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("reading packs directory {}", dir.display()))?
+    {
+        // An entry error (permissions, a vanished file) is a setup problem
+        // and aborts, like an unparseable pack - the dir is controlled input.
+        let path = entry
+            .with_context(|| format!("reading an entry in {}", dir.display()))?
+            .path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let named: Vec<(String, EvidencePack)> = paths
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading pack file {}", path.display()))?;
+            let pack: EvidencePack = serde_json::from_slice(&bytes).with_context(|| {
+                format!("parsing pack file {} as an evidence pack", path.display())
+            })?;
+            Ok((name, pack))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    if named.is_empty() {
+        anyhow::bail!("no `*.json` evidence packs found in {}", dir.display());
+    }
+
+    score_candidate_against_packs(program, &named).context("scoring against the packs failed")
 }
 
 /// Read an evidence pack (and optional external anchor) and score the

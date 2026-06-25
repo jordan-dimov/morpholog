@@ -81,7 +81,8 @@ pub use propose::{
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{
-    CandidateScore, CandidateScorer, InvariantScore, ScoreError, invariants_using_pre,
+    BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, InvariantScore,
+    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, invariants_using_pre,
 };
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};

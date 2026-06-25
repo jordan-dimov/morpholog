@@ -338,9 +338,16 @@ pub(crate) struct EvaluateArgs {
     #[arg(long)]
     pub(crate) pack: Option<std::path::PathBuf>,
 
+    /// Batch mode: score offline against every `*.json` evidence pack in
+    /// this directory, in one process, returning one JSON report with a
+    /// case per pack. No connection is opened. Anchors are single-pack only.
+    #[arg(long, conflicts_with = "pack")]
+    pub(crate) packs: Option<std::path::PathBuf>,
+
     /// An external checkpoint anchor for `--pack`, held outside the
     /// database: the pack must verify against it before it is scored.
-    #[arg(long, requires = "pack")]
+    /// Single-pack only - a single anchor is meaningless across a batch.
+    #[arg(long, requires = "pack", conflicts_with = "packs")]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
 }
 
