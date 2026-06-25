@@ -205,3 +205,36 @@ async fn export_refuses_without_a_covering_checkpoint() {
         Err(morpholog_postgres::PgError::NoCheckpoint)
     ));
 }
+
+#[tokio::test]
+async fn export_refuses_when_a_covered_row_is_missing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for i in 0..3 {
+        commit_entry(&pool, &format!("g{i}")).await;
+    }
+    make_checkpoint(&pool).await; // commits to 3 rows
+
+    // Delete a covered audit row directly - the checkpoint still claims 3.
+    // The exporter must fail rather than mint a known-incomplete pack.
+    // (Clear the outbox FK to that transition first.)
+    let first =
+        "SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id LIMIT 1";
+    sqlx::query(&format!(
+        "DELETE FROM morpholog.outbox WHERE transition_id IN ({first})"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "DELETE FROM morpholog.audit WHERE transition_id = ({first})"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        export_pack(&pool, None).await,
+        Err(morpholog_postgres::PgError::InvalidState(_))
+    ));
+}

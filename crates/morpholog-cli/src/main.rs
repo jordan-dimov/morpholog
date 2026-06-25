@@ -349,9 +349,11 @@ pub(crate) struct EvidenceVerifyArgs {
     pub(crate) pack_file: std::path::PathBuf,
 
     /// Path to a checkpoint JSON file (as printed by `checkpoint`), held
-    /// outside the database. The pack's covering checkpoint is verified to
-    /// match it - the check a coordinated rewrite cannot pass. Omit to
-    /// verify only the pack's internal consistency.
+    /// outside the database. The checkpoint at the anchor's `tree_size` in
+    /// the pack's chain is verified to match it (an older anchor is fine,
+    /// as long as the pack still covers it) - the check a coordinated
+    /// rewrite cannot pass. Omit to verify only the pack's internal
+    /// consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
 }

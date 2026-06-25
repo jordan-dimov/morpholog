@@ -28,6 +28,7 @@ const PACK_FORMAT_V1: u32 = 1;
 /// `checkpoints` + `rows`; the manifest just summarises the covering
 /// checkpoint for a human reading the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackManifest {
     pub pack_format_version: u32,
     pub tree_size: i64,
@@ -38,6 +39,7 @@ pub struct PackManifest {
 /// A portable evidence pack: everything an offline verifier needs to
 /// recompute and check the covered prefix of the audit log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidencePack {
     pub manifest: PackManifest,
     /// The checkpoint chain up to and including the covering checkpoint.
@@ -95,6 +97,17 @@ pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<Eviden
                 break;
             }
         }
+    }
+    // The checkpoint is watermark-bounded, so its rows should all be
+    // present and visible. Fewer means the audit log was edited under the
+    // checkpoint - fail loudly rather than emit a pack the verifier would
+    // (rightly) reject as malformed.
+    if rows.len() as i64 != covering.tree_size {
+        return Err(PgError::InvalidState(format!(
+            "checkpoint commits to {} audit rows but only {} were present",
+            covering.tree_size,
+            rows.len()
+        )));
     }
     tx.commit().await.map_err(classify)?;
 
@@ -336,6 +349,25 @@ mod tests {
             )],
         };
         malformed("manifest disagrees", &pack);
+    }
+
+    #[test]
+    fn an_unknown_top_level_field_is_rejected() {
+        let cp = checkpoint(1);
+        let pack = EvidencePack {
+            manifest: manifest_for(&cp),
+            checkpoints: vec![cp],
+            rows: vec![row(
+                "2026-06-24T00:00:00Z",
+                "00000000-0000-0000-0000-0000000000a1",
+            )],
+        };
+        let mut v = serde_json::to_value(&pack).unwrap();
+        v["surprise"] = serde_json::json!("not part of the proof");
+        assert!(
+            serde_json::from_value::<EvidencePack>(v).is_err(),
+            "an unknown top-level field must not be silently tolerated"
+        );
     }
 
     #[test]
