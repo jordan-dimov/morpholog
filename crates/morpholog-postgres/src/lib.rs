@@ -57,7 +57,7 @@ pub use propose::{
     propose_against_pg_with_trace,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
-pub use score::score_candidate;
+pub use score::{score_candidate, score_candidate_against_pack};
 pub use verify::{
     InitOutcome, SCHEMA_SQL, VerifyOutcome, coverage_replay, initialise_schema, verify_replay,
 };

@@ -321,15 +321,27 @@ pub(crate) struct VerifyArgs {
     pub(crate) anchor_file: Option<std::path::PathBuf>,
 }
 
-/// Arguments for `evaluate`: a candidate `.morph` path plus the
-/// connection whose audit log is the history to score against.
+/// Arguments for `evaluate`: a candidate `.morph` path, and the history to
+/// score it against - either a live connection or a portable evidence pack.
 #[derive(clap::Args, Debug)]
 pub(crate) struct EvaluateArgs {
     /// Path to the candidate `.morph` source file to score.
     pub(crate) file: std::path::PathBuf,
 
-    #[command(flatten)]
-    pub(crate) db: DatabaseArgs,
+    /// Score against the committed audit log at this connection (or
+    /// `DATABASE_URL`). The default mode; omit when using `--pack`.
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: Option<String>,
+
+    /// Score offline against a portable evidence pack instead of a
+    /// database. When given, no connection is opened or used.
+    #[arg(long)]
+    pub(crate) pack: Option<std::path::PathBuf>,
+
+    /// An external checkpoint anchor for `--pack`, held outside the
+    /// database: the pack must verify against it before it is scored.
+    #[arg(long, requires = "pack")]
+    pub(crate) anchor_file: Option<std::path::PathBuf>,
 }
 
 /// Evidence-pack subcommands. `export` is database-backed; `verify` is
