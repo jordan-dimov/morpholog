@@ -16,18 +16,11 @@
 
 use crate::SourceFileArgs;
 use crate::commands::{parse_or_exit, print_json, validate_or_exit};
-use morpholog_core::Program;
-use morpholog_core::format::format_program;
-use sha2::{Digest, Sha256};
 
 /// The canonical content hash: `sha256:<hex>` over the formatter's
-/// canonical rendering. The `sha256:` prefix keeps the format
-/// self-describing if the algorithm ever needs to change.
-pub(crate) fn canonical_hash(program: &Program) -> String {
-    let canonical = format_program(program);
-    let digest = Sha256::digest(canonical.as_bytes());
-    format!("sha256:{digest:x}")
-}
+/// canonical rendering. Rules identity, shared with the scorer's
+/// `program_hash` and the model hash in `schema`/`generate`.
+pub(crate) use morpholog_core::format::canonical_hash;
 
 pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;

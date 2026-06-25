@@ -611,6 +611,69 @@ async fn evidence_export_then_verify_offline() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_scores_a_candidate_against_history() {
+    reset_db().await;
+    post_balanced_entry("ev1", 100);
+    post_balanced_entry("ev2", 200);
+
+    // A candidate that forbids journal entries - history violates it.
+    let candidate = "program candidate\n\n\
+         predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)\n\n\
+         invariant no_entries:\n    not (exists e: JournalEntry(e, _, _))\n";
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut f, candidate.as_bytes()).unwrap();
+
+    let (status, stdout, stderr) = run_cli(&["evaluate", f.path().to_str().unwrap()]);
+    assert!(
+        status.success(),
+        "evaluate should succeed; {stderr}\n{stdout}"
+    );
+    let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
+    assert_eq!(report["score_format_version"], 1);
+    assert_eq!(report["semantics"], "fresh_state_violation_v1");
+    assert!(
+        report["program_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"),
+        "{stdout}"
+    );
+    let inv = &report["invariants"][0];
+    assert_eq!(inv["invariant"], "no_entries");
+    // The first entry introduces the violation; the second inherits it.
+    assert_eq!(inv["would_refuse"], 1, "got: {stdout}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_rejects_a_pre_candidate_before_connecting() {
+    // A transition-relational candidate (uses pre(...)): v1 cannot score it.
+    let candidate = "program candidate\n\n\
+         predicate Flag(x: Subject)\n\n\
+         invariant uses_pre:\n    Flag(a) implies pre(Flag(a))\n";
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut f, candidate.as_bytes()).unwrap();
+
+    // A deliberately unreachable database: if the CLI connected before
+    // checking, the failure would be a connection error, not the pre
+    // rejection. The rejection must come first.
+    let output = Command::new(morpholog_bin())
+        .args([
+            "evaluate",
+            f.path().to_str().unwrap(),
+            "--database-url",
+            "postgres://nonexistent.invalid:1/nope",
+        ])
+        .output()
+        .expect("spawn morpholog binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("pre(...)"),
+        "expected the pre(...) rejection, got: {stderr}"
+    );
+}
+
 // ============================================================
 // `--as-of` with a timestamp
 // ============================================================

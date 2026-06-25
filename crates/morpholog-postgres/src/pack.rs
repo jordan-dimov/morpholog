@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
-use crate::checkpoints::{Checkpoint, TreeVerification, verify_tree};
+use crate::checkpoints::{Checkpoint, TreeVerification, load_checkpoint_chain, verify_tree};
 use crate::error::{PgError, classify};
 use crate::merkle::{Hash, audit_leaf_hash};
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -55,23 +55,7 @@ pub struct EvidencePack {
 pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<EvidencePack, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
-    let stored = sqlx::query!(
-        "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash
-         FROM morpholog.audit_checkpoints
-         ORDER BY tree_size ASC",
-    )
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(classify)?;
-    let mut checkpoints: Vec<Checkpoint> = stored
-        .into_iter()
-        .map(|r| Checkpoint {
-            tree_size: r.tree_size,
-            root_hash: r.root_hash,
-            prev_checkpoint_hash: r.prev_checkpoint_hash,
-            checkpoint_hash: r.checkpoint_hash,
-        })
-        .collect();
+    let mut checkpoints = load_checkpoint_chain(&mut tx).await?;
 
     let covering = match tree_size {
         Some(n) => checkpoints.iter().find(|c| c.tree_size == n).cloned(),

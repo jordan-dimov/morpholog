@@ -228,21 +228,20 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
 /// chain is internally consistent (hash + `prev` links); and, if `anchor`
 /// is supplied, the stored checkpoint at the anchor's size matches the
 /// externally held copy.
-pub async fn verify_audit_tree(
-    pool: &PgPool,
-    anchor: Option<Checkpoint>,
-) -> Result<TreeVerification, PgError> {
-    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
-
+/// Load the whole checkpoint chain, ascending by size - the read shared by
+/// the live verifier and pack export.
+pub(crate) async fn load_checkpoint_chain(
+    conn: &mut sqlx::PgConnection,
+) -> Result<Vec<Checkpoint>, PgError> {
     let stored = sqlx::query!(
         "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash
          FROM morpholog.audit_checkpoints
          ORDER BY tree_size ASC",
     )
-    .fetch_all(&mut *tx)
+    .fetch_all(conn)
     .await
     .map_err(classify)?;
-    let checkpoints: Vec<Checkpoint> = stored
+    Ok(stored
         .into_iter()
         .map(|r| Checkpoint {
             tree_size: r.tree_size,
@@ -250,7 +249,16 @@ pub async fn verify_audit_tree(
             prev_checkpoint_hash: r.prev_checkpoint_hash,
             checkpoint_hash: r.checkpoint_hash,
         })
-        .collect();
+        .collect())
+}
+
+pub async fn verify_audit_tree(
+    pool: &PgPool,
+    anchor: Option<Checkpoint>,
+) -> Result<TreeVerification, PgError> {
+    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
+
+    let checkpoints = load_checkpoint_chain(&mut tx).await?;
 
     // Anchor check first: a coordinated rewrite is internally consistent,
     // so only the external copy can expose it.

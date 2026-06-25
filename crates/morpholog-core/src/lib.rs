@@ -41,6 +41,7 @@ mod ir;
 mod lint;
 mod propose;
 pub mod schema;
+mod score;
 mod state;
 mod validate;
 
@@ -79,6 +80,9 @@ pub use propose::{
     TracedProposal, Transition, propose, propose_with_trace,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
+pub use score::{
+    CandidateScore, CandidateScorer, InvariantScore, ScoreError, invariants_using_pre,
+};
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 

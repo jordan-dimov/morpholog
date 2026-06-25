@@ -551,7 +551,7 @@ impl<'p> CoverageTracker<'p> {
 /// Does this proposition contain `pre(...)`? Definitions cannot (a
 /// validated programme bans `pre` inside bodies), so the walk does
 /// not descend through calls.
-fn mentions_pre(prop: &Prop) -> bool {
+pub(crate) fn mentions_pre(prop: &Prop) -> bool {
     match prop {
         Prop::Pre(_) => true,
         Prop::Claim { .. }

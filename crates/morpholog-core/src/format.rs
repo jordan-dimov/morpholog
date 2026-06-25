@@ -72,6 +72,17 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
     }
 }
 
+/// The canonical content hash of a programme: `sha256:<hex>` over the
+/// formatter's canonical rendering. The round-trip property makes that
+/// rendering a canonical form, so formatting-only edits and comments do
+/// not change the hash - this is rules identity, not file identity. The
+/// `sha256:` prefix keeps it self-describing if the algorithm changes.
+pub fn canonical_hash(p: &Program) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format_program(p).as_bytes());
+    format!("sha256:{digest:x}")
+}
+
 /// Top-level entry. Returns a multi-line string terminated by a
 /// final `\n`, so callers can write directly to a stream or append
 /// to an existing buffer.

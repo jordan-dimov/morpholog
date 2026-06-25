@@ -139,6 +139,17 @@ enum Command {
     /// even one that also rewrites the checkpoint table.
     Checkpoint(DatabaseArgs),
 
+    /// Score a candidate programme against committed history.
+    ///
+    /// Replays the committed audit log under the candidate's invariants -
+    /// which are NOT deployed - and reports, per invariant, which already-
+    /// admitted commits it would have refused: a fresh violation, where the
+    /// commit's resulting state violates an invariant the prior state
+    /// satisfied. The fitness signal for discovering controls nobody
+    /// hand-authored. Output is JSON. Scores state invariants only;
+    /// transition-relational candidates using `pre(...)` are rejected.
+    Evaluate(EvaluateArgs),
+
     /// Export and verify portable evidence packs over the audit log.
     ///
     /// `export` writes a complete, checkpointed prefix of the log (its
@@ -308,6 +319,17 @@ pub(crate) struct VerifyArgs {
     /// pass. Omit to verify only internal checkpoint consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+}
+
+/// Arguments for `evaluate`: a candidate `.morph` path plus the
+/// connection whose audit log is the history to score against.
+#[derive(clap::Args, Debug)]
+pub(crate) struct EvaluateArgs {
+    /// Path to the candidate `.morph` source file to score.
+    pub(crate) file: std::path::PathBuf,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 /// Evidence-pack subcommands. `export` is database-backed; `verify` is
@@ -973,6 +995,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
         Command::Checkpoint(args) => commands::checkpoint::run(args).await,
+        Command::Evaluate(args) => commands::evaluate::run(args).await,
         Command::Evidence { what } => commands::evidence::run(what).await,
         Command::Generate {
             what: GenerateCmd::PythonClient(args),
