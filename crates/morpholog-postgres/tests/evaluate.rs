@@ -8,7 +8,7 @@ use morpholog_core::Program;
 use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, var, wildcard};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
+    Checkpoint, CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
     score_candidate, score_candidate_against_pack,
 };
 
@@ -187,4 +187,46 @@ async fn refuses_a_pre_candidate_against_a_pack() {
     ));
     let err = score_candidate_against_pack(&pre_candidate, &pack, None).unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")));
+}
+
+#[tokio::test]
+async fn pack_row_order_is_not_load_bearing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_entry(&pool, "e0").await;
+    commit_entry(&pool, "e1").await;
+    let pack = export_history_pack(&pool).await;
+    let candidate = no_entries();
+
+    let ordered = score_candidate_against_pack(&candidate, &pack, None).unwrap();
+    // The verifier re-sorts; so must scoring. A shuffled pack scores
+    // identically.
+    let mut shuffled = pack.clone();
+    shuffled.rows.reverse();
+    let reshuffled = score_candidate_against_pack(&candidate, &shuffled, None).unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&ordered).unwrap(),
+        serde_json::to_value(&reshuffled).unwrap(),
+    );
+}
+
+#[tokio::test]
+async fn refuses_to_score_against_a_mismatched_anchor() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_entry(&pool, "e0").await;
+    let pack = export_history_pack(&pool).await;
+
+    // An anchor at a size the pack covers but with a different identity:
+    // the coordinated-rewrite signal verify_pack catches.
+    let forged = Checkpoint {
+        tree_size: pack.manifest.tree_size,
+        root_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        prev_checkpoint_hash: None,
+        checkpoint_hash: "forged".to_string(),
+    };
+    let err = score_candidate_against_pack(&no_entries(), &pack, Some(&forged)).unwrap_err();
+    assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")));
 }
