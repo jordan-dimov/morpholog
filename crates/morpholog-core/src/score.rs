@@ -103,6 +103,41 @@ pub struct InvariantScore {
     pub refused_transitions: Vec<String>,
 }
 
+/// One candidate scored over many cases in a single call (`evaluate
+/// --packs`). The candidate identity is hoisted once; each case carries
+/// only the variable part. A discovery search is candidates x cases, so
+/// batching collapses the per-case process spawn.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchScore {
+    pub score_format_version: u32,
+    pub semantics: String,
+    pub program: String,
+    pub program_hash: String,
+    pub cases: Vec<CaseResult>,
+}
+
+/// The outcome for one case (pack) in a batch. A case that fails (e.g. a
+/// pack that does not verify) is a recorded outcome, not a batch abort -
+/// the search continues over the rest.
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseResult {
+    pub pack: String,
+    #[serde(flatten)]
+    pub outcome: CaseOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CaseOutcome {
+    Scored {
+        transitions_replayed: u64,
+        invariants: Vec<InvariantScore>,
+    },
+    Failed {
+        error: String,
+    },
+}
+
 /// Accumulates fresh-violation counts as committed history is replayed
 /// forward. The driver folds the audit log and calls [`observe`] with each
 /// transition's post- and pre-state; the kernel evaluation lives here so it
@@ -310,6 +345,31 @@ mod tests {
             .unwrap()
             .into_report();
         assert!(vacuous.invariants[0].initially_holds);
+    }
+
+    #[test]
+    fn batch_case_outcomes_serialize_with_a_status_tag() {
+        let scored = serde_json::to_value(CaseResult {
+            pack: "case_1".to_string(),
+            outcome: CaseOutcome::Scored {
+                transitions_replayed: 1,
+                invariants: vec![],
+            },
+        })
+        .unwrap();
+        assert_eq!(scored["pack"], "case_1");
+        assert_eq!(scored["status"], "scored");
+        assert_eq!(scored["transitions_replayed"], 1);
+
+        let failed = serde_json::to_value(CaseResult {
+            pack: "case_2".to_string(),
+            outcome: CaseOutcome::Failed {
+                error: "the pack does not verify".to_string(),
+            },
+        })
+        .unwrap();
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["error"], "the pack does not verify");
     }
 
     #[test]

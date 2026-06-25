@@ -4,12 +4,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use morpholog_core::CaseOutcome;
 use morpholog_core::Program;
 use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, var, wildcard};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
-    score_candidate, score_candidate_against_pack,
+    score_candidate, score_candidate_against_pack, score_candidate_against_packs,
 };
 
 mod common;
@@ -229,4 +230,88 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
     };
     let err = score_candidate_against_pack(&no_entries(), &pack, Some(&forged)).unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")));
+}
+
+/// Build one independent single-case pack: a fresh ledger holding exactly
+/// one firm-year, checkpointed and exported. The file-name label mirrors
+/// what the CLI would use.
+async fn build_case_pack(pool: &PgPool, id: &str) -> (String, EvidencePack) {
+    reset_db(pool).await;
+    commit_entry(pool, id).await;
+    (format!("{id}.json"), export_history_pack(pool).await)
+}
+
+#[tokio::test]
+async fn batch_over_packs_equals_individual_scores() {
+    let pool = test_pool().await;
+    let mut cases = Vec::new();
+    for id in ["c0", "c1", "c2"] {
+        cases.push(build_case_pack(&pool, id).await);
+    }
+    let candidate = no_entries();
+
+    let batch = score_candidate_against_packs(&candidate, &cases).unwrap();
+    assert_eq!(batch.cases.len(), 3);
+    assert_eq!(batch.semantics, "fresh_state_violation_v1");
+
+    // Each batch case equals the individual single-pack score on the
+    // substantive fields (the batch hoists candidate identity).
+    for (i, (name, pack)) in cases.iter().enumerate() {
+        let single = score_candidate_against_pack(&candidate, pack, None).unwrap();
+        let case = &batch.cases[i];
+        assert_eq!(case.pack, *name);
+        match &case.outcome {
+            CaseOutcome::Scored {
+                transitions_replayed,
+                invariants,
+            } => {
+                assert_eq!(*transitions_replayed, single.transitions_replayed);
+                assert_eq!(
+                    invariants[0].would_refuse,
+                    single.invariants[0].would_refuse
+                );
+                assert_eq!(
+                    invariants[0].refused_transitions,
+                    single.invariants[0].refused_transitions
+                );
+            }
+            CaseOutcome::Failed { error } => {
+                panic!("expected a scored case, got failed: {error}")
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_tampered_pack_fails_only_its_own_case() {
+    let pool = test_pool().await;
+    let (n0, p0) = build_case_pack(&pool, "c0").await;
+    let (n1, p1) = build_case_pack(&pool, "c1").await;
+
+    // Tamper the second pack the way an attacker holding the file would.
+    let mut v = serde_json::to_value(&p1).unwrap();
+    v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
+    let p1_bad: EvidencePack = serde_json::from_value(v).unwrap();
+
+    let batch = score_candidate_against_packs(&no_entries(), &[(n0, p0), (n1, p1_bad)]).unwrap();
+    assert!(matches!(batch.cases[0].outcome, CaseOutcome::Scored { .. }));
+    match &batch.cases[1].outcome {
+        CaseOutcome::Failed { error } => assert!(error.contains("does not verify")),
+        CaseOutcome::Scored { .. } => panic!("expected a failed case, got a scored one"),
+    }
+}
+
+#[tokio::test]
+async fn a_pre_candidate_fails_the_whole_batch_once() {
+    let pool = test_pool().await;
+    let case = build_case_pack(&pool, "c0").await;
+    let pre_candidate = candidate(invariant(
+        "UsesPre",
+        pre(exists(
+            "e",
+            claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
+        )),
+    ));
+    let err = score_candidate_against_packs(&pre_candidate, &[case]).unwrap_err();
+    assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")));
 }
