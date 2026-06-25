@@ -56,6 +56,21 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     )
 }
 
+/// Run `morpholog` with exactly the given args and NO `--database-url`,
+/// for the offline subcommands whose contract is that they take no
+/// connection (`evidence verify`).
+fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
+    let output = Command::new(morpholog_bin())
+        .args(args)
+        .output()
+        .expect("spawn morpholog binary");
+    (
+        output.status,
+        String::from_utf8(output.stdout).expect("stdout utf8"),
+        String::from_utf8(output.stderr).expect("stderr utf8"),
+    )
+}
+
 /// Absolute path to the shipped double-entry-ledger example source, so
 /// the CLI's file-path subcommands (`run`, `inspect derived`) can parse
 /// it directly. Resolved from the crate manifest dir so it is robust to
@@ -537,6 +552,63 @@ async fn checkpoint_then_verify_against_the_anchor() {
     let outcome: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(outcome["tree"]["status"], "intact", "got: {stdout}");
     assert_eq!(outcome["tree"]["checkpoints"], 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evidence_export_then_verify_offline() {
+    reset_db().await;
+    post_balanced_entry("ev1", 100);
+    post_balanced_entry("ev2", 200);
+
+    // Anchor (saved outside the database), then export the pack.
+    let (status, cp_stdout, stderr) = run_cli(&["checkpoint"]);
+    assert!(status.success(), "checkpoint should succeed; {stderr}");
+    let mut anchor = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
+
+    let (status, pack_stdout, stderr) = run_cli(&["evidence", "export"]);
+    assert!(status.success(), "evidence export should succeed; {stderr}");
+    let pack: Value = serde_json::from_str(&pack_stdout).expect("pack is JSON");
+    assert_eq!(pack["manifest"]["tree_size"], 2, "{pack_stdout}");
+    assert_eq!(pack["rows"].as_array().unwrap().len(), 2);
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, pack_stdout.as_bytes()).unwrap();
+    let pack_path = packfile.path().to_str().unwrap();
+
+    // Offline verify (NO --database-url) against the anchor: intact, exit 0.
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "evidence",
+        "verify",
+        pack_path,
+        "--anchor-file",
+        anchor.path().to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "offline verify should pass; {stderr}\n{stdout}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        "intact",
+        "got: {stdout}"
+    );
+
+    // Edit a row in the pack file: verify must catch it and exit non-zero.
+    let mut tampered_json: Value = serde_json::from_str(&pack_stdout).unwrap();
+    tampered_json["rows"][0]["transformation_name"] = serde_json::json!("tampered");
+    let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut tamperedfile, tampered_json.to_string().as_bytes()).unwrap();
+    let (status, stdout, _stderr) =
+        run_cli_no_db(&["evidence", "verify", tamperedfile.path().to_str().unwrap()]);
+    assert!(
+        !status.success(),
+        "a tampered pack must exit non-zero: {stdout}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        "tampered",
+        "got: {stdout}"
+    );
 }
 
 // ============================================================

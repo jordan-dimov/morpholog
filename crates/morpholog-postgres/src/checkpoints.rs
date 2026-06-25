@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
 use crate::error::{PgError, classify};
-use crate::merkle::{audit_leaf_hash, merkle_root, render_hash};
+use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
 /// Transaction-level advisory-lock key serialising checkpoint creation,
@@ -92,7 +92,7 @@ pub enum TreeVerification {
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||
 /// root_hash_bytes || prev_bytes)`, rendered `sha256:<hex>`. A genesis
 /// checkpoint hashes the empty string for `prev`.
-fn checkpoint_hash(tree_size: i64, root_hash: &str, prev: Option<&str>) -> String {
+pub(crate) fn checkpoint_hash(tree_size: i64, root_hash: &str, prev: Option<&str>) -> String {
     let mut h = Sha256::new();
     h.update(tree_size.to_le_bytes());
     h.update(root_hash.as_bytes());
@@ -268,8 +268,36 @@ pub async fn verify_audit_tree(
     let max_size = checkpoints.last().map(|c| c.tree_size).unwrap_or(0);
     let (leaves, _) = collect_leaves(&mut tx, None, Some(max_size)).await?;
 
+    Ok(verify_tree(&leaves, &checkpoints, anchor.as_ref()))
+}
+
+/// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,
+/// against Postgres) and the offline pack verifier: given the log's leaf
+/// hashes in canonical order and the checkpoint chain, confirm every
+/// checkpoint's root recomputes from the leaves, the chain is internally
+/// consistent, and (if supplied) the anchor matches the stored checkpoint
+/// at its size. One core, so the offline verifier cannot drift from the
+/// live one.
+pub(crate) fn verify_tree(
+    leaves: &[Hash],
+    checkpoints: &[Checkpoint],
+    anchor: Option<&Checkpoint>,
+) -> TreeVerification {
+    // Anchor check first: a coordinated rewrite is internally consistent,
+    // so only the external copy can expose it.
+    if let Some(anchor) = anchor {
+        let stored_at_size = checkpoints.iter().find(|c| c.tree_size == anchor.tree_size);
+        if stored_at_size != Some(anchor) {
+            return TreeVerification::AnchorMismatch {
+                tree_size: anchor.tree_size,
+                anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
+                stored_checkpoint_hash: stored_at_size.map(|c| c.checkpoint_hash.clone()),
+            };
+        }
+    }
+
     let mut prev_hash: Option<&str> = None;
-    for cp in &checkpoints {
+    for cp in checkpoints {
         // Chain integrity: the recorded checkpoint_hash must match its
         // contents, and prev must link to the previous checkpoint.
         let expected = checkpoint_hash(
@@ -278,44 +306,44 @@ pub async fn verify_audit_tree(
             cp.prev_checkpoint_hash.as_deref(),
         );
         if expected != cp.checkpoint_hash {
-            return Ok(TreeVerification::ChainBroken {
+            return TreeVerification::ChainBroken {
                 detail: format!(
                     "checkpoint at tree_size {} has hash {} but its contents hash to {expected}",
                     cp.tree_size, cp.checkpoint_hash
                 ),
-            });
+            };
         }
         if cp.prev_checkpoint_hash.as_deref() != prev_hash {
-            return Ok(TreeVerification::ChainBroken {
+            return TreeVerification::ChainBroken {
                 detail: format!(
                     "checkpoint at tree_size {} links to prev {:?}, expected {:?}",
                     cp.tree_size, cp.prev_checkpoint_hash, prev_hash
                 ),
-            });
+            };
         }
         prev_hash = Some(&cp.checkpoint_hash);
 
         // Tamper check: recompute the root over the log prefix.
         let size = cp.tree_size as usize;
         if size > leaves.len() {
-            return Ok(TreeVerification::Tampered {
+            return TreeVerification::Tampered {
                 tree_size: cp.tree_size,
                 recorded_root: cp.root_hash.clone(),
                 recomputed_root: format!("only {} rows present", leaves.len()),
-            });
+            };
         }
         let recomputed = render_hash(&merkle_root(&leaves[..size]));
         if recomputed != cp.root_hash {
-            return Ok(TreeVerification::Tampered {
+            return TreeVerification::Tampered {
                 tree_size: cp.tree_size,
                 recorded_root: cp.root_hash.clone(),
                 recomputed_root: recomputed,
-            });
+            };
         }
     }
 
-    Ok(TreeVerification::Intact {
+    TreeVerification::Intact {
         checkpoints: checkpoints.len(),
-        tree_size: max_size,
-    })
+        tree_size: checkpoints.last().map(|c| c.tree_size).unwrap_or(0),
+    }
 }
