@@ -7,7 +7,10 @@
 use morpholog_core::Program;
 use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, var, wildcard};
 use morpholog_examples::double_entry_ledger;
-use morpholog_postgres::{PgError, PgPool, score_candidate};
+use morpholog_postgres::{
+    CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
+    score_candidate, score_candidate_against_pack,
+};
 
 mod common;
 use common::{dec, reset_db, subj, test_pool};
@@ -43,6 +46,23 @@ fn candidate(inv: morpholog_core::Invariant) -> Program {
         transformations: vec![],
         derived_claims: vec![],
     }
+}
+
+fn no_entries() -> Program {
+    candidate(invariant(
+        "NoEntries",
+        not(exists(
+            "e",
+            claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
+        )),
+    ))
+}
+
+async fn export_history_pack(pool: &PgPool) -> EvidencePack {
+    match create_checkpoint(pool).await.unwrap() {
+        CheckpointOutcome::Created(_) | CheckpointOutcome::NoNewRows(_) => {}
+    }
+    export_pack(pool, None).await.unwrap()
 }
 
 #[tokio::test]
@@ -109,4 +129,62 @@ async fn a_pre_candidate_is_rejected_not_silently_mis_scored() {
         matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")),
         "a transition-relational candidate must be refused, not mis-scored"
     );
+}
+
+#[tokio::test]
+async fn pack_backed_score_reproduces_the_database_score() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_entry(&pool, "e0").await;
+    commit_entry(&pool, "e1").await;
+    let pack = export_history_pack(&pool).await;
+
+    let candidate = no_entries();
+    let online = score_candidate(&pool, &candidate).await.unwrap();
+    let offline = score_candidate_against_pack(&candidate, &pack, None).unwrap();
+
+    // The offline score of a genuine pack reproduces the live score
+    // exactly - same report, byte for byte.
+    assert_eq!(
+        serde_json::to_value(&online).unwrap(),
+        serde_json::to_value(&offline).unwrap(),
+    );
+    assert_eq!(offline.invariants[0].would_refuse, 1);
+}
+
+#[tokio::test]
+async fn refuses_to_score_a_tampered_pack() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_entry(&pool, "e0").await;
+    let pack = export_history_pack(&pool).await;
+
+    // Edit a row's content the way an attacker holding the file would.
+    let mut v = serde_json::to_value(&pack).unwrap();
+    v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
+    let tampered: EvidencePack = serde_json::from_value(v).unwrap();
+
+    let err = score_candidate_against_pack(&no_entries(), &tampered, None).unwrap_err();
+    assert!(
+        matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")),
+        "a pack that does not verify must not be scored"
+    );
+}
+
+#[tokio::test]
+async fn refuses_a_pre_candidate_against_a_pack() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_entry(&pool, "e0").await;
+    let pack = export_history_pack(&pool).await;
+
+    let pre_candidate = candidate(invariant(
+        "UsesPre",
+        pre(exists(
+            "e",
+            claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
+        )),
+    ));
+    let err = score_candidate_against_pack(&pre_candidate, &pack, None).unwrap_err();
+    assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")));
 }

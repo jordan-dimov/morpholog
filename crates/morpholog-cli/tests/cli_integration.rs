@@ -674,6 +674,56 @@ async fn evaluate_rejects_a_pre_candidate_before_connecting() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_against_a_pack_needs_no_database() {
+    reset_db().await;
+    post_balanced_entry("ev1", 100);
+    post_balanced_entry("ev2", 200);
+
+    // Checkpoint + export a pack over the history (these need the DB).
+    let (s, _, e) = run_cli(&["checkpoint"]);
+    assert!(s.success(), "checkpoint: {e}");
+    let (s, pack_stdout, e) = run_cli(&["evidence", "export"]);
+    assert!(s.success(), "export: {e}");
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, pack_stdout.as_bytes()).unwrap();
+
+    let candidate = "program candidate\n\n\
+         predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)\n\n\
+         invariant no_entries:\n    not (exists e: JournalEntry(e, _, _))\n";
+    let mut candfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut candfile, candidate.as_bytes()).unwrap();
+
+    // Score against the pack with NO --database-url - the offline promise.
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "evaluate",
+        candfile.path().to_str().unwrap(),
+        "--pack",
+        packfile.path().to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "pack-mode evaluate should pass with no DB; {stderr}\n{stdout}"
+    );
+    let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
+    assert_eq!(report["semantics"], "fresh_state_violation_v1");
+    assert_eq!(report["invariants"][0]["would_refuse"], 1, "got: {stdout}");
+
+    // A tampered pack is refused, not scored.
+    let mut tampered: Value = serde_json::from_str(&pack_stdout).unwrap();
+    tampered["rows"][0]["transformation_name"] = serde_json::json!("tampered");
+    let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut tamperedfile, tampered.to_string().as_bytes()).unwrap();
+    let (status, _stdout, stderr) = run_cli_no_db(&[
+        "evaluate",
+        candfile.path().to_str().unwrap(),
+        "--pack",
+        tamperedfile.path().to_str().unwrap(),
+    ]);
+    assert!(!status.success(), "a tampered pack must be refused");
+    assert!(stderr.contains("does not verify"), "got: {stderr}");
+}
+
 // ============================================================
 // `--as-of` with a timestamp
 // ============================================================
