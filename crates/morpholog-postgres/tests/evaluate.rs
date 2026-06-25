@@ -266,14 +266,12 @@ async fn batch_over_packs_equals_individual_scores() {
                 invariants,
             } => {
                 assert_eq!(*transitions_replayed, single.transitions_replayed);
-                assert_eq!(
-                    invariants[0].would_refuse,
-                    single.invariants[0].would_refuse
-                );
-                assert_eq!(
-                    invariants[0].refused_transitions,
-                    single.invariants[0].refused_transitions
-                );
+                let (batched, solo) = (&invariants[0], &single.invariants[0]);
+                assert_eq!(batched.invariant, solo.invariant);
+                assert_eq!(batched.version, solo.version);
+                assert_eq!(batched.initially_holds, solo.initially_holds);
+                assert_eq!(batched.would_refuse, solo.would_refuse);
+                assert_eq!(batched.refused_transitions, solo.refused_transitions);
             }
             CaseOutcome::Failed { error } => {
                 panic!("expected a scored case, got failed: {error}")

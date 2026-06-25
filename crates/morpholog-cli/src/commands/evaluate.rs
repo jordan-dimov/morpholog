@@ -66,11 +66,19 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
 /// is controlled input - whereas a genuine pack that does not verify is a
 /// per-case failure inside the report.
 fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchScore> {
-    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading packs directory {}", dir.display()))?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
-        .collect();
+    {
+        // An entry error (permissions, a vanished file) is a setup problem
+        // and aborts, like an unparseable pack - the dir is controlled input.
+        let path = entry
+            .with_context(|| format!("reading an entry in {}", dir.display()))?
+            .path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            paths.push(path);
+        }
+    }
     paths.sort();
 
     let named: Vec<(String, EvidencePack)> = paths
