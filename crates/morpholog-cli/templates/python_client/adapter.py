@@ -33,24 +33,50 @@ class Morpholog:
     ``binary`` resolves as: explicit argument, then the
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
     ``PATH``.
+
+    ``timeout`` bounds every call (in seconds); a call that overruns
+    raises ``MorphologError`` - a stuck binary becomes an operational
+    failure, never a stuck request. It defaults to unbounded; batch
+    imports, the one legitimately long case, stay unbounded even when
+    it is set (override per call on ``propose_batch``).
     """
 
-    def __init__(self, file: str, database_url: str, binary: str | None = None) -> None:
+    def __init__(
+        self,
+        file: str,
+        database_url: str,
+        binary: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
         self.file = str(file)
         self.database_url = database_url
         self.binary = binary or os.environ.get("MORPHOLOG_BIN", "morpholog")
+        self.timeout = timeout
 
     # ------------------------------------------------------------
     # The one subprocess seam.
     # ------------------------------------------------------------
 
+    def _run(
+        self, args: list[str], stdin: str | None = None, *, timeout: float | None
+    ) -> "subprocess.CompletedProcess[str]":
+        """Every invocation lands here. A timeout is operational, not a
+        decided outcome, so it raises ``MorphologError``."""
+        try:
+            return subprocess.run(
+                [self.binary, *args],
+                capture_output=True,
+                text=True,
+                input=stdin,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise MorphologError(
+                f"`{' '.join(args)}` timed out after {timeout}s"
+            ) from None
+
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
-        proc = subprocess.run(
-            [self.binary, *args],
-            capture_output=True,
-            text=True,
-            input=stdin,
-        )
+        proc = self._run(list(args), stdin=stdin, timeout=self.timeout)
         if not proc.stdout.strip():
             raise MorphologError(f"`{' '.join(args)}`:\n{proc.stderr.strip()}")
         return proc.stdout
@@ -113,26 +139,22 @@ class Morpholog:
             explain_on_reject=explain_on_reject,
         )
 
-    def propose_batch(self, rows: list) -> list:
+    def propose_batch(self, rows: list, timeout: float | None = None) -> list:
         """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
         of ``args``/``args_named``. Returns one ``BatchReceipt`` per
         processed row; a non-zero exit is operational (the batch
         aborted) and raises with the receipts that did arrive named in
-        the error.
+        the error. ``timeout`` bounds this one call and defaults to
+        unbounded, ignoring the client-wide timeout - a large import is
+        the legitimate long-running case.
         """
         ndjson = "".join(json.dumps(row) + "\n" for row in rows)
-        proc = subprocess.run(
-            [
-                self.binary,
-                "propose", self.file,
-                "--batch", "-",
-                "--database-url", self.database_url,
-            ],
-            capture_output=True,
-            text=True,
-            input=ndjson,
+        proc = self._run(
+            ["propose", self.file, "--batch", "-", "--database-url", self.database_url],
+            stdin=ndjson,
+            timeout=timeout,
         )
         receipts = [
             envelopes.BatchReceipt.from_json(json.loads(line))
@@ -222,13 +244,13 @@ class Morpholog:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.
-        argv = [self.binary, "inspect", "audit"]
+        argv = ["inspect", "audit"]
         if after is not None:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
         argv.extend(["--database-url", self.database_url])
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
             raise MorphologError(
                 f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
