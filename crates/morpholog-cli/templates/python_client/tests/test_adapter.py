@@ -41,6 +41,10 @@ if mode == "record_argv_empty":
     with open(os.environ["STUB_ARGV_FILE"], "w") as f:
         f.write("\\n".join(sys.argv[1:]))
     sys.exit(0)
+if mode == "hang":
+    import time
+    time.sleep(30)
+    sys.exit(0)
 if mode == "audit_ndjson":
     row = ('{"transition_id": "01900000-0000-7000-8000-00000000000%d", '
            '"transformation_name": "post", "arguments": [], '
@@ -63,6 +67,7 @@ class AdapterDiscrimination(unittest.TestCase):
         stub = Path(cls._dir.name) / "morpholog-stub"
         stub.write_text(STUB)
         stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+        cls.stub = stub
         cls.client = Morpholog("model.morph", "postgres:///stub", binary=str(stub))
 
     @classmethod
@@ -189,6 +194,36 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologError) as caught:
             self.client.audit()
         self.assertIn("failed to connect", str(caught.exception))
+
+    def test_a_client_timeout_surfaces_as_an_operational_error(self):
+        self._mode("hang")
+        bounded = Morpholog(
+            "model.morph", "postgres:///stub", binary=str(self.stub), timeout=0.2
+        )
+        with self.assertRaises(MorphologError) as caught:
+            bounded.check()
+        self.assertIn("timed out", str(caught.exception))
+
+    def test_audit_uses_the_client_timeout(self):
+        # The audit path does not go through _invoke (empty stdout is
+        # lawful there), so it needs its own pin on the _run seam.
+        self._mode("hang")
+        bounded = Morpholog(
+            "model.morph", "postgres:///stub", binary=str(self.stub), timeout=0.2
+        )
+        with self.assertRaises(MorphologError) as caught:
+            bounded.audit()
+        self.assertIn("timed out", str(caught.exception))
+
+    def test_batch_takes_a_per_call_timeout_override(self):
+        # The default client carries no timeout; the override bounds
+        # this one batch.
+        self._mode("hang")
+        with self.assertRaises(MorphologError) as caught:
+            self.client.propose_batch(
+                [{"transformation": "t", "actor": "a", "args_named": {}}], timeout=0.2
+            )
+        self.assertIn("timed out", str(caught.exception))
 
     def test_submit_is_duck_typed_on_the_request_protocol(self):
         self._mode("rejected_exit_1")
