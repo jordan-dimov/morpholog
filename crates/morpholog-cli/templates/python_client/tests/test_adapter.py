@@ -204,6 +204,17 @@ class AdapterDiscrimination(unittest.TestCase):
             bounded.check()
         self.assertIn("timed out", str(caught.exception))
 
+    def test_audit_uses_the_client_timeout(self):
+        # The audit path does not go through _invoke (empty stdout is
+        # lawful there), so it needs its own pin on the _run seam.
+        self._mode("hang")
+        bounded = Morpholog(
+            "model.morph", "postgres:///stub", binary=str(self.stub), timeout=0.2
+        )
+        with self.assertRaises(MorphologError) as caught:
+            bounded.audit()
+        self.assertIn("timed out", str(caught.exception))
+
     def test_batch_takes_a_per_call_timeout_override(self):
         # The default client carries no timeout; the override bounds
         # this one batch.

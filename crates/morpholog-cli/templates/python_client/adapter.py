@@ -34,11 +34,13 @@ class Morpholog:
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
     ``PATH``.
 
-    ``timeout`` bounds every call (in seconds); a call that overruns
-    raises ``MorphologError`` - a stuck binary becomes an operational
-    failure, never a stuck request. It defaults to unbounded; batch
-    imports, the one legitimately long case, stay unbounded even when
-    it is set (override per call on ``propose_batch``).
+    ``timeout`` bounds normal single-operation calls (read, commit,
+    audit, outbox) in seconds; a call that overruns raises
+    ``MorphologError`` - a stuck binary becomes an operational failure,
+    never a stuck request. It defaults to unbounded. ``propose_batch``
+    stays unbounded even when it is set - a large import is the
+    legitimate long case - and takes a per-call ``timeout`` to bound
+    one batch.
     """
 
     def __init__(
@@ -72,7 +74,7 @@ class Morpholog:
             )
         except subprocess.TimeoutExpired:
             raise MorphologError(
-                f"`{' '.join(args)}` timed out after {timeout}s"
+                f"`{self.binary} {' '.join(args)}` timed out after {timeout}s"
             ) from None
 
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
