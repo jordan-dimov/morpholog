@@ -547,6 +547,153 @@
         "status": { "enum": ["initialised", "already-initialised"] },
         "schema": { "const": "morpholog" }
       }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"],
+      "properties": {
+        "tree_size": { "type": "integer" },
+        "root_hash": { "type": "string" },
+        "prev_checkpoint_hash": { "type": ["string", "null"] },
+        "checkpoint_hash": { "type": "string" }
+      }
+    },
+    "checkpoint_outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"],
+          "properties": {
+            "status": { "const": "created" },
+            "tree_size": { "type": "integer" },
+            "root_hash": { "type": "string" },
+            "prev_checkpoint_hash": { "type": ["string", "null"] },
+            "checkpoint_hash": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"],
+          "properties": {
+            "status": { "const": "no_new_rows" },
+            "tree_size": { "type": "integer" },
+            "root_hash": { "type": "string" },
+            "prev_checkpoint_hash": { "type": ["string", "null"] },
+            "checkpoint_hash": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "verify_outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "transitions", "claims"],
+          "properties": {
+            "status": { "const": "consistent" },
+            "transitions": { "type": "integer" },
+            "claims": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "only_in_claims_table", "only_in_replay"],
+          "properties": {
+            "status": { "const": "divergent" },
+            "only_in_claims_table": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+            "only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } }
+          }
+        }
+      ]
+    },
+    "tree_verification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "checkpoints", "tree_size"],
+          "properties": {
+            "status": { "const": "intact" },
+            "checkpoints": { "type": "integer" },
+            "tree_size": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "recorded_root", "recomputed_root"],
+          "properties": {
+            "status": { "const": "tampered" },
+            "tree_size": { "type": "integer" },
+            "recorded_root": { "type": "string" },
+            "recomputed_root": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "detail"],
+          "properties": {
+            "status": { "const": "chain_broken" },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "anchor_checkpoint_hash", "stored_checkpoint_hash"],
+          "properties": {
+            "status": { "const": "anchor_mismatch" },
+            "tree_size": { "type": "integer" },
+            "anchor_checkpoint_hash": { "type": "string" },
+            "stored_checkpoint_hash": { "type": ["string", "null"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "detail"],
+          "properties": {
+            "status": { "const": "malformed_pack" },
+            "detail": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "verify_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replay", "tree"],
+      "properties": {
+        "replay": { "$ref": "#/$defs/verify_outcome" },
+        "tree": { "$ref": "#/$defs/tree_verification" }
+      }
+    },
+    "pack_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pack_format_version", "tree_size", "root_hash", "checkpoint_hash"],
+      "properties": {
+        "pack_format_version": { "type": "integer" },
+        "tree_size": { "type": "integer" },
+        "root_hash": { "type": "string" },
+        "checkpoint_hash": { "type": "string" }
+      }
+    },
+    "evidence_pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "checkpoints", "rows"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/pack_manifest" },
+        "checkpoints": { "type": "array", "items": { "$ref": "#/$defs/checkpoint" } },
+        "rows": { "type": "array", "items": { "$ref": "#/$defs/audit_row" } }
+      }
     }
   }
 }
