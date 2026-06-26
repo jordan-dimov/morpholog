@@ -87,6 +87,10 @@ pub enum TreeVerification {
         anchor_checkpoint_hash: String,
         stored_checkpoint_hash: Option<String>,
     },
+    /// An evidence pack could not be parsed into a checkable tree. Only
+    /// the offline `evidence verify` path produces this; the live
+    /// `verify` reads structured rows from the database and never does.
+    MalformedPack { detail: String },
 }
 
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||

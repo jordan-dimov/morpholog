@@ -3,7 +3,7 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    Checkpoint, TreeVerification, VerifyOutcome, verify_audit_tree, verify_replay,
+    Checkpoint, TreeVerification, VerifyOutcome, VerifyReport, verify_audit_tree, verify_replay,
 };
 
 use crate::VerifyArgs;
@@ -33,10 +33,11 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         .await
         .context("verify_audit_tree failed")?;
 
-    print_json(&serde_json::json!({ "replay": &replay, "tree": &tree }))?;
+    let report = VerifyReport { replay, tree };
+    print_json(&report)?;
 
-    let diverged = matches!(replay, VerifyOutcome::Divergent { .. });
-    let tampered = !matches!(tree, TreeVerification::Intact { .. });
+    let diverged = matches!(report.replay, VerifyOutcome::Divergent { .. });
+    let tampered = !matches!(report.tree, TreeVerification::Intact { .. });
     if diverged || tampered {
         std::process::exit(1);
     }

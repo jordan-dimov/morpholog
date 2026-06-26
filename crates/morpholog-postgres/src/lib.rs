@@ -59,5 +59,6 @@ pub use propose::{
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use score::{score_candidate, score_candidate_against_pack, score_candidate_against_packs};
 pub use verify::{
-    InitOutcome, SCHEMA_SQL, VerifyOutcome, coverage_replay, initialise_schema, verify_replay,
+    InitOutcome, SCHEMA_SQL, VerifyOutcome, VerifyReport, coverage_replay, initialise_schema,
+    verify_replay,
 };

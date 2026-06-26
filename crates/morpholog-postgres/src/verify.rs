@@ -1,5 +1,6 @@
 use crate::as_of::{ReplaySet, reconstruct_inner};
 use crate::audit::REPLAY_CHUNK;
+use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify};
 use crate::propose::REJECTION_KIND_INVARIANT;
@@ -80,6 +81,15 @@ pub enum VerifyOutcome {
         /// table lacks - out-of-band deletes or edits.
         only_in_replay: Vec<ClaimInstance>,
     },
+}
+/// The `morpholog verify` envelope: the replay verdict (claims table vs
+/// audit log) beside the tamper-evidence verdict (the audit Merkle tree
+/// against its checkpoints), so one read carries both. Field order is
+/// the wire contract; `replay` then `tree`.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyReport {
+    pub replay: VerifyOutcome,
+    pub tree: TreeVerification,
 }
 /// Replay the audit log through a [`CoverageTracker`], then count
 /// the rejection log into it, and report, per invariant of
