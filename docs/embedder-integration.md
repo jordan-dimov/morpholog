@@ -246,6 +246,14 @@ The discipline is the same as the rest of Morpholog: ship the contract that an e
 
 This is the artefact client generation consumes (the reserved "waits for a real consumer" slot is now filled): the generated Python client's envelope models derive from the same pinned document, and a contract-test suite in the binary's own repository holds the document, the binary's real serialization, and the generated models to one set of golden envelopes. Trace entry internals remain reserved (the `trace` array is pinned as an array, its items deliberately unconstrained).
 
+## A consumed surface is a pinned envelope (bridges are silent landmines)
+
+The drift check is regenerate-and-diff: regenerate the client (and the SQL views), diff the bytes, and a changed envelope shows up as a changed file. That check is only as wide as the surfaces it covers. A surface an embedder reaches by hand-writing its own subprocess call and parsing the raw JSON - a *bridge* - sits outside it. The envelope can be restructured under a version bump and nothing reddens: not the embedder, not the generated client (its bytes never moved), not Morpholog's own golden set. The break surfaces as a parse failure in production, at the worst possible moment. "The client is byte-stable across the upgrade" then proves only the *generated* surface safe while a bridged one quietly broke.
+
+So the contract is: **every operational surface an embedder consumes is a pinned envelope** - a `$defs` entry in `schema --result`, byte-pinned in the binary's golden set, and emitted as a typed method by `generate python-client`. The three pins move together: an envelope-touching change reddens all three or a test names the drift. A consumed surface that emits ad-hoc JSON has no such floor, so a shape change there is silent by construction. An envelope an embedder depends on therefore carries the same no-silent-change discipline as an invariant: the shape changes deliberately, under review, with a test going red here first - before any embedder feels it.
+
+The read and commit surface is under this contract today. The tamper-evidence surface is not yet: `verify`, `checkpoint`, and evidence-pack `export` / `verify` emit ad-hoc JSON, outside `schema --result` and outside the generated client. They are the next contract entries - pinned and generated, never bridged - so the legitimacy work can adopt tamper-evidence without laying a fresh landmine.
+
 ## The generated Python client (`generate python-client`)
 
 ```bash
