@@ -69,7 +69,7 @@ In Morpholog the behaviour *is* the system. An invariant and a transformation's 
 
 ## A sixty-second tour
 
-One-time setup (PostgreSQL 17+):
+One-time setup (PostgreSQL 18+):
 
 ```bash
 createdb my_books
@@ -141,7 +141,7 @@ New to Morpholog? [The developer introduction](docs/developer-intro.md) is the g
 
 ## Status
 
-Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and the worked examples are all working and tested; built in Rust on PostgreSQL 17+, `#[forbid(unsafe_code)]` throughout. A governed commit is ~9ms end to end at worked-example scale, and writes scale linearly from there (~1.6s per commit with 100,000 in-scope claims); as-of replay is also linear. The `.morph` parser arc is complete, with every diagnostic - parse, validation, lint - caret-located in source.
+Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and the worked examples are all working and tested; built in Rust on PostgreSQL 18+, `#[forbid(unsafe_code)]` throughout. A governed commit is ~9ms end to end at worked-example scale, and writes scale linearly from there (~1.6s per commit with 100,000 in-scope claims); as-of replay is also linear. The `.morph` parser arc is complete, with every diagnostic - parse, validation, lint - caret-located in source.
 
 The legibility tooling has begun: `inspect guarantees` names what a model makes impossible, `inspect controls` renders what must be true before each action beside what can never be true - and now draws the line between them, naming which front-line gate front-loads which standing invariant, `explain` turns a rejection into a missing-evidence checklist with the transformations that could supply each gap, `inspect coverage` replays history and reports which rules have ever actually done work (a rule that has never matched anything is dead text wearing an invariant's name - now it gets named), and `verify` replays the audit log against the claims table and names any divergence.
 
