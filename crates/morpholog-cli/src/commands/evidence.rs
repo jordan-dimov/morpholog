@@ -60,8 +60,10 @@ fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    let tree = verify_pack(&pack, anchor.as_ref())
-        .unwrap_or_else(|e| TreeVerification::MalformedPack { detail: e.to_string() });
+    let tree =
+        verify_pack(&pack, anchor.as_ref()).unwrap_or_else(|e| TreeVerification::MalformedPack {
+            detail: e.to_string(),
+        });
     print_json(&tree)?;
     if !matches!(tree, TreeVerification::Intact { .. }) {
         std::process::exit(1);

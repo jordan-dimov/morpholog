@@ -653,7 +653,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
         ("evidence_pack.json", "evidence_pack"),
         ("tree_verification_chain_broken.json", "tree_verification"),
-        ("tree_verification_anchor_mismatch.json", "tree_verification"),
+        (
+            "tree_verification_anchor_mismatch.json",
+            "tree_verification",
+        ),
         ("tree_verification_malformed_pack.json", "tree_verification"),
     ];
     for (file, def) in cases {
