@@ -155,6 +155,11 @@ pub enum TreeVerification {
         purpose: String,
         public_key: String,
     },
+    /// `--require-signatures` was asked for, the tree is otherwise intact,
+    /// but this checkpoint carries no signature. A policy verdict the
+    /// verifier opts into (compliance mode), not an intrinsic tamper - an
+    /// unsigned checkpoint is valid by default.
+    SignatureRequired { tree_size: i64 },
 }
 
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||
@@ -439,6 +444,22 @@ pub async fn verify_audit_tree(
         }
     }
     Ok(verdict)
+}
+
+/// The smallest `tree_size` of a checkpoint that carries no signature, or
+/// `None` if every checkpoint is signed (or there are none). The
+/// `--require-signatures` compliance policy reads this; signing stays
+/// opt-in by default, so this is not part of the intrinsic verdict.
+pub async fn first_unsigned_checkpoint_size(pool: &PgPool) -> Result<Option<i64>, PgError> {
+    let row = sqlx::query!(
+        r#"SELECT MIN(tree_size) AS "size"
+           FROM morpholog.audit_checkpoints
+           WHERE signatures = '[]'::jsonb"#
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(classify)?;
+    Ok(row.size)
 }
 
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,

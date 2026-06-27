@@ -3,7 +3,8 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    Checkpoint, TreeVerification, VerifyOutcome, VerifyReport, verify_audit_tree, verify_replay,
+    Checkpoint, TreeVerification, VerifyOutcome, VerifyReport, first_unsigned_checkpoint_size,
+    verify_audit_tree, verify_replay,
 };
 
 use crate::VerifyArgs;
@@ -29,9 +30,21 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         }
         None => None,
     };
-    let tree = verify_audit_tree(&pool, anchor)
+    let mut tree = verify_audit_tree(&pool, anchor)
         .await
         .context("verify_audit_tree failed")?;
+
+    // Compliance policy: with --require-signatures, an otherwise-intact
+    // tree that has an unsigned checkpoint fails. Signing is opt-in, so
+    // this is the verifier's choice, applied over the intrinsic verdict.
+    if args.require_signatures
+        && matches!(tree, TreeVerification::Intact { .. })
+        && let Some(tree_size) = first_unsigned_checkpoint_size(&pool)
+            .await
+            .context("checking for unsigned checkpoints")?
+    {
+        tree = TreeVerification::SignatureRequired { tree_size };
+    }
 
     let report = VerifyReport { replay, tree };
     print_json(&report)?;

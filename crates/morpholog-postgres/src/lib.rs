@@ -41,7 +41,7 @@ pub use audit::{
 };
 pub use checkpoints::{
     AUDIT_CHECKPOINT_PURPOSE, Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature,
-    TreeVerification, create_checkpoint, verify_audit_tree,
+    TreeVerification, create_checkpoint, first_unsigned_checkpoint_size, verify_audit_tree,
 };
 pub use claims::{list_claims, list_claims_for_predicates, load_scoped_state};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};

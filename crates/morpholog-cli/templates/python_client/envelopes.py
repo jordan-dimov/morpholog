@@ -844,6 +844,19 @@ class TreeUnauthorizedKey:
         )
 
 
+@dataclass(frozen=True)
+class TreeSignatureRequired:
+    """`--require-signatures` was asked for and this checkpoint is
+    unsigned. A compliance-policy verdict, not an intrinsic tamper."""
+
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeSignatureRequired":
+        data = _strict("signature-required tree", payload, {"status", "tree_size"})
+        return cls(tree_size=data["tree_size"])
+
+
 TreeVerification = (
     TreeIntact
     | TreeTampered
@@ -852,6 +865,7 @@ TreeVerification = (
     | TreeMalformedPack
     | TreeSignatureInvalid
     | TreeUnauthorizedKey
+    | TreeSignatureRequired
 )
 
 
@@ -874,6 +888,8 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             return TreeSignatureInvalid.from_json(payload)
         case "unauthorized_key":
             return TreeUnauthorizedKey.from_json(payload)
+        case "signature_required":
+            return TreeSignatureRequired.from_json(payload)
         case _:
             raise EnvelopeError(f"not a tree verdict: {payload!r}")
 

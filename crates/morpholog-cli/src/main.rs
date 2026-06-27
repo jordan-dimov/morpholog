@@ -328,6 +328,12 @@ pub(crate) struct VerifyArgs {
     /// pass. Omit to verify only internal checkpoint consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+
+    /// Compliance mode: require every checkpoint in the chain to be
+    /// signed. An unsigned checkpoint then fails (`signature_required`).
+    /// Off by default - signing is opt-in.
+    #[arg(long)]
+    pub(crate) require_signatures: bool,
 }
 
 /// Arguments for `checkpoint`: the connection, plus an optional Ed25519
@@ -437,6 +443,11 @@ pub(crate) struct EvidenceVerifyArgs {
     /// consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+
+    /// Compliance mode: require every checkpoint in the pack to be signed
+    /// (`signature_required` otherwise). Off by default.
+    #[arg(long)]
+    pub(crate) require_signatures: bool,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent
