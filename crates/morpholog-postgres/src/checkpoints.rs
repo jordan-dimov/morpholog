@@ -142,6 +142,7 @@ pub enum TreeVerification {
     SignatureInvalid {
         tree_size: i64,
         key_id: String,
+        purpose: String,
         public_key: String,
     },
 }
@@ -216,10 +217,24 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
 
 /// Record a checkpoint over the current watermark-stable prefix of the
 /// audit log. The heavy root computation runs under `SERIALIZABLE READ
+/// Attest a tree head with the signer's key for the audit-checkpoint
+/// purpose. The signature is deterministic (Ed25519), so re-signing the
+/// same head with the same key yields the same bytes.
+fn make_signature(signer: &CheckpointSigner, head: &signing::TreeHead<'_>) -> TreeHeadSignature {
+    let sig = signing::sign_tree_head(&signer.key, AUDIT_CHECKPOINT_PURPOSE, &signer.key_id, head);
+    TreeHeadSignature {
+        key_id: signer.key_id.clone(),
+        purpose: AUDIT_CHECKPOINT_PURPOSE.to_string(),
+        public_key: signing::render_public_key(&signer.key.verifying_key()),
+        signature: signing::render_signature(&sig),
+    }
+}
+
 /// ONLY DEFERRABLE` (zero SSI footprint); the short append takes a
 /// transaction advisory lock and re-reads the chain head, so concurrent
-/// runs cannot fork it. Refuses a no-op when the stable prefix has not
-/// grown.
+/// runs cannot fork it. When the stable prefix has not grown it records
+/// no new tree, but with a signer it still attaches the attestation to
+/// the existing head (a monotonic addition, de-duplicated on re-sign).
 pub async fn create_checkpoint(
     pool: &PgPool,
     signer: Option<&CheckpointSigner>,
@@ -246,8 +261,49 @@ pub async fn create_checkpoint(
     if let Some(p) = &prev
         && tree_size <= p.tree_size
     {
-        tx.rollback().await.map_err(classify)?;
-        return Ok(CheckpointOutcome::NoNewRows(p.clone()));
+        // No new rows. With a signer, attach its attestation to the
+        // existing head instead of returning it unsigned - signing an
+        // already-recorded checkpoint does not fork the tree (the
+        // signature is not part of `checkpoint_hash`). An exact re-sign
+        // is de-duplicated.
+        let outcome = match signer {
+            Some(s) => {
+                let head = signing::TreeHead {
+                    tree_size: p.tree_size,
+                    root_hash: &p.root_hash,
+                    prev_checkpoint_hash: p.prev_checkpoint_hash.as_deref(),
+                    checkpoint_hash: &p.checkpoint_hash,
+                };
+                let new_sig = make_signature(s, &head);
+                let mut signatures = p.signatures.clone();
+                if !signatures.iter().any(|x| {
+                    x.key_id == new_sig.key_id
+                        && x.purpose == new_sig.purpose
+                        && x.public_key == new_sig.public_key
+                }) {
+                    signatures.push(new_sig);
+                    sqlx::query!(
+                        "UPDATE morpholog.audit_checkpoints
+                         SET signatures = $1 WHERE checkpoint_hash = $2",
+                        sqlx::types::Json(&signatures) as _,
+                        p.checkpoint_hash,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(classify)?;
+                }
+                tx.commit().await.map_err(classify)?;
+                Checkpoint {
+                    signatures,
+                    ..p.clone()
+                }
+            }
+            None => {
+                tx.rollback().await.map_err(classify)?;
+                p.clone()
+            }
+        };
+        return Ok(CheckpointOutcome::NoNewRows(outcome));
     }
 
     let prev_hash = prev.as_ref().map(|p| p.checkpoint_hash.clone());
@@ -269,13 +325,7 @@ pub async fn create_checkpoint(
                 prev_checkpoint_hash: prev_hash.as_deref(),
                 checkpoint_hash: &cp_hash,
             };
-            let sig = signing::sign_tree_head(&s.key, AUDIT_CHECKPOINT_PURPOSE, &s.key_id, &head);
-            vec![TreeHeadSignature {
-                key_id: s.key_id.clone(),
-                purpose: AUDIT_CHECKPOINT_PURPOSE.to_string(),
-                public_key: signing::render_public_key(&s.key.verifying_key()),
-                signature: signing::render_signature(&sig),
-            }]
+            vec![make_signature(s, &head)]
         }
         None => Vec::new(),
     };
@@ -354,7 +404,7 @@ pub async fn verify_audit_tree(
     // so only the external copy can expose it.
     if let Some(anchor) = &anchor {
         let stored_at_size = checkpoints.iter().find(|c| c.tree_size == anchor.tree_size);
-        if stored_at_size != Some(anchor) {
+        if !stored_at_size.is_some_and(|c| same_tree_head(c, anchor)) {
             return Ok(TreeVerification::AnchorMismatch {
                 tree_size: anchor.tree_size,
                 anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
@@ -372,6 +422,18 @@ pub async fn verify_audit_tree(
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,
 /// against Postgres) and the offline pack verifier: given the log's leaf
 /// hashes in canonical order and the checkpoint chain, confirm every
+/// Tree-head identity: the cryptographic commitment, *excluding* the
+/// signatures attached to it. Two checkpoints with the same tree head but
+/// different signatures are the same commitment, so the anchor check must
+/// compare heads, not whole artefacts - otherwise a signature difference
+/// reads as a mismatch whose two `checkpoint_hash`es are identical.
+fn same_tree_head(a: &Checkpoint, b: &Checkpoint) -> bool {
+    a.tree_size == b.tree_size
+        && a.root_hash == b.root_hash
+        && a.prev_checkpoint_hash == b.prev_checkpoint_hash
+        && a.checkpoint_hash == b.checkpoint_hash
+}
+
 /// checkpoint's root recomputes from the leaves, the chain is internally
 /// consistent, and (if supplied) the anchor matches the stored checkpoint
 /// at its size. One core, so the offline verifier cannot drift from the
@@ -385,7 +447,7 @@ pub(crate) fn verify_tree(
     // so only the external copy can expose it.
     if let Some(anchor) = anchor {
         let stored_at_size = checkpoints.iter().find(|c| c.tree_size == anchor.tree_size);
-        if stored_at_size != Some(anchor) {
+        if !stored_at_size.is_some_and(|c| same_tree_head(c, anchor)) {
             return TreeVerification::AnchorMismatch {
                 tree_size: anchor.tree_size,
                 anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
@@ -463,6 +525,7 @@ pub(crate) fn verify_tree(
                 return TreeVerification::SignatureInvalid {
                     tree_size: cp.tree_size,
                     key_id: sig.key_id.clone(),
+                    purpose: sig.purpose.clone(),
                     public_key: sig.public_key.clone(),
                 };
             }

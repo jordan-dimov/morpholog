@@ -9,4 +9,5 @@
 -- database provisioned before signing landed.
 
 ALTER TABLE morpholog.audit_checkpoints
-    ADD COLUMN IF NOT EXISTS signatures jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ADD COLUMN IF NOT EXISTS signatures jsonb NOT NULL DEFAULT '[]'::jsonb
+        CHECK (jsonb_typeof(signatures) = 'array');

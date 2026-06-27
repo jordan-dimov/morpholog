@@ -243,3 +243,75 @@ async fn a_signed_checkpoint_verifies_and_a_corrupted_signature_is_caught() {
         TreeVerification::SignatureInvalid { key_id, .. } if key_id == "k1"
     ));
 }
+
+#[tokio::test]
+async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for i in 0..2 {
+        commit_entry(&pool, &format!("u{i}")).await;
+    }
+
+    // An unsigned head, then a sign run with no new rows: the signature is
+    // attached to the existing head, not dropped (the operational trap).
+    let unsigned = make_checkpoint(&pool).await;
+    assert!(unsigned.signatures.is_empty());
+
+    let signer = CheckpointSigner {
+        key_id: "k1".into(),
+        key: generate_signing_key(),
+    };
+    let signed = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+        CheckpointOutcome::NoNewRows(c) => c,
+        other @ CheckpointOutcome::Created(_) => panic!("expected no new rows, got {other:?}"),
+    };
+    assert_eq!(
+        signed.checkpoint_hash, unsigned.checkpoint_hash,
+        "same head"
+    );
+    assert_eq!(signed.signatures.len(), 1);
+    assert_eq!(signed.signatures[0].key_id, "k1");
+    assert!(matches!(
+        verify_audit_tree(&pool, None).await.unwrap(),
+        TreeVerification::Intact { .. }
+    ));
+
+    // Re-signing the same head with the same key is idempotent.
+    let again = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+        CheckpointOutcome::NoNewRows(c) => c,
+        other @ CheckpointOutcome::Created(_) => panic!("expected no new rows, got {other:?}"),
+    };
+    assert_eq!(again.signatures.len(), 1, "exact re-sign is de-duplicated");
+}
+
+#[tokio::test]
+async fn an_anchor_differing_only_in_signatures_is_not_a_mismatch() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for i in 0..2 {
+        commit_entry(&pool, &format!("a{i}")).await;
+    }
+    let signer = CheckpointSigner {
+        key_id: "k1".into(),
+        key: generate_signing_key(),
+    };
+    let signed = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+        CheckpointOutcome::Created(c) => c,
+        other @ CheckpointOutcome::NoNewRows(_) => {
+            panic!("expected a created checkpoint, got {other:?}")
+        }
+    };
+
+    // An anchor with the same tree head but no signatures must still
+    // verify intact: the anchor check is on the head, not the signatures.
+    let unsigned_anchor = Checkpoint {
+        signatures: Vec::new(),
+        ..signed.clone()
+    };
+    assert!(matches!(
+        verify_audit_tree(&pool, Some(unsigned_anchor))
+            .await
+            .unwrap(),
+        TreeVerification::Intact { .. }
+    ));
+}

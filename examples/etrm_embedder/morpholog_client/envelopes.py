@@ -800,16 +800,20 @@ class TreeSignatureInvalid:
 
     tree_size: int
     key_id: str
+    purpose: str
     public_key: str
 
     @classmethod
     def from_json(cls, payload: object) -> "TreeSignatureInvalid":
         data = _strict(
-            "signature-invalid tree", payload, {"status", "tree_size", "key_id", "public_key"}
+            "signature-invalid tree",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
         )
         return cls(
             tree_size=data["tree_size"],
             key_id=data["key_id"],
+            purpose=data["purpose"],
             public_key=data["public_key"],
         )
 
@@ -887,7 +891,10 @@ class TreeHeadSignature:
 
 
 def _parse_signatures(data: dict) -> list:
-    return [TreeHeadSignature.from_json(s) for s in data.get("signatures", [])]
+    raw = data.get("signatures", [])
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`signatures` must be a list, got {raw!r}")
+    return [TreeHeadSignature.from_json(s) for s in raw]
 
 
 @dataclass(frozen=True)

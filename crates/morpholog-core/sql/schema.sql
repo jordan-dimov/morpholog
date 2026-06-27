@@ -91,8 +91,11 @@ CREATE TABLE audit_checkpoints (
     -- Ed25519 signatures over this tree head; `[]` when unsigned. Each
     -- element is {key_id, purpose, public_key, signature}. Signing makes
     -- an externally held anchor attributable - tampering then needs the
-    -- private key, not just write access (see `signing.rs`).
+    -- private key, not just write access (see `signing.rs`). The CHECK
+    -- keeps a hand-edit from turning a tamper-evidence verdict into a
+    -- decode error on the read path.
     signatures            jsonb        NOT NULL DEFAULT '[]'::jsonb
+        CHECK (jsonb_typeof(signatures) = 'array')
 );
 
 -- At most one genesis checkpoint (the single chain root). A plain UNIQUE

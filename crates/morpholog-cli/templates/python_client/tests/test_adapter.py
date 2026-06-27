@@ -238,6 +238,13 @@ class AdapterDiscrimination(unittest.TestCase):
         outcome = self.client.submit(FakeRequest(), "alex")
         self.assertIsInstance(outcome, envelopes.Rejected)
 
+    def test_checkpoint_signing_key_and_key_id_must_be_given_together(self):
+        # The guard raises before any subprocess, so the stub never runs.
+        with self.assertRaises(ValueError):
+            self.client.checkpoint(signing_key="k.pem")
+        with self.assertRaises(ValueError):
+            self.client.checkpoint(key_id="k1")
+
 
 class BinaryDiscovery(unittest.TestCase):
     def test_explicit_argument_then_env_then_path_default(self):

@@ -527,6 +527,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         &to_value(&TreeVerification::SignatureInvalid {
             tree_size: 2,
             key_id: "audit-2026-q3".into(),
+            purpose: "audit_checkpoint_v1".into(),
             public_key: format!("ed25519-pub:{}", "c".repeat(64)),
         }),
     );

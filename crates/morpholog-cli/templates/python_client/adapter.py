@@ -297,6 +297,8 @@ class Morpholog:
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
         tree head, so the anchor is attributable."""
+        if (signing_key is None) != (key_id is None):
+            raise ValueError("signing_key and key_id must be given together")
         args = ["checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
