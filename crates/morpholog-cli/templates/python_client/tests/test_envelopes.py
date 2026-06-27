@@ -251,6 +251,7 @@ class TamperEvidence(unittest.TestCase):
             ("tree_verification_anchor_mismatch.json", envelopes.TreeAnchorMismatch),
             ("tree_verification_malformed_pack.json", envelopes.TreeMalformedPack),
             ("tree_verification_signature_invalid.json", envelopes.TreeSignatureInvalid),
+            ("tree_verification_unauthorized_key.json", envelopes.TreeUnauthorizedKey),
         ]:
             self.assertIsInstance(envelopes.parse_tree_verification(golden(name)), cls)
 

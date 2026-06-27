@@ -136,7 +136,10 @@ pub fn verify_pack(
 ) -> Result<TreeVerification, PackError> {
     validate_envelope(pack)?;
 
-    let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
+    // Owned + canonically sorted: the leaves are computed from this order
+    // and the authority check folds the same rows, so live and offline
+    // resolve signing keys from one ordering.
+    let mut rows = pack.rows.clone();
     rows.sort_by_key(|a| (a.committed_at, a.transition_id));
     for pair in rows.windows(2) {
         if (pair[0].committed_at, pair[0].transition_id)
@@ -151,11 +154,18 @@ pub fn verify_pack(
         }
     }
 
-    let leaves: Vec<Hash> = rows
-        .iter()
-        .map(|r| audit_leaf_hash(r))
-        .collect::<Result<_, _>>()?;
-    Ok(verify_tree(&leaves, &pack.checkpoints, anchor))
+    let leaves: Vec<Hash> = rows.iter().map(audit_leaf_hash).collect::<Result<_, _>>()?;
+    let verdict = verify_tree(&leaves, &pack.checkpoints, anchor);
+    // A genuinely-signed intact pack still has to answer the authority
+    // question, offline, from its own rows: was each signing key admitted
+    // as of its checkpoint's prefix?
+    if matches!(verdict, TreeVerification::Intact { .. })
+        && pack.checkpoints.iter().any(|c| !c.signatures.is_empty())
+        && let Some(violation) = crate::checkpoints::authority_violation(&pack.checkpoints, &rows)
+    {
+        return Ok(violation);
+    }
+    Ok(verdict)
 }
 
 /// The v1 envelope rules a well-formed pack must satisfy before its

@@ -35,7 +35,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
+use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
 use crate::error::{PgError, classify};
 use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
 use crate::signing;
@@ -140,6 +140,16 @@ pub enum TreeVerification {
     /// genuine; whether the signing key is *authorised* is a separate
     /// judgment (the keys-as-claims layer).
     SignatureInvalid {
+        tree_size: i64,
+        key_id: String,
+        purpose: String,
+        public_key: String,
+    },
+    /// A checkpoint carries a genuine signature, but the signing key was
+    /// not authorised (no admitted `AuditSigningKey` claim for that exact
+    /// `(key_id, purpose, public_key)`) as of the checkpoint's prefix. The
+    /// signature is real; the signer was not permitted at that point.
+    UnauthorizedKey {
         tree_size: i64,
         key_id: String,
         purpose: String,
@@ -416,7 +426,19 @@ pub async fn verify_audit_tree(
     let max_size = checkpoints.last().map(|c| c.tree_size).unwrap_or(0);
     let (leaves, _) = collect_leaves(&mut tx, None, Some(max_size)).await?;
 
-    Ok(verify_tree(&leaves, &checkpoints, anchor.as_ref()))
+    let verdict = verify_tree(&leaves, &checkpoints, anchor.as_ref());
+    // A structurally intact, genuinely signed tree still has to answer the
+    // authority question: was each signing key admitted as of its prefix?
+    // Only loaded when there are signatures to judge.
+    if matches!(verdict, TreeVerification::Intact { .. })
+        && checkpoints.iter().any(|c| !c.signatures.is_empty())
+    {
+        let rows = load_audit_rows(&mut tx, max_size).await?;
+        if let Some(violation) = authority_violation(&checkpoints, &rows) {
+            return Ok(violation);
+        }
+    }
+    Ok(verdict)
 }
 
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,
@@ -536,4 +558,63 @@ pub(crate) fn verify_tree(
         checkpoints: checkpoints.len(),
         tree_size: checkpoints.last().map(|c| c.tree_size).unwrap_or(0),
     }
+}
+
+/// The keys-as-claims authority check, run on a tree that is already
+/// structurally intact and whose signatures are genuine: for each signed
+/// checkpoint, every signature's `(key_id, purpose, public_key)` must
+/// match an `AuditSigningKey` claim in force as of that checkpoint's
+/// prefix (the `rows`, canonical order). Returns the first violation, or
+/// `None` if every signature is by an authorised key. Pure - the live and
+/// offline verifiers pass their own rows.
+pub(crate) fn authority_violation(
+    checkpoints: &[Checkpoint],
+    rows: &[AuditRow],
+) -> Option<TreeVerification> {
+    for cp in checkpoints {
+        if cp.signatures.is_empty() {
+            continue;
+        }
+        let authorized = crate::keys::authorized_keys_as_of(rows, cp.tree_size);
+        for sig in &cp.signatures {
+            let triple = (
+                sig.key_id.clone(),
+                sig.purpose.clone(),
+                sig.public_key.clone(),
+            );
+            if !authorized.contains(&triple) {
+                return Some(TreeVerification::UnauthorizedKey {
+                    tree_size: cp.tree_size,
+                    key_id: sig.key_id.clone(),
+                    purpose: sig.purpose.clone(),
+                    public_key: sig.public_key.clone(),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Read the audit rows of the first `max` of the canonical prefix - what
+/// the authority check folds for in-force signing keys.
+async fn load_audit_rows(
+    conn: &mut sqlx::PgConnection,
+    max: i64,
+) -> Result<Vec<AuditRow>, PgError> {
+    let mut rows = Vec::new();
+    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    while (rows.len() as i64) < max {
+        let page = list_audit_rows_page(conn, cursor, None, REPLAY_CHUNK).await?;
+        if page.is_empty() {
+            break;
+        }
+        for row in page {
+            cursor = Some((row.committed_at, row.transition_id));
+            rows.push(row);
+            if rows.len() as i64 >= max {
+                break;
+            }
+        }
+    }
+    Ok(rows)
 }
