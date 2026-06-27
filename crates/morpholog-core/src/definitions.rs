@@ -103,6 +103,7 @@ fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
             resolve_in_value(right, names);
         }
         ValueExpr::Sum { body, .. } => resolve_in_prop(body, names),
+        ValueExpr::Abs(operand) => resolve_in_value(operand, names),
     }
 }
 
@@ -187,6 +188,7 @@ pub(crate) fn defined_calls_in_value(value: &ValueExpr, out: &mut BTreeSet<Defin
             defined_calls_in_value(right, out);
         }
         ValueExpr::Sum { body, .. } => defined_calls_in_prop(body, out),
+        ValueExpr::Abs(operand) => defined_calls_in_value(operand, out),
     }
 }
 

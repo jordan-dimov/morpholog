@@ -257,6 +257,12 @@ pub fn div(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     arith(ArithOp::Div, lhs, rhs)
 }
 
+/// `abs(x)` - the magnitude of a signed value (decimal, quantity, or
+/// duration), preserving its kind.
+pub fn abs(operand: ValueExpr) -> ValueExpr {
+    ValueExpr::Abs(Box::new(operand))
+}
+
 // `modulo`, not `mod`: the latter is a Rust keyword.
 pub fn modulo(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     arith(ArithOp::Mod, lhs, rhs)

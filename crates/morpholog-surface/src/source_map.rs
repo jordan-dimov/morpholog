@@ -84,6 +84,7 @@ impl SourceMap {
             | ValidationError::ArgKindMismatch { context, .. }
             | ValidationError::OperandKindMismatch { context, .. }
             | ValidationError::NoArithRule { context, .. }
+            | ValidationError::AbsKind { context, .. }
             | ValidationError::EqualityKindMismatch { context, .. }
             | ValidationError::VariableKindConflict { context, .. }
             | ValidationError::ActorNotAvailable { context }

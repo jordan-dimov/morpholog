@@ -1131,6 +1131,18 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 },
             }
         }
+        ValueExpr::Abs(inner) => match eval_value(inner, ctx)? {
+            EvalValue::Decimal(d) => Ok(EvalValue::Decimal(d.abs())),
+            EvalValue::Quantity { amount, unit } => Ok(EvalValue::Quantity {
+                amount: amount.abs(),
+                unit,
+            }),
+            EvalValue::Duration(d) => Ok(EvalValue::Duration(d.abs())),
+            other => Err(EvalError::TypeMismatch(format!(
+                "abs is defined on decimals, quantities, and durations, not {}",
+                runtime_kind_label(&other)
+            ))),
+        },
     }
 }
 

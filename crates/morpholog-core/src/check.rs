@@ -984,6 +984,21 @@ impl CheckCtx<'_> {
                 }
                 result_kind
             }
+            ValueExpr::Abs(inner) => match self.infer_value(inner, scope) {
+                // abs preserves the kind of a signed value; any other
+                // known kind is an authoring-time error.
+                InferredKind::Known(
+                    k @ (PredicateArgKind::Decimal
+                    | PredicateArgKind::Quantity(_)
+                    | PredicateArgKind::Duration),
+                ) => InferredKind::Known(k),
+                InferredKind::Known(kind) => {
+                    let context = self.context.clone();
+                    self.errors.push(ValidationError::AbsKind { kind, context });
+                    InferredKind::UnknownOrAny
+                }
+                InferredKind::UnknownOrAny => InferredKind::UnknownOrAny,
+            },
         }
     }
 
@@ -1341,6 +1356,7 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
         ValueExpr::Arith { left, right, .. } => {
             value_mentions_actor(left) || value_mentions_actor(right)
         }
+        ValueExpr::Abs(inner) => value_mentions_actor(inner),
     }
 }
 
@@ -1376,6 +1392,7 @@ fn value_mentions_pre(expr: &ValueExpr) -> bool {
         ValueExpr::Arith { left, right, .. } => {
             value_mentions_pre(left) || value_mentions_pre(right)
         }
+        ValueExpr::Abs(inner) => value_mentions_pre(inner),
     }
 }
 
@@ -1419,6 +1436,7 @@ fn occurs_in_value(name: &Var, expr: &ValueExpr) -> bool {
         ValueExpr::Arith { left, right, .. } => {
             occurs_in_value(name, left) || occurs_in_value(name, right)
         }
+        ValueExpr::Abs(inner) => occurs_in_value(name, inner),
     }
 }
 
@@ -2233,6 +2251,41 @@ mod tests {
             }
             other => panic!("expected OperandKindMismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn abs_of_a_subject_flags_abs_kind() {
+        // abs is defined on signed numeric kinds; a subject has no
+        // magnitude.
+        let mut p = empty_program();
+        p.invariants = vec![invariant(
+            "bad_abs",
+            le(abs(term(subj("not_a_number"))), term(dec("100"))),
+        )];
+        let errs = check_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::AbsKind {
+                    kind: PredicateArgKind::Subject,
+                    ..
+                }
+            )),
+            "expected AbsKind on a subject, got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn abs_of_a_decimal_is_accepted() {
+        let mut p = empty_program();
+        p.invariants = vec![invariant(
+            "ok_abs",
+            le(abs(term(dec("10"))), term(dec("100"))),
+        )];
+        assert!(
+            check_program(&p).is_empty(),
+            "abs of a decimal should type-check"
+        );
     }
 
     #[test]

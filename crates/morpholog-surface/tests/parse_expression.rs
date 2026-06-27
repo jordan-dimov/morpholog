@@ -285,6 +285,23 @@ fn parses_nested_min_max() {
     );
 }
 
+#[test]
+fn parses_abs() {
+    let got = parse_value_expr("abs(x)").unwrap();
+    assert_eq!(got, ValueExpr::Abs(Box::new(var_value("x"))));
+}
+
+#[test]
+fn parses_abs_of_a_sum() {
+    // `abs(sum(q | P(q)))` - the two-sided-bound shape: the operand is a
+    // full value expression, evaluated once.
+    let got = parse_value_expr("abs(sum(q | Position(q)))").unwrap();
+    let ValueExpr::Abs(operand) = got else {
+        panic!("expected abs, got {got:?}");
+    };
+    assert!(matches!(*operand, ValueExpr::Sum { .. }));
+}
+
 // ---- Comparators ----
 
 #[test]

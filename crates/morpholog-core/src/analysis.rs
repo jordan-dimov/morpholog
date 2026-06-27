@@ -147,6 +147,7 @@ fn value_refs(
         ValueExpr::Sum { body, .. } => {
             prop_refs(body, definitions, seen, out);
         }
+        ValueExpr::Abs(operand) => value_refs(operand, definitions, seen, out),
         ValueExpr::Term(_) => {
             // No predicate references; operates on a Term only.
         }
@@ -1053,6 +1054,9 @@ impl<'a> ParamCollector<'a> {
                     self.walk_value(d, expected);
                 }
             }
+            // abs preserves its operand's kind, so the operand carries
+            // the same expected kind as the abs itself.
+            ValueExpr::Abs(operand) => self.walk_value(operand, expected),
         }
     }
 
