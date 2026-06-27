@@ -401,11 +401,11 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
             );
         }
         // The generated view name gets the SAME rules as a field: a
-        // predicate named `Order`, `User`, or `Select` would otherwise
-        // emit a reserved-word view, forcing consumers to quote it -
-        // against the unquoted-read contract. Length and the reserved
-        // `_morpholog_` namespace (which protects `_morpholog_catalog`)
-        // are covered by the same helper.
+        // reserved word (a predicate named `Order`, `User`, `Select`) is
+        // quoted, not refused, just like a reserved-word column; the helper
+        // refuses only what quoting cannot rescue - non-lowercase or
+        // over-long names, and the reserved `_morpholog_` namespace (which
+        // protects `_morpholog_catalog`).
         let view = snake_case(predicate.name.as_str());
         check_identifier(
             format!("predicate `{}` (view name `{view}`)", predicate.name),

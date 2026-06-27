@@ -1144,3 +1144,31 @@ fn buys_and_sells_net_against_each_other() {
     let state = capture_into(state, "t1", "power", "buy", "tv1", 40);
     capture_into(state, "t2", "power", "sell", "tv2", 35);
 }
+
+#[test]
+fn an_amendment_that_grows_a_position_past_the_limit_is_refused() {
+    // The invariant judges the resulting admitted state, not the action
+    // named: growing a position by amendment is refused exactly as an
+    // over-large new capture is. `current_quantity` follows the
+    // latest-effective version, so amending t1 up to 150 (net 150 > 100)
+    // breaches the limit.
+    let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 100);
+    let state = capture_into(state, "t1", "power", "buy", "tv1", 80);
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(150),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        &state,
+        &invariants(),
+        &definitions(),
+    )
+    .unwrap();
+    assert_rejected(outcome, "within_position_limit");
+}

@@ -117,7 +117,7 @@ re-judges admissibility against it.
 
 ## The position limit
 
-A second invariant guards a different exposure. A desk's *net position* on a
+Another invariant guards a different exposure. A desk's *net position* on a
 commodity is its buys minus its sells - a signed figure, positive when net
 long and negative when net short. A `PositionLimit` caps how far that net
 may swing in *either* direction, and the rule says so in one comparison:

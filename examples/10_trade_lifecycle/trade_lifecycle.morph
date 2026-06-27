@@ -314,10 +314,12 @@ transformation grant_confirm_authority(principal, commodity):
 
 -- Set the net-position limit for a commodity. The desk that holds
 -- authority for the commodity sets its own risk limit; the gate refuses a
--- second limit for the same commodity, so changing it is a deliberate
--- restatement rather than a silent overwrite. Once set, the
--- `within_position_limit` invariant holds it against every future capture
--- and amendment.
+-- second limit for the same commodity outright, so a limit is set once and
+-- never silently overwritten. Changing it later would need its own
+-- restatement shape (a supersession or pointer, the way the official price
+-- corrects), which this first version deliberately leaves out. Once set,
+-- the `within_position_limit` invariant holds it against every future
+-- capture and amendment.
 transformation set_position_limit(commodity, limit):
     require MayConfirm(actor, commodity)
     require not PositionLimit(commodity, _)

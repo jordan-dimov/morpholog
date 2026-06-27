@@ -682,6 +682,11 @@ impl CheckCtx<'_> {
             self.observe_or_report(scope, name, InferredKind::Known(expected));
             return;
         }
+        // A variable read through `abs(...)` refines toward `expected` too,
+        // when abs preserves that kind - so `abs(d) <cmp> duration(...)`
+        // pins `d` to Duration. Done before inferring, so the inference
+        // then sees the refined operand.
+        self.refine_through_abs(operand, &expected, scope);
         let inferred = self.infer_value(operand, scope);
         if let InferredKind::Known(actual) = inferred
             && !kinds_compatible(&expected, &actual)
@@ -693,6 +698,38 @@ impl CheckCtx<'_> {
                 actual,
                 context,
             });
+        }
+    }
+
+    /// Refine the variable inside an `abs(...)` operand toward `expected`,
+    /// when `expected` is a kind abs preserves (decimal, quantity,
+    /// duration). Bare variables are refined by the callers directly; this
+    /// reaches the one a kind-preserving unary wraps, so `abs(x) <= 10`
+    /// still pins `x` to Decimal. A non-abs operand, or an abs in a
+    /// non-magnitude comparison (where abs is itself an error), is left
+    /// alone.
+    fn refine_through_abs(
+        &mut self,
+        operand: &ValueExpr,
+        expected: &PredicateArgKind,
+        scope: &mut Scope,
+    ) {
+        if !matches!(operand, ValueExpr::Abs(_))
+            || !matches!(
+                expected,
+                PredicateArgKind::Decimal
+                    | PredicateArgKind::Quantity(_)
+                    | PredicateArgKind::Duration
+            )
+        {
+            return;
+        }
+        let mut cur = operand;
+        while let ValueExpr::Abs(inner) = cur {
+            cur = inner;
+        }
+        if let ValueExpr::Term(Term::Var(name)) = cur {
+            self.observe_or_report(scope, name, InferredKind::Known(expected.clone()));
         }
     }
 
@@ -754,6 +791,10 @@ impl CheckCtx<'_> {
             |this: &mut Self, operand: &ValueExpr, kind: PredicateArgKind, scope: &mut Scope| {
                 if let ValueExpr::Term(Term::Var(name)) = operand {
                     this.observe_or_report(scope, name, InferredKind::Known(kind));
+                } else {
+                    // A variable inside `abs(...)` refines too, so
+                    // `abs(x) <= 10` pins `x` to Decimal.
+                    this.refine_through_abs(operand, &kind, scope);
                 }
             };
         match (l, r) {
@@ -2285,6 +2326,32 @@ mod tests {
         assert!(
             check_program(&p).is_empty(),
             "abs of a decimal should type-check"
+        );
+    }
+
+    #[test]
+    fn abs_refines_the_variable_it_wraps() {
+        // `x` is used in a Subject slot and inside `abs(x) <= 10`. The
+        // refinement reaches the variable through abs and pins it to
+        // Decimal, conflicting with the Subject use - the conflict only
+        // arises if abs's operand is refined (without it, x stays the
+        // Subject the claim made it, and nothing pins it to Decimal).
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("S", &[("v", PredicateArgKind::Subject)])];
+        p.invariants = vec![invariant(
+            "abs_refine",
+            and(vec![
+                claim("S", vec![var("x")]),
+                le(abs(term(var("x"))), term(dec("10"))),
+            ]),
+        )];
+        let errs = check_program(&p);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::VariableKindConflict { variable, .. } if variable == "x"
+            )),
+            "abs(x) should refine x to Decimal and conflict with the Subject use: {errs:?}"
         );
     }
 

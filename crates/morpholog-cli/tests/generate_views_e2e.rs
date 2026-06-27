@@ -180,6 +180,29 @@ fn reserved_word_field_is_quoted_not_refused() {
     );
 }
 
+#[test]
+fn reserved_word_view_name_is_quoted_not_refused() {
+    // The same policy applies to a generated view NAME: a predicate named
+    // `Order` snakes to the reserved word `order`, and the view is quoted
+    // rather than refused.
+    let (_dir, path) = refusal_fixture(
+        "program kwview\n\
+         predicate Order(id: Subject)\n\
+         transformation t(id):\n    admit Order(id)\n",
+    );
+    let result = generate_stdout(&path, None);
+    assert!(
+        result.status.success(),
+        "a reserved-word view name is quoted, not refused; stderr:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let sql = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        sql.contains("\"morpholog_views\".\"order\""),
+        "reserved-word view name should be quoted: {sql}"
+    );
+}
+
 // snake_case is many-to-one: `TradeID` and `Trade_id` are distinct lawful
 // Morpholog names that render the same view.
 #[test]
