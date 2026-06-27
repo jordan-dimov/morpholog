@@ -225,6 +225,30 @@ class AdapterDiscrimination(unittest.TestCase):
             )
         self.assertIn("timed out", str(caught.exception))
 
+    def test_batch_explain_on_reject_lands_on_argv_exactly_when_supplied(self):
+        # The flag composes with --batch on the CLI; the client passes
+        # it through only when asked, so each rejected row carries the
+        # same-snapshot why.
+        self._mode("record_argv_empty")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                return open(record.name).read().split("\n")
+
+            rows = [{"transformation": "t", "actor": "a", "args_named": {}}]
+            argv = argv_after(
+                lambda: self.client.propose_batch(rows, explain_on_reject=True)
+            )
+            self.assertIn("--batch", argv)
+            self.assertIn("--explain-on-reject", argv)
+
+            argv = argv_after(lambda: self.client.propose_batch(rows))
+            self.assertIn("--batch", argv)
+            self.assertNotIn("--explain-on-reject", argv)
+
     def test_submit_is_duck_typed_on_the_request_protocol(self):
         self._mode("rejected_exit_1")
 
