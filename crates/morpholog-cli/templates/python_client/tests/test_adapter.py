@@ -119,7 +119,8 @@ class AdapterDiscrimination(unittest.TestCase):
 
             def argv_after(call):
                 call()
-                return open(record.name).read().split("\n")
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
 
             argv = argv_after(
                 lambda: self.client.claims_named(
@@ -154,7 +155,8 @@ class AdapterDiscrimination(unittest.TestCase):
 
             def argv_after(call):
                 call()
-                return open(record.name).read().split("\n")
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
 
             tid = "01900000-0000-7000-8000-000000000001"
             argv = argv_after(lambda: self.client.audit_named(after=tid))
@@ -247,7 +249,8 @@ class AdapterDiscrimination(unittest.TestCase):
 
             def argv_after(call):
                 call()
-                return open(record.name).read().split("\n")
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
 
             rows = [{"transformation": "t", "actor": "a", "args_named": {}}]
             argv = argv_after(
