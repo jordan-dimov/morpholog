@@ -548,6 +548,17 @@
         "schema": { "const": "morpholog" }
       }
     },
+    "tree_head_signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "purpose", "public_key", "signature"],
+      "properties": {
+        "key_id": { "type": "string" },
+        "purpose": { "type": "string" },
+        "public_key": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    },
     "checkpoint": {
       "type": "object",
       "additionalProperties": false,
@@ -556,7 +567,8 @@
         "tree_size": { "type": "integer" },
         "root_hash": { "type": "string" },
         "prev_checkpoint_hash": { "type": ["string", "null"] },
-        "checkpoint_hash": { "type": "string" }
+        "checkpoint_hash": { "type": "string" },
+        "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } }
       }
     },
     "checkpoint_outcome": {
@@ -570,7 +582,8 @@
             "tree_size": { "type": "integer" },
             "root_hash": { "type": "string" },
             "prev_checkpoint_hash": { "type": ["string", "null"] },
-            "checkpoint_hash": { "type": "string" }
+            "checkpoint_hash": { "type": "string" },
+            "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } }
           }
         },
         {
@@ -582,7 +595,8 @@
             "tree_size": { "type": "integer" },
             "root_hash": { "type": "string" },
             "prev_checkpoint_hash": { "type": ["string", "null"] },
-            "checkpoint_hash": { "type": "string" }
+            "checkpoint_hash": { "type": "string" },
+            "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } }
           }
         }
       ]

@@ -835,15 +835,45 @@ class VerifyReport:
 
 
 @dataclass(frozen=True)
+class TreeHeadSignature:
+    """One Ed25519 attestation over a tree head: who signed it (`key_id`
+    + `public_key`), what the key is authorised for (`purpose`), and the
+    signature - the latter two rendered `ed25519-pub:`/`ed25519-sig:`."""
+
+    key_id: str
+    purpose: str
+    public_key: str
+    signature: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeHeadSignature":
+        data = _strict(
+            "tree-head signature", payload, {"key_id", "purpose", "public_key", "signature"}
+        )
+        return cls(
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+            signature=data["signature"],
+        )
+
+
+def _parse_signatures(data: dict) -> list:
+    return [TreeHeadSignature.from_json(s) for s in data.get("signatures", [])]
+
+
+@dataclass(frozen=True)
 class Checkpoint:
     """A signed-tree-head commitment to a prefix of the audit log; held
     externally, it is the anchor `verify`/`evidence verify` check
-    against."""
+    against. `signatures` is empty (and omitted from JSON) when the
+    checkpoint is unsigned."""
 
     tree_size: int
     root_hash: str
     prev_checkpoint_hash: str | None
     checkpoint_hash: str
+    signatures: list = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> "Checkpoint":
@@ -851,12 +881,14 @@ class Checkpoint:
             "checkpoint",
             payload,
             {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
+            {"signatures"},
         )
         return cls(
             tree_size=data["tree_size"],
             root_hash=data["root_hash"],
             prev_checkpoint_hash=data["prev_checkpoint_hash"],
             checkpoint_hash=data["checkpoint_hash"],
+            signatures=_parse_signatures(data),
         )
 
 
@@ -868,12 +900,14 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         name,
         payload,
         {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
+        {"signatures"},
     )
     return Checkpoint(
         tree_size=data["tree_size"],
         root_hash=data["root_hash"],
         prev_checkpoint_hash=data["prev_checkpoint_hash"],
         checkpoint_hash=data["checkpoint_hash"],
+        signatures=_parse_signatures(data),
     )
 
 
