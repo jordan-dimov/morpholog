@@ -23,10 +23,13 @@
 //! self-consistent rewrite cannot be re-signed without the private key, so
 //! a verifier holding the trusted public key catches it even without a
 //! prior anchor. `verify` checks that every signature present is genuine
-//! over its tree head ([`TreeVerification::SignatureInvalid`] otherwise).
-//! Whether the signing key is *authorised* - resolved from an admitted
-//! `AuditSigningKey` claim as of the signed prefix - is the keys-as-claims
-//! layer; until then trust in a public key is established out of band.
+//! over its tree head ([`TreeVerification::SignatureInvalid`] otherwise),
+//! and that the signing key was *authorised* - an admitted `AuditSigningKey`
+//! claim for that exact `(key_id, purpose, public_key)` as of the signed
+//! prefix ([`TreeVerification::UnauthorizedKey`] otherwise; the as-of fold
+//! lives in [`crate::keys`]). Signing makes key authority governed and
+//! revocable; it does not conjure a root of trust - the first authorisation
+//! is trusted the way the schema is.
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
@@ -44,7 +47,7 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 /// What an `AuditSigningKey` claim authorises a key for. Bound into the
 /// signed payload, so a key authorised for checkpoints cannot sign a
 /// future artefact kind (an evidence pack, a schema manifest) by
-/// accident. The keys-as-claims authority check lands in a follow-up.
+/// accident. The authority check matches this exact `purpose`.
 pub const AUDIT_CHECKPOINT_PURPOSE: &str = "audit_checkpoint_v1";
 
 /// A signing identity for [`create_checkpoint`]: the private key plus the
@@ -261,10 +264,34 @@ pub async fn create_checkpoint(
 
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let (leaves, last) = collect_leaves(&mut read_tx, Some(horizon), None).await?;
+    let tree_size = leaves.len() as i64;
+    // When signing, fold the same prefix to resolve authority - within the
+    // one deferrable snapshot, so the check and the leaves agree.
+    let signer_rows = match signer {
+        Some(_) => Some(load_audit_rows(&mut read_tx, tree_size).await?),
+        None => None,
+    };
     read_tx.commit().await.map_err(classify)?;
 
-    let tree_size = leaves.len() as i64;
     let root_hash = render_hash(&merkle_root(&leaves));
+
+    // Refuse to sign with a key the ledger has not authorised as of this
+    // prefix - signing must not produce a checkpoint that verification
+    // would then reject as `UnauthorizedKey`. (The no-new-rows path signs
+    // the existing head, whose tree_size equals this prefix's.)
+    if let (Some(s), Some(rows)) = (signer, &signer_rows) {
+        let triple = (
+            s.key_id.clone(),
+            AUDIT_CHECKPOINT_PURPOSE.to_string(),
+            signing::render_public_key(&s.key.verifying_key()),
+        );
+        if !crate::keys::authorized_keys_as_of(rows, tree_size).contains(&triple) {
+            return Err(PgError::InvalidState(format!(
+                "signing key is not authorised as AuditSigningKey({}, {}, {}) as of tree_size {}",
+                triple.0, triple.1, triple.2, tree_size
+            )));
+        }
+    }
 
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query!("SELECT pg_advisory_xact_lock($1)", CHECKPOINT_LOCK_KEY)
@@ -328,10 +355,9 @@ pub async fn create_checkpoint(
         None => (None, None),
     };
 
-    // Sign the new tree head if a key was supplied. The authority check
-    // (that this key is an admitted `AuditSigningKey`) lands with the
-    // keys-as-claims work; here we attest with whatever key the caller
-    // holds.
+    // Sign the new tree head if a key was supplied - the signer's
+    // authority as of this prefix was already checked above, so an
+    // unauthorised key never reaches this attestation.
     let signatures: Vec<TreeHeadSignature> = match signer {
         Some(s) => {
             let head = signing::TreeHead {
@@ -434,12 +460,20 @@ pub async fn verify_audit_tree(
     let verdict = verify_tree(&leaves, &checkpoints, anchor.as_ref());
     // A structurally intact, genuinely signed tree still has to answer the
     // authority question: was each signing key admitted as of its prefix?
-    // Only loaded when there are signatures to judge.
+    // The supplied anchor's own signatures are judged the same way. Rows
+    // are loaded only when there are signatures to judge.
+    let anchor_signed = anchor.as_ref().is_some_and(|a| !a.signatures.is_empty());
     if matches!(verdict, TreeVerification::Intact { .. })
-        && checkpoints.iter().any(|c| !c.signatures.is_empty())
+        && (anchor_signed || checkpoints.iter().any(|c| !c.signatures.is_empty()))
     {
         let rows = load_audit_rows(&mut tx, max_size).await?;
         if let Some(violation) = authority_violation(&checkpoints, &rows) {
+            return Ok(violation);
+        }
+        if let Some(anchor) = &anchor
+            && anchor_signed
+            && let Some(violation) = authority_violation(std::slice::from_ref(anchor), &rows)
+        {
             return Ok(violation);
         }
     }
@@ -497,6 +531,13 @@ pub(crate) fn verify_tree(
                 stored_checkpoint_hash: stored_at_size.map(|c| c.checkpoint_hash.clone()),
             };
         }
+        // The signed anchor is the attestation the operator actually held
+        // outside the database, so its own signatures must verify - a
+        // stored checkpoint with its signatures stripped must not let an
+        // anchor's signature go unchecked. (Authority is judged below.)
+        if let Some(violation) = signature_crypto_violation(anchor) {
+            return violation;
+        }
     }
 
     let mut prev_hash: Option<&str> = None;
@@ -548,30 +589,8 @@ pub(crate) fn verify_tree(
         // this tree head. A signature that does not is corruption or a
         // signed checkpoint altered without re-signing. (Whether the key
         // is *authorised* is the keys-as-claims layer's judgment.)
-        let head = signing::TreeHead {
-            tree_size: cp.tree_size,
-            root_hash: &cp.root_hash,
-            prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
-            checkpoint_hash: &cp.checkpoint_hash,
-        };
-        for sig in &cp.signatures {
-            let valid = match (
-                signing::parse_public_key(&sig.public_key),
-                signing::parse_signature(&sig.signature),
-            ) {
-                (Ok(pk), Ok(parsed)) => {
-                    signing::verify_tree_head(&pk, &parsed, &sig.purpose, &sig.key_id, &head)
-                }
-                _ => false,
-            };
-            if !valid {
-                return TreeVerification::SignatureInvalid {
-                    tree_size: cp.tree_size,
-                    key_id: sig.key_id.clone(),
-                    purpose: sig.purpose.clone(),
-                    public_key: sig.public_key.clone(),
-                };
-            }
+        if let Some(violation) = signature_crypto_violation(cp) {
+            return violation;
         }
     }
 
@@ -579,6 +598,39 @@ pub(crate) fn verify_tree(
         checkpoints: checkpoints.len(),
         tree_size: checkpoints.last().map(|c| c.tree_size).unwrap_or(0),
     }
+}
+
+/// The cryptographic half of signature checking for one checkpoint: every
+/// attached signature must verify over the checkpoint's tree head, else
+/// `SignatureInvalid`. Pure; whether the key is *authorised* is
+/// [`authority_violation`]'s separate judgment.
+fn signature_crypto_violation(cp: &Checkpoint) -> Option<TreeVerification> {
+    let head = signing::TreeHead {
+        tree_size: cp.tree_size,
+        root_hash: &cp.root_hash,
+        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+        checkpoint_hash: &cp.checkpoint_hash,
+    };
+    for sig in &cp.signatures {
+        let valid = match (
+            signing::parse_public_key(&sig.public_key),
+            signing::parse_signature(&sig.signature),
+        ) {
+            (Ok(pk), Ok(parsed)) => {
+                signing::verify_tree_head(&pk, &parsed, &sig.purpose, &sig.key_id, &head)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Some(TreeVerification::SignatureInvalid {
+                tree_size: cp.tree_size,
+                key_id: sig.key_id.clone(),
+                purpose: sig.purpose.clone(),
+                public_key: sig.public_key.clone(),
+            });
+        }
+    }
+    None
 }
 
 /// The keys-as-claims authority check, run on a tree that is already

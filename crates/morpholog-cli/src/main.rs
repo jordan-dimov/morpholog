@@ -350,7 +350,7 @@ pub(crate) struct CheckpointArgs {
 
     /// The key id the signature is published under; it must match an
     /// authorised `AuditSigningKey(key_id, "audit_checkpoint_v1", <public
-    /// key>)` claim once authority enforcement lands.
+    /// key>)` claim as of the checkpoint's prefix, or signing is refused.
     #[arg(long, requires = "signing_key")]
     pub(crate) key_id: Option<String>,
 }

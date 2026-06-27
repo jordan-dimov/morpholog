@@ -4,9 +4,13 @@
 //! A signing key is authorised by an admitted `AuditSigningKey(key_id,
 //! purpose, public_key)` claim - an ordinary governed claim, admitted and
 //! retracted through the operator's own transformations under their own
-//! authority gate. The runtime reserves only the predicate name and the
-//! argument shape (as it knows the built-in `Exists`); it does not own the
-//! authorisation rules, the operator does.
+//! authority gate; the runtime does not own the authorisation rules, the
+//! operator does. The verifier recognises only this exact shape - the name
+//! `AuditSigningKey` with three `Subject` arguments in that order - so a
+//! differently-shaped declaration of the same name authorises nothing.
+//! That is not silent in practice: `checkpoint --signing-key` refuses to
+//! sign with a key this fold does not find authorised, so a misshapen
+//! declaration fails loudly at signing time, not quietly at verify.
 //!
 //! Authorisation is judged **as of the checkpoint's prefix**: a key valid
 //! when a checkpoint was signed stays valid for that checkpoint even after
@@ -24,8 +28,9 @@ use morpholog_core::{ClaimInstance, EvalValue};
 
 use crate::audit::AuditRow;
 
-/// The reserved predicate naming an authorised signing key. The operator
-/// declares it and admits/retracts it; the runtime recognises the name.
+/// The predicate naming an authorised signing key. The operator declares
+/// it and admits/retracts it; the verifier recognises it by name and exact
+/// `(key_id, purpose, public_key): Subject` shape.
 pub const AUDIT_SIGNING_KEY_PREDICATE: &str = "AuditSigningKey";
 
 /// The exact authorisation a checkpoint signature must match:

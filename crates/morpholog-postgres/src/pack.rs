@@ -158,12 +158,22 @@ pub fn verify_pack(
     let verdict = verify_tree(&leaves, &pack.checkpoints, anchor);
     // A genuinely-signed intact pack still has to answer the authority
     // question, offline, from its own rows: was each signing key admitted
-    // as of its checkpoint's prefix?
+    // as of its checkpoint's prefix? The supplied anchor's own signatures
+    // are judged the same way.
+    let anchor_signed = anchor.is_some_and(|a| !a.signatures.is_empty());
     if matches!(verdict, TreeVerification::Intact { .. })
-        && pack.checkpoints.iter().any(|c| !c.signatures.is_empty())
-        && let Some(violation) = crate::checkpoints::authority_violation(&pack.checkpoints, &rows)
+        && (anchor_signed || pack.checkpoints.iter().any(|c| !c.signatures.is_empty()))
     {
-        return Ok(violation);
+        if let Some(violation) = crate::checkpoints::authority_violation(&pack.checkpoints, &rows) {
+            return Ok(violation);
+        }
+        if let Some(anchor) = anchor
+            && anchor_signed
+            && let Some(violation) =
+                crate::checkpoints::authority_violation(std::slice::from_ref(anchor), &rows)
+        {
+            return Ok(violation);
+        }
     }
     Ok(verdict)
 }
@@ -177,6 +187,15 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
     let Some(covering) = pack.checkpoints.last() else {
         return Err(malformed("the checkpoint chain is empty".into()));
     };
+    // No negative checkpoint size: the database enforces `tree_size >= 0`,
+    // but a pack is hostile JSON, so the offline verifier rejects what the
+    // runtime could never produce rather than indexing with it.
+    if let Some(bad) = pack.checkpoints.iter().find(|c| c.tree_size < 0) {
+        return Err(malformed(format!(
+            "checkpoint tree_size is negative: {}",
+            bad.tree_size
+        )));
+    }
     // Canonical, strictly increasing checkpoint sizes: a forged pack must
     // not carry duplicate or out-of-order checkpoints the runtime could
     // never produce. The covering checkpoint is therefore the last one.
