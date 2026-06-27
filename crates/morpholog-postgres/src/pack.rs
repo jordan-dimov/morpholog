@@ -158,22 +158,14 @@ pub fn verify_pack(
     let verdict = verify_tree(&leaves, &pack.checkpoints, anchor);
     // A genuinely-signed intact pack still has to answer the authority
     // question, offline, from its own rows: was each signing key admitted
-    // as of its checkpoint's prefix? The supplied anchor's own signatures
-    // are judged the same way.
-    let anchor_signed = anchor.is_some_and(|a| !a.signatures.is_empty());
+    // as of its checkpoint's prefix? The supplied anchor is judged the same.
+    let signed = |c: &Checkpoint| !c.signatures.is_empty();
     if matches!(verdict, TreeVerification::Intact { .. })
-        && (anchor_signed || pack.checkpoints.iter().any(|c| !c.signatures.is_empty()))
+        && (pack.checkpoints.iter().any(signed) || anchor.is_some_and(signed))
+        && let Some(violation) =
+            crate::checkpoints::authority_violation(&pack.checkpoints, anchor, &rows)
     {
-        if let Some(violation) = crate::checkpoints::authority_violation(&pack.checkpoints, &rows) {
-            return Ok(violation);
-        }
-        if let Some(anchor) = anchor
-            && anchor_signed
-            && let Some(violation) =
-                crate::checkpoints::authority_violation(std::slice::from_ref(anchor), &rows)
-        {
-            return Ok(violation);
-        }
+        return Ok(violation);
     }
     Ok(verdict)
 }

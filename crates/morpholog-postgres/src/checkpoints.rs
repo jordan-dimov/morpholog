@@ -441,39 +441,22 @@ pub async fn verify_audit_tree(
 
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
 
-    // Anchor check first: a coordinated rewrite is internally consistent,
-    // so only the external copy can expose it.
-    if let Some(anchor) = &anchor {
-        let stored_at_size = checkpoints.iter().find(|c| c.tree_size == anchor.tree_size);
-        if !stored_at_size.is_some_and(|c| same_tree_head(c, anchor)) {
-            return Ok(TreeVerification::AnchorMismatch {
-                tree_size: anchor.tree_size,
-                anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
-                stored_checkpoint_hash: stored_at_size.map(|c| c.checkpoint_hash.clone()),
-            });
-        }
-    }
-
     let max_size = checkpoints.last().map(|c| c.tree_size).unwrap_or(0);
     let (leaves, _) = collect_leaves(&mut tx, None, Some(max_size)).await?;
 
+    // `verify_tree` is the authoritative structural + crypto check,
+    // including the anchor match and the anchor's own signatures.
     let verdict = verify_tree(&leaves, &checkpoints, anchor.as_ref());
     // A structurally intact, genuinely signed tree still has to answer the
     // authority question: was each signing key admitted as of its prefix?
-    // The supplied anchor's own signatures are judged the same way. Rows
-    // are loaded only when there are signatures to judge.
-    let anchor_signed = anchor.as_ref().is_some_and(|a| !a.signatures.is_empty());
+    // The supplied anchor is judged the same way. Rows are loaded only when
+    // there are signatures to judge.
+    let signed = |c: &Checkpoint| !c.signatures.is_empty();
     if matches!(verdict, TreeVerification::Intact { .. })
-        && (anchor_signed || checkpoints.iter().any(|c| !c.signatures.is_empty()))
+        && (checkpoints.iter().any(signed) || anchor.as_ref().is_some_and(signed))
     {
         let rows = load_audit_rows(&mut tx, max_size).await?;
-        if let Some(violation) = authority_violation(&checkpoints, &rows) {
-            return Ok(violation);
-        }
-        if let Some(anchor) = &anchor
-            && anchor_signed
-            && let Some(violation) = authority_violation(std::slice::from_ref(anchor), &rows)
-        {
+        if let Some(violation) = authority_violation(&checkpoints, anchor.as_ref(), &rows) {
             return Ok(violation);
         }
     }
@@ -635,16 +618,18 @@ fn signature_crypto_violation(cp: &Checkpoint) -> Option<TreeVerification> {
 
 /// The keys-as-claims authority check, run on a tree that is already
 /// structurally intact and whose signatures are genuine: for each signed
-/// checkpoint, every signature's `(key_id, purpose, public_key)` must
-/// match an `AuditSigningKey` claim in force as of that checkpoint's
-/// prefix (the `rows`, canonical order). Returns the first violation, or
-/// `None` if every signature is by an authorised key. Pure - the live and
-/// offline verifiers pass their own rows.
+/// checkpoint - and the supplied `anchor`, judged the same way - every
+/// signature's `(key_id, purpose, public_key)` must match an
+/// `AuditSigningKey` claim in force as of that checkpoint's prefix (the
+/// `rows`, canonical order). Returns the first violation, or `None` if
+/// every signature is by an authorised key. Pure - the live and offline
+/// verifiers pass their own rows.
 pub(crate) fn authority_violation(
     checkpoints: &[Checkpoint],
+    anchor: Option<&Checkpoint>,
     rows: &[AuditRow],
 ) -> Option<TreeVerification> {
-    for cp in checkpoints {
+    for cp in checkpoints.iter().chain(anchor) {
         if cp.signatures.is_empty() {
             continue;
         }
