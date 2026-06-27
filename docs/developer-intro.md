@@ -31,13 +31,22 @@ many rows and many tables. It can do exact decimal arithmetic. It can say "for
 all", "there exists", "the sum of". Those are the rules a `CHECK` constraint
 cannot express - the ones that live in application code today, and drift.
 
-**The database has only one door for writes.** In Morpholog, state
-changes one way and one way only: you propose a change - some records to add,
-some to remove - and the runtime checks every invariant against the result. If
-anything would break, nothing happens, and the database is byte-for-byte what
-it was before. Morpholog calls that proposal a **transformation**. There is no
-other door. No `UPDATE` from a forgotten script, no code path that skips the
-checks.
+**The governed path is the only door for writes.** In Morpholog, state
+changes one way: you propose a change - some records to add, some to remove -
+and the runtime checks every invariant against the result. If anything would
+break, nothing happens, and the database is byte-for-byte what it was before.
+Morpholog calls that proposal a **transformation**. Inside your application
+there is no second door - no ORM path or forgotten service that writes its own
+way and skips the checks; every write goes through the gate. One honest caveat,
+because it is the first question a careful reader asks: the gate runs in the
+runtime, not the storage engine, so a direct `UPDATE` against the claims table
+by something holding raw write privilege would go around it. You close that the
+ordinary way - grant write on the `morpholog` schema to the runtime's role
+alone - and, unlike a `CHECK` constraint that is simply gone once dropped, a
+write that does slip around the gate is not silent: the claims table and the
+audit log are two records of one history, and `morpholog verify` catches any
+edit that leaves them disagreeing. ("Can someone bypass the rules with raw
+SQL?" in the README has the full answer.)
 
 The last idea is the one with no familiar name, so hold it lightly for now.
 Morpholog stores **claims**, not objects. There is no `Invoice` class, no row
