@@ -53,6 +53,10 @@ pub fn settle_trade() -> Transformation {
     crate::transformation(&PROGRAM, "settle_trade")
 }
 
+pub fn set_position_limit() -> Transformation {
+    crate::transformation(&PROGRAM, "set_position_limit")
+}
+
 pub fn terms_timeline() -> DerivedClaim {
     crate::derived(&PROGRAM, "TermsTimeline")
 }

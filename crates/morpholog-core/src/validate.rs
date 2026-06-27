@@ -177,6 +177,13 @@ pub enum ValidationError {
         right: PredicateArgKind,
         context: ValidationContext,
     },
+    /// `abs(...)` was applied to a value that has no magnitude. Defined
+    /// on the signed numeric kinds - decimals, quantities, and durations.
+    #[error("abs is defined on decimals, quantities, and durations, not {kind} in {context}")]
+    AbsKind {
+        kind: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// An equality (`==` or `!=`) had two operands of distinct,
     /// incompatible kinds. Symmetric by nature: there is no
     /// "expected" side - both kinds are equally constrained by the
@@ -507,6 +514,7 @@ fn value_depth_capped(
             Some(d) => value_depth_capped(d, inner, depths)?,
             None => 0,
         },
+        ValueExpr::Abs(operand) => value_depth_capped(operand, inner, depths)?,
     };
     let total = below + 1;
     (total <= budget).then_some(total)
@@ -631,6 +639,7 @@ fn value_exceeds_depth(
         ValueExpr::ValueOf { default, .. } => default
             .as_deref()
             .is_some_and(|d| value_exceeds_depth(d, budget, depths)),
+        ValueExpr::Abs(operand) => value_exceeds_depth(operand, budget, depths),
     }
 }
 

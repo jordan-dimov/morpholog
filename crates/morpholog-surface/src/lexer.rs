@@ -15,7 +15,7 @@
 //!   `rust_decimal::Decimal`, never to a float.
 //! - Punctuation: `(`, `)`, `[`, `]`, `:`, `,`.
 //! - Comparators: `=`, `!=`, `<=`, `<`, `>=`, `>`.
-//! - Arithmetic: `+`, `-`, `*`, `/` (infix); `min` / `max` (functions).
+//! - Arithmetic: `+`, `-`, `*`, `/` (infix); `min` / `max` / `abs` (functions).
 //! - Wildcard: `_`.
 //!
 //! Each reserved word maps to a specific `Token::*` variant so the
@@ -163,6 +163,8 @@ pub enum Token {
     KwMin,
     /// `max` function keyword (binary decimal maximum: `max(a, b)`).
     KwMax,
+    /// `abs` function keyword (unary magnitude: `abs(x)`).
+    KwAbs,
     /// `value` claim-lookup keyword.
     KwValue,
     /// `default` keyword (only meaningful after `value Pred(args)`
@@ -282,6 +284,7 @@ impl fmt::Display for Token {
             Token::KwSum => write!(f, "`sum`"),
             Token::KwMin => write!(f, "`min`"),
             Token::KwMax => write!(f, "`max`"),
+            Token::KwAbs => write!(f, "`abs`"),
             Token::KwValue => write!(f, "`value`"),
             Token::KwDefault => write!(f, "`default`"),
             Token::KwIn => write!(f, "`in`"),
@@ -379,6 +382,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "sum" => Token::KwSum,
         "min" => Token::KwMin,
         "max" => Token::KwMax,
+        "abs" => Token::KwAbs,
         "value" => Token::KwValue,
         "default" => Token::KwDefault,
         "in" => Token::KwIn,

@@ -73,9 +73,6 @@ pub enum ViewRefusal {
     /// An identifier exceeds PostgreSQL's 63-byte limit, beyond which it
     /// is silently truncated - which can collide invisibly.
     IdentifierTooLong { owner: String, name: String },
-    /// A field name is a SQL reserved word; refusing means consumers
-    /// never have to quote it in their own queries.
-    ReservedKeyword { owner: String, name: String },
     /// A business field name starts with the generator-owned
     /// `_morpholog_` prefix, which would shadow a metadata column.
     ReservedPrefix { owner: String, name: String },
@@ -103,9 +100,6 @@ impl std::fmt::Display for ViewRefusal {
                 f,
                 "{owner}: `{name}` exceeds PostgreSQL's 63-byte identifier limit; rename it"
             ),
-            ViewRefusal::ReservedKeyword { owner, name } => {
-                write!(f, "{owner}: `{name}` is a SQL reserved word; rename it")
-            }
             ViewRefusal::ReservedPrefix { owner, name } => write!(
                 f,
                 "{owner}: `{name}` uses the reserved `_morpholog_` prefix; rename it"
@@ -140,90 +134,6 @@ const MAX_IDENT_BYTES: usize = 63;
 /// The catalogue view's name. Carries the model hash and the intended
 /// view inventory for drift-checking.
 const CATALOG_VIEW: &str = "_morpholog_catalog";
-
-/// SQL reserved words (the PG17/PG18 fully-reserved union). A field or
-/// view name matching one is refused so consumers need not quote it. Kept
-/// as a sorted slice; lookups lowercase the candidate first.
-const SQL_KEYWORDS: &[&str] = &[
-    "all",
-    "analyse",
-    "analyze",
-    "and",
-    "any",
-    "array",
-    "as",
-    "asc",
-    "asymmetric",
-    "both",
-    "case",
-    "cast",
-    "check",
-    "collate",
-    "column",
-    "constraint",
-    "create",
-    "current_catalog",
-    "current_date",
-    "current_role",
-    "current_time",
-    "current_timestamp",
-    "current_user",
-    "default",
-    "deferrable",
-    "desc",
-    "distinct",
-    "do",
-    "else",
-    "end",
-    "except",
-    "false",
-    "fetch",
-    "for",
-    "foreign",
-    "from",
-    "grant",
-    "group",
-    "having",
-    "in",
-    "initially",
-    "intersect",
-    "into",
-    "lateral",
-    "leading",
-    "limit",
-    "localtime",
-    "localtimestamp",
-    "not",
-    "null",
-    "offset",
-    "on",
-    "only",
-    "or",
-    "order",
-    "placing",
-    "primary",
-    "references",
-    "returning",
-    "select",
-    "session_user",
-    "some",
-    "symmetric",
-    "system_user",
-    "table",
-    "then",
-    "to",
-    "trailing",
-    "true",
-    "union",
-    "unique",
-    "user",
-    "using",
-    "variadic",
-    "when",
-    "where",
-    "window",
-    "with",
-];
 
 /// The SQL `SELECT` expression and the kind note for one declared
 /// argument position. The expression is over the CTE-bound `arguments`
@@ -342,9 +252,11 @@ fn is_safe_lower_ident(s: &str) -> bool {
 }
 
 /// Push every identifier refusal for `name` under `owner`. Applied
-/// identically to a preserved field name and to a generated view name -
-/// so a predicate named `Order` is refused exactly as a field named
-/// `order` would be, and consumers never have to quote a generated name.
+/// identically to a preserved field name and to a generated view name.
+/// SQL reserved words are not refused (they are quoted on both sides);
+/// the refusals here are for names quoting cannot rescue - non-lowercase
+/// or otherwise unsafe identifiers, over-long ones, and the reserved
+/// `_morpholog_` metadata prefix.
 fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) {
     if name.starts_with(MORPHOLOG_PREFIX) {
         refusals.push(ViewRefusal::ReservedPrefix {
@@ -362,18 +274,15 @@ fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) 
     }
     if name.len() > MAX_IDENT_BYTES {
         refusals.push(ViewRefusal::IdentifierTooLong {
-            owner: owner.clone(),
-            name: name.to_string(),
-        });
-    }
-    // `name` is already ASCII-lowercase here (it passed
-    // `is_safe_lower_ident`), so no lowercasing allocation is needed.
-    if SQL_KEYWORDS.contains(&name) {
-        refusals.push(ViewRefusal::ReservedKeyword {
             owner,
             name: name.to_string(),
         });
     }
+    // A SQL reserved word (`limit`, `order`, `user`, ...) is not refused:
+    // every generated identifier is double-quoted, so a reserved-word
+    // column or view is valid DDL. Consumers quote it in turn (`SELECT
+    // "limit" FROM ...`) - the one place the unquoted-read convenience
+    // does not reach, in exchange for not banning common field names.
 }
 
 /// Double-quote a SQL identifier, doubling any embedded quote. Every
@@ -492,11 +401,11 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
             );
         }
         // The generated view name gets the SAME rules as a field: a
-        // predicate named `Order`, `User`, or `Select` would otherwise
-        // emit a reserved-word view, forcing consumers to quote it -
-        // against the unquoted-read contract. Length and the reserved
-        // `_morpholog_` namespace (which protects `_morpholog_catalog`)
-        // are covered by the same helper.
+        // reserved word (a predicate named `Order`, `User`, `Select`) is
+        // quoted, not refused, just like a reserved-word column; the helper
+        // refuses only what quoting cannot rescue - non-lowercase or
+        // over-long names, and the reserved `_morpholog_` namespace (which
+        // protects `_morpholog_catalog`).
         let view = snake_case(predicate.name.as_str());
         check_identifier(
             format!("predicate `{}` (view name `{view}`)", predicate.name),
@@ -983,15 +892,17 @@ mod tests {
     // ---- refusals ----
 
     #[test]
-    fn reserved_keyword_field_is_refused() {
+    fn reserved_keyword_field_is_quoted_not_refused() {
+        // A reserved-word field (`select`) is allowed: it is double-quoted
+        // in the view, so the DDL is valid and consumers quote it in turn.
         let src = "program kw\n\
             predicate P(id: Subject, select: Decimal)\n\
             transformation t(id, select):\n    admit P(id, select)\n";
-        let found = refusals(src, "morpholog_views");
-        assert!(found.iter().any(|r| matches!(
-            r,
-            ViewRefusal::ReservedKeyword { name, .. } if name == "select"
-        )));
+        let sql = render_ok(src).sql;
+        assert!(
+            sql.contains("AS \"select\""),
+            "reserved-word column should be quoted, not refused: {sql}"
+        );
     }
 
     #[test]
@@ -1079,22 +990,22 @@ mod tests {
     }
 
     #[test]
-    fn keyword_view_names_are_refused() {
+    fn keyword_view_names_are_quoted_not_refused() {
         // A predicate named `Order` or `User` snakes to a reserved word;
-        // refuse it so consumers never have to quote the generated view.
+        // the generated view is quoted rather than refused.
         let src = "program kwviews\n\
             predicate Order(id: Subject)\n\
             predicate User(id: Subject)\n\
             transformation t(id):\n    admit Order(id)\n";
-        let found = refusals(src, "morpholog_views");
-        assert!(found.iter().any(|r| matches!(
-            r,
-            ViewRefusal::ReservedKeyword { name, .. } if name == "order"
-        )));
-        assert!(found.iter().any(|r| matches!(
-            r,
-            ViewRefusal::ReservedKeyword { name, .. } if name == "user"
-        )));
+        let sql = render_ok(src).sql;
+        assert!(
+            sql.contains("\"morpholog_views\".\"order\""),
+            "reserved-word view name should be quoted: {sql}"
+        );
+        assert!(
+            sql.contains("\"morpholog_views\".\"user\""),
+            "reserved-word view name should be quoted: {sql}"
+        );
     }
 
     #[test]

@@ -359,6 +359,12 @@ pub enum ValueExpr {
         args: Vec<Term>,
         default: Option<Box<ValueExpr>>,
     },
+    /// The magnitude of a signed value: `abs(x)`. Unary and
+    /// unit-preserving (`abs` of a `Decimal[USD]` is a `Decimal[USD]`),
+    /// defined on decimals, quantities, and durations. A dedicated node,
+    /// not `max(x, 0 - x)`, so the operand is evaluated once and the form
+    /// round-trips as `abs`.
+    Abs(Box<ValueExpr>),
 }
 
 /// A comparison operator, independent of operand domain. Carried by

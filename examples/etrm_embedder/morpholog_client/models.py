@@ -84,6 +84,22 @@ class GrantConfirmAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class SetPositionLimitRequest:
+    """Arguments for `set_position_limit`."""
+
+    TRANSFORMATION: ClassVar[str] = "set_position_limit"
+
+    commodity: str
+    limit: Decimal
+
+    def to_args_named(self) -> dict:
+        return {
+            "commodity": values.encode_named(self.commodity),
+            "limit": values.encode_named(self.limit),
+        }
+
+
+@dataclass(frozen=True)
 class ConfirmTradeRequest:
     """Arguments for `confirm_trade`."""
 
@@ -358,6 +374,24 @@ class TradeSettledClaim:
 
 
 @dataclass(frozen=True)
+class PositionLimitClaim:
+    """One admitted `PositionLimit` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "PositionLimit"
+
+    commodity: str
+    limit: Decimal
+
+    @classmethod
+    def from_named(cls, args: dict) -> "PositionLimitClaim":
+        raw = args["commodity"]
+        commodity = raw
+        raw = args["limit"]
+        limit = values.parse_decimal(raw)
+        return cls(commodity=commodity, limit=limit)
+
+
+@dataclass(frozen=True)
 class TermsTimelineClaim:
     """One admitted `TermsTimeline` claim, decoded by declared kind."""
 
@@ -519,6 +553,28 @@ class TradeSettlementRequestedPayload:
         return cls(*args)
 
 
+@dataclass(frozen=True)
+class PositionLimitSetPayload:
+    """Payload of an emitted `PositionLimitSet` intent."""
+
+    INTENT: ClassVar[str] = "PositionLimitSet"
+    _ARG_ORDER: ClassVar[tuple] = ("commodity", "limit",)
+
+    commodity: str
+    limit: Decimal
+
+    @classmethod
+    def from_args(cls, args: list) -> "PositionLimitSetPayload":
+        """Build from the decoded positional values of an outbox
+        row's `arguments` (the adapter decodes; this names)."""
+        if len(args) != 2:
+            raise ValueError(
+                f"PositionLimitSet: payload arity {len(args)} != contract arity 2 "
+                f"(schema/payload skew)"
+            )
+        return cls(*args)
+
+
 INTENT_PAYLOADS = {
     "TradeCapturedAdmitted": TradeCapturedAdmittedPayload,
     "TradeTermsAmended": TradeTermsAmendedPayload,
@@ -526,4 +582,5 @@ INTENT_PAYLOADS = {
     "TradeConfirmedAdmitted": TradeConfirmedAdmittedPayload,
     "OfficialPriceCorrected": OfficialPriceCorrectedPayload,
     "TradeSettlementRequested": TradeSettlementRequestedPayload,
+    "PositionLimitSet": PositionLimitSetPayload,
 }

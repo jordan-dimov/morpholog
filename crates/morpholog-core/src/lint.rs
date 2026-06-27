@@ -390,6 +390,8 @@ fn positive_value_claims(expr: &ValueExpr, positive: bool, out: &mut BTreeSet<Pr
             positive_value_claims(left, positive, out);
             positive_value_claims(right, positive, out);
         }
+        // abs reads its operand, so it requires whatever the operand does.
+        ValueExpr::Abs(operand) => positive_value_claims(operand, positive, out),
         // A sum tolerates zero matches; its body does not REQUIRE the
         // claims, so it contributes nothing.
         ValueExpr::Sum { .. } => {}

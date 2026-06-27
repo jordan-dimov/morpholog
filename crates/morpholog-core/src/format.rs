@@ -441,6 +441,7 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
                 )
             }
         }
+        ValueExpr::Abs(operand) => format!("abs({})", format_value_inline(operand)),
     }
 }
 

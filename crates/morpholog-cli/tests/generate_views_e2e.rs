@@ -158,7 +158,10 @@ fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
 // Refusal is whole-run: a reserved-word field is named, and nothing is
 // written to stdout.
 #[test]
-fn reserved_word_field_refuses_and_writes_nothing() {
+fn reserved_word_field_is_quoted_not_refused() {
+    // A reserved-word field (`select`) is allowed: the generator quotes
+    // every identifier, so the column is emitted as `AS "select"` rather
+    // than refused. Consumers quote it in turn.
     let (_dir, path) = refusal_fixture(
         "program kw\n\
          predicate P(id: Subject, select: Decimal)\n\
@@ -166,18 +169,37 @@ fn reserved_word_field_refuses_and_writes_nothing() {
     );
     let result = generate_stdout(&path, None);
     assert!(
-        !result.status.success(),
-        "a reserved-word field must refuse"
+        result.status.success(),
+        "a reserved-word field is quoted, not refused; stderr:\n{}",
+        String::from_utf8_lossy(&result.stderr)
     );
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let sql = String::from_utf8_lossy(&result.stdout);
     assert!(
-        stderr.contains("`select` is a SQL reserved word"),
-        "got:\n{stderr}"
+        sql.contains("AS \"select\""),
+        "reserved-word column should be quoted: {sql}"
     );
-    assert!(stderr.contains("nothing was written"), "got:\n{stderr}");
+}
+
+#[test]
+fn reserved_word_view_name_is_quoted_not_refused() {
+    // The same policy applies to a generated view NAME: a predicate named
+    // `Order` snakes to the reserved word `order`, and the view is quoted
+    // rather than refused.
+    let (_dir, path) = refusal_fixture(
+        "program kwview\n\
+         predicate Order(id: Subject)\n\
+         transformation t(id):\n    admit Order(id)\n",
+    );
+    let result = generate_stdout(&path, None);
     assert!(
-        result.stdout.is_empty(),
-        "refusal must write no SQL to stdout"
+        result.status.success(),
+        "a reserved-word view name is quoted, not refused; stderr:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let sql = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        sql.contains("\"morpholog_views\".\"order\""),
+        "reserved-word view name should be quoted: {sql}"
     );
 }
 

@@ -760,9 +760,20 @@ where
             right: Box::new(rhs),
         });
 
+        // abs function: `abs ( <value> )`. Unary magnitude of a signed
+        // value, the natural form for a two-sided bound (`abs(x) <= limit`).
+        let abs_expr = just(Token::KwAbs)
+            .ignore_then(
+                value
+                    .clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|operand| ValueExpr::Abs(Box::new(operand)));
+
         let primary = choice((
             sum_expr,
             min_max_expr,
+            abs_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,

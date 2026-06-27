@@ -1026,3 +1026,149 @@ fn negative_settlement_quantity_is_rejected() {
         Outcome::Accepted { .. } => panic!("a negative settlement quantity must be rejected"),
     }
 }
+
+// ---- Position limit: abs of the net buys-minus-sells ----
+
+fn assert_rejected(outcome: Outcome, invariant_name: &str) {
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.to_string().contains(invariant_name),
+            "expected {invariant_name}, got: {reason}"
+        ),
+        Outcome::Accepted { .. } => panic!("expected a rejection on {invariant_name}"),
+    }
+}
+
+// Set the net-position limit for `commodity` as `actor` (who must hold
+// confirm authority for it).
+fn set_limit(state: State, actor: &str, commodity: &str, limit: i64) -> State {
+    must_accept_as(
+        &trade_lifecycle::set_position_limit(),
+        vec![subj(commodity), dec(limit)],
+        actor,
+        state,
+        &invariants(),
+        &definitions(),
+    )
+}
+
+// Capture trade `trade` on `commodity` in `direction` (#buy / #sell) for
+// `qty`, terms version `version`.
+fn capture_into(
+    state: State,
+    trade: &str,
+    commodity: &str,
+    direction: &str,
+    version: &str,
+    qty: i64,
+) -> State {
+    must_accept(
+        &trade_lifecycle::capture_trade(),
+        vec![
+            subj(trade),
+            subj(commodity),
+            subj(direction),
+            subj(version),
+            dec(qty),
+            subj("cal26"),
+            date("2026-01-15"),
+            dec(50),
+        ],
+        state,
+        &invariants(),
+        &definitions(),
+    )
+}
+
+#[test]
+fn a_net_position_within_the_limit_is_admitted() {
+    // Limit 100 on power; a buy of 60 nets to +60, within the +/-100 band.
+    let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 100);
+    capture_into(state, "t1", "power", "buy", "tv1", 60);
+}
+
+#[test]
+fn a_long_position_over_the_limit_is_refused() {
+    let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 100);
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::capture_trade(),
+        vec![
+            subj("t1"),
+            subj("power"),
+            subj("buy"),
+            subj("tv1"),
+            dec(150),
+            subj("cal26"),
+            date("2026-01-15"),
+            dec(50),
+        ],
+        &state,
+        &invariants(),
+        &definitions(),
+    )
+    .unwrap();
+    assert_rejected(outcome, "within_position_limit");
+}
+
+#[test]
+fn a_short_position_over_the_limit_is_refused() {
+    // The abs catches the short side too: a sell of 150 nets to -150,
+    // whose magnitude exceeds the 100 limit just as a long 150 would.
+    let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 100);
+    let outcome = propose_with_test_actor(
+        &trade_lifecycle::capture_trade(),
+        vec![
+            subj("t1"),
+            subj("power"),
+            subj("sell"),
+            subj("tv1"),
+            dec(150),
+            subj("cal26"),
+            date("2026-01-15"),
+            dec(50),
+        ],
+        &state,
+        &invariants(),
+        &definitions(),
+    )
+    .unwrap();
+    assert_rejected(outcome, "within_position_limit");
+}
+
+#[test]
+fn buys_and_sells_net_against_each_other() {
+    // It is the net magnitude that is bounded, not the gross: a buy of 40
+    // and a sell of 35 leave a net of +5, comfortably within a limit of 50
+    // even though the two legs gross 75. The sell reduces the position.
+    let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 50);
+    let state = capture_into(state, "t1", "power", "buy", "tv1", 40);
+    capture_into(state, "t2", "power", "sell", "tv2", 35);
+}
+
+#[test]
+fn an_amendment_that_grows_a_position_past_the_limit_is_refused() {
+    // The invariant judges the resulting admitted state, not the action
+    // named: growing a position by amendment is refused exactly as an
+    // over-large new capture is. `current_quantity` follows the
+    // latest-effective version, so amending t1 up to 150 (net 150 > 100)
+    // breaches the limit.
+    let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 100);
+    let state = capture_into(state, "t1", "power", "buy", "tv1", 80);
+    let outcome = propose_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(150),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        &state,
+        &invariants(),
+        &definitions(),
+    )
+    .unwrap();
+    assert_rejected(outcome, "within_position_limit");
+}
