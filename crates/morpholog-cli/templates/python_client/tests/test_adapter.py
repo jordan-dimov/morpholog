@@ -225,6 +225,17 @@ class AdapterDiscrimination(unittest.TestCase):
             )
         self.assertIn("timed out", str(caught.exception))
 
+    def test_batch_timeout_stays_the_second_positional_arg(self):
+        # explain_on_reject is keyword-only, so an old caller passing the
+        # timeout positionally still bounds the call - it does not silently
+        # flip the explain flag (the API-compat catch from review).
+        self._mode("hang")
+        with self.assertRaises(MorphologError) as caught:
+            self.client.propose_batch(
+                [{"transformation": "t", "actor": "a", "args_named": {}}], 0.2
+            )
+        self.assertIn("timed out", str(caught.exception))
+
     def test_batch_explain_on_reject_lands_on_argv_exactly_when_supplied(self):
         # The flag composes with --batch on the CLI; the client passes
         # it through only when asked, so each rejected row carries the

@@ -144,8 +144,9 @@ class Morpholog:
     def propose_batch(
         self,
         rows: list,
-        explain_on_reject: bool = False,
         timeout: float | None = None,
+        *,
+        explain_on_reject: bool = False,
     ) -> list:
         """Admit many rows in one invocation (`propose --batch -`).
 
