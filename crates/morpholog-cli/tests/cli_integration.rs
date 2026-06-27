@@ -555,6 +555,34 @@ async fn checkpoint_then_verify_against_the_anchor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn verify_require_signatures_fails_an_unsigned_checkpoint() {
+    reset_db().await;
+    post_balanced_entry("rs1", 100);
+    let (status, _stdout, stderr) = run_cli(&["checkpoint"]);
+    assert!(status.success(), "checkpoint should succeed; {stderr}");
+
+    // Default verify: an unsigned checkpoint is intact (signing is opt-in).
+    let (status, stdout, _stderr) = run_cli(&["verify"]);
+    assert!(status.success(), "unsigned verify is intact: {stdout}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["tree"]["status"],
+        "intact"
+    );
+
+    // --require-signatures: the unsigned checkpoint now fails, exit non-zero.
+    let (status, stdout, _stderr) = run_cli(&["verify", "--require-signatures"]);
+    assert!(
+        !status.success(),
+        "require-signatures must fail an unsigned checkpoint: {stdout}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["tree"]["status"],
+        "signature_required",
+        "got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn evidence_export_then_verify_offline() {
     reset_db().await;
     post_balanced_entry("ev1", 100);

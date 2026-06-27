@@ -328,6 +328,12 @@ pub(crate) struct VerifyArgs {
     /// pass. Omit to verify only internal checkpoint consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+
+    /// Compliance mode: require every checkpoint in the chain to be
+    /// signed. An unsigned checkpoint then fails (`signature_required`).
+    /// Off by default - signing is opt-in.
+    #[arg(long)]
+    pub(crate) require_signatures: bool,
 }
 
 /// Arguments for `checkpoint`: the connection, plus an optional Ed25519
@@ -344,7 +350,7 @@ pub(crate) struct CheckpointArgs {
 
     /// The key id the signature is published under; it must match an
     /// authorised `AuditSigningKey(key_id, "audit_checkpoint_v1", <public
-    /// key>)` claim once authority enforcement lands.
+    /// key>)` claim as of the checkpoint's prefix, or signing is refused.
     #[arg(long, requires = "signing_key")]
     pub(crate) key_id: Option<String>,
 }
@@ -437,6 +443,11 @@ pub(crate) struct EvidenceVerifyArgs {
     /// consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+
+    /// Compliance mode: require every checkpoint in the pack to be signed
+    /// (`signature_required` otherwise). Off by default.
+    #[arg(long)]
+    pub(crate) require_signatures: bool,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent

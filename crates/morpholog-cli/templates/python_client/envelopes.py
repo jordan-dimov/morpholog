@@ -818,6 +818,45 @@ class TreeSignatureInvalid:
         )
 
 
+@dataclass(frozen=True)
+class TreeUnauthorizedKey:
+    """A checkpoint carries a genuine signature, but the signing key was
+    not authorised (no admitted `AuditSigningKey` for that exact triple)
+    as of the checkpoint's prefix."""
+
+    tree_size: int
+    key_id: str
+    purpose: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeUnauthorizedKey":
+        data = _strict(
+            "unauthorized-key tree",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+        )
+
+
+@dataclass(frozen=True)
+class TreeSignatureRequired:
+    """`--require-signatures` was asked for and this checkpoint is
+    unsigned. A compliance-policy verdict, not an intrinsic tamper."""
+
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeSignatureRequired":
+        data = _strict("signature-required tree", payload, {"status", "tree_size"})
+        return cls(tree_size=data["tree_size"])
+
+
 TreeVerification = (
     TreeIntact
     | TreeTampered
@@ -825,6 +864,8 @@ TreeVerification = (
     | TreeAnchorMismatch
     | TreeMalformedPack
     | TreeSignatureInvalid
+    | TreeUnauthorizedKey
+    | TreeSignatureRequired
 )
 
 
@@ -845,6 +886,10 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             return TreeMalformedPack.from_json(payload)
         case "signature_invalid":
             return TreeSignatureInvalid.from_json(payload)
+        case "unauthorized_key":
+            return TreeUnauthorizedKey.from_json(payload)
+        case "signature_required":
+            return TreeSignatureRequired.from_json(payload)
         case _:
             raise EnvelopeError(f"not a tree verdict: {payload!r}")
 

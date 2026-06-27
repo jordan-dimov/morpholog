@@ -10,8 +10,10 @@
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, PgPool, TreeVerification, create_checkpoint,
-    generate_signing_key, verify_audit_tree,
+    generate_signing_key, render_public_key, verify_audit_tree,
 };
+
+const PURPOSE: &str = "audit_checkpoint_v1";
 
 mod common;
 use common::{dec, reset_db, subj, test_pool};
@@ -206,9 +208,17 @@ async fn a_signed_checkpoint_verifies_and_a_corrupted_signature_is_caught() {
         commit_entry(&pool, &format!("s{i}")).await;
     }
 
+    let key = generate_signing_key();
+    common::authorize_signing_key(
+        &pool,
+        "k1",
+        PURPOSE,
+        &render_public_key(&key.verifying_key()),
+    )
+    .await;
     let signer = CheckpointSigner {
         key_id: "k1".into(),
-        key: generate_signing_key(),
+        key,
     };
     let cp = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
@@ -251,6 +261,16 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
     for i in 0..2 {
         commit_entry(&pool, &format!("u{i}")).await;
     }
+    // Authorise the key before the head exists, so it is in force as of the
+    // checkpoint's prefix.
+    let key = generate_signing_key();
+    common::authorize_signing_key(
+        &pool,
+        "k1",
+        PURPOSE,
+        &render_public_key(&key.verifying_key()),
+    )
+    .await;
 
     // An unsigned head, then a sign run with no new rows: the signature is
     // attached to the existing head, not dropped (the operational trap).
@@ -259,7 +279,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
 
     let signer = CheckpointSigner {
         key_id: "k1".into(),
-        key: generate_signing_key(),
+        key,
     };
     let signed = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
         CheckpointOutcome::NoNewRows(c) => c,
@@ -291,9 +311,17 @@ async fn an_anchor_differing_only_in_signatures_is_not_a_mismatch() {
     for i in 0..2 {
         commit_entry(&pool, &format!("a{i}")).await;
     }
+    let key = generate_signing_key();
+    common::authorize_signing_key(
+        &pool,
+        "k1",
+        PURPOSE,
+        &render_public_key(&key.verifying_key()),
+    )
+    .await;
     let signer = CheckpointSigner {
         key_id: "k1".into(),
-        key: generate_signing_key(),
+        key,
     };
     let signed = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
         CheckpointOutcome::Created(c) => c,

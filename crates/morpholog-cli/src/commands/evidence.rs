@@ -58,11 +58,29 @@ fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     // an operational failure - the offline verifier still answers on
     // stdout. Only an unreadable file (above) stays operational.
     let tree = match serde_json::from_slice::<EvidencePack>(&bytes) {
-        Ok(pack) => verify_pack(&pack, anchor.as_ref()).unwrap_or_else(|e| {
-            TreeVerification::MalformedPack {
-                detail: e.to_string(),
+        Ok(pack) => {
+            let verdict = verify_pack(&pack, anchor.as_ref()).unwrap_or_else(|e| {
+                TreeVerification::MalformedPack {
+                    detail: e.to_string(),
+                }
+            });
+            // Compliance policy, offline from the pack's own checkpoints:
+            // with --require-signatures an unsigned checkpoint fails.
+            if args.require_signatures && matches!(verdict, TreeVerification::Intact { .. }) {
+                match pack
+                    .checkpoints
+                    .iter()
+                    .filter(|c| c.signatures.is_empty())
+                    .map(|c| c.tree_size)
+                    .min()
+                {
+                    Some(tree_size) => TreeVerification::SignatureRequired { tree_size },
+                    None => verdict,
+                }
+            } else {
+                verdict
             }
-        }),
+        }
         Err(e) => TreeVerification::MalformedPack {
             detail: e.to_string(),
         },

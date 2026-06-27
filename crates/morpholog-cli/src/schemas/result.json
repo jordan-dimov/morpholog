@@ -688,6 +688,27 @@
             "purpose": { "type": "string" },
             "public_key": { "type": "string" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "key_id", "purpose", "public_key"],
+          "properties": {
+            "status": { "const": "unauthorized_key" },
+            "tree_size": { "type": "integer" },
+            "key_id": { "type": "string" },
+            "purpose": { "type": "string" },
+            "public_key": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size"],
+          "properties": {
+            "status": { "const": "signature_required" },
+            "tree_size": { "type": "integer" }
+          }
         }
       ]
     },

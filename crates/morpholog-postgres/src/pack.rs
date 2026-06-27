@@ -136,7 +136,10 @@ pub fn verify_pack(
 ) -> Result<TreeVerification, PackError> {
     validate_envelope(pack)?;
 
-    let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
+    // Owned + canonically sorted: the leaves are computed from this order
+    // and the authority check folds the same rows, so live and offline
+    // resolve signing keys from one ordering.
+    let mut rows = pack.rows.clone();
     rows.sort_by_key(|a| (a.committed_at, a.transition_id));
     for pair in rows.windows(2) {
         if (pair[0].committed_at, pair[0].transition_id)
@@ -151,11 +154,20 @@ pub fn verify_pack(
         }
     }
 
-    let leaves: Vec<Hash> = rows
-        .iter()
-        .map(|r| audit_leaf_hash(r))
-        .collect::<Result<_, _>>()?;
-    Ok(verify_tree(&leaves, &pack.checkpoints, anchor))
+    let leaves: Vec<Hash> = rows.iter().map(audit_leaf_hash).collect::<Result<_, _>>()?;
+    let verdict = verify_tree(&leaves, &pack.checkpoints, anchor);
+    // A genuinely-signed intact pack still has to answer the authority
+    // question, offline, from its own rows: was each signing key admitted
+    // as of its checkpoint's prefix? The supplied anchor is judged the same.
+    let signed = |c: &Checkpoint| !c.signatures.is_empty();
+    if matches!(verdict, TreeVerification::Intact { .. })
+        && (pack.checkpoints.iter().any(signed) || anchor.is_some_and(signed))
+        && let Some(violation) =
+            crate::checkpoints::authority_violation(&pack.checkpoints, anchor, &rows)
+    {
+        return Ok(violation);
+    }
+    Ok(verdict)
 }
 
 /// The v1 envelope rules a well-formed pack must satisfy before its
@@ -167,6 +179,15 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
     let Some(covering) = pack.checkpoints.last() else {
         return Err(malformed("the checkpoint chain is empty".into()));
     };
+    // No negative checkpoint size: the database enforces `tree_size >= 0`,
+    // but a pack is hostile JSON, so the offline verifier rejects what the
+    // runtime could never produce rather than indexing with it.
+    if let Some(bad) = pack.checkpoints.iter().find(|c| c.tree_size < 0) {
+        return Err(malformed(format!(
+            "checkpoint tree_size is negative: {}",
+            bad.tree_size
+        )));
+    }
     // Canonical, strictly increasing checkpoint sizes: a forged pack must
     // not carry duplicate or out-of-order checkpoints the runtime could
     // never produce. The covering checkpoint is therefore the last one.

@@ -19,6 +19,7 @@ mod checkpoints;
 mod claims;
 mod derived;
 mod error;
+mod keys;
 mod merkle;
 mod outbox;
 mod pack;
@@ -40,11 +41,12 @@ pub use audit::{
 };
 pub use checkpoints::{
     AUDIT_CHECKPOINT_PURPOSE, Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature,
-    TreeVerification, create_checkpoint, verify_audit_tree,
+    TreeVerification, create_checkpoint, first_unsigned_checkpoint_size, verify_audit_tree,
 };
 pub use claims::{list_claims, list_claims_for_predicates, load_scoped_state};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
+pub use keys::{AUDIT_SIGNING_KEY_PREDICATE, KeyTriple, authorized_keys_as_of};
 pub use outbox::{
     CompensationArgsFromRow, CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxUpdate,
     ProcessOutcome, begin_compensation, claim_pending_outbox_row, complete_compensation,
