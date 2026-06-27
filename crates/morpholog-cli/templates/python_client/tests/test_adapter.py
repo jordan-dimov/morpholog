@@ -119,7 +119,8 @@ class AdapterDiscrimination(unittest.TestCase):
 
             def argv_after(call):
                 call()
-                return open(record.name).read().split("\n")
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
 
             argv = argv_after(
                 lambda: self.client.claims_named(
@@ -154,7 +155,8 @@ class AdapterDiscrimination(unittest.TestCase):
 
             def argv_after(call):
                 call()
-                return open(record.name).read().split("\n")
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
 
             tid = "01900000-0000-7000-8000-000000000001"
             argv = argv_after(lambda: self.client.audit_named(after=tid))
@@ -224,6 +226,42 @@ class AdapterDiscrimination(unittest.TestCase):
                 [{"transformation": "t", "actor": "a", "args_named": {}}], timeout=0.2
             )
         self.assertIn("timed out", str(caught.exception))
+
+    def test_batch_timeout_stays_the_second_positional_arg(self):
+        # explain_on_reject is keyword-only, so an old caller passing the
+        # timeout positionally still bounds the call - it does not silently
+        # flip the explain flag (the API-compat catch from review).
+        self._mode("hang")
+        with self.assertRaises(MorphologError) as caught:
+            self.client.propose_batch(
+                [{"transformation": "t", "actor": "a", "args_named": {}}], 0.2
+            )
+        self.assertIn("timed out", str(caught.exception))
+
+    def test_batch_explain_on_reject_lands_on_argv_exactly_when_supplied(self):
+        # The flag composes with --batch on the CLI; the client passes
+        # it through only when asked, so each rejected row carries the
+        # same-snapshot why.
+        self._mode("record_argv_empty")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
+
+            rows = [{"transformation": "t", "actor": "a", "args_named": {}}]
+            argv = argv_after(
+                lambda: self.client.propose_batch(rows, explain_on_reject=True)
+            )
+            self.assertIn("--batch", argv)
+            self.assertIn("--explain-on-reject", argv)
+
+            argv = argv_after(lambda: self.client.propose_batch(rows))
+            self.assertIn("--batch", argv)
+            self.assertNotIn("--explain-on-reject", argv)
 
     def test_submit_is_duck_typed_on_the_request_protocol(self):
         self._mode("rejected_exit_1")

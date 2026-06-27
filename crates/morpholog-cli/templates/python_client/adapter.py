@@ -141,23 +141,30 @@ class Morpholog:
             explain_on_reject=explain_on_reject,
         )
 
-    def propose_batch(self, rows: list, timeout: float | None = None) -> list:
+    def propose_batch(
+        self,
+        rows: list,
+        timeout: float | None = None,
+        *,
+        explain_on_reject: bool = False,
+    ) -> list:
         """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
         of ``args``/``args_named``. Returns one ``BatchReceipt`` per
         processed row; a non-zero exit is operational (the batch
         aborted) and raises with the receipts that did arrive named in
-        the error. ``timeout`` bounds this one call and defaults to
-        unbounded, ignoring the client-wide timeout - a large import is
-        the legitimate long-running case.
+        the error. ``explain_on_reject`` attaches the same-snapshot why
+        to every rejected row, as on ``propose``. ``timeout`` bounds
+        this one call and defaults to unbounded, ignoring the
+        client-wide timeout - a large import is the legitimate
+        long-running case.
         """
         ndjson = "".join(json.dumps(row) + "\n" for row in rows)
-        proc = self._run(
-            ["propose", self.file, "--batch", "-", "--database-url", self.database_url],
-            stdin=ndjson,
-            timeout=timeout,
-        )
+        args = ["propose", self.file, "--batch", "-", "--database-url", self.database_url]
+        if explain_on_reject:
+            args.append("--explain-on-reject")
+        proc = self._run(args, stdin=ndjson, timeout=timeout)
         receipts = [
             envelopes.BatchReceipt.from_json(json.loads(line))
             for line in proc.stdout.splitlines()
