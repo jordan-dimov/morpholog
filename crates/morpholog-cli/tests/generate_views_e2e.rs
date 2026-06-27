@@ -158,7 +158,10 @@ fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
 // Refusal is whole-run: a reserved-word field is named, and nothing is
 // written to stdout.
 #[test]
-fn reserved_word_field_refuses_and_writes_nothing() {
+fn reserved_word_field_is_quoted_not_refused() {
+    // A reserved-word field (`select`) is allowed: the generator quotes
+    // every identifier, so the column is emitted as `AS "select"` rather
+    // than refused. Consumers quote it in turn.
     let (_dir, path) = refusal_fixture(
         "program kw\n\
          predicate P(id: Subject, select: Decimal)\n\
@@ -166,18 +169,14 @@ fn reserved_word_field_refuses_and_writes_nothing() {
     );
     let result = generate_stdout(&path, None);
     assert!(
-        !result.status.success(),
-        "a reserved-word field must refuse"
+        result.status.success(),
+        "a reserved-word field is quoted, not refused; stderr:\n{}",
+        String::from_utf8_lossy(&result.stderr)
     );
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let sql = String::from_utf8_lossy(&result.stdout);
     assert!(
-        stderr.contains("`select` is a SQL reserved word"),
-        "got:\n{stderr}"
-    );
-    assert!(stderr.contains("nothing was written"), "got:\n{stderr}");
-    assert!(
-        result.stdout.is_empty(),
-        "refusal must write no SQL to stdout"
+        sql.contains("AS \"select\""),
+        "reserved-word column should be quoted: {sql}"
     );
 }
 

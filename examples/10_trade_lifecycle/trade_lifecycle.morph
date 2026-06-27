@@ -47,6 +47,16 @@
 -- the answer to the first can change as the second moves, because new
 -- knowledge (a backdated amendment) arrives.
 --
+-- Fourth, a desk's exposure on a commodity is limited in both directions
+-- at once. Add up everything it has bought, subtract everything it has
+-- sold, and the result is the net position: positive when the desk is net
+-- long, negative when net short. A risk limit caps how far that net may
+-- swing either way - not too long, not too short. The rule asks for the
+-- size of the net regardless of its sign (its distance from zero) and
+-- refuses any capture or amendment that would push it past the limit. A
+-- buy and an offsetting sell net against each other, so it is the net that
+-- is bounded, never the gross.
+--
 -- Here is how Morpholog thinks about this. It does not store "facts" -
 -- it stores *claims* it has agreed to admit because they obey the
 -- rules. Two kinds of rule do the work:
@@ -129,6 +139,12 @@ predicate OfficialPriceSupersedes(new_official_price_id: Subject, prior_official
 -- cumulative cap honest.
 predicate TradeSettled(trade: Subject, settled_qty: Decimal, settlement_id: Subject, official_price_id: Subject, effective_on: Date)
     unique by (settlement_id)
+-- A risk limit on a commodity book: the most the net position may reach in
+-- either direction. One limit per commodity (the declared uniqueness), so
+-- setting it twice for the same commodity is refused rather than silently
+-- racing two figures.
+predicate PositionLimit(commodity: Subject, limit: Decimal)
+    unique by (commodity)
 -- The read-side projection (defined by the `derived` block at the foot of
 -- the file): one row per terms version, keyed by its identity and
 -- effective date, carrying the quantity in force from that date.
@@ -145,6 +161,7 @@ intent ConfirmAuthorityGranted(principal: Subject, commodity: Subject)
 intent TradeConfirmedAdmitted(trade: Subject, confirmation_id: Subject, official_price_id: Subject)
 intent OfficialPriceCorrected(trade: Subject, new_official_price_id: Subject, prior_official_price_id: Subject)
 intent TradeSettlementRequested(settlement_id: Subject, trade: Subject, settled_qty: Decimal)
+intent PositionLimitSet(commodity: Subject, limit: Decimal)
 
 
 -- "The terms in force on a date", given its name. A trade's terms come
@@ -161,6 +178,16 @@ define terms_in_force_on(trade, d, qty):
     TradeTerms(trade, _, qty, _, ef)
     and ef on_or_before d
     and not (exists later_ef: TradeTerms(trade, _, _, _, later_ef) and later_ef on_or_before d and later_ef after ef)
+
+-- "The trade's current quantity", given its name. Settlement cares about
+-- the quantity in force on a particular date; the running position cares
+-- about the latest one agreed - the version with the latest effective date,
+-- with no later version effective after it. Like `terms_in_force_on` it is
+-- decided by effective dates, not the amendment chain, and hands the
+-- quantity back as `qty`.
+define current_quantity(trade, qty):
+    TradeTerms(trade, _, qty, _, ef)
+    and not (exists later: TradeTerms(trade, _, _, _, later) and later after ef)
 
 
 -- The rules that must always hold. Any change that would leave the
@@ -226,6 +253,21 @@ invariant settled_quantity_is_positive:
 invariant settled_trade_was_confirmed:
     TradeSettled(trade, _, _, _, _) implies TradeConfirmed(trade, _, _, _)
 
+-- The position limit. A desk's net position on a commodity is its buys
+-- minus its sells - a signed figure: positive is net long, negative is net
+-- short. The risk limit caps the *magnitude* of that net in either
+-- direction, so a desk can be neither too long nor too short. `abs` is
+-- exactly that magnitude, which is why a single comparison says it:
+-- whatever the sign of the net, its distance from zero must stay within the
+-- limit. Each trade contributes its current quantity (the define above), so
+-- an amendment that grows a position can breach the limit just as a new
+-- trade can, and the runtime refuses the change that would cross it.
+invariant within_position_limit:
+    PositionLimit(commodity, limit) implies (
+        abs(sum(q | TradeCaptured(t, commodity, #buy) and current_quantity(t, q))
+            - sum(q | TradeCaptured(t, commodity, #sell) and current_quantity(t, q)))
+        <= limit)
+
 
 -- The only ways state may change. A transformation proposes a set of
 -- changes; the runtime applies them only if every invariant still holds
@@ -269,6 +311,18 @@ transformation amend_trade_terms(trade, prior_version_id, new_version_id, quanti
 transformation grant_confirm_authority(principal, commodity):
     admit MayConfirm(principal, commodity)
     emit ConfirmAuthorityGranted(principal, commodity)
+
+-- Set the net-position limit for a commodity. The desk that holds
+-- authority for the commodity sets its own risk limit; the gate refuses a
+-- second limit for the same commodity, so changing it is a deliberate
+-- restatement rather than a silent overwrite. Once set, the
+-- `within_position_limit` invariant holds it against every future capture
+-- and amendment.
+transformation set_position_limit(commodity, limit):
+    require MayConfirm(actor, commodity)
+    require not PositionLimit(commodity, _)
+    admit PositionLimit(commodity, limit)
+    emit PositionLimitSet(commodity, limit)
 
 -- The middle office confirms the trade against the counterparty and sets
 -- the official price. The first gate ties the authority to the trade's

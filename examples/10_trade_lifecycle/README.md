@@ -115,6 +115,25 @@ amendment to 120 (effective 1 February) is recorded, the very same slice
 becomes admissible. The amendment changed what is true, and the runtime
 re-judges admissibility against it.
 
+## The position limit
+
+A second invariant guards a different exposure. A desk's *net position* on a
+commodity is its buys minus its sells - a signed figure, positive when net
+long and negative when net short. A `PositionLimit` caps how far that net
+may swing in *either* direction, and the rule says so in one comparison:
+
+```
+abs(buys - sells) <= limit
+```
+
+`abs` is the magnitude of the net, its distance from zero, so a single
+bound holds the position both ways - too long and too short are the same
+breach. A buy and an offsetting sell net against each other, so it is the
+net that is bounded, never the gross: a 40-lot buy and a 35-lot sell sit at
+a net of 5 even though they gross 75. Each trade contributes its current
+quantity, so an amendment that grows a position can cross the limit just as
+a new capture can, and the runtime refuses the change either way.
+
 ## The program
 
 See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
@@ -123,7 +142,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 
 | Predicate | Role |
 | --- | --- |
-| `TradeCaptured(trade, commodity, direction)` | The trade's immutable identity. Fixed once captured; the quantity lives on the versioned terms. |
+| `TradeCaptured(trade, commodity, direction)` | The trade's immutable identity (direction is `#buy` or `#sell`). Fixed once captured; the quantity lives on the versioned terms. |
 | `TradeTerms(trade, version_id, quantity, delivery_period, effective_from)` | A versioned terms record carrying the date its quantity takes force. Capture admits the first; an amendment admits a later one. |
 | `TradeTermsSupersedes(new_version_id, prior_version_id)` | Amendment lineage: which terms version amended which. Audit only - which version is in force on a date is decided by effective dates, not this chain. |
 | `CapturedPrice(trade, price)` | The trader's price estimate. Recorded, but never settleable on its own. |
@@ -133,6 +152,7 @@ See [`trade_lifecycle.morph`](trade_lifecycle.morph) for the surface form.
 | `CurrentOfficialPrice(trade, official_price_id)` | The retractable pointer naming which official figure is in force - the settlement figure. The one moving part. |
 | `OfficialPriceSupersedes(new_official_price_id, prior_official_price_id)` | Price-correction lineage: which official figure replaced which. |
 | `TradeSettled(trade, settled_qty, settlement_id, official_price_id, effective_on)` | A settlement slice, recording the official price it relied on and the business date it is effective on. Several can stand for one trade. |
+| `PositionLimit(commodity, limit)` | The risk cap on a commodity's net position, bounding `abs(buys - sells)`. One per commodity. |
 | `TermsTimeline(trade, version_id, delivery_period, effective_from, quantity)` | Read-side view: the terms as a timeline, one row per version. Replayed as-of a transition, the bitemporal answer. |
 
 `effective_on` on a settlement is the *business* date the slice belongs to
@@ -171,6 +191,7 @@ money actually moves (that is computed downstream).
 | `confirm_trade(...)` | The middle office confirms the trade and sets the official price in force. Gated on commodity-scoped authority tied to the trade's own commodity, and on the trade not already being confirmed. |
 | `correct_official_price(...)` | Restates the official price: admits the corrected figure, moves the in-force pointer, records the supersession. The prior figure and any settlement made under it stay on the record. |
 | `settle_trade(...)` | Records a settlement slice against the official price in force, effective on a business date, and emits a downstream settlement-request intent. Gated on an in-force official price, on terms effective by the settlement date, and on a fresh settlement id (an idempotency key, so replaying one is refused before the emit). May run more than once per trade. The cumulative effective cap is an invariant, not a gate. |
+| `set_position_limit(commodity, limit)` | Sets the net-position limit for a commodity, gated on confirm authority for it and refused if one is already set. The `within_position_limit` invariant then holds it against every future capture and amendment. |
 
 ## How to run it
 
