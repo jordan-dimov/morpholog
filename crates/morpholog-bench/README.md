@@ -56,9 +56,11 @@ DATABASE_URL=postgres:///morpholog_bench ./scripts/embedder_latency.sh 50
 
 The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at.
 
-## Observations (2026-05-29, local PostgreSQL 17)
+## Observations
 
 Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
+
+The detailed tables below were taken on 2026-05-29 against PostgreSQL 17. A 2026-06-27 re-run on the PostgreSQL 18 floor confirmed every shape and law here is unchanged. The contention numbers - SSI-bound, not hardware-bound - reproduced within noise (16-worker shared-predicate retry rate ~9.9 / ~21 commits/s; predicate-disjoint ~2.3 / ~2760 commits/s); the read and write absolute timings moved in *both* directions with the machine (write faster, `list_scoped` slower), which is machine and cache variance, not a version effect - so they are annotated here, not restated as a PG17-to-18 delta. PG18's headline performance features do not touch this hot path: `list_scoped` is a full-prefix index scan on the `(predicate_name, arguments)` primary key plus JSONB decode (CPU-bound), so B-tree skip scan (which needs an *omitted* prefix column) does not apply, and async I/O (which accelerates sequential and bitmap-heap scans and vacuum) lands elsewhere; the contention floor is SSI predicate-lock granularity. The deferred levers below - incremental snapshots, streaming fetch, materialised derived claims - remain the real ones; PG18 does not change which they are.
 
 ### Read path phase split (N=100 000, K=2)
 
