@@ -19,6 +19,7 @@
 //! makes tampering provable.
 
 use chrono::{DateTime, Utc};
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -27,7 +28,22 @@ use uuid::Uuid;
 use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
 use crate::error::{PgError, classify};
 use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
+use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
+
+/// What an `AuditSigningKey` claim authorises a key for. Bound into the
+/// signed payload, so a key authorised for checkpoints cannot sign a
+/// future artefact kind (an evidence pack, a schema manifest) by
+/// accident. The keys-as-claims authority check lands in a follow-up.
+pub const AUDIT_CHECKPOINT_PURPOSE: &str = "audit_checkpoint_v1";
+
+/// A signing identity for [`create_checkpoint`]: the private key plus the
+/// `key_id` it is published under. The private key is held by the caller
+/// (read from a file in the CLI); it never enters the database.
+pub struct CheckpointSigner {
+    pub key_id: String,
+    pub key: SigningKey,
+}
 
 /// Transaction-level advisory-lock key serialising checkpoint creation,
 /// so two concurrent `checkpoint` runs cannot fork the chain. Arbitrary
@@ -184,7 +200,10 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
 /// transaction advisory lock and re-reads the chain head, so concurrent
 /// runs cannot fork it. Refuses a no-op when the stable prefix has not
 /// grown.
-pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgError> {
+pub async fn create_checkpoint(
+    pool: &PgPool,
+    signer: Option<&CheckpointSigner>,
+) -> Result<CheckpointOutcome, PgError> {
     // Watermark first, then the deferrable read - the lossless-resume
     // ordering: only rows below the horizon are stable enough that no
     // in-flight writer can later insert inside the prefix.
@@ -218,11 +237,35 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         None => (None, None),
     };
 
+    // Sign the new tree head if a key was supplied. The authority check
+    // (that this key is an admitted `AuditSigningKey`) lands with the
+    // keys-as-claims work; here we attest with whatever key the caller
+    // holds.
+    let signatures: Vec<TreeHeadSignature> = match signer {
+        Some(s) => {
+            let head = signing::TreeHead {
+                tree_size,
+                root_hash: &root_hash,
+                prev_checkpoint_hash: prev_hash.as_deref(),
+                checkpoint_hash: &cp_hash,
+            };
+            let sig = signing::sign_tree_head(&s.key, AUDIT_CHECKPOINT_PURPOSE, &s.key_id, &head);
+            vec![TreeHeadSignature {
+                key_id: s.key_id.clone(),
+                purpose: AUDIT_CHECKPOINT_PURPOSE.to_string(),
+                public_key: signing::render_public_key(&s.key.verifying_key()),
+                signature: signing::render_signature(&sig),
+            }]
+        }
+        None => Vec::new(),
+    };
+
     sqlx::query!(
         "INSERT INTO morpholog.audit_checkpoints (
             checkpoint_id, tree_size, root_hash, prev_checkpoint_hash,
-            checkpoint_hash, covered_until, last_transition_id, last_committed_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            checkpoint_hash, covered_until, last_transition_id, last_committed_at,
+            signatures
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         Uuid::now_v7(),
         tree_size,
         root_hash,
@@ -231,6 +274,7 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         horizon,
         last_tid,
         last_at,
+        sqlx::types::Json(&signatures) as _,
     )
     .execute(&mut *tx)
     .await
@@ -242,7 +286,7 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         root_hash,
         prev_checkpoint_hash: prev_hash,
         checkpoint_hash: cp_hash,
-        signatures: Vec::new(),
+        signatures,
     }))
 }
 

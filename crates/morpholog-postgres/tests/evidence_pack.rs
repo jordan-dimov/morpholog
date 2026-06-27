@@ -39,7 +39,7 @@ async fn commit_entry(pool: &PgPool, id: &str) {
 }
 
 async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
-    match create_checkpoint(pool).await.unwrap() {
+    match create_checkpoint(pool, None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")

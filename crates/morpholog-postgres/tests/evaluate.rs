@@ -60,7 +60,7 @@ fn no_entries() -> Program {
 }
 
 async fn export_history_pack(pool: &PgPool) -> EvidencePack {
-    match create_checkpoint(pool).await.unwrap() {
+    match create_checkpoint(pool, None).await.unwrap() {
         CheckpointOutcome::Created(_) | CheckpointOutcome::NoNewRows(_) => {}
     }
     export_pack(pool, None).await.unwrap()
