@@ -718,10 +718,9 @@ underneath; the generated client is the ergonomic face over the same stable
 JSON, regenerated whenever the rules change.
 
 So the division of labour is: your UI, your analytics, your market data, your
-dashboards - all of it stays in the tools you already use. Morpholog owns the one
-line where "may this be admitted as a valid record?" needs an answer you can
-defend three years later. That is a small fraction of any system. It is also the
-fraction that, when it goes wrong, makes the news.
+dashboards stay in the tools you already use; Morpholog owns the one line where
+"may this be admitted as a valid record?" needs an answer you can defend three
+years later.
 
 ## Poke the model
 
@@ -874,64 +873,11 @@ conditions instead of one twenty-line gate.)
 
 ## Questions you are probably asking
 
-**"Isn't this just the dual-write problem with extra steps?"**
-No - it is the standard cure for the transactional version of it. Morpholog
-is the system of record for the governed records; everything downstream
-(analytics tables, caches, search indexes) is a *derived copy*, kept up to
-date by consuming the intents each commit emits. You never write the same
-record to two places and hope. You write once, and propagation is explicit,
-at-least-once, and idempotent. The projection pipeline is still yours to
-operate - retries, idempotency keys, monitoring - but it is one system
-propagating, not two writers pretending to be co-primary. And
-since Morpholog's schema is plain PostgreSQL, it can live in the same database
-as your application's tables - behind its own schema and role, which the next
-question explains.
-
-**"If it is all just PostgreSQL, can't someone connect with `psql` and edit
-the claims directly?"**
-With enough privileges, yes - the same way a DBA can drop a `CHECK` constraint
-or rewrite any ledger's rows. The one door governs every *code path*; it
-cannot govern a superuser. Two things keep that honest. First, ordinary
-privilege hygiene: only the runtime's role writes the `morpholog` schema;
-applications and people get read-only. Second - and this is where the model
-earns something extra - the claims table and the audit log are two records of
-the same history, so an edit that leaves them disagreeing is *detectable*:
-replay the log and compare. `morpholog verify` performs exactly that check,
-naming any claims one record holds that the other does not. What it cannot
-catch is a *coordinated* edit of both records at once - that is the job of the
-recognised next hardening step, a tamper-evident (hash-chained) audit log, not
-yet built.
-
-**"A single generic claims table - isn't that an EAV anti-pattern that defeats
-the query planner?"**
-The claims table is storage, not the query engine. Rules are not evaluated as
-SQL self-joins: the runtime loads only the claims whose predicates a
-transformation touches, and the kernel evaluates the rules in memory. The
-measured shape is linear - about 1.6 seconds per commit with a hundred
-thousand in-scope claims - and as you saw earlier, everyday reads never replay
-anything. Morpholog is built for the admission line of governed records, not
-as a general OLTP store; that boundary is the design, not an accident.
-
-**"Nothing is ever deleted - what about GDPR's right to erasure?"**
-Opaque subjects reduce the problem; they do not magically solve it. The
-intended pattern: claims reference identifiers like `battery_07` or a UUID,
-and names, emails, and anything personal live in an ordinary, erasable store
-keyed by subject id - erasure then deletes the mapping. Two honest caveats. A
-pseudonymous id is still personal data while you hold the mapping; and claim
-*contents* can re-identify someone if you model personal details into them, so
-the pattern is also a modelling discipline. Blinding parts of history itself
-(per-subject encryption, where erasing a key redacts the past without breaking
-its structure) is a recognised future direction, not yet built.
-
-**"Why not OPA, Datomic, or plain Datalog?"**
-Each solves a neighbouring problem. OPA is a stateless policy decision point:
-it answers "may this happen?" but owns no state, commits nothing, keeps no
-audit trail, replays no history. Datomic and XTDB are immutable temporal
-databases: they keep history beautifully, but rules are not first-class
-admission law and nothing explains a refusal. Datalog derives; it does not
-gate transactions. Morpholog's bet is the combination - admission law,
-atomic commit, audit-as-store, replay, and explanation - in one small kernel
-on plain PostgreSQL. [`prior-art.md`](prior-art.md) has the longer comparison.
+The broader pitch questions - the dual-write worry, raw `psql` access, whether
+a generic claims table is an EAV trap, GDPR erasure, and why not OPA, Datomic,
+or Datalog - are answered in the
+[README's common questions](../README.md#common-questions). What this guide
+raises specifically:
 
 **"Are `Subject` and `Decimal` really the only types?"**
 No - this guide's example just never needed more. There are dates with date
@@ -944,15 +890,6 @@ accident), booleans, enum-like domain symbols, and collections. Genuinely
 missing today: calendar arithmetic on civil dates, timezone-aware local time,
 and unit conversions - each planned to enter as admitted claims from an
 authority you choose, never as a hidden runtime lookup table.
-
-**"What happens when a predicate needs to change shape?"**
-Today: the same move this guide taught for figures, applied to vocabulary. You
-do not mutate `Revenue` - you declare the new shape alongside it and write a
-governed transformation that carries forward what should carry forward. Old
-claims stand under the old shape; history replays as it was recorded. A
-first-class migration story - versioned vocabularies, tooling for the
-carry-forward - is acknowledged future work. The honest status: the pattern
-works, the tooling does not exist yet.
 
 **"Does this scale beyond one small file?"**
 The programmes are deliberately small so far, and `.morph` has no imports or

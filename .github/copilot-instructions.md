@@ -46,7 +46,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --lock
 cargo audit                                                                          # needs `cargo install cargo-audit` once
 cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support -p morpholog-cli --all-targets --locked
 
-# Against a local PostgreSQL 17+ with crates/morpholog-core/sql/schema.sql applied:
+# Against a local PostgreSQL 18+ with crates/morpholog-core/sql/schema.sql applied:
 DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-postgres -p morpholog-outbox --all-targets --locked -- --test-threads=1
 ```
