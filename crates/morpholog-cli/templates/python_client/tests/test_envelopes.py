@@ -233,12 +233,24 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsNone(created.checkpoint.prev_checkpoint_hash)
         no_new = envelopes.parse_checkpoint_outcome(golden("checkpoint_no_new_rows.json"))
         self.assertIsInstance(no_new, envelopes.CheckpointNoNewRows)
+        self.assertEqual(created.checkpoint.signatures, [])
+
+    def test_a_signed_checkpoint_carries_its_signature(self):
+        signed = envelopes.parse_checkpoint_outcome(golden("checkpoint_created_signed.json"))
+        self.assertIsInstance(signed, envelopes.CheckpointCreated)
+        sig = signed.checkpoint.signatures[0]
+        self.assertIsInstance(sig, envelopes.TreeHeadSignature)
+        self.assertEqual(sig.key_id, "audit-2026-q3")
+        self.assertEqual(sig.purpose, "audit_checkpoint_v1")
+        self.assertTrue(sig.public_key.startswith("ed25519-pub:"))
+        self.assertTrue(sig.signature.startswith("ed25519-sig:"))
 
     def test_every_tree_verdict_parses(self):
         for name, cls in [
             ("tree_verification_chain_broken.json", envelopes.TreeChainBroken),
             ("tree_verification_anchor_mismatch.json", envelopes.TreeAnchorMismatch),
             ("tree_verification_malformed_pack.json", envelopes.TreeMalformedPack),
+            ("tree_verification_signature_invalid.json", envelopes.TreeSignatureInvalid),
         ]:
             self.assertIsInstance(envelopes.parse_tree_verification(golden(name)), cls)
 

@@ -17,8 +17,19 @@
 //! anchor and fails if the stored checkpoint at that size disagrees. The
 //! checkpoint chain raises the forgery cost; the external anchor is what
 //! makes tampering provable.
+//!
+//! **Signing (see [`crate::signing`]).** A checkpoint may carry Ed25519
+//! signatures over its tree head, which make the anchor *attributable*: a
+//! self-consistent rewrite cannot be re-signed without the private key, so
+//! a verifier holding the trusted public key catches it even without a
+//! prior anchor. `verify` checks that every signature present is genuine
+//! over its tree head ([`TreeVerification::SignatureInvalid`] otherwise).
+//! Whether the signing key is *authorised* - resolved from an admitted
+//! `AuditSigningKey` claim as of the signed prefix - is the keys-as-claims
+//! layer; until then trust in a public key is established out of band.
 
 use chrono::{DateTime, Utc};
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -27,12 +38,40 @@ use uuid::Uuid;
 use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
 use crate::error::{PgError, classify};
 use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
+use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
+
+/// What an `AuditSigningKey` claim authorises a key for. Bound into the
+/// signed payload, so a key authorised for checkpoints cannot sign a
+/// future artefact kind (an evidence pack, a schema manifest) by
+/// accident. The keys-as-claims authority check lands in a follow-up.
+pub const AUDIT_CHECKPOINT_PURPOSE: &str = "audit_checkpoint_v1";
+
+/// A signing identity for [`create_checkpoint`]: the private key plus the
+/// `key_id` it is published under. The private key is held by the caller
+/// (read from a file in the CLI); it never enters the database.
+pub struct CheckpointSigner {
+    pub key_id: String,
+    pub key: SigningKey,
+}
 
 /// Transaction-level advisory-lock key serialising checkpoint creation,
 /// so two concurrent `checkpoint` runs cannot fork the chain. Arbitrary
 /// fixed constant, namespaced to this feature.
 const CHECKPOINT_LOCK_KEY: i64 = 0x4D4F_5250_4F4C_4701; // "MORPOLG\x01"
+
+/// One Ed25519 attestation over a tree head: the signer (`key_id` +
+/// `public_key`), what the key is authorised for (`purpose`), and the
+/// signature, both rendered `ed25519-pub:`/`ed25519-sig:` hex. Carried
+/// with the checkpoint so an externally held anchor is attributable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TreeHeadSignature {
+    pub key_id: String,
+    pub purpose: String,
+    pub public_key: String,
+    pub signature: String,
+}
 
 /// A checkpoint as it is stored, printed, and held externally as an
 /// anchor. `tree_size` + `root_hash` are the cryptographic commitment;
@@ -43,6 +82,10 @@ pub struct Checkpoint {
     pub root_hash: String,
     pub prev_checkpoint_hash: Option<String>,
     pub checkpoint_hash: String,
+    /// Tree-head attestations; empty (and omitted from JSON) when the
+    /// checkpoint is unsigned, which stays valid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signatures: Vec<TreeHeadSignature>,
 }
 
 /// Outcome of [`create_checkpoint`]. Both variants carry a full
@@ -91,6 +134,17 @@ pub enum TreeVerification {
     /// the offline `evidence verify` path produces this; the live
     /// `verify` reads structured rows from the database and never does.
     MalformedPack { detail: String },
+    /// A checkpoint carries a signature that does not verify over its tree
+    /// head (a corrupted signature, or a signed checkpoint whose fields
+    /// were altered without re-signing). This proves the attestation is
+    /// genuine; whether the signing key is *authorised* is a separate
+    /// judgment (the keys-as-claims layer).
+    SignatureInvalid {
+        tree_size: i64,
+        key_id: String,
+        purpose: String,
+        public_key: String,
+    },
 }
 
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||
@@ -143,10 +197,11 @@ async fn collect_leaves(
 /// empty.
 async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Checkpoint>, PgError> {
     let row = sqlx::query!(
-        "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash
-         FROM morpholog.audit_checkpoints
-         ORDER BY tree_size DESC
-         LIMIT 1",
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+           FROM morpholog.audit_checkpoints
+           ORDER BY tree_size DESC
+           LIMIT 1"#,
     )
     .fetch_optional(&mut *conn)
     .await
@@ -156,16 +211,34 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
         root_hash: r.root_hash,
         prev_checkpoint_hash: r.prev_checkpoint_hash,
         checkpoint_hash: r.checkpoint_hash,
+        signatures: r.signatures.0,
     }))
 }
 
 /// Record a checkpoint over the current watermark-stable prefix of the
 /// audit log. The heavy root computation runs under `SERIALIZABLE READ
+/// Attest a tree head with the signer's key for the audit-checkpoint
+/// purpose. The signature is deterministic (Ed25519), so re-signing the
+/// same head with the same key yields the same bytes.
+fn make_signature(signer: &CheckpointSigner, head: &signing::TreeHead<'_>) -> TreeHeadSignature {
+    let sig = signing::sign_tree_head(&signer.key, AUDIT_CHECKPOINT_PURPOSE, &signer.key_id, head);
+    TreeHeadSignature {
+        key_id: signer.key_id.clone(),
+        purpose: AUDIT_CHECKPOINT_PURPOSE.to_string(),
+        public_key: signing::render_public_key(&signer.key.verifying_key()),
+        signature: signing::render_signature(&sig),
+    }
+}
+
 /// ONLY DEFERRABLE` (zero SSI footprint); the short append takes a
 /// transaction advisory lock and re-reads the chain head, so concurrent
-/// runs cannot fork it. Refuses a no-op when the stable prefix has not
-/// grown.
-pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgError> {
+/// runs cannot fork it. When the stable prefix has not grown it records
+/// no new tree, but with a signer it still attaches the attestation to
+/// the existing head (a monotonic addition, de-duplicated on re-sign).
+pub async fn create_checkpoint(
+    pool: &PgPool,
+    signer: Option<&CheckpointSigner>,
+) -> Result<CheckpointOutcome, PgError> {
     // Watermark first, then the deferrable read - the lossless-resume
     // ordering: only rows below the horizon are stable enough that no
     // in-flight writer can later insert inside the prefix.
@@ -188,8 +261,49 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
     if let Some(p) = &prev
         && tree_size <= p.tree_size
     {
-        tx.rollback().await.map_err(classify)?;
-        return Ok(CheckpointOutcome::NoNewRows(p.clone()));
+        // No new rows. With a signer, attach its attestation to the
+        // existing head instead of returning it unsigned - signing an
+        // already-recorded checkpoint does not fork the tree (the
+        // signature is not part of `checkpoint_hash`). An exact re-sign
+        // is de-duplicated.
+        let outcome = match signer {
+            Some(s) => {
+                let head = signing::TreeHead {
+                    tree_size: p.tree_size,
+                    root_hash: &p.root_hash,
+                    prev_checkpoint_hash: p.prev_checkpoint_hash.as_deref(),
+                    checkpoint_hash: &p.checkpoint_hash,
+                };
+                let new_sig = make_signature(s, &head);
+                let mut signatures = p.signatures.clone();
+                if !signatures.iter().any(|x| {
+                    x.key_id == new_sig.key_id
+                        && x.purpose == new_sig.purpose
+                        && x.public_key == new_sig.public_key
+                }) {
+                    signatures.push(new_sig);
+                    sqlx::query!(
+                        "UPDATE morpholog.audit_checkpoints
+                         SET signatures = $1 WHERE checkpoint_hash = $2",
+                        sqlx::types::Json(&signatures) as _,
+                        p.checkpoint_hash,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(classify)?;
+                }
+                tx.commit().await.map_err(classify)?;
+                Checkpoint {
+                    signatures,
+                    ..p.clone()
+                }
+            }
+            None => {
+                tx.rollback().await.map_err(classify)?;
+                p.clone()
+            }
+        };
+        return Ok(CheckpointOutcome::NoNewRows(outcome));
     }
 
     let prev_hash = prev.as_ref().map(|p| p.checkpoint_hash.clone());
@@ -199,11 +313,29 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         None => (None, None),
     };
 
+    // Sign the new tree head if a key was supplied. The authority check
+    // (that this key is an admitted `AuditSigningKey`) lands with the
+    // keys-as-claims work; here we attest with whatever key the caller
+    // holds.
+    let signatures: Vec<TreeHeadSignature> = match signer {
+        Some(s) => {
+            let head = signing::TreeHead {
+                tree_size,
+                root_hash: &root_hash,
+                prev_checkpoint_hash: prev_hash.as_deref(),
+                checkpoint_hash: &cp_hash,
+            };
+            vec![make_signature(s, &head)]
+        }
+        None => Vec::new(),
+    };
+
     sqlx::query!(
         "INSERT INTO morpholog.audit_checkpoints (
             checkpoint_id, tree_size, root_hash, prev_checkpoint_hash,
-            checkpoint_hash, covered_until, last_transition_id, last_committed_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            checkpoint_hash, covered_until, last_transition_id, last_committed_at,
+            signatures
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         Uuid::now_v7(),
         tree_size,
         root_hash,
@@ -212,6 +344,7 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         horizon,
         last_tid,
         last_at,
+        sqlx::types::Json(&signatures) as _,
     )
     .execute(&mut *tx)
     .await
@@ -223,6 +356,7 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         root_hash,
         prev_checkpoint_hash: prev_hash,
         checkpoint_hash: cp_hash,
+        signatures,
     }))
 }
 
@@ -238,9 +372,10 @@ pub(crate) async fn load_checkpoint_chain(
     conn: &mut sqlx::PgConnection,
 ) -> Result<Vec<Checkpoint>, PgError> {
     let stored = sqlx::query!(
-        "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash
-         FROM morpholog.audit_checkpoints
-         ORDER BY tree_size ASC",
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+           FROM morpholog.audit_checkpoints
+           ORDER BY tree_size ASC"#,
     )
     .fetch_all(conn)
     .await
@@ -252,6 +387,7 @@ pub(crate) async fn load_checkpoint_chain(
             root_hash: r.root_hash,
             prev_checkpoint_hash: r.prev_checkpoint_hash,
             checkpoint_hash: r.checkpoint_hash,
+            signatures: r.signatures.0,
         })
         .collect())
 }
@@ -268,7 +404,7 @@ pub async fn verify_audit_tree(
     // so only the external copy can expose it.
     if let Some(anchor) = &anchor {
         let stored_at_size = checkpoints.iter().find(|c| c.tree_size == anchor.tree_size);
-        if stored_at_size != Some(anchor) {
+        if !stored_at_size.is_some_and(|c| same_tree_head(c, anchor)) {
             return Ok(TreeVerification::AnchorMismatch {
                 tree_size: anchor.tree_size,
                 anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
@@ -286,6 +422,18 @@ pub async fn verify_audit_tree(
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,
 /// against Postgres) and the offline pack verifier: given the log's leaf
 /// hashes in canonical order and the checkpoint chain, confirm every
+/// Tree-head identity: the cryptographic commitment, *excluding* the
+/// signatures attached to it. Two checkpoints with the same tree head but
+/// different signatures are the same commitment, so the anchor check must
+/// compare heads, not whole artefacts - otherwise a signature difference
+/// reads as a mismatch whose two `checkpoint_hash`es are identical.
+fn same_tree_head(a: &Checkpoint, b: &Checkpoint) -> bool {
+    a.tree_size == b.tree_size
+        && a.root_hash == b.root_hash
+        && a.prev_checkpoint_hash == b.prev_checkpoint_hash
+        && a.checkpoint_hash == b.checkpoint_hash
+}
+
 /// checkpoint's root recomputes from the leaves, the chain is internally
 /// consistent, and (if supplied) the anchor matches the stored checkpoint
 /// at its size. One core, so the offline verifier cannot drift from the
@@ -299,7 +447,7 @@ pub(crate) fn verify_tree(
     // so only the external copy can expose it.
     if let Some(anchor) = anchor {
         let stored_at_size = checkpoints.iter().find(|c| c.tree_size == anchor.tree_size);
-        if stored_at_size != Some(anchor) {
+        if !stored_at_size.is_some_and(|c| same_tree_head(c, anchor)) {
             return TreeVerification::AnchorMismatch {
                 tree_size: anchor.tree_size,
                 anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
@@ -351,6 +499,36 @@ pub(crate) fn verify_tree(
                 recorded_root: cp.root_hash.clone(),
                 recomputed_root: recomputed,
             };
+        }
+
+        // Signature integrity: every attestation present must verify over
+        // this tree head. A signature that does not is corruption or a
+        // signed checkpoint altered without re-signing. (Whether the key
+        // is *authorised* is the keys-as-claims layer's judgment.)
+        let head = signing::TreeHead {
+            tree_size: cp.tree_size,
+            root_hash: &cp.root_hash,
+            prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+            checkpoint_hash: &cp.checkpoint_hash,
+        };
+        for sig in &cp.signatures {
+            let valid = match (
+                signing::parse_public_key(&sig.public_key),
+                signing::parse_signature(&sig.signature),
+            ) {
+                (Ok(pk), Ok(parsed)) => {
+                    signing::verify_tree_head(&pk, &parsed, &sig.purpose, &sig.key_id, &head)
+                }
+                _ => false,
+            };
+            if !valid {
+                return TreeVerification::SignatureInvalid {
+                    tree_size: cp.tree_size,
+                    key_id: sig.key_id.clone(),
+                    purpose: sig.purpose.clone(),
+                    public_key: sig.public_key.clone(),
+                };
+            }
         }
     }
 

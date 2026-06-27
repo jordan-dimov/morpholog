@@ -31,6 +31,7 @@ pub(crate) mod generate_views;
 pub(crate) mod hash;
 pub(crate) mod init;
 pub(crate) mod inspect;
+pub(crate) mod keygen;
 pub(crate) mod outbox;
 pub(crate) mod propose;
 pub(crate) mod refresh;

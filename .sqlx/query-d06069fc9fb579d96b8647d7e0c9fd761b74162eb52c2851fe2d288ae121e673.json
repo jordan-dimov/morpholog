@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash\n         FROM morpholog.audit_checkpoints\n         ORDER BY tree_size DESC\n         LIMIT 1",
+  "query": "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,\n                  signatures as \"signatures: sqlx::types::Json<Vec<TreeHeadSignature>>\"\n           FROM morpholog.audit_checkpoints\n           ORDER BY tree_size ASC",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "ordinal": 3,
         "name": "checkpoint_hash",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+        "type_info": "Jsonb"
       }
     ],
     "parameters": {
@@ -31,8 +36,9 @@
       false,
       false,
       true,
+      false,
       false
     ]
   },
-  "hash": "6cc335f36f41d75ec899f7e33693b1d186c9638d441ec3a0007764d06b2930ca"
+  "hash": "d06069fc9fb579d96b8647d7e0c9fd761b74162eb52c2851fe2d288ae121e673"
 }

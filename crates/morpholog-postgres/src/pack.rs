@@ -241,6 +241,7 @@ mod tests {
             root_hash: format!("sha256:{tree_size:0>64}"),
             prev_checkpoint_hash: None,
             checkpoint_hash: format!("cp-{tree_size}"),
+            signatures: Vec::new(),
         }
     }
 

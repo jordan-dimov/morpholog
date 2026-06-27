@@ -793,8 +793,38 @@ class TreeMalformedPack:
         return cls(detail=data["detail"])
 
 
+@dataclass(frozen=True)
+class TreeSignatureInvalid:
+    """A checkpoint carries a signature that does not verify over its tree
+    head - corruption, or a signed checkpoint altered without re-signing."""
+
+    tree_size: int
+    key_id: str
+    purpose: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeSignatureInvalid":
+        data = _strict(
+            "signature-invalid tree",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+        )
+
+
 TreeVerification = (
-    TreeIntact | TreeTampered | TreeChainBroken | TreeAnchorMismatch | TreeMalformedPack
+    TreeIntact
+    | TreeTampered
+    | TreeChainBroken
+    | TreeAnchorMismatch
+    | TreeMalformedPack
+    | TreeSignatureInvalid
 )
 
 
@@ -813,6 +843,8 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             return TreeAnchorMismatch.from_json(payload)
         case "malformed_pack":
             return TreeMalformedPack.from_json(payload)
+        case "signature_invalid":
+            return TreeSignatureInvalid.from_json(payload)
         case _:
             raise EnvelopeError(f"not a tree verdict: {payload!r}")
 
@@ -835,15 +867,48 @@ class VerifyReport:
 
 
 @dataclass(frozen=True)
+class TreeHeadSignature:
+    """One Ed25519 attestation over a tree head: who signed it (`key_id`
+    + `public_key`), what the key is authorised for (`purpose`), and the
+    signature - the latter two rendered `ed25519-pub:`/`ed25519-sig:`."""
+
+    key_id: str
+    purpose: str
+    public_key: str
+    signature: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeHeadSignature":
+        data = _strict(
+            "tree-head signature", payload, {"key_id", "purpose", "public_key", "signature"}
+        )
+        return cls(
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+            signature=data["signature"],
+        )
+
+
+def _parse_signatures(data: dict) -> list:
+    raw = data.get("signatures", [])
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`signatures` must be a list, got {raw!r}")
+    return [TreeHeadSignature.from_json(s) for s in raw]
+
+
+@dataclass(frozen=True)
 class Checkpoint:
     """A signed-tree-head commitment to a prefix of the audit log; held
     externally, it is the anchor `verify`/`evidence verify` check
-    against."""
+    against. `signatures` is empty (and omitted from JSON) when the
+    checkpoint is unsigned."""
 
     tree_size: int
     root_hash: str
     prev_checkpoint_hash: str | None
     checkpoint_hash: str
+    signatures: list = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> "Checkpoint":
@@ -851,12 +916,14 @@ class Checkpoint:
             "checkpoint",
             payload,
             {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
+            {"signatures"},
         )
         return cls(
             tree_size=data["tree_size"],
             root_hash=data["root_hash"],
             prev_checkpoint_hash=data["prev_checkpoint_hash"],
             checkpoint_hash=data["checkpoint_hash"],
+            signatures=_parse_signatures(data),
         )
 
 
@@ -868,12 +935,14 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         name,
         payload,
         {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
+        {"signatures"},
     )
     return Checkpoint(
         tree_size=data["tree_size"],
         root_hash=data["root_hash"],
         prev_checkpoint_hash=data["prev_checkpoint_hash"],
         checkpoint_hash=data["checkpoint_hash"],
+        signatures=_parse_signatures(data),
     )
 
 

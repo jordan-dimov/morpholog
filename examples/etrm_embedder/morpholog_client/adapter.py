@@ -290,12 +290,19 @@ class Morpholog:
             args.extend(["--anchor-file", str(anchor_file)])
         return envelopes.VerifyReport.from_json(self._json(*args))
 
-    def checkpoint(self) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
+    def checkpoint(
+        self, signing_key: str | None = None, key_id: str | None = None
+    ) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
         """Record a checkpoint over the current stable prefix, or return
-        the unchanged head - either way a usable external anchor."""
-        return envelopes.parse_checkpoint_outcome(
-            self._json("checkpoint", "--database-url", self.database_url)
-        )
+        the unchanged head - either way a usable external anchor. Pass
+        ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
+        tree head, so the anchor is attributable."""
+        if (signing_key is None) != (key_id is None):
+            raise ValueError("signing_key and key_id must be given together")
+        args = ["checkpoint", "--database-url", self.database_url]
+        if signing_key is not None:
+            args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
+        return envelopes.parse_checkpoint_outcome(self._json(*args))
 
     def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
         """Export a complete-prefix evidence pack covering the latest

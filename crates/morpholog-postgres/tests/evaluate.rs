@@ -60,7 +60,7 @@ fn no_entries() -> Program {
 }
 
 async fn export_history_pack(pool: &PgPool) -> EvidencePack {
-    match create_checkpoint(pool).await.unwrap() {
+    match create_checkpoint(pool, None).await.unwrap() {
         CheckpointOutcome::Created(_) | CheckpointOutcome::NoNewRows(_) => {}
     }
     export_pack(pool, None).await.unwrap()
@@ -227,6 +227,7 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
             .to_string(),
         prev_checkpoint_hash: None,
         checkpoint_hash: "forged".to_string(),
+        signatures: Vec::new(),
     };
     let err = score_candidate_against_pack(&no_entries(), &pack, Some(&forged)).unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")));

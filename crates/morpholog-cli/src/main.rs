@@ -136,8 +136,17 @@ enum Command {
     /// and chains it onto the previous checkpoint. Prints the checkpoint
     /// as JSON - save it outside the database as an anchor: a later
     /// `verify --anchor-file` against it catches any rewrite of the log,
-    /// even one that also rewrites the checkpoint table.
-    Checkpoint(DatabaseArgs),
+    /// even one that also rewrites the checkpoint table. With
+    /// `--signing-key` the tree head is signed, so the anchor is
+    /// attributable as well as tamper-evident.
+    Checkpoint(CheckpointArgs),
+
+    /// Generate an Ed25519 audit-signing keypair.
+    ///
+    /// Writes the private key as PKCS#8 PEM (keep it secret) and the
+    /// public key as `ed25519-pub:<hex>` - the value you admit as an
+    /// `AuditSigningKey` claim and give to verifiers. No database.
+    Keygen(KeygenArgs),
 
     /// Score a candidate programme against committed history.
     ///
@@ -319,6 +328,37 @@ pub(crate) struct VerifyArgs {
     /// pass. Omit to verify only internal checkpoint consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+}
+
+/// Arguments for `checkpoint`: the connection, plus an optional Ed25519
+/// signing key. With `--signing-key` the new tree head is signed; both
+/// `--signing-key` and `--key-id` must be supplied together.
+#[derive(clap::Args, Debug)]
+pub(crate) struct CheckpointArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// PKCS#8 PEM private key to sign the new checkpoint's tree head.
+    #[arg(long, requires = "key_id")]
+    pub(crate) signing_key: Option<std::path::PathBuf>,
+
+    /// The key id the signature is published under; it must match an
+    /// authorised `AuditSigningKey(key_id, "audit_checkpoint_v1", <public
+    /// key>)` claim once authority enforcement lands.
+    #[arg(long, requires = "signing_key")]
+    pub(crate) key_id: Option<String>,
+}
+
+/// Arguments for `keygen`: where to write the new Ed25519 keypair.
+#[derive(clap::Args, Debug)]
+pub(crate) struct KeygenArgs {
+    /// Where to write the PKCS#8 PEM private key. Keep it secret.
+    #[arg(long)]
+    pub(crate) private_out: std::path::PathBuf,
+
+    /// Where to write the `ed25519-pub:<hex>` public key.
+    #[arg(long)]
+    pub(crate) public_out: std::path::PathBuf,
 }
 
 /// Arguments for `evaluate`: a candidate `.morph` path, and the history to
@@ -1014,6 +1054,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Schema(args) => commands::schema::run(args),
         Command::Verify(args) => commands::verify::run(args).await,
         Command::Checkpoint(args) => commands::checkpoint::run(args).await,
+        Command::Keygen(args) => commands::keygen::run(&args),
         Command::Evaluate(args) => commands::evaluate::run(args).await,
         Command::Evidence { what } => commands::evidence::run(what).await,
         Command::Generate {

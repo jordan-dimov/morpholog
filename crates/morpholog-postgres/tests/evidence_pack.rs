@@ -39,7 +39,7 @@ async fn commit_entry(pool: &PgPool, id: &str) {
 }
 
 async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
-    match create_checkpoint(pool).await.unwrap() {
+    match create_checkpoint(pool, None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")
@@ -179,6 +179,7 @@ async fn an_older_anchor_in_the_chain_is_intact_an_outside_anchor_mismatches() {
         root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
         prev_checkpoint_hash: None,
         checkpoint_hash: "forged".into(),
+        signatures: Vec::new(),
     };
     assert!(matches!(
         verify_pack(&pack, Some(&forged)).unwrap(),

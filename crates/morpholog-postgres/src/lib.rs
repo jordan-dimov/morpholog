@@ -25,6 +25,7 @@ mod pack;
 mod propose;
 mod rejections;
 mod score;
+mod signing;
 mod txn;
 mod verify;
 
@@ -38,7 +39,8 @@ pub use audit::{
     list_audit_rows, list_audit_rows_page,
 };
 pub use checkpoints::{
-    Checkpoint, CheckpointOutcome, TreeVerification, create_checkpoint, verify_audit_tree,
+    AUDIT_CHECKPOINT_PURPOSE, Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature,
+    TreeVerification, create_checkpoint, verify_audit_tree,
 };
 pub use claims::{list_claims, list_claims_for_predicates, load_scoped_state};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
@@ -58,6 +60,11 @@ pub use propose::{
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use score::{score_candidate, score_candidate_against_pack, score_candidate_against_packs};
+pub use signing::{
+    SigningError, TreeHead, generate_signing_key, parse_public_key, parse_signature,
+    render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
+    tree_head_signing_bytes, verify_tree_head,
+};
 pub use verify::{
     InitOutcome, SCHEMA_SQL, VerifyOutcome, VerifyReport, coverage_replay, initialise_schema,
     verify_replay,

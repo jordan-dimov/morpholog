@@ -34,7 +34,8 @@ use morpholog_core::{
 };
 use morpholog_postgres::{
     AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
-    PackManifest, PgProposalOutcome, TreeVerification, VerifyOutcome, VerifyReport,
+    PackManifest, PgProposalOutcome, TreeHeadSignature, TreeVerification, VerifyOutcome,
+    VerifyReport,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -413,6 +414,7 @@ fn sample_checkpoint() -> Checkpoint {
         root_hash: format!("sha256:{}", "a".repeat(64)),
         prev_checkpoint_hash: None,
         checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+        signatures: Vec::new(),
     }
 }
 
@@ -467,6 +469,17 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "checkpoint_created.json",
         &to_value(&CheckpointOutcome::Created(sample_checkpoint())),
     );
+    let mut signed = sample_checkpoint();
+    signed.signatures = vec![TreeHeadSignature {
+        key_id: "audit-2026-q3".into(),
+        purpose: "audit_checkpoint_v1".into(),
+        public_key: format!("ed25519-pub:{}", "c".repeat(64)),
+        signature: format!("ed25519-sig:{}", "d".repeat(128)),
+    }];
+    assert_golden(
+        "checkpoint_created_signed.json",
+        &to_value(&CheckpointOutcome::Created(signed)),
+    );
     assert_golden(
         "checkpoint_no_new_rows.json",
         &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
@@ -507,6 +520,15 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "tree_verification_malformed_pack.json",
         &to_value(&TreeVerification::MalformedPack {
             detail: "pack rows do not match the manifest tree_size".into(),
+        }),
+    );
+    assert_golden(
+        "tree_verification_signature_invalid.json",
+        &to_value(&TreeVerification::SignatureInvalid {
+            tree_size: 2,
+            key_id: "audit-2026-q3".into(),
+            purpose: "audit_checkpoint_v1".into(),
+            public_key: format!("ed25519-pub:{}", "c".repeat(64)),
         }),
     );
 }
@@ -650,6 +672,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),
         ("checkpoint_created.json", "checkpoint_outcome"),
+        ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
         ("evidence_pack.json", "evidence_pack"),
         ("tree_verification_chain_broken.json", "tree_verification"),
@@ -658,6 +681,10 @@ fn every_golden_validates_against_its_defs_entry() {
             "tree_verification",
         ),
         ("tree_verification_malformed_pack.json", "tree_verification"),
+        (
+            "tree_verification_signature_invalid.json",
+            "tree_verification",
+        ),
     ];
     for (file, def) in cases {
         let golden: serde_json::Value = serde_json::from_str(
