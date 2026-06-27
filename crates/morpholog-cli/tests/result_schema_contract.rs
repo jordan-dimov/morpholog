@@ -522,6 +522,14 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             detail: "pack rows do not match the manifest tree_size".into(),
         }),
     );
+    assert_golden(
+        "tree_verification_signature_invalid.json",
+        &to_value(&TreeVerification::SignatureInvalid {
+            tree_size: 2,
+            key_id: "audit-2026-q3".into(),
+            public_key: format!("ed25519-pub:{}", "c".repeat(64)),
+        }),
+    );
 }
 
 // ============================================================
@@ -672,6 +680,10 @@ fn every_golden_validates_against_its_defs_entry() {
             "tree_verification",
         ),
         ("tree_verification_malformed_pack.json", "tree_verification"),
+        (
+            "tree_verification_signature_invalid.json",
+            "tree_verification",
+        ),
     ];
     for (file, def) in cases {
         let golden: serde_json::Value = serde_json::from_str(

@@ -124,6 +124,16 @@ pub enum TreeVerification {
     /// the offline `evidence verify` path produces this; the live
     /// `verify` reads structured rows from the database and never does.
     MalformedPack { detail: String },
+    /// A checkpoint carries a signature that does not verify over its tree
+    /// head (a corrupted signature, or a signed checkpoint whose fields
+    /// were altered without re-signing). This proves the attestation is
+    /// genuine; whether the signing key is *authorised* is a separate
+    /// judgment (the keys-as-claims layer).
+    SignatureInvalid {
+        tree_size: i64,
+        key_id: String,
+        public_key: String,
+    },
 }
 
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||
@@ -417,6 +427,35 @@ pub(crate) fn verify_tree(
                 recorded_root: cp.root_hash.clone(),
                 recomputed_root: recomputed,
             };
+        }
+
+        // Signature integrity: every attestation present must verify over
+        // this tree head. A signature that does not is corruption or a
+        // signed checkpoint altered without re-signing. (Whether the key
+        // is *authorised* is the keys-as-claims layer's judgment.)
+        let head = signing::TreeHead {
+            tree_size: cp.tree_size,
+            root_hash: &cp.root_hash,
+            prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+            checkpoint_hash: &cp.checkpoint_hash,
+        };
+        for sig in &cp.signatures {
+            let valid = match (
+                signing::parse_public_key(&sig.public_key),
+                signing::parse_signature(&sig.signature),
+            ) {
+                (Ok(pk), Ok(parsed)) => {
+                    signing::verify_tree_head(&pk, &parsed, &sig.purpose, &sig.key_id, &head)
+                }
+                _ => false,
+            };
+            if !valid {
+                return TreeVerification::SignatureInvalid {
+                    tree_size: cp.tree_size,
+                    key_id: sig.key_id.clone(),
+                    public_key: sig.public_key.clone(),
+                };
+            }
         }
     }
 

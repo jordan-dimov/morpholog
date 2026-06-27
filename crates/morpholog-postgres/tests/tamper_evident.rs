@@ -9,7 +9,8 @@
 
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, PgPool, TreeVerification, create_checkpoint, verify_audit_tree,
+    Checkpoint, CheckpointOutcome, CheckpointSigner, PgPool, TreeVerification, create_checkpoint,
+    generate_signing_key, verify_audit_tree,
 };
 
 mod common;
@@ -195,4 +196,48 @@ async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
         ),
         "the anchor must catch the coordinated rewrite: {verdict:?}"
     );
+}
+
+#[tokio::test]
+async fn a_signed_checkpoint_verifies_and_a_corrupted_signature_is_caught() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for i in 0..2 {
+        commit_entry(&pool, &format!("s{i}")).await;
+    }
+
+    let signer = CheckpointSigner {
+        key_id: "k1".into(),
+        key: generate_signing_key(),
+    };
+    let cp = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+        CheckpointOutcome::Created(c) => c,
+        other => panic!("expected a created checkpoint, got {other:?}"),
+    };
+    assert_eq!(cp.signatures.len(), 1);
+    assert_eq!(cp.signatures[0].key_id, "k1");
+
+    // A genuinely signed checkpoint verifies intact.
+    assert!(matches!(
+        verify_audit_tree(&pool, None).await.unwrap(),
+        TreeVerification::Intact { .. }
+    ));
+
+    // Replace the stored signature with one that does not verify, keeping
+    // the tree head intact: the verdict is SignatureInvalid, not Tampered.
+    let corrupted = format!(
+        r#"[{{"key_id":"k1","purpose":"audit_checkpoint_v1","public_key":"{}","signature":"ed25519-sig:{}"}}]"#,
+        cp.signatures[0].public_key,
+        "0".repeat(128)
+    );
+    sqlx::query("UPDATE morpholog.audit_checkpoints SET signatures = $1::jsonb")
+        .bind(corrupted)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        verify_audit_tree(&pool, None).await.unwrap(),
+        TreeVerification::SignatureInvalid { key_id, .. } if key_id == "k1"
+    ));
 }

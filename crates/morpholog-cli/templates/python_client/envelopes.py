@@ -793,8 +793,34 @@ class TreeMalformedPack:
         return cls(detail=data["detail"])
 
 
+@dataclass(frozen=True)
+class TreeSignatureInvalid:
+    """A checkpoint carries a signature that does not verify over its tree
+    head - corruption, or a signed checkpoint altered without re-signing."""
+
+    tree_size: int
+    key_id: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeSignatureInvalid":
+        data = _strict(
+            "signature-invalid tree", payload, {"status", "tree_size", "key_id", "public_key"}
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            public_key=data["public_key"],
+        )
+
+
 TreeVerification = (
-    TreeIntact | TreeTampered | TreeChainBroken | TreeAnchorMismatch | TreeMalformedPack
+    TreeIntact
+    | TreeTampered
+    | TreeChainBroken
+    | TreeAnchorMismatch
+    | TreeMalformedPack
+    | TreeSignatureInvalid
 )
 
 
@@ -813,6 +839,8 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             return TreeAnchorMismatch.from_json(payload)
         case "malformed_pack":
             return TreeMalformedPack.from_json(payload)
+        case "signature_invalid":
+            return TreeSignatureInvalid.from_json(payload)
         case _:
             raise EnvelopeError(f"not a tree verdict: {payload!r}")
 

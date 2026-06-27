@@ -676,6 +676,17 @@
             "status": { "const": "malformed_pack" },
             "detail": { "type": "string" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "key_id", "public_key"],
+          "properties": {
+            "status": { "const": "signature_invalid" },
+            "tree_size": { "type": "integer" },
+            "key_id": { "type": "string" },
+            "public_key": { "type": "string" }
+          }
         }
       ]
     },
