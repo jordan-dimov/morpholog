@@ -17,6 +17,16 @@
 //! anchor and fails if the stored checkpoint at that size disagrees. The
 //! checkpoint chain raises the forgery cost; the external anchor is what
 //! makes tampering provable.
+//!
+//! **Signing (see [`crate::signing`]).** A checkpoint may carry Ed25519
+//! signatures over its tree head, which make the anchor *attributable*: a
+//! self-consistent rewrite cannot be re-signed without the private key, so
+//! a verifier holding the trusted public key catches it even without a
+//! prior anchor. `verify` checks that every signature present is genuine
+//! over its tree head ([`TreeVerification::SignatureInvalid`] otherwise).
+//! Whether the signing key is *authorised* - resolved from an admitted
+//! `AuditSigningKey` claim as of the signed prefix - is the keys-as-claims
+//! layer; until then trust in a public key is established out of band.
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;

@@ -212,7 +212,9 @@ async fn a_signed_checkpoint_verifies_and_a_corrupted_signature_is_caught() {
     };
     let cp = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
-        other => panic!("expected a created checkpoint, got {other:?}"),
+        other @ CheckpointOutcome::NoNewRows(_) => {
+            panic!("expected a created checkpoint, got {other:?}")
+        }
     };
     assert_eq!(cp.signatures.len(), 1);
     assert_eq!(cp.signatures[0].key_id, "k1");
