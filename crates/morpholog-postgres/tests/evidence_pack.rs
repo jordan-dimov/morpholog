@@ -179,6 +179,7 @@ async fn an_older_anchor_in_the_chain_is_intact_an_outside_anchor_mismatches() {
         root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
         prev_checkpoint_hash: None,
         checkpoint_hash: "forged".into(),
+        signatures: Vec::new(),
     };
     assert!(matches!(
         verify_pack(&pack, Some(&forged)).unwrap(),

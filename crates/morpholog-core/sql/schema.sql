@@ -87,7 +87,12 @@ CREATE TABLE audit_checkpoints (
     covered_until         timestamptz  NOT NULL,
     last_transition_id    uuid,
     last_committed_at     timestamptz,
-    created_at            timestamptz  NOT NULL DEFAULT now()
+    created_at            timestamptz  NOT NULL DEFAULT now(),
+    -- Ed25519 signatures over this tree head; `[]` when unsigned. Each
+    -- element is {key_id, purpose, public_key, signature}. Signing makes
+    -- an externally held anchor attributable - tampering then needs the
+    -- private key, not just write access (see `signing.rs`).
+    signatures            jsonb        NOT NULL DEFAULT '[]'::jsonb
 );
 
 -- At most one genesis checkpoint (the single chain root). A plain UNIQUE

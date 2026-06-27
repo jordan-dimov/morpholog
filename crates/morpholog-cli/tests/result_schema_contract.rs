@@ -413,6 +413,7 @@ fn sample_checkpoint() -> Checkpoint {
         root_hash: format!("sha256:{}", "a".repeat(64)),
         prev_checkpoint_hash: None,
         checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+        signatures: Vec::new(),
     }
 }
 

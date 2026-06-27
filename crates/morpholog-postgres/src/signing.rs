@@ -177,10 +177,11 @@ fn from_hex<const N: usize>(s: &str, what: &'static str) -> Result<[u8; N], Sign
     }
     let mut out = [0u8; N];
     for (i, slot) in out.iter_mut().enumerate() {
-        *slot = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| SigningError::Malformed {
-            what,
-            detail: e.to_string(),
-        })?;
+        *slot =
+            u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| SigningError::Malformed {
+                what,
+                detail: e.to_string(),
+            })?;
     }
     Ok(out)
 }

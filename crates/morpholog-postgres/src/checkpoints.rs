@@ -34,6 +34,19 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 /// fixed constant, namespaced to this feature.
 const CHECKPOINT_LOCK_KEY: i64 = 0x4D4F_5250_4F4C_4701; // "MORPOLG\x01"
 
+/// One Ed25519 attestation over a tree head: the signer (`key_id` +
+/// `public_key`), what the key is authorised for (`purpose`), and the
+/// signature, both rendered `ed25519-pub:`/`ed25519-sig:` hex. Carried
+/// with the checkpoint so an externally held anchor is attributable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TreeHeadSignature {
+    pub key_id: String,
+    pub purpose: String,
+    pub public_key: String,
+    pub signature: String,
+}
+
 /// A checkpoint as it is stored, printed, and held externally as an
 /// anchor. `tree_size` + `root_hash` are the cryptographic commitment;
 /// `checkpoint_hash` is this checkpoint's identity in the chain.
@@ -43,6 +56,10 @@ pub struct Checkpoint {
     pub root_hash: String,
     pub prev_checkpoint_hash: Option<String>,
     pub checkpoint_hash: String,
+    /// Tree-head attestations; empty (and omitted from JSON) when the
+    /// checkpoint is unsigned, which stays valid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signatures: Vec<TreeHeadSignature>,
 }
 
 /// Outcome of [`create_checkpoint`]. Both variants carry a full
@@ -143,10 +160,11 @@ async fn collect_leaves(
 /// empty.
 async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Checkpoint>, PgError> {
     let row = sqlx::query!(
-        "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash
-         FROM morpholog.audit_checkpoints
-         ORDER BY tree_size DESC
-         LIMIT 1",
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+           FROM morpholog.audit_checkpoints
+           ORDER BY tree_size DESC
+           LIMIT 1"#,
     )
     .fetch_optional(&mut *conn)
     .await
@@ -156,6 +174,7 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
         root_hash: r.root_hash,
         prev_checkpoint_hash: r.prev_checkpoint_hash,
         checkpoint_hash: r.checkpoint_hash,
+        signatures: r.signatures.0,
     }))
 }
 
@@ -223,6 +242,7 @@ pub async fn create_checkpoint(pool: &PgPool) -> Result<CheckpointOutcome, PgErr
         root_hash,
         prev_checkpoint_hash: prev_hash,
         checkpoint_hash: cp_hash,
+        signatures: Vec::new(),
     }))
 }
 
@@ -238,9 +258,10 @@ pub(crate) async fn load_checkpoint_chain(
     conn: &mut sqlx::PgConnection,
 ) -> Result<Vec<Checkpoint>, PgError> {
     let stored = sqlx::query!(
-        "SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash
-         FROM morpholog.audit_checkpoints
-         ORDER BY tree_size ASC",
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+           FROM morpholog.audit_checkpoints
+           ORDER BY tree_size ASC"#,
     )
     .fetch_all(conn)
     .await
@@ -252,6 +273,7 @@ pub(crate) async fn load_checkpoint_chain(
             root_hash: r.root_hash,
             prev_checkpoint_hash: r.prev_checkpoint_hash,
             checkpoint_hash: r.checkpoint_hash,
+            signatures: r.signatures.0,
         })
         .collect())
 }
