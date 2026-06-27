@@ -873,10 +873,11 @@ conditions instead of one twenty-line gate.)
 
 ## Questions you are probably asking
 
-Two that this guide specifically raises. The broader pitch questions - the
-dual-write worry, raw `psql` access, whether a generic claims table is an EAV
-trap, GDPR erasure, and why not OPA, Datomic, or Datalog - are answered in the
-[README's common questions](../README.md#common-questions).
+The broader pitch questions - the dual-write worry, raw `psql` access, whether
+a generic claims table is an EAV trap, GDPR erasure, and why not OPA, Datomic,
+or Datalog - are answered in the
+[README's common questions](../README.md#common-questions). What this guide
+raises specifically:
 
 **"Are `Subject` and `Decimal` really the only types?"**
 No - this guide's example just never needed more. There are dates with date
