@@ -1,0 +1,4 @@
+{
+  "detail": "pack rows do not match the manifest tree_size",
+  "status": "malformed_pack"
+}

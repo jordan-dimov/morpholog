@@ -612,6 +612,28 @@ async fn evidence_export_then_verify_offline() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict() {
+    // A file that reads but is not a valid pack is a decided verdict on
+    // stdout (`malformed_pack`, exit one), not an operational failure on
+    // stderr - the offline verifier still answers. No database needed.
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, br#"{"not": "a pack"}"#).unwrap();
+    let (status, stdout, stderr) =
+        run_cli_no_db(&["evidence", "verify", packfile.path().to_str().unwrap()]);
+    assert!(
+        !status.success(),
+        "an invalid pack must exit non-zero: {stdout}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap_or_else(|_| panic!(
+            "verdict on stdout, got stdout={stdout:?} stderr={stderr:?}"
+        ))["status"],
+        "malformed_pack",
+        "got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn evaluate_scores_a_candidate_against_history() {
     reset_db().await;
     post_balanced_entry("ev1", 100);

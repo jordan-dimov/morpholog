@@ -51,7 +51,7 @@ fine - it is the part that pays off at the end of this guide.
 
 ## Setup
 
-Morpholog runs on PostgreSQL 17+ and ships as a single CLI. One-time setup:
+Morpholog runs on PostgreSQL 18+ and ships as a single CLI. One-time setup:
 
 ```bash
 # install the CLI from the repo

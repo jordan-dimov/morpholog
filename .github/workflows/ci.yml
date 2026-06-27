@@ -69,9 +69,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 17 is the stated floor; 18 is what hosted embedders (the
-        # Glasshouse demo) already run on.
-        postgres: [17, 18]
+        # PostgreSQL 18 is the minimum supported version.
+        postgres: [18]
 
     services:
       postgres:
@@ -113,17 +112,15 @@ jobs:
           PGPASSWORD: postgres
         run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f crates/morpholog-core/sql/schema.sql
 
-      # The committed `.sqlx/` cache is generated against the PG 17 floor;
-      # check it against the live schema on that matrix entry, so a query
-      # that drifted from the schema fails CI here rather than at runtime.
+      # The committed `.sqlx/` cache is generated against the PG 18 floor;
+      # check it against the live schema so a query that drifted from the
+      # schema fails CI here rather than at runtime.
       - name: Install sqlx-cli
-        if: matrix.postgres == 17
         uses: taiki-e/install-action@v2
         with:
           tool: sqlx-cli@0.8.6
 
       - name: Check sqlx offline cache against the schema
-        if: matrix.postgres == 17
         env:
           SQLX_OFFLINE: "false"
         run: cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
@@ -165,7 +162,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -229,7 +226,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports:

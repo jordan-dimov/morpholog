@@ -42,12 +42,6 @@ async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
 fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)
         .with_context(|| format!("reading pack file {}", args.pack_file.display()))?;
-    let pack: EvidencePack = serde_json::from_slice(&bytes).with_context(|| {
-        format!(
-            "parsing pack file {} as an evidence pack",
-            args.pack_file.display()
-        )
-    })?;
 
     let anchor: Option<Checkpoint> = match &args.anchor_file {
         Some(path) => {
@@ -60,20 +54,22 @@ fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    match verify_pack(&pack, anchor.as_ref()) {
-        Ok(tree) => {
-            print_json(&tree)?;
-            if !matches!(tree, TreeVerification::Intact { .. }) {
-                std::process::exit(1);
+    // A readable file that is not a valid pack is a decided verdict, not
+    // an operational failure - the offline verifier still answers on
+    // stdout. Only an unreadable file (above) stays operational.
+    let tree = match serde_json::from_slice::<EvidencePack>(&bytes) {
+        Ok(pack) => verify_pack(&pack, anchor.as_ref()).unwrap_or_else(|e| {
+            TreeVerification::MalformedPack {
+                detail: e.to_string(),
             }
-            Ok(())
-        }
-        Err(e) => {
-            print_json(&serde_json::json!({
-                "status": "malformed_pack",
-                "detail": e.to_string(),
-            }))?;
-            std::process::exit(1);
-        }
+        }),
+        Err(e) => TreeVerification::MalformedPack {
+            detail: e.to_string(),
+        },
+    };
+    print_json(&tree)?;
+    if !matches!(tree, TreeVerification::Intact { .. }) {
+        std::process::exit(1);
     }
+    Ok(())
 }

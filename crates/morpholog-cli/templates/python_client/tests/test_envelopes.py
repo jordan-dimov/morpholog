@@ -210,5 +210,45 @@ class DriftTripwire(unittest.TestCase):
             envelopes.parse_run_outcome(payload)
 
 
+class TamperEvidence(unittest.TestCase):
+    def test_verify_report_consistent_and_intact(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_consistent.json"))
+        self.assertIsInstance(report.replay, envelopes.ReplayConsistent)
+        self.assertEqual(report.replay.transitions, 2)
+        self.assertIsInstance(report.tree, envelopes.TreeIntact)
+        self.assertEqual(report.tree.checkpoints, 1)
+
+    def test_verify_report_divergent_and_tampered(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_divergent.json"))
+        self.assertIsInstance(report.replay, envelopes.ReplayDivergent)
+        self.assertEqual(report.replay.only_in_claims_table[0].predicate, "EveryKind")
+        self.assertEqual(report.replay.only_in_replay, [])
+        self.assertIsInstance(report.tree, envelopes.TreeTampered)
+        self.assertNotEqual(report.tree.recorded_root, report.tree.recomputed_root)
+
+    def test_checkpoint_outcomes(self):
+        created = envelopes.parse_checkpoint_outcome(golden("checkpoint_created.json"))
+        self.assertIsInstance(created, envelopes.CheckpointCreated)
+        self.assertEqual(created.checkpoint.tree_size, 2)
+        self.assertIsNone(created.checkpoint.prev_checkpoint_hash)
+        no_new = envelopes.parse_checkpoint_outcome(golden("checkpoint_no_new_rows.json"))
+        self.assertIsInstance(no_new, envelopes.CheckpointNoNewRows)
+
+    def test_every_tree_verdict_parses(self):
+        for name, cls in [
+            ("tree_verification_chain_broken.json", envelopes.TreeChainBroken),
+            ("tree_verification_anchor_mismatch.json", envelopes.TreeAnchorMismatch),
+            ("tree_verification_malformed_pack.json", envelopes.TreeMalformedPack),
+        ]:
+            self.assertIsInstance(envelopes.parse_tree_verification(golden(name)), cls)
+
+    def test_evidence_pack_with_embedded_rows_and_checkpoints(self):
+        pack = envelopes.EvidencePack.from_json(golden("evidence_pack.json"))
+        self.assertEqual(pack.manifest.pack_format_version, 1)
+        self.assertIsInstance(pack.checkpoints[0], envelopes.Checkpoint)
+        self.assertIsInstance(pack.rows[0], envelopes.AuditRow)
+        self.assertEqual(pack.rows[0].transformation_name, "open_account")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,10 @@ use morpholog_core::ir_builder::{
 use morpholog_core::{
     ClaimInstance, CoverageTracker, EvalValue, IntentInstance, State, Subject, Transition, explain,
 };
-use morpholog_postgres::{AuditRow, AuditedInvariantCheck, OutboxRow, PgProposalOutcome};
+use morpholog_postgres::{
+    AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
+    PackManifest, PgProposalOutcome, TreeVerification, VerifyOutcome, VerifyReport,
+};
 use rust_decimal::Decimal;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -400,6 +403,114 @@ fn report_envelopes_serialize_as_pinned() {
     );
 }
 
+// The tamper-evidence family: the envelopes of `verify`, `checkpoint`,
+// and `evidence export`/`verify`. One golden per serialized variant so
+// the reality layer pins every shape an embedder decodes.
+
+fn sample_checkpoint() -> Checkpoint {
+    Checkpoint {
+        tree_size: 2,
+        root_hash: format!("sha256:{}", "a".repeat(64)),
+        prev_checkpoint_hash: None,
+        checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+    }
+}
+
+fn sample_audit_row() -> AuditRow {
+    AuditRow {
+        transition_id: sample_uuid(),
+        transformation_name: "open_account".into(),
+        arguments: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        actor: Subject::from("alex"),
+        invariant_epoch: 1,
+        invariants_checked: vec![],
+        asserted_claims: vec![kitchen_sink_claim()],
+        retracted_claims: vec![],
+        emitted_intents: vec![],
+        committed_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+    }
+}
+
+#[test]
+fn tamper_evidence_envelopes_serialize_as_pinned() {
+    // `verify`: replay verdict beside tamper-evidence verdict.
+    assert_golden(
+        "verify_report_consistent.json",
+        &to_value(&VerifyReport {
+            replay: VerifyOutcome::Consistent {
+                transitions: 2,
+                claims: 3,
+            },
+            tree: TreeVerification::Intact {
+                checkpoints: 1,
+                tree_size: 2,
+            },
+        }),
+    );
+    assert_golden(
+        "verify_report_divergent.json",
+        &to_value(&VerifyReport {
+            replay: VerifyOutcome::Divergent {
+                only_in_claims_table: vec![kitchen_sink_claim()],
+                only_in_replay: vec![],
+            },
+            tree: TreeVerification::Tampered {
+                tree_size: 2,
+                recorded_root: format!("sha256:{}", "a".repeat(64)),
+                recomputed_root: format!("sha256:{}", "c".repeat(64)),
+            },
+        }),
+    );
+
+    // `checkpoint`: both variants carry a full checkpoint under the tag.
+    assert_golden(
+        "checkpoint_created.json",
+        &to_value(&CheckpointOutcome::Created(sample_checkpoint())),
+    );
+    assert_golden(
+        "checkpoint_no_new_rows.json",
+        &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
+    );
+
+    // `evidence export`: the portable pack.
+    assert_golden(
+        "evidence_pack.json",
+        &to_value(&EvidencePack {
+            manifest: PackManifest {
+                pack_format_version: 1,
+                tree_size: 2,
+                root_hash: format!("sha256:{}", "a".repeat(64)),
+                checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+            },
+            checkpoints: vec![sample_checkpoint()],
+            rows: vec![sample_audit_row()],
+        }),
+    );
+
+    // `evidence verify`: the remaining tree verdicts (intact and tampered
+    // are pinned via verify_report above).
+    assert_golden(
+        "tree_verification_chain_broken.json",
+        &to_value(&TreeVerification::ChainBroken {
+            detail: "checkpoint 2 prev link does not match checkpoint 1".into(),
+        }),
+    );
+    assert_golden(
+        "tree_verification_anchor_mismatch.json",
+        &to_value(&TreeVerification::AnchorMismatch {
+            tree_size: 2,
+            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+            stored_checkpoint_hash: Some(format!("sha256:{}", "d".repeat(64))),
+        }),
+    );
+    assert_golden(
+        "tree_verification_malformed_pack.json",
+        &to_value(&TreeVerification::MalformedPack {
+            detail: "pack rows do not match the manifest tree_size".into(),
+        }),
+    );
+}
+
 // ============================================================
 // Pin layer: every golden validates against its $defs entry in the
 // embedded result.json.
@@ -536,6 +647,17 @@ fn every_golden_validates_against_its_defs_entry() {
         ("hash_report.json", "hash_report"),
         ("init_report.json", "init_report"),
         ("named_claim.json", "named_claim"),
+        ("verify_report_consistent.json", "verify_report"),
+        ("verify_report_divergent.json", "verify_report"),
+        ("checkpoint_created.json", "checkpoint_outcome"),
+        ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
+        ("evidence_pack.json", "evidence_pack"),
+        ("tree_verification_chain_broken.json", "tree_verification"),
+        (
+            "tree_verification_anchor_mismatch.json",
+            "tree_verification",
+        ),
+        ("tree_verification_malformed_pack.json", "tree_verification"),
     ];
     for (file, def) in cases {
         let golden: serde_json::Value = serde_json::from_str(

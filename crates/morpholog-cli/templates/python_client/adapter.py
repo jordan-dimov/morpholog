@@ -277,6 +277,48 @@ class Morpholog:
         )
 
     # ------------------------------------------------------------
+    # Tamper-evidence: replay, checkpoints, evidence packs.
+    # ------------------------------------------------------------
+
+    def verify(self, anchor_file: str | None = None) -> envelopes.VerifyReport:
+        """Replay the audit log against the claims table and check the
+        audit Merkle tree against its checkpoints (and an external
+        ``anchor_file`` if given). A divergence or tamper is a decided
+        verdict on stdout, not an operational error."""
+        args = ["verify", "--database-url", self.database_url]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.VerifyReport.from_json(self._json(*args))
+
+    def checkpoint(self) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
+        """Record a checkpoint over the current stable prefix, or return
+        the unchanged head - either way a usable external anchor."""
+        return envelopes.parse_checkpoint_outcome(
+            self._json("checkpoint", "--database-url", self.database_url)
+        )
+
+    def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
+        """Export a complete-prefix evidence pack covering the latest
+        checkpoint, or the one at ``tree_size``. The pack carries the
+        full audit prefix - confidential data, not selective
+        disclosure."""
+        args = ["evidence", "export", "--database-url", self.database_url]
+        if tree_size is not None:
+            args.extend(["--tree-size", str(tree_size)])
+        return envelopes.EvidencePack.from_json(self._json(*args))
+
+    def evidence_verify(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.TreeVerification:
+        """Verify an evidence pack offline - no database. Returns the
+        tamper-evidence verdict; a tamper or malformed pack is a decided
+        verdict on stdout."""
+        args = ["evidence", "verify", str(pack_file)]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.parse_tree_verification(self._json(*args))
+
+    # ------------------------------------------------------------
     # The outbox lease protocol.
     # ------------------------------------------------------------
 

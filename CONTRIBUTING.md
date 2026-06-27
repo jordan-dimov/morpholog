@@ -5,7 +5,7 @@ Notes for developers working on the codebase. For the project's framing and work
 ## Prerequisites
 
 - **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
-- **PostgreSQL 17+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
+- **PostgreSQL 18+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
 - **`sqlx-cli`** (only when adding or changing a SQL query): the adapter's queries are compile-time-checked against the schema via a committed offline cache, and regenerating it uses the version-matched CLI: `cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls`. A normal build needs neither the CLI nor a database (see below).
 - **Python 3** (optional): the precommit script runs the generated-client template tests, and (with `DATABASE_URL`) the worked embedder end to end; both are skipped with a note when `python3` is absent. CI pins the generated client's declared floor; any local Python 3 is a smoke test.
@@ -72,7 +72,7 @@ git add .sqlx
 
 **Never hand-edit `.sqlx/`.** Those files are a generated contract between the queries and the schema; the only correct way to change them is to regenerate via the script above. A hand-edit that disagrees with the schema is exactly the drift the cache exists to catch.
 
-The checked contract is **PostgreSQL 17**, the stated floor: regenerate against a clean PG 17 database when you have one, and CI's PG 17 `cargo sqlx prepare --workspace --check` is the source of truth for floor compatibility. Precommit and CI run that check against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
+The checked contract is **PostgreSQL 18**, the stated floor: regenerate against a clean PG 18 database when you have one, and CI's PG 18 `cargo sqlx prepare --workspace --check` is the source of truth for floor compatibility. Precommit and CI run that check against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
 
 ## Workspace layout
 
