@@ -794,11 +794,11 @@ class TreeMalformedPack:
 
 
 TreeVerification = (
-    "TreeIntact | TreeTampered | TreeChainBroken | TreeAnchorMismatch | TreeMalformedPack"
+    TreeIntact | TreeTampered | TreeChainBroken | TreeAnchorMismatch | TreeMalformedPack
 )
 
 
-def parse_tree_verification(payload: object):
+def parse_tree_verification(payload: object) -> TreeVerification:
     """The tamper-evidence verdict, the output of `evidence verify` and
     the `tree` half of `verify`."""
     status = payload.get("status") if isinstance(payload, dict) else None
@@ -822,8 +822,8 @@ class VerifyReport:
     """The `verify` envelope: the replay verdict beside the
     tamper-evidence verdict."""
 
-    replay: "ReplayConsistent | ReplayDivergent"
-    tree: object
+    replay: ReplayConsistent | ReplayDivergent
+    tree: TreeVerification
 
     @classmethod
     def from_json(cls, payload: object) -> "VerifyReport":

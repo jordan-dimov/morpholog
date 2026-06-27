@@ -8,9 +8,9 @@
 # and CI run `cargo sqlx prepare --check` to fail when the cache and the
 # live schema have drifted apart.
 #
-# Contract: PostgreSQL 17 is the stated floor, and CI's PG 17
+# Contract: PostgreSQL 18 is the stated floor, and CI's PG 18
 # `prepare --check` is the source of truth for floor compatibility.
-# Regenerate against a clean PG 17 database when you have one. Point
+# Regenerate against a clean PG 18 database when you have one. Point
 # DATABASE_URL at a DISPOSABLE database - this script DROPS and recreates
 # the `morpholog` and `morpholog_read` schemas.
 #

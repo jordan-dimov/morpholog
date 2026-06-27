@@ -307,7 +307,9 @@ class Morpholog:
             args.extend(["--tree-size", str(tree_size)])
         return envelopes.EvidencePack.from_json(self._json(*args))
 
-    def evidence_verify(self, pack_file: str, anchor_file: str | None = None):
+    def evidence_verify(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.TreeVerification:
         """Verify an evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
         verdict on stdout."""
