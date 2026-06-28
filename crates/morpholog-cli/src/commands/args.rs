@@ -422,4 +422,38 @@ mod tests {
             assert!(!is_schema_decimal(s), "{s} should be rejected");
         }
     }
+
+    use super::decode_value;
+    use morpholog_core::{EvalValue, ParamKind, PredicateArgKind};
+    use serde_json::json;
+
+    fn subject_collection() -> ParamKind {
+        ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject)))
+    }
+
+    #[test]
+    fn a_collection_param_decodes_a_json_array_item_by_item() {
+        let raw = json!(["acct_a", "acct_b"]);
+        let decoded = decode_value("accounts", &subject_collection(), &raw, "").unwrap();
+        let EvalValue::Collection(items) = decoded else {
+            panic!("expected a collection, got {decoded:?}");
+        };
+        assert_eq!(items.len(), 2);
+        assert!(matches!(&items[0], EvalValue::Subject(s) if s.as_str() == "acct_a"));
+        assert!(matches!(&items[1], EvalValue::Subject(s) if s.as_str() == "acct_b"));
+    }
+
+    #[test]
+    fn a_collection_param_rejects_a_non_array() {
+        let raw = json!("not an array");
+        assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
+    }
+
+    #[test]
+    fn a_collection_param_rejects_an_ill_typed_item() {
+        // An item that is not a subject string fails at the element decode,
+        // not silently - the array is decoded item by item via the element kind.
+        let raw = json!(["acct_a", 42]);
+        assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
+    }
 }
