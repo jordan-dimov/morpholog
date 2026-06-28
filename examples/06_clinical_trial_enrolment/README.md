@@ -94,21 +94,9 @@ In-memory tests pin: happy-path admission, boundary equality at both window endp
 
 ## Design notes
 
-### Why civil-date comparison was added to the runtime
+This example is why Morpholog gained a date type and date comparison (`on_or_before`, lowering to a comparison over the date domain): the validity-window rule *was this in force on this date?* is the natural shape of a regulated decision, and comparing dates as text or in a custom out-of-runtime predicate would have no audit standing or replay. Date ordering is a distinct operator from decimal ordering on purpose - a generic comparator stays out until a third ordered domain forces one.
 
-This example is the reason Morpholog gained a date type and date comparison (`on_or_before` in the surface, lowering to `Prop::Compare` over the date domain in the IR). The validity-window rule
-
-```text
-effective_from on_or_before action_date and action_date on_or_before effective_to
-```
-
-is the natural shape of a regulated decision: *was this thing in force on this date?* Without first-class date ordering, the choices would be to compare dates as text (correct only as long as nobody mixes formats, brittle to refactoring) or to write a custom date predicate outside the runtime (which then has no audit standing and no replay).
-
-Date ordering is a separate operator from decimal ordering on purpose. Two distinct ordered domains share no useful generic shape yet, and a generic comparator would be premature until a third domain forces one. The same discipline keeps date arithmetic, time-of-day values, time zones, durations, and business calendars out for now - each will arrive with the worked example that needs it. Civil-date ordering and inclusive `[from, to]` windows is the entire temporal surface of v0.
-
-### Inclusive window semantics
-
-Validity windows are **inclusive on both ends**: `effective_to == randomised_on` admits. This matches how regulatory and clinical language read the windows ("the protocol is valid through 31 March 2026") and is pinned by tests on both endpoints (`boundary_equality_admits_at_protocol_end`, `boundary_equality_admits_at_assessment_expiry`). Half-open `[from, to)` is common in software but not what a non-engineer reading the audit log would assume. The choice is one for the whole runtime, not per-example: once made, it must be invariant across every date-window predicate in every future example.
+Validity windows are **inclusive on both ends** (`effective_to == randomised_on` admits), matching how regulatory language reads ("valid through 31 March 2026") and pinned at both endpoints. It is a whole-runtime choice, not per-example: every date-window predicate, in every future example, reads the same way.
 
 ### What this example deliberately does not cover
 

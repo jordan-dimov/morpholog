@@ -62,3 +62,7 @@ The corresponding integration tests in `crates/morpholog-postgres/tests/integrat
 - `invariant_violation_on_candidate_state_writes_nothing` - durable counterpart of the candidate-state invariant failure. All three tables unchanged.
 
 The shared schema (`claims`, `audit`, `outbox`) is **canonical runtime infrastructure**, not example-specific. It lives at [`crates/morpholog-core/sql/schema.sql`](../../crates/morpholog-core/sql/schema.sql).
+
+## What this example deliberately does not cover
+
+It is the gallery's first example, kept to the smallest shape that shows candidate-state invariants and atomic rollback. Authority over who may net, the currentness and correction of a settlement, cumulative caps, and multi-period netting all arrive in later examples ([approval controls](../04_approval_controls/), [verified revenue](../02_verified_revenue/), [insurance claim settlement](../05_insurance_claim_settlement/)). Here a settlement either nets its obligations atomically or does not commit at all - that one guarantee is the point.

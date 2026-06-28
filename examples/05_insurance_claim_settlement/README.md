@@ -94,26 +94,7 @@ In-memory tests cover: policy issuance and claim reporting; the actor authority 
 
 ## How payments consume headroom
 
-Two rules in this example check the policy cap, and they answer different questions. Understanding the split is the main payoff of this example.
-
-**The admission gate.** Inside `authorise_settlement`, a `require` clause checks that the sum of all prior payments plus the proposed amount fits inside the aggregate limit. If it doesn't, the settlement is refused at admission with a clear "would exceed the cap" rejection. This is what a claims handler interacts with: "is there enough capacity to make this payment?".
-
-**The conservation invariant.** Separately, `headroom_consumed_by_payment` checks that *whenever* a payment is admitted, the policy's remaining headroom must drop by exactly the amount of the payment. The rule uses `pre(...)` to refer to the headroom value as it stood before the transaction, and compares it to the value after.
-
-If both rules check the same idea, why have both? Because they answer different questions and would each catch different bugs:
-
-- The require ensures the payment is **allowed**: it has enough room to fit.
-- The invariant ensures the payment is **honest**: the transaction it sits in actually decremented the headroom by the right amount.
-
-A buggy version of `authorise_settlement` that recorded a payment but forgot to update the headroom would pass the require (the cumulative sum still fits) and fail the invariant (the headroom did not move). A buggy version that decremented headroom by the wrong amount would also fail the invariant.
-
-The conservation rule uses a sum rather than a per-payment equality for an important reason. If two payments of the same amount were admitted in one transaction while headroom was only decremented once, a per-payment check (`after = before - amt`) would pass for each payment individually, even though headroom should have gone down by twice the amount. Summing the newly-admitted payments and comparing once is the correct conservation law:
-
-```text
-after = before - sum(amt for each newly-admitted SettlementPaid)
-```
-
-This pattern - admission gate plus conservation invariant - generalises beyond insurance. Anywhere a system records actions that consume a finite resource (an account balance, a stock level, an entitlement, a budget) the same two-question split applies: "am I allowed to do this?" and "did I actually do it correctly?". The kernel mechanism that makes the second question expressible (the `pre(...)` wrapper) is also exercised, in a non-business setting, by the [chess example](../07_chess_transition_invariants/).
+Two rules check the cap, and the split is the example's payoff. The **admission gate** in `authorise_settlement` (a `require`) refuses a settlement whose cumulative total would exceed the aggregate limit - "is there room?". The **conservation invariant** `headroom_consumed_by_payment` checks, via `pre(...)`, that an admitted payment actually dropped the policy's headroom by exactly its amount - summed over the payments in one transaction, not per-payment, so two same-amount payments cannot both pass while headroom moves once - "was it done honestly?". A bug that recorded a payment but forgot to decrement headroom passes the gate and fails the invariant. The same admission-gate-plus-conservation split fits anywhere actions consume a finite resource (a balance, a stock level, a budget); [`insurance_claim_settlement.morph`](insurance_claim_settlement.morph) walks it through, and the [chess example](../07_chess_transition_invariants/) exercises the same `pre(...)` in a non-business setting.
 
 ## What this example deliberately does not cover
 
