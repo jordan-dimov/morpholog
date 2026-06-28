@@ -6,9 +6,12 @@
 //! declarations, and generates the per-example accessor module (`program`,
 //! `all_invariants`, one accessor per declaration) into `OUT_DIR`; the
 //! `example_module!` calls below bring each in under its name, and the
-//! `all_programs()` registry is generated the same way. So adding an
-//! example is just dropping a `.morph` - no accessor boilerplate, no list
-//! to forget, and the teaching surface and the runnable program cannot
+//! `all_programs()` registry is generated the same way. So adding an example
+//! is dropping a `.morph` plus one `example_module!(<name>)` line - no
+//! accessor boilerplate and no list to maintain. That one line is the only
+//! manual step, and it cannot be silently forgotten: the generated registry
+//! references the module, so a missing line is a compile error, not a quietly
+//! skipped example. The teaching surface and the runnable program cannot
 //! drift. The few non-mechanical items a `.morph` cannot yield (domain
 //! constants used by tests; accessors for generated discipline invariants)
 //! are hand-written supplements in the `example_module!` bodies.
