@@ -337,6 +337,14 @@ pub enum WindowVerification {
         purpose: String,
         public_key: String,
     },
+    /// `--require-signatures` was asked for and the to-checkpoint carries no
+    /// signature. A policy verdict the verifier opts into (REMIT attribution
+    /// wants a signed window end), not an intrinsic tamper.
+    SignatureRequired { tree_size: i64 },
+    /// The window pack is not a well-formed v2 artefact (a bad envelope or
+    /// unparseable JSON) - it never had a chance to prove anything, kept
+    /// distinct from a genuine divergence of a well-formed pack.
+    Malformed { detail: String },
 }
 
 /// Export a windowed evidence pack between two existing checkpoints. Reads
