@@ -54,7 +54,10 @@ pub use outbox::{
     mark_outbox_delivered, mark_outbox_failed, mark_outbox_transient_attempt,
     process_one_outbox_row, record_compensation, release_outbox_claim, system_actor,
 };
-pub use pack::{EvidencePack, PackError, PackManifest, export_pack, verify_pack};
+pub use pack::{
+    EvidencePack, PackError, PackManifest, RowInclusionProof, WindowEvidencePack,
+    WindowPackManifest, WindowVerification, export_pack, export_window, verify_pack, verify_window,
+};
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,
     compute_idempotency_key, propose_against_pg, propose_against_pg_with_rejection_state,

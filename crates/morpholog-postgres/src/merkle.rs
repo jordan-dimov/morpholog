@@ -88,6 +88,22 @@ pub(crate) fn render_hash(hash: &Hash) -> String {
     s
 }
 
+/// Parse a `sha256:<hex>` string back into a digest - the inverse of
+/// [`render_hash`]. `None` if the prefix is wrong or the hex is not exactly
+/// 32 bytes; a window verifier parses proof hashes out of a pack, which is
+/// hostile input.
+pub(crate) fn parse_hash(s: &str) -> Option<Hash> {
+    let hex = s.strip_prefix("sha256:")?;
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
 /// Append `bytes` length-prefixed (u32 little-endian length, then the
 /// bytes) so the field concatenation is injective: no two distinct field
 /// sequences can produce the same buffer.
@@ -435,6 +451,16 @@ mod tests {
         assert_eq!(split_point(7), 4);
         assert_eq!(split_point(8), 4);
         assert_eq!(split_point(9), 8);
+    }
+
+    /// `parse_hash` inverts `render_hash` and rejects malformed input.
+    #[test]
+    fn parse_hash_inverts_render_hash() {
+        let h = leaf_hash(b"roundtrip");
+        assert_eq!(parse_hash(&render_hash(&h)), Some(h));
+        assert_eq!(parse_hash("no-prefix"), None);
+        assert_eq!(parse_hash("sha256:abcd"), None); // too short
+        assert_eq!(parse_hash(&format!("sha256:{}", "zz".repeat(32))), None); // non-hex
     }
 
     /// The RFC 6962 section 2.1.3/2.1.4 worked example tree over seven
