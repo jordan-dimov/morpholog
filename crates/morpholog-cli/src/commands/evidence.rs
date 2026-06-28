@@ -38,8 +38,9 @@ async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
         Some(path) => {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("reading anchor file {}", path.display()))?;
-            let anchor: Checkpoint = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing anchor file {} as a checkpoint", path.display()))?;
+            let anchor: Checkpoint = serde_json::from_slice(&bytes).with_context(|| {
+                format!("parsing anchor file {} as a checkpoint", path.display())
+            })?;
             Some(anchor.tree_size)
         }
         None => args.from_tree_size,
@@ -131,8 +132,9 @@ fn verify_prefix_pack(
             };
         }
     };
-    let verdict = verify_pack(&pack, anchor)
-        .unwrap_or_else(|e| TreeVerification::MalformedPack { detail: e.to_string() });
+    let verdict = verify_pack(&pack, anchor).unwrap_or_else(|e| TreeVerification::MalformedPack {
+        detail: e.to_string(),
+    });
     // Compliance policy, offline from the pack's own checkpoints: with
     // --require-signatures an unsigned checkpoint fails.
     if require_signatures
@@ -162,8 +164,9 @@ fn verify_window_pack(
             };
         }
     };
-    let verdict = verify_window(&pack, anchor)
-        .unwrap_or_else(|e| WindowVerification::Malformed { detail: e.to_string() });
+    let verdict = verify_window(&pack, anchor).unwrap_or_else(|e| WindowVerification::Malformed {
+        detail: e.to_string(),
+    });
     // Compliance policy: REMIT attribution wants a signed window end, so
     // --require-signatures fails an unsigned to-checkpoint.
     if require_signatures

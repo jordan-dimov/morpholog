@@ -429,7 +429,10 @@ fn assemble_window_pack(
     let inclusion_proofs = (from..leaves.len())
         .map(|index| RowInclusionProof {
             leaf_index: index as i64,
-            proof: inclusion_proof(&leaves, index).iter().map(render_hash).collect(),
+            proof: inclusion_proof(&leaves, index)
+                .iter()
+                .map(render_hash)
+                .collect(),
         })
         .collect();
 
@@ -481,8 +484,8 @@ pub fn verify_window(
     }
 
     let malformed = |detail: String| PackError::Malformed { detail };
-    let from_root =
-        parse_hash(&from.root_hash).ok_or_else(|| malformed("from root_hash is not sha256".into()))?;
+    let from_root = parse_hash(&from.root_hash)
+        .ok_or_else(|| malformed("from root_hash is not sha256".into()))?;
     let to_root =
         parse_hash(&to.root_hash).ok_or_else(|| malformed("to root_hash is not sha256".into()))?;
 
@@ -599,7 +602,11 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
     // Each checkpoint's identity hash must match its own contents - a forged
     // checkpoint_hash is rejected before the proofs trust it.
     for (label, cp) in [("from", from), ("to", to)] {
-        let expected = checkpoint_hash(cp.tree_size, &cp.root_hash, cp.prev_checkpoint_hash.as_deref());
+        let expected = checkpoint_hash(
+            cp.tree_size,
+            &cp.root_hash,
+            cp.prev_checkpoint_hash.as_deref(),
+        );
         if expected != cp.checkpoint_hash {
             return Err(malformed(format!(
                 "{label}-checkpoint hash {} does not match its contents",
@@ -966,7 +973,9 @@ mod tests {
         pack.to_checkpoint.checkpoint_hash = "cp-forged".into();
         pack.manifest.to_checkpoint_hash = "cp-forged".into();
         match verify_window(&pack, None) {
-            Err(PackError::Malformed { detail }) => assert!(detail.contains("does not match its contents")),
+            Err(PackError::Malformed { detail }) => {
+                assert!(detail.contains("does not match its contents"))
+            }
             other => panic!("expected Malformed, got {other:?}"),
         }
     }

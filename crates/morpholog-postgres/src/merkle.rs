@@ -253,7 +253,11 @@ pub(crate) fn consistency_proof(leaves: &[Hash], first_size: usize) -> Vec<Hash>
 fn subproof(m: usize, leaves: &[Hash], b: bool) -> Vec<Hash> {
     let n = leaves.len();
     if m == n {
-        return if b { Vec::new() } else { vec![merkle_root(leaves)] };
+        return if b {
+            Vec::new()
+        } else {
+            vec![merkle_root(leaves)]
+        };
     }
     let k = split_point(n);
     if m <= k {
@@ -486,8 +490,20 @@ mod tests {
         let k = node_hash(&g, &h);
         let l = node_hash(&i, &d[6]); // j = leaf d6
         let root = node_hash(&k, &l);
-        assert_eq!(merkle_root(&d), root, "test tree disagrees with merkle_root");
-        Rfc7 { d, g, h, i, k, l, root }
+        assert_eq!(
+            merkle_root(&d),
+            root,
+            "test tree disagrees with merkle_root"
+        );
+        Rfc7 {
+            d,
+            g,
+            h,
+            i,
+            k,
+            l,
+            root,
+        }
     }
 
     /// Consistency proofs match the three RFC 6962 section 2.1.4 vectors:
@@ -608,7 +624,13 @@ mod tests {
         // ...yet a forged "suffix row" has no inclusion at its position.
         let forged = leaf_hash(b"not the real row 5");
         assert_eq!(
-            verify_inclusion_proof(5, n, &forged, &second_root, &inclusion_proof(&leaves[..n], 5)),
+            verify_inclusion_proof(
+                5,
+                n,
+                &forged,
+                &second_root,
+                &inclusion_proof(&leaves[..n], 5)
+            ),
             Err(ProofError::RootMismatch)
         );
     }

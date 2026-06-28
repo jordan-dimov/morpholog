@@ -123,8 +123,9 @@ async fn a_corrupted_consistency_proof_is_an_inconsistent_extension() {
     let (pack, _q1, _q2) = window_q1_q2(&pool, "incon").await;
 
     let broken = edit_json(&pack, |v| {
-        v["consistency_proof"][0] =
-            serde_json::json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+        v["consistency_proof"][0] = serde_json::json!(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
     });
     assert!(matches!(
         verify_window(&broken, None).unwrap(),
