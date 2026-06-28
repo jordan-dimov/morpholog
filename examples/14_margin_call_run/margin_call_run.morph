@@ -1,0 +1,182 @@
+-- =====================================================================
+-- A daily margin call run, governed for completeness.
+--
+-- The story, for a reader who has never traded a thing.
+--
+-- When you trade on credit - futures, cleared swaps, an energy forward -
+-- you do not pay the whole value up front. Instead you keep a deposit
+-- with your broker or clearing house, called margin, as a cushion against
+-- the position moving against you. Each day the position is re-priced,
+-- and your account's equity (the deposit plus or minus what you have made
+-- or lost) goes up and down with the market.
+--
+-- Two levels matter. The REQUIRED margin is the level your account is
+-- supposed to sit at. The MAINTENANCE margin is a lower floor. As long as
+-- your equity stays above the floor, nobody bothers you. The moment it
+-- drops below the floor, the firm issues a MARGIN CALL: a demand that you
+-- top your account back up to the required level by the next morning. The
+-- amount of the call is exactly the gap - what you need to add to get from
+-- where you are back up to where you should be.
+--
+-- Every day a risk engine sweeps the whole book, works out which accounts
+-- have fallen through the floor, and produces a batch of calls. That batch
+-- is the thing this model governs.
+--
+-- Why is that worth governing? Because the dangerous mistake is not a
+-- wrong call - it is a MISSING one. If the engine quietly leaves an
+-- under-margined account out of the run, that account is now carrying a
+-- losing position with too little cushion, and if it defaults the firm
+-- eats the loss. Whole firms have failed this way in volatile markets.
+-- So the control we want is not just "every call is correct" but "every
+-- account that should be called IS called" - completeness, not merely
+-- correctness. A rule that only forbids bad calls would happily wave
+-- through a run that forgot half the book.
+--
+-- The risk engine is ordinary software - it might have a bug, it might be
+-- fed stale prices, it might be a model nobody fully understands. We do
+-- not have to trust it. It PROPOSES the whole batch as one all-or-nothing
+-- decision, and the runtime admits the run only if it is complete and
+-- exact. If a single under-margined account is missing, the entire run is
+-- refused; nothing is recorded until the batch is right.
+--
+-- A note on words. The runtime never stores "facts". It stores CLAIMS -
+-- statements the firm has accepted and is prepared to stand behind ("this
+-- account's equity is 80,000 dollars", "this account was called for
+-- 30,000 in today's run"). An INVARIANT below is a rule the runtime will
+-- not let any change break. A `require` is a gate on a single action: a
+-- yes/no question asked before that action is allowed to proceed.
+-- =====================================================================
+
+
+program margin_call_run
+
+
+-- ---------------------------------------------------------------------
+-- The book, as it stands at the start of the run.
+--
+-- These three claims describe each account before today's sweep. In a
+-- real deployment they are kept current by their own governed processes
+-- (positions are marked to market, deposits are posted and withdrawn);
+-- here they are simply the state the run reads. Money is written with its
+-- unit, `Decimal[USD]`, so the runtime will not let dollars be compared
+-- with or added to anything that is not also dollars.
+--
+-- `unique by (account)` says the keys in brackets determine the whole
+-- claim: an account has exactly one required margin, one maintenance
+-- floor, one equity figure. The runtime refuses a second, contradicting
+-- one - you cannot quietly give an account two different equities.
+-- ---------------------------------------------------------------------
+
+predicate RequiredMargin(account: Subject, level: Decimal[USD])
+  unique by (account)
+
+predicate MaintenanceMargin(account: Subject, floor: Decimal[USD])
+  unique by (account)
+
+predicate AccountEquity(account: Subject, equity: Decimal[USD])
+  unique by (account)
+
+
+-- ---------------------------------------------------------------------
+-- What the run records.
+--
+-- `MarginRun` is the run's header - which run, as of which date. A
+-- `MarginCall` is one demand: this run called this account for this
+-- amount. `unique by (run, account)` is the control against a double
+-- call - one account cannot be called twice in the same run, however the
+-- engine phrases its batch.
+-- ---------------------------------------------------------------------
+
+predicate MarginRun(run: Subject, as_of: Date)
+  unique by (run)
+
+predicate MarginCall(run: Subject, account: Subject, amount: Decimal[USD])
+  unique by (run, account)
+
+
+-- ---------------------------------------------------------------------
+-- The message that leaves the building.
+--
+-- An `intent` is something the runtime will hand to the outside world
+-- once the run commits - here, the notice sent to the account holder
+-- demanding the top-up. It is emitted inside the transformation but
+-- delivered after the commit, so a refused run sends nothing.
+-- ---------------------------------------------------------------------
+
+intent MarginCallIssued(run: Subject, account: Subject, amount: Decimal[USD])
+
+
+-- ---------------------------------------------------------------------
+-- The correctness rule: a call is exactly the top-up.
+--
+-- An invariant holds over all admitted state, forever. This one says:
+-- wherever a margin call exists, its amount is precisely the account's
+-- required level minus its current equity - the gap that brings the
+-- account back to where it should be. A call for a made-up number cannot
+-- be admitted, because committing it would break this rule.
+--
+-- Note what this does NOT say. It does not, by itself, demand that any
+-- account be called. Forbidding wrong amounts is not the same as
+-- requiring the right accounts to appear - that second, harder half is
+-- the completeness gate inside the run below.
+-- ---------------------------------------------------------------------
+
+invariant call_amount_is_the_top_up:
+  MarginCall(run, account, amount)
+  implies (RequiredMargin(account, required)
+           and AccountEquity(account, equity)
+           and amount = required - equity)
+
+
+-- ---------------------------------------------------------------------
+-- The run itself.
+--
+-- The risk engine hands the runtime three things: an id for the run, the
+-- date it is as of, and `called_accounts` - the WHOLE LIST of accounts it
+-- is calling, submitted as one value. This is the heart of the example:
+-- a batch of unknown size, proposed and judged as a single all-or-nothing
+-- decision, rather than dribbled in one account at a time.
+--
+-- Read the body top to bottom.
+--
+-- First the completeness gate. `require` asks a yes/no question and lets
+-- the run proceed only on a yes. The question here is the whole point of
+-- the model: is there any account that has fallen below its maintenance
+-- floor and is NOT in the batch? If such an account exists, the answer is
+-- no and the entire run is refused. `acct in called_accounts` tests
+-- membership of the proposed list, so this gate compares the batch the
+-- engine submitted against the accounts the book says must be called. A
+-- forgotten account is caught here, before anything is recorded.
+--
+-- Then the work. For each account in the batch, the runtime reads its
+-- required level, its equity, and its floor (`bind` looks up the single
+-- matching claim and names its fields). The second `require` guards
+-- against the opposite mistake - calling an account that is fine: only an
+-- account actually below its floor may be called. The call amount is the
+-- gap, and a `MarginCall` is recorded and a notice emitted.
+--
+-- So the run commits only if the batch is complete (every under-margined
+-- account present, by the gate), exact (no adequately-margined account
+-- called, by the per-account require; no wrong amount, by the invariant),
+-- and free of double calls (by `unique by (run, account)`). Miss one
+-- account and the whole run is refused - which is exactly the protection
+-- a margin process is supposed to give.
+-- ---------------------------------------------------------------------
+
+transformation issue_margin_run(run_id, as_of_date, called_accounts):
+  admit MarginRun(run_id, as_of_date)
+
+  require not (exists acct:
+    AccountEquity(acct, equity)
+    and MaintenanceMargin(acct, floor)
+    and equity < floor
+    and not (acct in called_accounts))
+
+  for acct in called_accounts:
+    bind RequiredMargin(acct, required)
+    bind AccountEquity(acct, equity)
+    bind MaintenanceMargin(acct, floor)
+    require equity < floor
+    let call_amount = required - equity
+    admit MarginCall(run_id, acct, call_amount)
+    emit MarginCallIssued(run_id, acct, call_amount)
