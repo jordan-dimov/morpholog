@@ -158,9 +158,7 @@ fn decode_value(
         // external engine submits a whole batch through.
         ParamKind::Collection(element) => {
             let Value::Array(items) = raw else {
-                bail!(
-                    "parameter `{param}` is a collection; expected a JSON array. {schema_hint}"
-                );
+                bail!("parameter `{param}` is a collection; expected a JSON array. {schema_hint}");
             };
             let decoded = items
                 .iter()

@@ -22,13 +22,31 @@ use morpholog_examples::margin_call_run;
 fn book() -> State {
     State::from_claims(vec![
         // acct_short_a: equity 60k below the 70k floor; tops up to 100k -> 40k call.
-        claim_instance("RequiredMargin", &[subj("acct_short_a"), qty("100000", "USD")]),
-        claim_instance("MaintenanceMargin", &[subj("acct_short_a"), qty("70000", "USD")]),
-        claim_instance("AccountEquity", &[subj("acct_short_a"), qty("60000", "USD")]),
+        claim_instance(
+            "RequiredMargin",
+            &[subj("acct_short_a"), qty("100000", "USD")],
+        ),
+        claim_instance(
+            "MaintenanceMargin",
+            &[subj("acct_short_a"), qty("70000", "USD")],
+        ),
+        claim_instance(
+            "AccountEquity",
+            &[subj("acct_short_a"), qty("60000", "USD")],
+        ),
         // acct_short_b: equity 30k below the 35k floor; tops up to 50k -> 20k call.
-        claim_instance("RequiredMargin", &[subj("acct_short_b"), qty("50000", "USD")]),
-        claim_instance("MaintenanceMargin", &[subj("acct_short_b"), qty("35000", "USD")]),
-        claim_instance("AccountEquity", &[subj("acct_short_b"), qty("30000", "USD")]),
+        claim_instance(
+            "RequiredMargin",
+            &[subj("acct_short_b"), qty("50000", "USD")],
+        ),
+        claim_instance(
+            "MaintenanceMargin",
+            &[subj("acct_short_b"), qty("35000", "USD")],
+        ),
+        claim_instance(
+            "AccountEquity",
+            &[subj("acct_short_b"), qty("30000", "USD")],
+        ),
         // acct_ok: equity 90k above the 70k floor; must NOT be called.
         claim_instance("RequiredMargin", &[subj("acct_ok"), qty("100000", "USD")]),
         claim_instance("MaintenanceMargin", &[subj("acct_ok"), qty("70000", "USD")]),
@@ -70,12 +88,20 @@ fn a_complete_and_exact_run_is_admitted() {
     assert!(has_claim(
         &candidate_state,
         "MarginCall",
-        &[subj("run_2026_06_29"), subj("acct_short_a"), qty("40000", "USD")],
+        &[
+            subj("run_2026_06_29"),
+            subj("acct_short_a"),
+            qty("40000", "USD")
+        ],
     ));
     assert!(has_claim(
         &candidate_state,
         "MarginCall",
-        &[subj("run_2026_06_29"), subj("acct_short_b"), qty("20000", "USD")],
+        &[
+            subj("run_2026_06_29"),
+            subj("acct_short_b"),
+            qty("20000", "USD")
+        ],
     ));
 }
 
