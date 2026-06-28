@@ -21,6 +21,26 @@ import subprocess
 from . import envelopes
 
 
+# Flags whose VALUE is a credential. It must never appear in a raised
+# message: these are structured-logged and may be reflected to a caller.
+_CREDENTIAL_FLAGS = frozenset({"--database-url"})
+
+
+def _redact_argv(args: list[str]) -> str:
+    """Join an argv for an error message, masking the value after any
+    credential-bearing flag. The rest of the argv is safe to echo."""
+    parts: list[str] = []
+    redact_next = False
+    for arg in args:
+        if redact_next:
+            parts.append("<redacted>")
+            redact_next = False
+        else:
+            parts.append(arg)
+            redact_next = arg in _CREDENTIAL_FLAGS
+    return " ".join(parts)
+
+
 class MorphologError(RuntimeError):
     """An operational failure from the CLI - distinct from a lawful
     business rejection, which is a decided outcome on stdout."""
@@ -74,13 +94,18 @@ class Morpholog:
             )
         except subprocess.TimeoutExpired:
             raise MorphologError(
-                f"`{self.binary} {' '.join(args)}` timed out after {timeout}s"
+                f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
             ) from None
 
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
         proc = self._run(list(args), stdin=stdin, timeout=self.timeout)
         if not proc.stdout.strip():
-            raise MorphologError(f"`{' '.join(args)}`:\n{proc.stderr.strip()}")
+            # The argv is masked by flag; the binary's stderr may echo the
+            # conninfo itself (a connection error), so mask the literal too.
+            stderr = proc.stderr.strip()
+            if self.database_url:
+                stderr = stderr.replace(self.database_url, "<redacted>")
+            raise MorphologError(f"`{_redact_argv(list(args))}`:\n{stderr}")
         return proc.stdout
 
     def _json(self, *args: str) -> object:

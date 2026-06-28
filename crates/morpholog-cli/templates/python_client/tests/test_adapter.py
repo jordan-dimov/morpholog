@@ -56,6 +56,10 @@ if mode == "audit_ndjson":
     print(row % (1, 1))
     print(row % (2, 2))
     sys.exit(0)
+if mode == "stderr_echoes_conninfo":
+    i = sys.argv.index("--database-url")
+    print(f"error: could not connect to {sys.argv[i + 1]}", file=sys.stderr)
+    sys.exit(1)
 raise SystemExit(f"unknown STUB_MODE {mode}")
 """
 
@@ -216,6 +220,44 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologError) as caught:
             bounded.audit()
         self.assertIn("timed out", str(caught.exception))
+
+    def test_a_timeout_message_redacts_the_database_url(self):
+        # Glasshouse's forcing case: the timeout message is structured-
+        # logged and may be reflected to a caller, so the conninfo (and
+        # its password) must never ride in it.
+        self._mode("hang")
+        secret = "postgres://user:hunter2@db.internal/ledger"
+        bounded = Morpholog("model.morph", secret, binary=str(self.stub), timeout=0.2)
+        with self.assertRaises(MorphologError) as caught:
+            bounded.verify()
+        msg = str(caught.exception)
+        self.assertNotIn("hunter2", msg)
+        self.assertNotIn(secret, msg)
+        self.assertIn("--database-url <redacted>", msg)
+
+    def test_an_operational_failure_message_redacts_the_database_url(self):
+        # The other raised message (empty stdout) masks the argv too.
+        self._mode("operational_failure")
+        secret = "postgres://user:hunter2@db.internal/ledger"
+        client = Morpholog("model.morph", secret, binary=str(self.stub))
+        with self.assertRaises(MorphologError) as caught:
+            client.verify()
+        msg = str(caught.exception)
+        self.assertNotIn("hunter2", msg)
+        self.assertIn("--database-url <redacted>", msg)
+
+    def test_stderr_echoing_the_conninfo_is_masked(self):
+        # A PG driver error can echo the connection string itself; the
+        # client masks its own database_url in any stderr it surfaces.
+        self._mode("stderr_echoes_conninfo")
+        secret = "postgres://user:hunter2@db.internal/ledger"
+        client = Morpholog("model.morph", secret, binary=str(self.stub))
+        with self.assertRaises(MorphologError) as caught:
+            client.verify()
+        msg = str(caught.exception)
+        self.assertNotIn("hunter2", msg)
+        self.assertNotIn(secret, msg)
+        self.assertIn("<redacted>", msg)
 
     def test_batch_takes_a_per_call_timeout_override(self):
         # The default client carries no timeout; the override bounds
