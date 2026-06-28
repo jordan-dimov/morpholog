@@ -480,12 +480,125 @@ fn for_binding_reusing_param_name_does_not_type_the_external_param() {
             (Var::from("x"), ParamKind::Unconstrained),
             (
                 Var::from("items"),
-                ParamKind::Concrete(PredicateArgKind::Collection),
+                ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Decimal))),
             ),
         ],
-        "the For-loop binding `x` shadows the external parameter `x`; \
+        "the For-loop binding `x` shadows the external parameter `x`, so \
          observations inside the loop body must not propagate to the \
-         external parameter",
+         external parameter `x` (which stays Unconstrained) - but they DO \
+         become `items`'s element kind: the body uses the binding at a \
+         Decimal slot, so `items` is a collection of Decimal",
+    );
+}
+
+/// A collection parameter iterated by `for`, whose loop binding lands
+/// at a Subject slot, infers `Collection(Concrete(Subject))` - the
+/// element kind an embedder needs to type a `list[str]`. This is the
+/// shape an external engine submits a whole batch through.
+#[test]
+fn an_iterated_collection_infers_its_element_kind() {
+    let prog = program("batch_test")
+        .predicates(vec![
+            predicate("settled")
+                .subject("batch")
+                .subject("line")
+                .build(),
+        ])
+        .transformations(vec![transformation(
+            "settle",
+            params(&["batch", "lines"]),
+            vec![for_(
+                "line",
+                term(var("lines")),
+                vec![assert_("settled", vec![var("batch"), var("line")])],
+            )],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("settle"),
+    )
+    .unwrap();
+    assert_eq!(
+        kinds,
+        vec![
+            (
+                Var::from("batch"),
+                ParamKind::Concrete(PredicateArgKind::Subject),
+            ),
+            (
+                Var::from("lines"),
+                ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject))),
+            ),
+        ],
+    );
+}
+
+/// A collection iterated with a binding that is never used at a
+/// kind-bearing position has no observable element kind, so it stays
+/// the opaque `Concrete(Collection)` - the same as a parameter passed
+/// only to a Collection-declared predicate arg. The element kind is
+/// inferred only when the body actually constrains the binding.
+#[test]
+fn an_iterated_collection_with_an_unused_binding_stays_opaque() {
+    let prog = program("opaque_batch")
+        .transformations(vec![transformation(
+            "iterate",
+            params(&["xs"]),
+            vec![for_("x", term(var("xs")), vec![])],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("iterate"),
+    )
+    .unwrap();
+    assert_eq!(
+        kinds,
+        vec![(
+            Var::from("xs"),
+            ParamKind::Concrete(PredicateArgKind::Collection),
+        )],
+    );
+}
+
+/// `forall x in xs: ...` infers the element kind the same way `for`
+/// does - the quantifier binding's body usage becomes `xs`'s element
+/// kind. The natural author-facing completeness shape (`require forall
+/// acct in batch: Eligible(acct)`) must type the batch as a collection
+/// of subjects, not leave it opaque. This mirrors the surface lowering
+/// of `forall acct in called_accounts: ...` to a `Forall` whose source
+/// is the auto-lifted `In(acct, called_accounts)`.
+#[test]
+fn a_forall_over_a_collection_infers_its_element_kind() {
+    let prog = program("forall_batch")
+        .predicates(vec![
+            predicate("margin_eligible").subject("account").build(),
+        ])
+        .transformations(vec![transformation(
+            "check_batch",
+            params(&["called_accounts"]),
+            vec![require(forall(
+                "acct",
+                in_(var("acct"), var("called_accounts")),
+                claim("margin_eligible", vec![var("acct")]),
+            ))],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("check_batch"),
+    )
+    .unwrap();
+    assert_eq!(
+        kinds,
+        vec![(
+            Var::from("called_accounts"),
+            ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject))),
+        )],
     );
 }
 

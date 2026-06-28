@@ -23,6 +23,10 @@ fn trade_lifecycle() -> PathBuf {
     repo_root().join("examples/10_trade_lifecycle/trade_lifecycle.morph")
 }
 
+fn margin_call_run() -> PathBuf {
+    repo_root().join("examples/14_margin_call_run/margin_call_run.morph")
+}
+
 fn generate(file: &Path, out: &Path) -> std::process::Output {
     Command::new(bin())
         .args([
@@ -61,6 +65,29 @@ fn generates_the_five_file_package() {
     // extra travels (in particular, not the template test suite).
     let count = std::fs::read_dir(&package).unwrap().count();
     assert_eq!(count, PACKAGE_FILES.len(), "exactly the five package files");
+}
+
+// The collection-argument contract, rendered: a transformation taking a
+// collection parameter (the margin run's batch of accounts) generates a
+// typed `list[str]` request field, encoded item by item for --args-named.
+#[test]
+fn a_collection_parameter_renders_a_typed_list_field() {
+    let out = tempfile::tempdir().unwrap();
+    let result = generate(&margin_call_run(), out.path());
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let models = std::fs::read_to_string(out.path().join("morpholog_client/models.py")).unwrap();
+    assert!(
+        models.contains("called_accounts: list[str]"),
+        "expected a typed list field for the collection parameter; got:\n{models}",
+    );
+    assert!(
+        models.contains("[values.encode_named(x) for x in self.called_accounts]"),
+        "expected item-by-item encoding for the collection parameter; got:\n{models}",
+    );
 }
 
 // Determinism IS the drift contract: the same binary and programme

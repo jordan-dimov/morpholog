@@ -155,6 +155,17 @@ fn property_schema(kind: &ParamKind) -> Value {
                 "anyOf": alternatives,
             })
         }
+        // A collection: a JSON array whose items take the element kind
+        // inferred from the loop binding, decodable through the named codec
+        // like any scalar. This arm is reached only when an element kind was
+        // observed; a collection with no element evidence stays the opaque
+        // `Concrete(Collection)` and renders an untyped array elsewhere.
+        // `items` recurses on the element kind.
+        ParamKind::Collection(element) => json!({
+            "type": "array",
+            "description": "collection; send as a JSON array, one entry per item",
+            "items": property_schema(element),
+        }),
     }
 }
 
@@ -310,5 +321,17 @@ mod tests {
         // The bare type shape is the same in both contexts.
         assert_eq!(input["type"], "array");
         assert_eq!(payload["type"], "array");
+    }
+
+    /// An inferred collection (the loop binding observed at a Subject
+    /// slot) emits a TYPED array: `items` carries the element kind, not
+    /// the opaque untyped array of `Concrete(Collection)`. This is the
+    /// embedder-facing contract behind a generated `list[str]` field.
+    #[test]
+    fn an_inferred_collection_emits_typed_items() {
+        let kind = ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject)));
+        let schema = property_schema(&kind);
+        assert_eq!(schema["type"], "array");
+        assert_eq!(schema["items"]["type"], "string");
     }
 }

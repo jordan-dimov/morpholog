@@ -153,11 +153,31 @@ fn decode_value(
             })
         }
         ParamKind::Concrete(PredicateArgKind::Bool) => decode_bool(param, raw, schema_hint),
+        // A collection with a known element kind: decode a JSON array,
+        // each item by the element kind. This is the named-codec path an
+        // external engine submits a whole batch through.
+        ParamKind::Collection(element) => {
+            let Value::Array(items) = raw else {
+                bail!("parameter `{param}` is a collection; expected a JSON array. {schema_hint}");
+            };
+            let decoded = items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    decode_value(param, element, item, schema_hint).map_err(|e| {
+                        anyhow!("{e}").context(format!("collection `{param}`, item {i}"))
+                    })
+                })
+                .collect::<anyhow::Result<Vec<EvalValue>>>()?;
+            Ok(EvalValue::Collection(decoded))
+        }
+        // An element kind the kernel never narrowed (e.g. a loop binding
+        // used at no kind-bearing position, or a nested collection). The
+        // named codec cannot type the items; the tagged `--args` codec can.
         ParamKind::Concrete(PredicateArgKind::Collection) => bail!(
-            "parameter `{param}` is Collection; --args-named cannot decode bare arrays \
-             without per-item kind information (deferred until a worked example forces \
-             collection item-kind tracking). Use --args with the tagged EvalValue codec \
-             to send a collection. {schema_hint}"
+            "parameter `{param}` is a collection whose item kind the model never observes; \
+             --args-named cannot decode it. Use the parameter's items in the body so their \
+             kind is observed, or send it via --args with the tagged EvalValue codec. {schema_hint}"
         ),
         ParamKind::Concrete(PredicateArgKind::Any) | ParamKind::Polymorphic => bail!(
             "parameter `{param}` is polymorphic (the schema cannot narrow its kind); \
@@ -399,5 +419,39 @@ mod tests {
         ] {
             assert!(!is_schema_decimal(s), "{s} should be rejected");
         }
+    }
+
+    use super::decode_value;
+    use morpholog_core::{EvalValue, ParamKind, PredicateArgKind};
+    use serde_json::json;
+
+    fn subject_collection() -> ParamKind {
+        ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject)))
+    }
+
+    #[test]
+    fn a_collection_param_decodes_a_json_array_item_by_item() {
+        let raw = json!(["acct_a", "acct_b"]);
+        let decoded = decode_value("accounts", &subject_collection(), &raw, "").unwrap();
+        let EvalValue::Collection(items) = decoded else {
+            panic!("expected a collection, got {decoded:?}");
+        };
+        assert_eq!(items.len(), 2);
+        assert!(matches!(&items[0], EvalValue::Subject(s) if s.as_str() == "acct_a"));
+        assert!(matches!(&items[1], EvalValue::Subject(s) if s.as_str() == "acct_b"));
+    }
+
+    #[test]
+    fn a_collection_param_rejects_a_non_array() {
+        let raw = json!("not an array");
+        assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
+    }
+
+    #[test]
+    fn a_collection_param_rejects_an_ill_typed_item() {
+        // An item that is not a subject string fails at the element decode,
+        // not silently - the array is decoded item by item via the element kind.
+        let raw = json!(["acct_a", 42]);
+        assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
     }
 }

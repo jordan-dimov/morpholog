@@ -7,9 +7,12 @@ strings end to end and become ``decimal.Decimal``, never a float;
 timestamps are aware ``datetime`` objects, and a naive datetime is
 refused on write because an instant must name an instant.
 
-Durations and collections have no encoder here: the generator refuses
-programmes whose contracts need them, so a codec that silently
-half-supported them would lie about the client's coverage.
+Durations have no encoder here: the generator refuses programmes whose
+contracts need a Duration argument, so a codec that silently
+half-supported it would lie about the client's coverage. A collection
+argument needs no encoder of its own either - the generated request
+model encodes it element by element, each item passing through
+``encode_named`` as the scalar it is.
 """
 
 from __future__ import annotations

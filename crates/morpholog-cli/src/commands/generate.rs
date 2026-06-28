@@ -189,6 +189,16 @@ fn sweep(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow::Result<
                          --args-named)"
                     ));
                 }
+                // A collection with a supported scalar element is carried as
+                // a typed list; an element kind the client cannot type (or a
+                // nested collection) is refused, the same floor as a scalar.
+                ParamKind::Collection(element) => match element.as_ref() {
+                    ParamKind::Concrete(c) if kind_supported(c) => {}
+                    _ => refusals.push(format!(
+                        "{owner}: parameter `{param}` is a collection whose item kind the \
+                         generated client cannot type (it must be a single supported scalar)"
+                    )),
+                },
             }
         }
     }
@@ -354,17 +364,38 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
         let mut encodes = Vec::new();
         for (param, kind) in &kinds {
-            let ParamKind::Concrete(concrete) = kind else {
-                unreachable!("the refusal sweep rejected non-concrete parameter kinds")
+            // The sweep already refused everything but a concrete scalar
+            // or a collection of a concrete scalar; a collection becomes a
+            // typed `list[...]` field encoded item by item.
+            let (annotation, qualifier, encode) = match kind {
+                ParamKind::Concrete(concrete) => {
+                    let (annotation, _, qualifier) = kind_map(concrete);
+                    (
+                        annotation.to_string(),
+                        qualifier,
+                        format!("            \"{param}\": values.encode_named(self.{param}),"),
+                    )
+                }
+                ParamKind::Collection(element) => {
+                    let ParamKind::Concrete(concrete) = element.as_ref() else {
+                        unreachable!("the sweep rejected collections of non-concrete elements")
+                    };
+                    let (item_annotation, _, qualifier) = kind_map(concrete);
+                    (
+                        format!("list[{item_annotation}]"),
+                        qualifier,
+                        format!(
+                            "            \"{param}\": [values.encode_named(x) for x in self.{param}],"
+                        ),
+                    )
+                }
+                _ => unreachable!("the refusal sweep rejected non-concrete parameter kinds"),
             };
-            let (annotation, _, qualifier) = kind_map(concrete);
             let _ = writeln!(out, "    {param}: {annotation}");
             if let Some(qualifier) = qualifier {
                 let _ = writeln!(out, "    # {qualifier}");
             }
-            encodes.push(format!(
-                "            \"{param}\": values.encode_named(self.{param}),"
-            ));
+            encodes.push(encode);
         }
         let _ = write!(
             out,

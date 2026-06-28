@@ -39,5 +39,6 @@ pub fn all_programs() -> Vec<morpholog_core::Program> {
         borrowing_base::program(),
         laytime_demurrage::program(),
         biometric_identification_oversight::program(),
+        margin_call_run::program(),
     ]
 }
