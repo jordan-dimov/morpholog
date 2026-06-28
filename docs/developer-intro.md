@@ -622,37 +622,15 @@ June?" is usually a week of forensics, not a second and a half.
 
 ### Reading governed state as SQL
 
-Your BI tool and your reporting stack speak SQL, not a CLI. So Morpholog hands
-them SQL. `generate views` emits a script of typed views - one per predicate,
-plus one per declared derived read - over a read-only schema:
-
-```bash
-morpholog generate views revenue.morph
-```
-```sql
--- View for base predicate `Revenue`.
-CREATE OR REPLACE VIEW "morpholog_views"."revenue" AS ...
--- View for derived predicate `CurrentRevenue`.
-CREATE OR REPLACE VIEW "morpholog_views"."current_revenue" AS ...
-```
-
-The base-predicate views read live claims directly. The derived views read a
-cache the kernel fills, because a derived value (the exact decimal, the
-nanosecond instant) is computed by the kernel and SQL must not become a second
-evaluator that rounds it differently. You populate the cache out of band:
-
-```bash
-morpholog refresh derived revenue.morph
-```
-```
-refreshed 1 derived claim(s) from 1 derived predicate(s)
-  model: sha256:3056ed72...
-```
-
-Each refresh stamps the rules' hash, and the derived view shows rows only for a
-cache built from the *same* rules - so a stale or mismatched refresh reads as
-empty, never as a wrong number. The discipline holds on both sides: the kernel
-is the only thing that evaluates, and SQL only projects what it produced.
+Your BI tool and reporting stack speak SQL, not a CLI - so `morpholog generate
+views` hands them SQL: a script of typed views, one per predicate and one per
+declared derived read, over a read-only schema. Base views read live claims; a
+derived view reads a cache the kernel fills, because a derived value (the exact
+decimal, the nanosecond instant) is the kernel's to compute and SQL must never
+become a second evaluator that rounds it differently. The cache is refreshed
+out of band and stamped with the rules' hash, so a stale or mismatched refresh
+reads as empty, never as a wrong number. The view shapes and the refresh
+discipline are in [`embedder-integration.md`](embedder-integration.md).
 
 ## Where this fits in your stack
 
@@ -709,22 +687,12 @@ exactly this pattern, driving a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
 contract in [`embedder-integration.md`](embedder-integration.md).
 
-That snippet is plumbing, and it reads like plumbing. So you do not have to
-write it: the binary generates a typed client from your own programme.
-
-```bash
-morpholog generate python-client revenue.morph --out ./revclient
-```
-```
-generated ./revclient/morpholog_client (3 transformations, 5 predicates, 3 intents)
-```
-
-What lands is a small, dependency-free package - a request model per
-transformation, envelope parsing, refusals as values - stamped with the hash of
-the rules it was built against, so the client and the binary cannot silently
-speak different contracts. The subprocess call above is still what runs
-underneath; the generated client is the ergonomic face over the same stable
-JSON, regenerated whenever the rules change.
+That snippet is plumbing, and it reads like plumbing - so you do not have to
+write it. `morpholog generate python-client revenue.morph` emits a small,
+dependency-free package (a request model per transformation, envelope parsing,
+refusals as values) stamped with the rules' hash, so client and binary cannot
+silently speak different contracts. The subprocess call above is what runs
+underneath; the generated client is the ergonomic face over the same stable JSON.
 
 So the division of labour is: your UI, your analytics, your market data, your
 dashboards stay in the tools you already use; Morpholog owns the one line where

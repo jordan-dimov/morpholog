@@ -89,7 +89,7 @@ Each category is *located* in the core primitive - admitted claims governed by i
 
 ## What the language actually needs
 
-Four affordances unlock the categories above. Together they are far less than the surface area of the seven subsystems they replace.
+These affordances unlock the categories above. Together they are far less than the surface area of the subsystems they replace.
 
 ### 1. Typed predicate declarations *(landed)*
 
@@ -106,19 +106,19 @@ Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predic
 
 This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
 
-**Status:** landed. Every `Program` carries typed `PredicateDecl`s; `Program::validate()` enforces strict arity and kind/type compatibility, surfaced through `morpholog check`. Intent declarations (`IntentDecl`) followed, giving outbox effects the same typed, strictly-validated vocabulary.
+**Status:** landed - typed `PredicateDecl`s and `IntentDecl`s, validated for arity and kind by `morpholog check`.
 
 ### 2. Derived claims *(first cut landed)*
 
 A named, read-only computation over admitted claims - a trial balance, a running total, a report row - declared alongside the rules and computed by the same kernel, so a read can never show what an invariant would refuse. This single construct subsumes most of what other systems call "projections" or "read models": phase/lifecycle naming, balances and totals, current pointers re-expressed as derivable, report rows. It is how Morpholog owns the read side without becoming a query engine - the read side is a governed artefact, not a free query surface.
 
-**Status:** landed, and now materialised. The first cut arrived with the double-entry ledger's trial balance (`DerivedClaim { predicate, keys, values, domain }`, `enumerate_derived`, computed on demand). Materialisation followed as a kernel-computed read cache - `refresh derived` enumerates through the kernel and stores the rows in a `morpholog_read` schema, and `generate views` emits typed SQL views (base predicates and derived) over them, so BI reads governed numbers as ordinary tables without the kernel becoming a query engine. The kernel stays the sole evaluator; SQL only projects. Recursion and visibility to invariants are still deferred; see [`design-history.md`](design-history.md).
+**Status:** landed and materialised - computed on demand (`enumerate_derived`), with `refresh derived` caching into a `morpholog_read` schema and `generate views` emitting typed SQL views over it, the kernel staying the sole evaluator. Recursion and visibility to invariants are deferred; see [`design-history.md`](design-history.md).
 
 ### 3. As-of, as a single operator
 
 The audit log already records every transition with a UUIDv7 transition id and timestamp. One operator - `state at T` (or `as of t`) - lets any invariant or derived claim be evaluated against the state that existed at any prior transition.
 
-This single primitive collapses the four temporal notions that ETRM and accounting systems normally carry as separate fields:
+This single primitive collapses the temporal notions that ETRM and accounting systems normally carry as separate fields:
 
 - **Event time** - modelled as a claim `OccurredOn(subject, date)`.
 - **Admission time** - already in the audit row (`committed_at`, `transition_id`).
@@ -127,7 +127,7 @@ This single primitive collapses the four temporal notions that ETRM and accounti
 
 No bitemporal schema is assumed at the modelling level. The v0 audit log already contains enough information to define as-of semantics by replay; performance may later require snapshots or materialised histories, but those are *implementation strategies* rather than *semantic primitives*. The semantics is "evaluate against the state that existed at T"; how to do that efficiently is a separate, contained question.
 
-**Status:** landed by replay. Reads and derived claims take `--as-of`, naming either a transition id or an RFC 3339 timestamp, and the kernel reconstructs the state that existed at that point from the audit log - no bitemporal columns in any schema. Snapshots and materialised histories remain the deferred optimisation, exactly as the semantics/strategy split above predicted.
+**Status:** landed by replay - reads and derived claims take `--as-of` (a transition id or RFC 3339 timestamp), reconstructed from the audit log with no bitemporal columns. Snapshots remain the deferred optimisation, exactly as the semantics/strategy split above predicted.
 
 ### 4. Actor context on transitions
 
