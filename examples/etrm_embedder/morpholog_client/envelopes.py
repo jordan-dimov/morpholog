@@ -1103,6 +1103,15 @@ class WindowPackManifest:
         )
 
 
+def _str_list(label: str, value: object) -> list:
+    """A list of strings, or an `EnvelopeError`. The schema pins proof and
+    consistency-proof hashes as string arrays; a bare string would otherwise
+    pass `list(...)` as a list of characters."""
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise EnvelopeError(f"`{label}` must be a list of strings, got {value!r}")
+    return list(value)
+
+
 @dataclass(frozen=True)
 class RowInclusionProof:
     """One window row's inclusion proof: the row sits at ``leaf_index`` in
@@ -1114,10 +1123,7 @@ class RowInclusionProof:
     @classmethod
     def from_json(cls, payload: object) -> "RowInclusionProof":
         data = _strict("row inclusion proof", payload, {"leaf_index", "proof"})
-        proof = data["proof"]
-        if not isinstance(proof, list):
-            raise EnvelopeError(f"`proof` must be a list, got {proof!r}")
-        return cls(leaf_index=data["leaf_index"], proof=list(proof))
+        return cls(leaf_index=data["leaf_index"], proof=_str_list("proof", data["proof"]))
 
 
 @dataclass(frozen=True)
@@ -1151,7 +1157,7 @@ class WindowEvidencePack:
             manifest=WindowPackManifest.from_json(data["manifest"]),
             from_checkpoint=Checkpoint.from_json(data["from_checkpoint"]),
             to_checkpoint=Checkpoint.from_json(data["to_checkpoint"]),
-            consistency_proof=list(data["consistency_proof"]),
+            consistency_proof=_str_list("consistency_proof", data["consistency_proof"]),
             rows=[AuditRow.from_json(r) for r in data["rows"]],
             inclusion_proofs=[RowInclusionProof.from_json(p) for p in data["inclusion_proofs"]],
         )

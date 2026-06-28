@@ -9,7 +9,7 @@
 
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, PgPool, WindowEvidencePack, WindowVerification,
+    Checkpoint, CheckpointOutcome, PgPool, WindowEvidencePack, WindowStart, WindowVerification,
     create_checkpoint, export_window, verify_window,
 };
 
@@ -57,9 +57,13 @@ async fn window_q1_q2(pool: &PgPool, tag: &str) -> (WindowEvidencePack, Checkpoi
         commit_entry(pool, &format!("{tag}_q2_{i}")).await;
     }
     let q2 = make_checkpoint(pool).await; // tree_size 4
-    let pack = export_window(pool, q1.tree_size, Some(q2.tree_size))
-        .await
-        .unwrap();
+    let pack = export_window(
+        pool,
+        WindowStart::TreeSize(q1.tree_size),
+        Some(q2.tree_size),
+    )
+    .await
+    .unwrap();
     (pack, q1, q2)
 }
 
@@ -168,17 +172,47 @@ async fn export_refuses_a_window_with_an_unknown_endpoint() {
 
     // `from` is not an existing checkpoint.
     assert!(matches!(
-        export_window(&pool, 1, Some(2)).await,
+        export_window(&pool, WindowStart::TreeSize(1), Some(2)).await,
         Err(morpholog_postgres::PgError::NoCheckpoint)
     ));
     // `to` is not an existing checkpoint.
     assert!(matches!(
-        export_window(&pool, 2, Some(99)).await,
+        export_window(&pool, WindowStart::TreeSize(2), Some(99)).await,
         Err(morpholog_postgres::PgError::NoCheckpoint)
     ));
     // `from` is not strictly before `to` (latest == from here).
     assert!(matches!(
-        export_window(&pool, 2, None).await,
+        export_window(&pool, WindowStart::TreeSize(2), None).await,
         Err(morpholog_postgres::PgError::InvalidState(_))
+    ));
+}
+
+#[tokio::test]
+async fn export_from_a_diverged_anchor_refuses() {
+    // `--from-anchor` is the trust object: if the stored start checkpoint no
+    // longer matches the anchor the operator holds, export must refuse rather
+    // than silently export from the diverged stored checkpoint.
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let (_pack, q1, q2) = window_q1_q2(&pool, "div").await;
+
+    // The genuine anchor exports fine.
+    assert!(
+        export_window(&pool, WindowStart::Anchor(q1.clone()), Some(q2.tree_size))
+            .await
+            .is_ok()
+    );
+
+    // An anchor at the same size but a different tree head is refused.
+    let forged = Checkpoint {
+        tree_size: q1.tree_size,
+        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
+        prev_checkpoint_hash: None,
+        checkpoint_hash: "forged".into(),
+        signatures: Vec::new(),
+    };
+    assert!(matches!(
+        export_window(&pool, WindowStart::Anchor(forged), Some(q2.tree_size)).await,
+        Err(morpholog_postgres::PgError::AnchorDivergedFromStart { tree_size }) if tree_size == q1.tree_size
     ));
 }

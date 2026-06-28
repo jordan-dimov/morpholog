@@ -7,8 +7,8 @@
 //! product promise.
 
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, TreeVerification, WindowEvidencePack, WindowVerification,
-    export_pack, export_window, verify_pack, verify_window,
+    Checkpoint, EvidencePack, TreeVerification, WindowEvidencePack, WindowStart,
+    WindowVerification, export_pack, export_window, verify_pack, verify_window,
 };
 
 use anyhow::Context;
@@ -31,24 +31,25 @@ pub(crate) async fn run(cmd: EvidenceCmd) -> anyhow::Result<()> {
 async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
 
-    // The window start: a whole anchor file (its tree_size selects the
-    // start), or the weaker tree-size convenience. Either turns this into a
-    // window export.
-    let from_tree_size = match &args.from_anchor {
-        Some(path) => {
+    // The window start: a whole anchor file (the trust object - export
+    // refuses if the stored start has diverged from it), or the weaker
+    // tree-size convenience. Either turns this into a window export.
+    let start = match (&args.from_anchor, args.from_tree_size) {
+        (Some(path), _) => {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("reading anchor file {}", path.display()))?;
             let anchor: Checkpoint = serde_json::from_slice(&bytes).with_context(|| {
                 format!("parsing anchor file {} as a checkpoint", path.display())
             })?;
-            Some(anchor.tree_size)
+            Some(WindowStart::Anchor(anchor))
         }
-        None => args.from_tree_size,
+        (None, Some(n)) => Some(WindowStart::TreeSize(n)),
+        (None, None) => None,
     };
 
-    match from_tree_size {
-        Some(from) => {
-            let pack = export_window(&pool, from, args.tree_size)
+    match start {
+        Some(start) => {
+            let pack = export_window(&pool, start, args.tree_size)
                 .await
                 .context("export_window failed")?;
             print_json(&pack)?;

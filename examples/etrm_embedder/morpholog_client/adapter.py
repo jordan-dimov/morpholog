@@ -333,18 +333,25 @@ class Morpholog:
         return envelopes.parse_tree_verification(self._json(*args))
 
     def evidence_export_window(
-        self, from_tree_size: int, to_tree_size: int | None = None
+        self,
+        from_tree_size: int | None = None,
+        to_tree_size: int | None = None,
+        from_anchor: str | None = None,
     ) -> envelopes.WindowEvidencePack:
-        """Export a WINDOW pack between the checkpoint at ``from_tree_size``
-        (the prior period's anchor) and the covering one (latest, or
-        ``to_tree_size``): it proves the covered range extends that anchor.
-        Carries the window's rows - confidential data, not selective
-        disclosure."""
-        args = [
-            "evidence", "export",
-            "--from-tree-size", str(from_tree_size),
-            "--database-url", self.database_url,
-        ]
+        """Export a WINDOW pack between an earlier checkpoint and the
+        covering one (latest, or ``to_tree_size``): it proves the covered
+        range extends that start. Give the start as ``from_anchor`` (a path
+        to the prior period's checkpoint file - the trust object, and export
+        refuses if the stored start has diverged from it) or the weaker
+        ``from_tree_size``; exactly one. Carries the window's rows -
+        confidential data, not selective disclosure."""
+        if (from_anchor is None) == (from_tree_size is None):
+            raise ValueError("give exactly one of from_anchor or from_tree_size")
+        args = ["evidence", "export", "--database-url", self.database_url]
+        if from_anchor is not None:
+            args.extend(["--from-anchor", str(from_anchor)])
+        else:
+            args.extend(["--from-tree-size", str(from_tree_size)])
         if to_tree_size is not None:
             args.extend(["--tree-size", str(to_tree_size)])
         return envelopes.WindowEvidencePack.from_json(self._json(*args))

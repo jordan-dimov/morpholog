@@ -56,7 +56,8 @@ pub use outbox::{
 };
 pub use pack::{
     EvidencePack, PackError, PackManifest, RowInclusionProof, WindowEvidencePack,
-    WindowPackManifest, WindowVerification, export_pack, export_window, verify_pack, verify_window,
+    WindowPackManifest, WindowStart, WindowVerification, export_pack, export_window, verify_pack,
+    verify_window,
 };
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,

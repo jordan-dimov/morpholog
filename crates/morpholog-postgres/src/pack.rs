@@ -347,13 +347,34 @@ pub enum WindowVerification {
     Malformed { detail: String },
 }
 
+/// Where a window starts. `TreeSize` trusts the database to hold the right
+/// checkpoint at that size; `Anchor` carries the prior period's
+/// externally-held checkpoint and makes export REFUSE unless the stored
+/// start still matches it - the anchor is the trust object, not a size lookup.
+#[derive(Debug, Clone)]
+pub enum WindowStart {
+    TreeSize(i64),
+    Anchor(Checkpoint),
+}
+
+impl WindowStart {
+    fn tree_size(&self) -> i64 {
+        match self {
+            WindowStart::TreeSize(n) => *n,
+            WindowStart::Anchor(c) => c.tree_size,
+        }
+    }
+}
+
 /// Export a windowed evidence pack between two existing checkpoints. Reads
 /// under `SERIALIZABLE READ ONLY DEFERRABLE`; errors if either endpoint is
-/// not an existing checkpoint or `from` is not strictly before `to`.
-/// `to_tree_size` defaults to the latest checkpoint.
+/// not an existing checkpoint or `from` is not strictly before `to`. When
+/// `start` is an `Anchor`, export also refuses if the stored start checkpoint
+/// has diverged from the supplied anchor. `to_tree_size` defaults to the
+/// latest checkpoint.
 pub async fn export_window(
     pool: &PgPool,
-    from_tree_size: i64,
+    start: WindowStart,
     to_tree_size: Option<i64>,
 ) -> Result<WindowEvidencePack, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
@@ -368,11 +389,23 @@ pub async fn export_window(
     };
     let Some(from_checkpoint) = checkpoints
         .iter()
-        .find(|c| c.tree_size == from_tree_size)
+        .find(|c| c.tree_size == start.tree_size())
         .cloned()
     else {
         return Err(PgError::NoCheckpoint);
     };
+    // The externally-held anchor is the trust object: if the caller supplied
+    // the whole prior checkpoint, the stored start must still match its tree
+    // head (signatures excluded, like the verifier's anchor check), or we are
+    // exporting a window from a checkpoint that has diverged from what they
+    // hold - the silent degradation `--from-anchor` exists to prevent.
+    if let WindowStart::Anchor(anchor) = &start
+        && !same_tree_head(anchor, &from_checkpoint)
+    {
+        return Err(PgError::AnchorDivergedFromStart {
+            tree_size: from_checkpoint.tree_size,
+        });
+    }
     if from_checkpoint.tree_size >= to_checkpoint.tree_size {
         return Err(PgError::InvalidState(format!(
             "window from tree_size {} must be strictly before to tree_size {}",

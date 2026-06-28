@@ -74,6 +74,16 @@ pub enum PgError {
     /// the chain is empty, or no checkpoint exists at the requested size.
     #[error("no checkpoint to export; run `checkpoint` first (or pass an existing --tree-size)")]
     NoCheckpoint,
+    /// `export_window` was given a full anchor (`--from-anchor`) whose tree
+    /// head does not match the stored checkpoint at its size. The
+    /// externally-held anchor is the trust object, so export refuses rather
+    /// than silently exporting a window from a possibly-diverged stored
+    /// checkpoint.
+    #[error(
+        "the supplied anchor does not match the stored checkpoint at tree_size {tree_size}; \
+         the stored start has diverged from the anchor you hold"
+    )]
+    AnchorDivergedFromStart { tree_size: i64 },
 }
 /// Is this SQLSTATE the PostgreSQL serialization-failure code
 /// (`40001`) returned by SSI when a SERIALIZABLE transaction cannot be

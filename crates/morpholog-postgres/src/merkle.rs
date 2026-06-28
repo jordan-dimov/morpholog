@@ -9,6 +9,13 @@
 //! naive hash chain) so the same leaves later yield logarithmic inclusion
 //! and consistency proofs without recomputation.
 //!
+//! Proof *generation* follows RFC 6962 (sections 2.1.1 and 2.1.2); proof
+//! *verification* follows the explicit step-by-step algorithms in RFC 9162
+//! (Certificate Transparency 2.0, sections 2.1.3.2 and 2.1.4.2) - its
+//! successor over the same tree, because RFC 6962 specifies the construction
+//! but not a verifier procedure. The two are interoperable; the per-function
+//! doc comments cite whichever the code there implements.
+//!
 //! This module is pure and synchronous: leaf encoding + tree hashing,
 //! no I/O.
 
@@ -239,8 +246,11 @@ pub(crate) fn verify_inclusion_proof(
 /// `first_size == leaves.len()` yields the empty proof.
 pub(crate) fn consistency_proof(leaves: &[Hash], first_size: usize) -> Vec<Hash> {
     let n = leaves.len();
-    debug_assert!(first_size > 0 && first_size <= n, "first_size out of range");
-    if first_size >= n {
+    debug_assert!(first_size <= n, "first_size past tree size");
+    // The empty tree is consistent with anything and the whole tree with
+    // itself; both are the empty proof, matching the verifier's handling of
+    // `first_size == 0` and `first_size == second_size`.
+    if first_size == 0 || first_size >= n {
         return Vec::new();
     }
     subproof(first_size, leaves, true)
@@ -602,6 +612,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An empty first tree is consistent with any later tree, the empty
+    /// proof - prover and verifier agree on `first_size == 0` (the case the
+    /// prover used to debug-assert away).
+    #[test]
+    fn consistency_with_an_empty_first_tree_is_the_empty_proof() {
+        let leaves: Vec<Hash> = (0u16..5).map(|n| leaf_hash(&n.to_le_bytes())).collect();
+        let empty_root = merkle_root(&[]);
+        let full_root = merkle_root(&leaves);
+        assert!(consistency_proof(&leaves, 0).is_empty());
+        assert_eq!(
+            verify_consistency_proof(0, &empty_root, 5, &full_root, &[]),
+            Ok(())
+        );
     }
 
     /// A genuine consistency proof does not authenticate which rows are the
