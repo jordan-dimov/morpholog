@@ -97,15 +97,22 @@ class Morpholog:
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
             ) from None
 
+    def _redact_stderr(self, stderr: str) -> str:
+        """Mask the client's own conninfo in any stderr it surfaces - a
+        PG driver error can echo the connection string verbatim. Used at
+        every raised operational error, not only ``_invoke``, so a path
+        that bypasses ``_invoke`` (batch, audit) cannot leak it."""
+        stderr = stderr.strip()
+        if self.database_url:
+            stderr = stderr.replace(self.database_url, "<redacted>")
+        return stderr
+
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
         proc = self._run(list(args), stdin=stdin, timeout=self.timeout)
         if not proc.stdout.strip():
-            # The argv is masked by flag; the binary's stderr may echo the
-            # conninfo itself (a connection error), so mask the literal too.
-            stderr = proc.stderr.strip()
-            if self.database_url:
-                stderr = stderr.replace(self.database_url, "<redacted>")
-            raise MorphologError(f"`{_redact_argv(list(args))}`:\n{stderr}")
+            raise MorphologError(
+                f"`{_redact_argv(list(args))}`:\n{self._redact_stderr(proc.stderr)}"
+            )
         return proc.stdout
 
     def _json(self, *args: str) -> object:
@@ -197,7 +204,8 @@ class Morpholog:
         ]
         if proc.returncode != 0:
             raise MorphologError(
-                f"batch aborted after {len(receipts)} receipt(s):\n{proc.stderr.strip()}"
+                f"batch aborted after {len(receipts)} receipt(s):\n"
+                f"{self._redact_stderr(proc.stderr)}"
             )
         return receipts
 
@@ -287,7 +295,8 @@ class Morpholog:
         proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
             raise MorphologError(
-                f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
+                f"inspect audit failed (exit {proc.returncode}):\n"
+                f"{self._redact_stderr(proc.stderr)}"
             )
         return [
             json.loads(line) for line in proc.stdout.splitlines() if line.strip()

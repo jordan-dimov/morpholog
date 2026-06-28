@@ -259,6 +259,29 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertNotIn(secret, msg)
         self.assertIn("<redacted>", msg)
 
+    def test_batch_stderr_echoing_the_conninfo_is_masked(self):
+        # propose_batch bypasses _invoke and raises with raw stderr; it
+        # must mask the conninfo on the abort path too.
+        self._mode("stderr_echoes_conninfo")
+        secret = "postgres://user:hunter2@db.internal/ledger"
+        client = Morpholog("model.morph", secret, binary=str(self.stub))
+        with self.assertRaises(MorphologError) as caught:
+            client.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
+        msg = str(caught.exception)
+        self.assertNotIn("hunter2", msg)
+        self.assertNotIn(secret, msg)
+
+    def test_audit_stderr_echoing_the_conninfo_is_masked(self):
+        # _audit_lines also bypasses _invoke (an empty tail is lawful).
+        self._mode("stderr_echoes_conninfo")
+        secret = "postgres://user:hunter2@db.internal/ledger"
+        client = Morpholog("model.morph", secret, binary=str(self.stub))
+        with self.assertRaises(MorphologError) as caught:
+            client.audit()
+        msg = str(caught.exception)
+        self.assertNotIn("hunter2", msg)
+        self.assertNotIn(secret, msg)
+
     def test_batch_takes_a_per_call_timeout_override(self):
         # The default client carries no timeout; the override bounds
         # this one batch.
