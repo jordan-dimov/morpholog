@@ -1,19 +1,20 @@
 # Laytime and demurrage: the argument about minutes
 
-A ship arrives at Sines to load. The master tenders Notice of Readiness at
-14:00. The charterer says the clock should not have started until the next
-working period; the owner says it started six hours after the notice, as the
-charterparty plainly states. Rain stops the cranes for four and a half hours
-on the second day - excepted time, says the charterer; counted, says the
-owner, because the rain clause does not apply on demurrage. Weeks later a
-demurrage claim arrives, built from a Statement of Facts the two sides do not
-quite share, and someone has to audit every line of it.
+In voyage chartering, the charterer gets a fixed amount of time - *laytime* -
+to load or discharge the ship. Run past it and the charter switches to
+*demurrage*: the delay is priced and paid to the owner by the day. So the
+bill turns on minutes, and on rules about which minutes count. When does the
+clock start - at the Notice of Readiness, or an agreed turn-time later? Does a
+rain stoppage count, or is it excepted - and does that exception still apply
+once the ship is on demurrage? Weeks later a demurrage claim arrives, built
+from a Statement of Facts the two sides do not quite share, and someone audits
+every line of it.
 
 This is not an edge case. Demurrage is how voyage chartering prices delay -
 an expected, agreed outcome settled to the minute - and disputing the minutes
-is an industry in itself. The question a tribunal asks is the question this
-example makes mechanical: **which events were admitted, under what rules did
-each minute count, and does the claimed total follow?**
+is an industry in itself. The question a tribunal asks is the one this example
+makes mechanical: **which events were admitted, under what rules did each
+minute count, and does the claimed total follow?**
 
 ## What the model governs
 

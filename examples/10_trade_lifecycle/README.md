@@ -67,72 +67,31 @@ An auditor later can ask, and the model answers by construction:
   any terms were effective at all?* No to either - the runtime would not
   have admitted it.
 
-## The two clocks
+## What it governs
 
-That "same date, different answer" is not a trick. A trade's terms live on
-two independent clocks, and the example keeps them apart:
+The deep walk-through of each control is in
+[`trade_lifecycle.morph`](trade_lifecycle.morph); in brief, three are worth
+seeing:
 
-- **When a claim is effective in the world** - the date a quantity takes
-  force. This is just a date carried on an ordinary claim
-  (`effective_from` on a terms version, `effective_on` on a settlement
-  slice). Effective time can be written retroactively: an amendment booked
-  in March can be effective from February.
-- **When the system recorded a claim** - the append-only audit log. This
-  clock only moves forward; you cannot record into the past. Any past
-  moment can be replayed "as of" a transition.
-
-Combine them and the book answers bitemporal questions - *what was
-effective on date D, as we knew it at time T?* - with nothing more than a
-date on a claim and the audit log. No valid-time columns, no temporal
-database. The `TermsTimeline` read-side view, replayed as-of an earlier
-transition, is what gives 100 on 16 January and 120 today for the same 20
-February question.
-
-## The two controls
-
-The example is also built around the distinction between the two kinds of
-rule, because they answer different questions:
-
-- **Who may confirm, correct, or amend** is settled at the moment someone
-  acts. It is a gate (`require`): confirming a power trade today stays valid
-  even if that authority is withdrawn tomorrow. The authority is scoped per
-  commodity and tied to the trade's *own* commodity, so authority over gas
-  does not let you touch a power trade.
-- **A trade may never be over-settled** must hold for all admitted state,
-  forever. It is an invariant: no path, however the books are reached, may
-  leave an over-settled trade behind. And "over-settled" is judged on the
-  effective clock - the total settled effective on or before a date may not
-  exceed the quantity the terms in force on that date allow.
-
-`settle_trade` shows the split cleanly. Its gates are operational
-preconditions - there must be an official price in force to settle on, and
-the settlement id must be unused, so replaying a settlement cannot request
-a second downstream payment. The structural truths (a settled trade was
-confirmed; the cumulative effective cap holds) are left to the invariants.
-This is what lets a backdated amendment *lift* the cap: a slice of 110
-effective 20 February is refused while the terms in force say 100; once the
-amendment to 120 (effective 1 February) is recorded, the very same slice
-becomes admissible. The amendment changed what is true, and the runtime
-re-judges admissibility against it.
-
-## The position limit
-
-Another invariant guards a different exposure. A desk's *net position* on a
-commodity is its buys minus its sells - a signed figure, positive when net
-long and negative when net short. A `PositionLimit` caps how far that net
-may swing in *either* direction, and the rule says so in one comparison:
-
-```
-abs(buys - sells) <= limit
-```
-
-`abs` is the magnitude of the net, its distance from zero, so a single
-bound holds the position both ways - too long and too short are the same
-breach. A buy and an offsetting sell net against each other, so it is the
-net that is bounded, never the gross: a 40-lot buy and a 35-lot sell sit at
-a net of 5 even though they gross 75. Each trade contributes its current
-quantity, so an amendment that grows a position can cross the limit just as
-a new capture can, and the runtime refuses the change either way.
+- **Two clocks.** Terms carry an *effective* date (when a quantity takes
+  force - writable retroactively, so a March amendment can be effective from
+  February), separate from *recorded* time (the append-only audit log,
+  replayable as-of). Together they answer *what was effective on date D, as
+  we knew it at time T?* with nothing but a date on a claim - no valid-time
+  columns. The `TermsTimeline` view replayed as-of an earlier transition is
+  what gives 100 on 16 January and 120 today for the same 20 February
+  question.
+- **Gate versus invariant.** *Who may confirm, correct, or amend* is settled
+  when someone acts (a `require` gate, scoped per commodity to the trade's
+  own commodity); *a trade may never be over-settled* must hold forever (an
+  invariant, judged on the effective clock). That split is what lets a
+  backdated amendment *lift* the cap: a slice of 110 effective 20 February is
+  refused while the terms in force say 100, then becomes admissible once an
+  amendment to 120 (effective 1 February) is recorded.
+- **Net-position limit.** `abs(buys - sells) <= limit` caps a desk's signed
+  net position in *either* direction with one comparison - a 40-lot buy and a
+  35-lot sell net to 5, not 75, so it is the net that is bounded, and an
+  amendment that grows a position breaches it just as a new capture can.
 
 ## The program
 
