@@ -125,6 +125,13 @@ book admits an empty run.
   `AccountEquity` are read as given. In a real deployment they are kept
   current by their own governed processes (positions marked to market,
   collateral posted); modelling that daily refresh is a separate concern.
+- **Book completeness is a separate control.** The completeness gate sees
+  only accounts that *have* their margin claims: an account missing, say, its
+  `MaintenanceMargin` is invisible to it. So this example governs
+  completeness of the call run *given a complete book* - that every account
+  with its figures is called - not that every account has figures in the
+  first place. That second control belongs to whatever process maintains the
+  book.
 - **Proposer-chosen amounts.** Each call here is the derived top-up, so the
   batch carries only account handles. A run where the engine supplies a
   per-line figure of its own would need a structured collection element - a

@@ -520,13 +520,15 @@ pub enum ParamKind {
     /// render this as a disjunctive contract (JSON Schema `anyOf`,
     /// for instance) or surface it as a modelling diagnostic.
     Ambiguous(Vec<PredicateArgKind>),
-    /// The parameter is a collection (iterated by `for` / `forall`),
-    /// and its element kind is the projection of how the loop binding
+    /// The parameter is a collection iterated by `for` / `forall` whose
+    /// element kind WAS observed: the projection of how the loop binding
     /// is used in the body - `Collection(Concrete(Subject))` for a list
-    /// of subjects. The element is itself a [`ParamKind`], so an
-    /// unobserved element is `Collection(Unconstrained)` (the embedder
-    /// cannot type the items) and nesting is expressible. This is the
-    /// shape an external engine submits a whole batch through.
+    /// of subjects. The element is itself a [`ParamKind`], so nesting is
+    /// expressible. This variant appears only once an element kind is
+    /// actually observed: a collection whose binding is never used at a
+    /// kind-bearing position carries no element evidence and stays the
+    /// opaque `Concrete(Collection)` instead. This is the shape an
+    /// external engine submits a whole batch through.
     Collection(Box<ParamKind>),
 }
 
@@ -606,13 +608,15 @@ pub fn transformation_param_kinds(
                 .get(param)
                 .cloned()
                 .unwrap_or_default();
-            // A parameter ITERATED as a collection carries an element kind:
-            // the projection of how its loop binding was used (an unobserved
-            // element projects to `Unconstrained`). A parameter observed as a
-            // collection only through a Collection-declared predicate arg has
-            // no element information, so it stays the opaque `Concrete(Collection)`.
-            // A parameter used both as a collection and a scalar stays a
-            // genuine conflict (the ordinary `Ambiguous` projection).
+            // A parameter ITERATED as a collection with an observed element
+            // (a `collection_elements` entry, always non-empty) carries that
+            // element kind: the projection of how its loop binding was used.
+            // A parameter observed as a collection only through a
+            // Collection-declared predicate arg, or iterated with a binding
+            // never used at a kind-bearing position, has no element evidence
+            // and stays the opaque `Concrete(Collection)`. A parameter used
+            // both as a collection and a scalar stays a genuine conflict (the
+            // ordinary `Ambiguous` projection).
             let kind = if observed.len() == 1
                 && observed.contains(&PredicateArgKind::Collection)
                 && let Some(element) = collector.collection_elements.get(param)
@@ -976,9 +980,51 @@ impl<'a> ParamCollector<'a> {
             Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
                 self.walk_prop(inner);
             }
-            Prop::Forall { source, body, .. } => {
+            Prop::Forall {
+                binding,
+                source,
+                body,
+            } => {
+                // The source observes the collection (a `forall x in xs`
+                // lowers to a source `In(x, xs)`, whose `In` arm observes
+                // `xs` as a collection).
                 self.walk_prop(source);
+
+                // Same shadowing discipline as `Stmt::For`: the quantifier
+                // binding is loop-local, so its body-time observations must
+                // not leak to an outer name of the same name. Save, clear,
+                // walk, capture the element kind, then restore.
+                let saved_obs = self.observations.get(binding).cloned();
+                let saved_class = self.current_class.get(binding).cloned();
+                self.invalidate(binding);
+                self.observations.remove(binding);
+
                 self.walk_prop(body);
+
+                // The binding's body-time observations ARE the source
+                // collection's element kinds. Capture them against the
+                // collection variable from the `In` source before the
+                // binding's loop-local state is discarded.
+                if let Prop::In(_, Term::Var(coll)) = source.as_ref()
+                    && let Some(elem_obs) = self.observations.get(binding)
+                {
+                    let elem_obs = elem_obs.clone();
+                    self.collection_elements
+                        .entry(coll.clone())
+                        .or_default()
+                        .extend(elem_obs);
+                }
+
+                self.invalidate(binding);
+                self.observations.remove(binding);
+                if let Some(obs) = saved_obs {
+                    self.observations.insert(binding.clone(), obs);
+                }
+                if let Some(class) = saved_class {
+                    for member in &class {
+                        self.current_class.insert(member.clone(), class.clone());
+                    }
+                }
             }
             Prop::Compare {
                 domain,

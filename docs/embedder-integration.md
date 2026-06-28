@@ -23,7 +23,7 @@ This document is the public contract. What it pins is what an embedder can rely 
   / generates forms        the JSON envelope
 ```
 
-The embedder asks `morpholog schema <file> <transformation>` for the JSON Schema of the transformation's argument object. For the transformations whose parameters all resolve to unambiguous scalar kinds (`Subject`, `Decimal`, `Decimal[U]`, `Date`, `Timestamp`, `Duration`, `Bool`), it sends that shape to `morpholog propose --args-named` to commit (or to `morpholog explain --args-named --json` to dry-run and diagnose). For the corner cases the named codec cannot decode unambiguously - `Polymorphic`, `Unconstrained`, `Ambiguous`, and `Collection` parameters - it falls back to `--args` with the tagged `EvalValue` codec. The named codec's refusals are documented below alongside each pointer to `--args`. Between transitions, `morpholog inspect claims --predicate` reads governed state back - decoded by declared field name under `--named` - so the next transition can be built from claims the embedder did not itself mint. On day zero, `morpholog init` provisions the schema from the binary itself. The embedder parses the JSON envelope on stdout. None of that requires Rust. The `.morph` source is the single source of truth; everything else is derivable from it.
+The embedder asks `morpholog schema <file> <transformation>` for the JSON Schema of the transformation's argument object. For the transformations whose parameters all resolve to unambiguous scalar kinds (`Subject`, `Decimal`, `Decimal[U]`, `Date`, `Timestamp`, `Duration`, `Bool`) or collections of them, it sends that shape to `morpholog propose --args-named` to commit (or to `morpholog explain --args-named --json` to dry-run and diagnose). For the corner cases the named codec cannot decode unambiguously - `Polymorphic`, `Unconstrained`, `Ambiguous`, and opaque `Collection` parameters - it falls back to `--args` with the tagged `EvalValue` codec. The named codec's refusals are documented below alongside each pointer to `--args`. Between transitions, `morpholog inspect claims --predicate` reads governed state back - decoded by declared field name under `--named` - so the next transition can be built from claims the embedder did not itself mint. On day zero, `morpholog init` provisions the schema from the binary itself. The embedder parses the JSON envelope on stdout. None of that requires Rust. The `.morph` source is the single source of truth; everything else is derivable from it.
 
 ## The argument codecs
 
@@ -53,7 +53,8 @@ Accepts the subset of transformations whose every parameter resolves to one of `
 - **`Timestamp`** - JSON string parsed as an RFC 3339 instant (`2026-10-24T14:00:00Z`). Zone-less UTC by design: local-time interpretation is admitted as claims, never assumed by the runtime.
 - **`Duration`** - JSON string parsed as an ISO-8601 duration in exact time units (`PT6H`, `PT1H30M`); calendar units (months, years) are rejected.
 - **`Bool`** - JSON boolean.
-- **`Polymorphic`** / **`Unconstrained`** / **`Ambiguous`** / **`Collection`** - refused. The schema either does not give a single unambiguous kind (the first three) or gives a shape the named codec cannot decode without per-item information that v0 does not track (the fourth). Use `--args` with the tagged `EvalValue` codec for these parameters.
+- **`Collection`** - a JSON array, decoded item by item against the element kind inferred from how the parameter is iterated (`for` / `forall`): a collection of subjects accepts `["acct_a", "acct_b"]`, a collection of amounts accepts an array of decimal strings, and so on. A collection whose element kind the model never observes (iterated with a binding used at no kind-bearing position, or passed only to a `Collection`-declared predicate argument) stays opaque and is refused here - send it via `--args` with the tagged `EvalValue` codec.
+- **`Polymorphic`** / **`Unconstrained`** / **`Ambiguous`** - refused. The schema does not give a single unambiguous kind, so the named codec cannot choose one safely. Use `--args` with the tagged `EvalValue` codec for these parameters.
 
 Strict beyond the kind check. Missing required keys, unknown keys, wrong JSON types (`true` where a Decimal is expected, etc.), and `null` values are all rejected before any database work. Each error names the parameter, the expected kind, the actual shape, and ends with a pointer at the schema subcommand so the embedder can inspect the accepted shape without leaving the terminal.
 
@@ -70,7 +71,7 @@ morpholog propose trade_lifecycle.morph capture_trade \
     ]'
 ```
 
-The full codec, faithful and unambiguous. Use this when the schema cannot narrow a parameter's kind (the `--args-named` refusals above), when sending Collection values, or when the embedder genuinely wants the lower-level codec.
+The full codec, faithful and unambiguous. Use this when the schema cannot narrow a parameter's kind (the `--args-named` refusals above), when sending an opaque collection (one whose element kind the model does not observe), or when the embedder genuinely wants the lower-level codec.
 
 Both codecs decode through one shared function so the `propose` and `explain` paths cannot drift on what counts as a valid input.
 

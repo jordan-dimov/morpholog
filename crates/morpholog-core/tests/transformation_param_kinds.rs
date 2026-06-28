@@ -564,6 +564,44 @@ fn an_iterated_collection_with_an_unused_binding_stays_opaque() {
     );
 }
 
+/// `forall x in xs: ...` infers the element kind the same way `for`
+/// does - the quantifier binding's body usage becomes `xs`'s element
+/// kind. The natural author-facing completeness shape (`require forall
+/// acct in batch: Eligible(acct)`) must type the batch as a collection
+/// of subjects, not leave it opaque. This mirrors the surface lowering
+/// of `forall acct in called_accounts: ...` to a `Forall` whose source
+/// is the auto-lifted `In(acct, called_accounts)`.
+#[test]
+fn a_forall_over_a_collection_infers_its_element_kind() {
+    let prog = program("forall_batch")
+        .predicates(vec![
+            predicate("margin_eligible").subject("account").build(),
+        ])
+        .transformations(vec![transformation(
+            "check_batch",
+            params(&["called_accounts"]),
+            vec![require(forall(
+                "acct",
+                in_(var("acct"), var("called_accounts")),
+                claim("margin_eligible", vec![var("acct")]),
+            ))],
+        )])
+        .build();
+
+    let kinds = transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from("check_batch"),
+    )
+    .unwrap();
+    assert_eq!(
+        kinds,
+        vec![(
+            Var::from("called_accounts"),
+            ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject))),
+        )],
+    );
+}
+
 /// An invalid programme surfaces its validation errors at the
 /// `Program::validated` gate, before the analysis surface is even
 /// reachable. The type system enforces this: `transformation_param_kinds`
