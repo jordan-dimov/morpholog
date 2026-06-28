@@ -119,10 +119,9 @@ Comments and docs earn their place by the same subtraction test as code. This is
 
 ## Adding a worked example
 
-A worked example lives in two places:
+A worked example is **its `.morph`**. Put the canonical `.morph` source and the business framing (`README.md`) in `examples/NN_<name>/`, then add one line - `example_module!(<name>);` - to `crates/morpholog-examples/src/lib.rs`.
 
-1. `examples/NN_<name>/` carries the **canonical `.morph` source** and the business framing as a `README.md`.
-2. `crates/morpholog-examples/src/<name>.rs` is a thin accessor module: it embeds the `.morph` via `include_str!`, parses it once into the registered `Program`, and exposes the by-name getters (`program`, `all_invariants`, individual transformations and invariants) the tests use as fixtures. It builds no IR by hand.
+That is all. `crates/morpholog-examples/build.rs` reads the `.morph`, extracts its `transformation` / `invariant` / `derived` declarations, and generates the accessor module (`program`, `all_invariants`, one getter per declaration) that the tests use as fixtures; the cross-example property tests pick the example up through the generated `all_programs()` registry. There is no hand-written accessor module and no IR by hand. If a test needs a domain-symbol constant the `.morph` cannot yield (a role name, a list name) or an accessor for a *generated* discipline invariant, add it as a small supplement in that `example_module!` call's `{ ... }` body.
 
 The `.morph` file is the **single source of truth**, not an illustration: the runnable program *is* the parsed teaching source, so the two cannot drift - there is no separate hand-built IR to keep in sync. A pedagogical simplification belongs in the `README` or in `.morph` comments, never in a divergent model. (The round-trip test in `morpholog-surface` checks `format(IR) -> parse == IR` over generated source, and the CLI integration test verifies every example parses and validates.)
 
