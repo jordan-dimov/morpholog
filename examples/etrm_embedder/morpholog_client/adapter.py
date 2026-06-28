@@ -324,13 +324,41 @@ class Morpholog:
     def evidence_verify(
         self, pack_file: str, anchor_file: str | None = None
     ) -> envelopes.TreeVerification:
-        """Verify an evidence pack offline - no database. Returns the
+        """Verify a prefix evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
         verdict on stdout."""
         args = ["evidence", "verify", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         return envelopes.parse_tree_verification(self._json(*args))
+
+    def evidence_export_window(
+        self, from_tree_size: int, to_tree_size: int | None = None
+    ) -> envelopes.WindowEvidencePack:
+        """Export a WINDOW pack between the checkpoint at ``from_tree_size``
+        (the prior period's anchor) and the covering one (latest, or
+        ``to_tree_size``): it proves the covered range extends that anchor.
+        Carries the window's rows - confidential data, not selective
+        disclosure."""
+        args = [
+            "evidence", "export",
+            "--from-tree-size", str(from_tree_size),
+            "--database-url", self.database_url,
+        ]
+        if to_tree_size is not None:
+            args.extend(["--tree-size", str(to_tree_size)])
+        return envelopes.WindowEvidencePack.from_json(self._json(*args))
+
+    def evidence_verify_window(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.WindowVerification:
+        """Verify a window pack offline - no database. Returns the window
+        verdict; a tamper, inconsistent extension, or malformed pack is a
+        decided verdict on stdout."""
+        args = ["evidence", "verify", str(pack_file)]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.parse_window_verification(self._json(*args))
 
     # ------------------------------------------------------------
     # The outbox lease protocol.
