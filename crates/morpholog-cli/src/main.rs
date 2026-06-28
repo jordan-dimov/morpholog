@@ -401,9 +401,11 @@ pub(crate) struct EvaluateArgs {
 /// deliberately offline - it takes no connection string, only files.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum EvidenceCmd {
-    /// Export a complete-prefix evidence pack as JSON (redirect to a
-    /// file). Covers the latest checkpoint, or the checkpoint at
-    /// `--tree-size N`. Refuses if there is no such checkpoint.
+    /// Export an evidence pack as JSON (redirect to a file): a complete
+    /// prefix by default, or - with `--from-anchor`/`--from-tree-size` - the
+    /// window between that earlier checkpoint and the covering one, proving
+    /// it extends the earlier anchor. Refuses if a named checkpoint does not
+    /// exist.
     Export(EvidenceExportArgs),
 
     /// Verify a pack offline, with no database. Recomputes the Merkle
@@ -413,19 +415,32 @@ pub(crate) enum EvidenceCmd {
     Verify(EvidenceVerifyArgs),
 }
 
-/// Arguments for `evidence export`: the connection plus an optional exact
-/// checkpoint size to cover.
+/// Arguments for `evidence export`. With no `--from-*` it exports a
+/// complete prefix; with one it exports the window between that earlier
+/// checkpoint and the covering one.
 #[derive(clap::Args, Debug)]
 pub(crate) struct EvidenceExportArgs {
     #[command(flatten)]
     pub(crate) db: DatabaseArgs,
 
-    /// Cover the checkpoint whose `tree_size` equals this value, instead
-    /// of the latest. Must match an existing checkpoint exactly - a later
-    /// checkpoint does not prove an arbitrary earlier prefix until
-    /// consistency proofs exist.
+    /// Cover the checkpoint whose `tree_size` equals this value, instead of
+    /// the latest. In window mode this is the window's end (`to`). Must
+    /// match an existing checkpoint exactly.
     #[arg(long)]
     pub(crate) tree_size: Option<i64>,
+
+    /// Export a WINDOW starting at the checkpoint in this anchor file (as
+    /// printed by `checkpoint`, the prior period's externally-held anchor):
+    /// the pack proves the covered range extends it. The trusted start is
+    /// the whole checkpoint, which is why a file is the main path.
+    #[arg(long, conflicts_with = "from_tree_size")]
+    pub(crate) from_anchor: Option<std::path::PathBuf>,
+
+    /// Export a window starting at this checkpoint `tree_size` - a
+    /// database-side convenience for `--from-anchor`. The pack still carries
+    /// the full start checkpoint; prefer `--from-anchor` for the trust object.
+    #[arg(long)]
+    pub(crate) from_tree_size: Option<i64>,
 }
 
 /// Arguments for `evidence verify`: a pack file and an optional external

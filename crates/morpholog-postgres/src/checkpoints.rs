@@ -487,7 +487,7 @@ pub async fn first_unsigned_checkpoint_size(pool: &PgPool) -> Result<Option<i64>
 /// different signatures are the same commitment, so the anchor check must
 /// compare heads, not whole artefacts - otherwise a signature difference
 /// reads as a mismatch whose two `checkpoint_hash`es are identical.
-fn same_tree_head(a: &Checkpoint, b: &Checkpoint) -> bool {
+pub(crate) fn same_tree_head(a: &Checkpoint, b: &Checkpoint) -> bool {
     a.tree_size == b.tree_size
         && a.root_hash == b.root_hash
         && a.prev_checkpoint_hash == b.prev_checkpoint_hash
@@ -587,7 +587,7 @@ pub(crate) fn verify_tree(
 /// attached signature must verify over the checkpoint's tree head, else
 /// `SignatureInvalid`. Pure; whether the key is *authorised* is
 /// [`authority_violation`]'s separate judgment.
-fn signature_crypto_violation(cp: &Checkpoint) -> Option<TreeVerification> {
+pub(crate) fn signature_crypto_violation(cp: &Checkpoint) -> Option<TreeVerification> {
     let head = signing::TreeHead {
         tree_size: cp.tree_size,
         root_hash: &cp.root_hash,

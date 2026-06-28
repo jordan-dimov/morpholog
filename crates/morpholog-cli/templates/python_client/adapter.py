@@ -324,13 +324,48 @@ class Morpholog:
     def evidence_verify(
         self, pack_file: str, anchor_file: str | None = None
     ) -> envelopes.TreeVerification:
-        """Verify an evidence pack offline - no database. Returns the
+        """Verify a prefix evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
         verdict on stdout."""
         args = ["evidence", "verify", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         return envelopes.parse_tree_verification(self._json(*args))
+
+    def evidence_export_window(
+        self,
+        from_tree_size: int | None = None,
+        to_tree_size: int | None = None,
+        from_anchor: str | None = None,
+    ) -> envelopes.WindowEvidencePack:
+        """Export a WINDOW pack between an earlier checkpoint and the
+        covering one (latest, or ``to_tree_size``): it proves the covered
+        range extends that start. Give the start as ``from_anchor`` (a path
+        to the prior period's checkpoint file - the trust object, and export
+        refuses if the stored start has diverged from it) or the weaker
+        ``from_tree_size``; exactly one. Carries the window's rows -
+        confidential data, not selective disclosure."""
+        if (from_anchor is None) == (from_tree_size is None):
+            raise ValueError("give exactly one of from_anchor or from_tree_size")
+        args = ["evidence", "export", "--database-url", self.database_url]
+        if from_anchor is not None:
+            args.extend(["--from-anchor", str(from_anchor)])
+        else:
+            args.extend(["--from-tree-size", str(from_tree_size)])
+        if to_tree_size is not None:
+            args.extend(["--tree-size", str(to_tree_size)])
+        return envelopes.WindowEvidencePack.from_json(self._json(*args))
+
+    def evidence_verify_window(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.WindowVerification:
+        """Verify a window pack offline - no database. Returns the window
+        verdict; a tamper, inconsistent extension, or malformed pack is a
+        decided verdict on stdout."""
+        args = ["evidence", "verify", str(pack_file)]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.parse_window_verification(self._json(*args))
 
     # ------------------------------------------------------------
     # The outbox lease protocol.

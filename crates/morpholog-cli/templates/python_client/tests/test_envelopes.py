@@ -263,6 +263,31 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsInstance(pack.rows[0], envelopes.AuditRow)
         self.assertEqual(pack.rows[0].transformation_name, "open_account")
 
+    def test_every_window_verdict_parses(self):
+        for name, cls in [
+            ("window_verification_intact.json", envelopes.WindowIntact),
+            (
+                "window_verification_inconsistent_extension.json",
+                envelopes.WindowInconsistentExtension,
+            ),
+            ("window_verification_row_not_included.json", envelopes.WindowRowNotIncluded),
+            ("window_verification_anchor_mismatch.json", envelopes.WindowAnchorMismatch),
+            ("window_verification_signature_invalid.json", envelopes.WindowSignatureInvalid),
+            ("window_verification_signature_required.json", envelopes.WindowSignatureRequired),
+            ("window_verification_malformed.json", envelopes.WindowMalformed),
+        ]:
+            self.assertIsInstance(envelopes.parse_window_verification(golden(name)), cls)
+
+    def test_window_evidence_pack_with_proofs(self):
+        pack = envelopes.WindowEvidencePack.from_json(golden("window_evidence_pack.json"))
+        self.assertEqual(pack.manifest.pack_format_version, 2)
+        self.assertEqual(pack.manifest.pack_kind, "window")
+        self.assertIsInstance(pack.from_checkpoint, envelopes.Checkpoint)
+        self.assertIsInstance(pack.to_checkpoint, envelopes.Checkpoint)
+        self.assertEqual(len(pack.rows), len(pack.inclusion_proofs))
+        self.assertIsInstance(pack.inclusion_proofs[0], envelopes.RowInclusionProof)
+        self.assertEqual(pack.inclusion_proofs[0].leaf_index, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

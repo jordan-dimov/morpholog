@@ -1,0 +1,103 @@
+{
+  "consistency_proof": [
+    "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  ],
+  "from_checkpoint": {
+    "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "prev_checkpoint_hash": null,
+    "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tree_size": 2
+  },
+  "inclusion_proofs": [
+    {
+      "leaf_index": 2,
+      "proof": [
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ]
+    }
+  ],
+  "manifest": {
+    "from_checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "from_root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "from_tree_size": 2,
+    "pack_format_version": 2,
+    "pack_kind": "window",
+    "to_checkpoint_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "to_root_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "to_tree_size": 3
+  },
+  "rows": [
+    {
+      "actor": {
+        "type": "subject",
+        "value": "alex"
+      },
+      "arguments": [
+        {
+          "type": "subject",
+          "value": "acct_1"
+        }
+      ],
+      "asserted_claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "acct_1"
+            },
+            {
+              "type": "decimal",
+              "value": "100.50"
+            },
+            {
+              "type": "bool",
+              "value": true
+            },
+            {
+              "type": "date",
+              "value": "2026-06-01"
+            },
+            {
+              "type": "timestamp",
+              "value": "2026-06-01T12:00:00Z"
+            },
+            {
+              "type": "duration",
+              "value": "PT6H"
+            },
+            {
+              "type": "quantity",
+              "value": {
+                "amount": "25000",
+                "unit": "USD"
+              }
+            },
+            {
+              "type": "collection",
+              "value": [
+                {
+                  "type": "subject",
+                  "value": "nested"
+                }
+              ]
+            }
+          ],
+          "predicate": "EveryKind"
+        }
+      ],
+      "committed_at": "2026-06-01T12:00:00Z",
+      "emitted_intents": [],
+      "invariant_epoch": 1,
+      "invariants_checked": [],
+      "retracted_claims": [],
+      "transformation_name": "open_account",
+      "transition_id": "01900000-0000-7000-8000-000000000001"
+    }
+  ],
+  "to_checkpoint": {
+    "checkpoint_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "prev_checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "root_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "tree_size": 3
+  }
+}

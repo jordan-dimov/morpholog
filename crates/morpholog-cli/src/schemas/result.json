@@ -741,6 +741,118 @@
         "checkpoints": { "type": "array", "items": { "$ref": "#/$defs/checkpoint" } },
         "rows": { "type": "array", "items": { "$ref": "#/$defs/audit_row" } }
       }
+    },
+    "row_inclusion_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["leaf_index", "proof"],
+      "properties": {
+        "leaf_index": { "type": "integer" },
+        "proof": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "window_pack_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pack_format_version", "pack_kind", "from_tree_size", "to_tree_size", "from_checkpoint_hash", "to_checkpoint_hash", "from_root_hash", "to_root_hash"],
+      "properties": {
+        "pack_format_version": { "type": "integer" },
+        "pack_kind": { "type": "string" },
+        "from_tree_size": { "type": "integer" },
+        "to_tree_size": { "type": "integer" },
+        "from_checkpoint_hash": { "type": "string" },
+        "to_checkpoint_hash": { "type": "string" },
+        "from_root_hash": { "type": "string" },
+        "to_root_hash": { "type": "string" }
+      }
+    },
+    "window_evidence_pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "from_checkpoint", "to_checkpoint", "consistency_proof", "rows", "inclusion_proofs"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/window_pack_manifest" },
+        "from_checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "to_checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "consistency_proof": { "type": "array", "items": { "type": "string" } },
+        "rows": { "type": "array", "items": { "$ref": "#/$defs/audit_row" } },
+        "inclusion_proofs": { "type": "array", "items": { "$ref": "#/$defs/row_inclusion_proof" } }
+      }
+    },
+    "window_verification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "from_tree_size", "to_tree_size", "rows"],
+          "properties": {
+            "status": { "const": "intact" },
+            "from_tree_size": { "type": "integer" },
+            "to_tree_size": { "type": "integer" },
+            "rows": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "from_tree_size", "to_tree_size"],
+          "properties": {
+            "status": { "const": "inconsistent_extension" },
+            "from_tree_size": { "type": "integer" },
+            "to_tree_size": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "leaf_index"],
+          "properties": {
+            "status": { "const": "row_not_included" },
+            "leaf_index": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "anchor_checkpoint_hash", "pack_checkpoint_hash"],
+          "properties": {
+            "status": { "const": "anchor_mismatch" },
+            "tree_size": { "type": "integer" },
+            "anchor_checkpoint_hash": { "type": "string" },
+            "pack_checkpoint_hash": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "key_id", "purpose", "public_key"],
+          "properties": {
+            "status": { "const": "signature_invalid" },
+            "tree_size": { "type": "integer" },
+            "key_id": { "type": "string" },
+            "purpose": { "type": "string" },
+            "public_key": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size"],
+          "properties": {
+            "status": { "const": "signature_required" },
+            "tree_size": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "detail"],
+          "properties": {
+            "status": { "const": "malformed" },
+            "detail": { "type": "string" }
+          }
+        }
+      ]
     }
   }
 }

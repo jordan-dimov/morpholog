@@ -17,12 +17,20 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
-use crate::checkpoints::{Checkpoint, TreeVerification, load_checkpoint_chain, verify_tree};
+use crate::checkpoints::{
+    Checkpoint, TreeVerification, checkpoint_hash, load_checkpoint_chain, same_tree_head,
+    signature_crypto_violation, verify_tree,
+};
 use crate::error::{PgError, classify};
-use crate::merkle::{Hash, audit_leaf_hash};
+use crate::merkle::{
+    Hash, ProofError, audit_leaf_hash, consistency_proof, inclusion_proof, parse_hash, render_hash,
+    verify_consistency_proof, verify_inclusion_proof,
+};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
 const PACK_FORMAT_V1: u32 = 1;
+const PACK_FORMAT_V2: u32 = 2;
+const PACK_KIND_WINDOW: &str = "window";
 
 /// A thin convenience header on the pack. The authoritative data is
 /// `checkpoints` + `rows`; the manifest just summarises the covering
@@ -229,6 +237,470 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Window evidence packs (the Certificate Transparency proof tier).
+//
+// A window pack proves two separate things about an interval `[from, to)` of
+// the audit log, and needs both because neither implies the other:
+//   1. the later checkpoint is an append-only extension of the earlier one
+//      (a consistency proof - the prior period was not rewritten), and
+//   2. each exported row is included at its declared position in the later
+//      checkpoint (per-row inclusion proofs - the rows are the real suffix).
+// A consistency proof alone verifies between two roots regardless of any
+// rows; an inclusion proof alone says nothing about append-only continuity.
+//
+// A window pack carries only the `[from, to)` rows, so - unlike a full
+// prefix pack - it CANNOT establish governed signing-key *authority* (that
+// needs the `[0, from)` rows to fold `AuditSigningKey` claims as of the
+// prefix). It checks checkpoint signatures cryptographically only; authority
+// remains a full-prefix property.
+// ---------------------------------------------------------------------------
+
+/// One exported row's inclusion proof: the row sits at `leaf_index` in the
+/// to-checkpoint's tree, proven by `proof` (rendered sibling hashes,
+/// leaf-to-root).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RowInclusionProof {
+    pub leaf_index: i64,
+    pub proof: Vec<String>,
+}
+
+/// The window pack's convenience header. The authoritative data is the two
+/// checkpoints, the consistency proof, the rows, and the inclusion proofs;
+/// the manifest just restates the two endpoints for a human reading the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowPackManifest {
+    pub pack_format_version: u32,
+    pub pack_kind: String,
+    pub from_tree_size: i64,
+    pub to_tree_size: i64,
+    pub from_checkpoint_hash: String,
+    pub to_checkpoint_hash: String,
+    pub from_root_hash: String,
+    pub to_root_hash: String,
+}
+
+/// A windowed evidence pack: everything an offline verifier needs to confirm
+/// the interval `[from_tree_size, to_tree_size)` is a faithful, contiguous,
+/// append-only continuation of the earlier (anchor) checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowEvidencePack {
+    pub manifest: WindowPackManifest,
+    pub from_checkpoint: Checkpoint,
+    pub to_checkpoint: Checkpoint,
+    /// RFC 6962 consistency proof from `from` to `to` (rendered hashes).
+    pub consistency_proof: Vec<String>,
+    /// The window rows, in canonical order: exactly `to - from` of them.
+    pub rows: Vec<AuditRow>,
+    /// One inclusion proof per window row, declaring its leaf index.
+    pub inclusion_proofs: Vec<RowInclusionProof>,
+}
+
+/// The verdict of verifying a window pack. Kept separate from the
+/// prefix-shaped [`TreeVerification`]: a window proves consistency +
+/// row-inclusion, not a recomputed-from-every-row prefix, so its honest
+/// failure modes differ.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WindowVerification {
+    /// The later checkpoint extends the earlier (consistency holds), every
+    /// window row is included at its declared position, and the
+    /// to-checkpoint signatures (if any) verify cryptographically.
+    Intact {
+        from_tree_size: i64,
+        to_tree_size: i64,
+        rows: usize,
+    },
+    /// The later checkpoint is not an append-only extension of the earlier
+    /// one - the prior period was altered.
+    InconsistentExtension {
+        from_tree_size: i64,
+        to_tree_size: i64,
+    },
+    /// A window row is not included at its declared position in the later
+    /// checkpoint - the exported rows are not the genuine suffix.
+    RowNotIncluded { leaf_index: i64 },
+    /// An externally held anchor disagrees with the pack's from-checkpoint.
+    AnchorMismatch {
+        tree_size: i64,
+        anchor_checkpoint_hash: String,
+        pack_checkpoint_hash: String,
+    },
+    /// The to-checkpoint carries a signature that does not verify over its
+    /// tree head (cryptographic check only; authority is not judged here).
+    SignatureInvalid {
+        tree_size: i64,
+        key_id: String,
+        purpose: String,
+        public_key: String,
+    },
+    /// `--require-signatures` was asked for and the to-checkpoint carries no
+    /// signature. A policy verdict the verifier opts into (REMIT attribution
+    /// wants a signed window end), not an intrinsic tamper.
+    SignatureRequired { tree_size: i64 },
+    /// The window pack is not a well-formed v2 artefact (a bad envelope or
+    /// unparseable JSON) - it never had a chance to prove anything, kept
+    /// distinct from a genuine divergence of a well-formed pack.
+    Malformed { detail: String },
+}
+
+/// Where a window starts. `TreeSize` trusts the database to hold the right
+/// checkpoint at that size; `Anchor` carries the prior period's
+/// externally-held checkpoint and makes export REFUSE unless the stored
+/// start still matches it - the anchor is the trust object, not a size lookup.
+#[derive(Debug, Clone)]
+pub enum WindowStart {
+    TreeSize(i64),
+    Anchor(Checkpoint),
+}
+
+impl WindowStart {
+    fn tree_size(&self) -> i64 {
+        match self {
+            WindowStart::TreeSize(n) => *n,
+            WindowStart::Anchor(c) => c.tree_size,
+        }
+    }
+}
+
+/// Export a windowed evidence pack between two existing checkpoints. Reads
+/// under `SERIALIZABLE READ ONLY DEFERRABLE`; errors if either endpoint is
+/// not an existing checkpoint or `from` is not strictly before `to`. When
+/// `start` is an `Anchor`, export also refuses if the stored start checkpoint
+/// has diverged from the supplied anchor. `to_tree_size` defaults to the
+/// latest checkpoint.
+pub async fn export_window(
+    pool: &PgPool,
+    start: WindowStart,
+    to_tree_size: Option<i64>,
+) -> Result<WindowEvidencePack, PgError> {
+    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
+    let checkpoints = load_checkpoint_chain(&mut tx).await?;
+
+    let to_checkpoint = match to_tree_size {
+        Some(n) => checkpoints.iter().find(|c| c.tree_size == n).cloned(),
+        None => checkpoints.last().cloned(),
+    };
+    let Some(to_checkpoint) = to_checkpoint else {
+        return Err(PgError::NoCheckpoint);
+    };
+    let Some(from_checkpoint) = checkpoints
+        .iter()
+        .find(|c| c.tree_size == start.tree_size())
+        .cloned()
+    else {
+        return Err(PgError::NoCheckpoint);
+    };
+    // The externally-held anchor is the trust object: if the caller supplied
+    // the whole prior checkpoint, the stored start must still match its tree
+    // head (signatures excluded, like the verifier's anchor check), or we are
+    // exporting a window from a checkpoint that has diverged from what they
+    // hold - the silent degradation `--from-anchor` exists to prevent.
+    if let WindowStart::Anchor(anchor) = &start
+        && !same_tree_head(anchor, &from_checkpoint)
+    {
+        return Err(PgError::AnchorDivergedFromStart {
+            tree_size: from_checkpoint.tree_size,
+        });
+    }
+    if from_checkpoint.tree_size >= to_checkpoint.tree_size {
+        return Err(PgError::InvalidState(format!(
+            "window from tree_size {} must be strictly before to tree_size {}",
+            from_checkpoint.tree_size, to_checkpoint.tree_size
+        )));
+    }
+
+    // The prover needs the whole `[0, to)` prefix to build the consistency
+    // proof and the per-row inclusion paths.
+    let to_size = to_checkpoint.tree_size;
+    let mut rows: Vec<AuditRow> = Vec::new();
+    let mut cursor = None;
+    while (rows.len() as i64) < to_size {
+        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
+        if page.is_empty() {
+            break;
+        }
+        for row in page {
+            cursor = Some((row.committed_at, row.transition_id));
+            rows.push(row);
+            if (rows.len() as i64) >= to_size {
+                break;
+            }
+        }
+    }
+    if rows.len() as i64 != to_size {
+        return Err(PgError::InvalidState(format!(
+            "to-checkpoint commits to {} audit rows but only {} were present",
+            to_size,
+            rows.len()
+        )));
+    }
+    tx.commit().await.map_err(classify)?;
+
+    assemble_window_pack(&rows, from_checkpoint, to_checkpoint)
+        .map_err(|e| PgError::InvalidState(format!("could not encode an audit row: {e}")))
+}
+
+/// Build a window pack from the canonical `[0, to)` rows and the two
+/// checkpoints - the pure core of [`export_window`], so it is testable
+/// without a database.
+fn assemble_window_pack(
+    rows: &[AuditRow],
+    from_checkpoint: Checkpoint,
+    to_checkpoint: Checkpoint,
+) -> Result<WindowEvidencePack, serde_json::Error> {
+    let leaves: Vec<Hash> = rows.iter().map(audit_leaf_hash).collect::<Result<_, _>>()?;
+    let from = from_checkpoint.tree_size as usize;
+
+    let consistency_proof = consistency_proof(&leaves, from)
+        .iter()
+        .map(render_hash)
+        .collect();
+    let inclusion_proofs = (from..leaves.len())
+        .map(|index| RowInclusionProof {
+            leaf_index: index as i64,
+            proof: inclusion_proof(&leaves, index)
+                .iter()
+                .map(render_hash)
+                .collect(),
+        })
+        .collect();
+
+    let manifest = WindowPackManifest {
+        pack_format_version: PACK_FORMAT_V2,
+        pack_kind: PACK_KIND_WINDOW.to_string(),
+        from_tree_size: from_checkpoint.tree_size,
+        to_tree_size: to_checkpoint.tree_size,
+        from_checkpoint_hash: from_checkpoint.checkpoint_hash.clone(),
+        to_checkpoint_hash: to_checkpoint.checkpoint_hash.clone(),
+        from_root_hash: from_checkpoint.root_hash.clone(),
+        to_root_hash: to_checkpoint.root_hash.clone(),
+    };
+    Ok(WindowEvidencePack {
+        manifest,
+        from_checkpoint,
+        to_checkpoint,
+        consistency_proof,
+        rows: rows[from..].to_vec(),
+        inclusion_proofs,
+    })
+}
+
+/// Verify a window pack offline - no database. Validates the v2 envelope,
+/// matches the supplied anchor against the from-checkpoint, then checks the
+/// consistency proof (append-only extension) and every row's inclusion proof
+/// (the rows are the genuine suffix), and finally the to-checkpoint
+/// signatures cryptographically. Governed signer authority is NOT judged - a
+/// window lacks the `[0, from)` rows that would establish it.
+pub fn verify_window(
+    pack: &WindowEvidencePack,
+    anchor: Option<&Checkpoint>,
+) -> Result<WindowVerification, PackError> {
+    validate_window_envelope(pack)?;
+    let from = &pack.from_checkpoint;
+    let to = &pack.to_checkpoint;
+
+    // The external anchor is the whole point: a window proves it extends the
+    // checkpoint the regulator already holds. Compare tree heads (signatures
+    // excluded), and reject even if the internal proof would verify.
+    if let Some(anchor) = anchor
+        && !same_tree_head(anchor, from)
+    {
+        return Ok(WindowVerification::AnchorMismatch {
+            tree_size: from.tree_size,
+            anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
+            pack_checkpoint_hash: from.checkpoint_hash.clone(),
+        });
+    }
+
+    let malformed = |detail: String| PackError::Malformed { detail };
+    let from_root = parse_hash(&from.root_hash)
+        .ok_or_else(|| malformed("from root_hash is not sha256".into()))?;
+    let to_root =
+        parse_hash(&to.root_hash).ok_or_else(|| malformed("to root_hash is not sha256".into()))?;
+
+    let consistency = parse_hashes(&pack.consistency_proof)?;
+    match verify_consistency_proof(
+        from.tree_size as usize,
+        &from_root,
+        to.tree_size as usize,
+        &to_root,
+        &consistency,
+    ) {
+        Ok(()) => {}
+        Err(ProofError::Malformed | ProofError::BadParameters) => {
+            return Err(malformed("the consistency proof is malformed".into()));
+        }
+        Err(ProofError::RootMismatch) => {
+            return Ok(WindowVerification::InconsistentExtension {
+                from_tree_size: from.tree_size,
+                to_tree_size: to.tree_size,
+            });
+        }
+    }
+
+    for (row, rp) in pack.rows.iter().zip(&pack.inclusion_proofs) {
+        let leaf = audit_leaf_hash(row)?;
+        let proof = parse_hashes(&rp.proof)?;
+        match verify_inclusion_proof(
+            rp.leaf_index as usize,
+            to.tree_size as usize,
+            &leaf,
+            &to_root,
+            &proof,
+        ) {
+            Ok(()) => {}
+            Err(ProofError::Malformed | ProofError::BadParameters) => {
+                return Err(malformed(format!(
+                    "inclusion proof for leaf {} is malformed",
+                    rp.leaf_index
+                )));
+            }
+            Err(ProofError::RootMismatch) => {
+                return Ok(WindowVerification::RowNotIncluded {
+                    leaf_index: rp.leaf_index,
+                });
+            }
+        }
+    }
+
+    // The to-checkpoint is the new attestation this pack carries; its
+    // signatures must be genuine. (The from-checkpoint's trust comes from the
+    // external anchor.) Authority - whether the key was admitted - is a
+    // full-prefix question a window cannot answer.
+    if let Some(TreeVerification::SignatureInvalid {
+        tree_size,
+        key_id,
+        purpose,
+        public_key,
+    }) = signature_crypto_violation(to)
+    {
+        return Ok(WindowVerification::SignatureInvalid {
+            tree_size,
+            key_id,
+            purpose,
+            public_key,
+        });
+    }
+
+    Ok(WindowVerification::Intact {
+        from_tree_size: from.tree_size,
+        to_tree_size: to.tree_size,
+        rows: pack.rows.len(),
+    })
+}
+
+fn parse_hashes(strings: &[String]) -> Result<Vec<Hash>, PackError> {
+    strings
+        .iter()
+        .map(|s| {
+            parse_hash(s).ok_or_else(|| PackError::Malformed {
+                detail: format!("proof hash is not a sha256 digest: {s}"),
+            })
+        })
+        .collect()
+}
+
+/// The v2 envelope rules a well-formed window pack must satisfy before its
+/// proofs are worth checking. Like the prefix validator, stricter than the
+/// live path: a pack is untrusted JSON.
+fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> {
+    let malformed = |detail: String| PackError::Malformed { detail };
+    let m = &pack.manifest;
+    if m.pack_format_version != PACK_FORMAT_V2 {
+        return Err(malformed(format!(
+            "unsupported pack_format_version {}",
+            m.pack_format_version
+        )));
+    }
+    if m.pack_kind != PACK_KIND_WINDOW {
+        return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
+    }
+
+    let from = &pack.from_checkpoint;
+    let to = &pack.to_checkpoint;
+    if from.tree_size < 0 || to.tree_size < 0 {
+        return Err(malformed("a checkpoint tree_size is negative".into()));
+    }
+    if from.tree_size >= to.tree_size {
+        return Err(malformed(format!(
+            "from tree_size {} is not strictly before to tree_size {}",
+            from.tree_size, to.tree_size
+        )));
+    }
+
+    // Each checkpoint's identity hash must match its own contents - a forged
+    // checkpoint_hash is rejected before the proofs trust it.
+    for (label, cp) in [("from", from), ("to", to)] {
+        let expected = checkpoint_hash(
+            cp.tree_size,
+            &cp.root_hash,
+            cp.prev_checkpoint_hash.as_deref(),
+        );
+        if expected != cp.checkpoint_hash {
+            return Err(malformed(format!(
+                "{label}-checkpoint hash {} does not match its contents",
+                cp.checkpoint_hash
+            )));
+        }
+    }
+
+    // Exactly the `to - from` window rows, one inclusion proof each, with
+    // declared leaf indices exactly `from .. to-1` in order - so every
+    // position in the window is covered and none is duplicated or omitted.
+    let expected = (to.tree_size - from.tree_size) as usize;
+    if pack.rows.len() != expected {
+        return Err(malformed(format!(
+            "the window covers {} rows but the pack carries {}",
+            expected,
+            pack.rows.len()
+        )));
+    }
+    if pack.inclusion_proofs.len() != pack.rows.len() {
+        return Err(malformed(format!(
+            "{} rows but {} inclusion proofs",
+            pack.rows.len(),
+            pack.inclusion_proofs.len()
+        )));
+    }
+    for (offset, rp) in pack.inclusion_proofs.iter().enumerate() {
+        let expected_index = from.tree_size + offset as i64;
+        if rp.leaf_index != expected_index {
+            return Err(malformed(format!(
+                "inclusion proof {offset} declares leaf_index {} but the window expects {expected_index}",
+                rp.leaf_index
+            )));
+        }
+    }
+
+    let mut rows = pack.rows.clone();
+    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
+    for pair in rows.windows(2) {
+        if (pair[0].committed_at, pair[0].transition_id)
+            == (pair[1].committed_at, pair[1].transition_id)
+        {
+            return Err(malformed(format!(
+                "two rows share coordinates ({}, {})",
+                pair[0].committed_at, pair[0].transition_id
+            )));
+        }
+    }
+
+    if m.from_tree_size != from.tree_size
+        || m.to_tree_size != to.tree_size
+        || m.from_checkpoint_hash != from.checkpoint_hash
+        || m.to_checkpoint_hash != to.checkpoint_hash
+        || m.from_root_hash != from.root_hash
+        || m.to_root_hash != to.root_hash
+    {
+        return Err(malformed("manifest disagrees with the checkpoints".into()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +861,163 @@ mod tests {
             rows: vec![dup.clone(), dup],
         };
         malformed("share coordinates", &pack);
+    }
+
+    // --- window packs ---
+
+    use crate::merkle::merkle_root;
+
+    /// `n` rows in canonical order, each tagged so a different `tag` yields
+    /// a different leaf at the same coordinates (a rewritten-prefix forgery).
+    fn rows_tagged(n: usize, tag: char) -> Vec<AuditRow> {
+        (0..n)
+            .map(|i| {
+                serde_json::from_value(serde_json::json!({
+                    "transition_id": format!("00000000-0000-0000-0000-{:012x}", i + 1),
+                    "transformation_name": format!("X{tag}"),
+                    "arguments": [],
+                    "actor": { "type": "subject", "value": "00000000-0000-0000-0000-000000000001" },
+                    "invariant_epoch": 1,
+                    "invariants_checked": [],
+                    "asserted_claims": [],
+                    "retracted_claims": [],
+                    "emitted_intents": [],
+                    "committed_at": format!("2026-06-24T00:00:{:02}Z", i),
+                }))
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn real_checkpoint(leaves: &[Hash], size: usize, prev: Option<&Checkpoint>) -> Checkpoint {
+        let root = render_hash(&merkle_root(&leaves[..size]));
+        let prev_hash = prev.map(|c| c.checkpoint_hash.clone());
+        let checkpoint_hash = checkpoint_hash(size as i64, &root, prev_hash.as_deref());
+        Checkpoint {
+            tree_size: size as i64,
+            root_hash: root,
+            prev_checkpoint_hash: prev_hash,
+            checkpoint_hash,
+            signatures: Vec::new(),
+        }
+    }
+
+    /// A valid window pack over a single `tag`-history of `to` rows, with the
+    /// from-checkpoint at `from`. Returns the pack and the from-checkpoint
+    /// (the prior anchor a verifier would hold).
+    fn valid_window(from: usize, to: usize) -> (WindowEvidencePack, Checkpoint) {
+        let rows = rows_tagged(to, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let from_cp = real_checkpoint(&leaves, from, None);
+        let to_cp = real_checkpoint(&leaves, to, Some(&from_cp));
+        let pack = assemble_window_pack(&rows, from_cp.clone(), to_cp).unwrap();
+        (pack, from_cp)
+    }
+
+    #[test]
+    fn a_window_round_trips_and_matches_its_anchor() {
+        let (pack, anchor) = valid_window(3, 7);
+        let intact = WindowVerification::Intact {
+            from_tree_size: 3,
+            to_tree_size: 7,
+            rows: 4,
+        };
+        assert_eq!(verify_window(&pack, None).unwrap(), intact);
+        assert_eq!(verify_window(&pack, Some(&anchor)).unwrap(), intact);
+    }
+
+    #[test]
+    fn a_wrong_anchor_is_caught_even_when_the_proof_verifies() {
+        let (pack, _) = valid_window(3, 7);
+        // An anchor from an unrelated history at the same size.
+        let other: Vec<Hash> = rows_tagged(3, 'z')
+            .iter()
+            .map(|r| audit_leaf_hash(r).unwrap())
+            .collect();
+        let wrong_anchor = real_checkpoint(&other, 3, None);
+        assert!(matches!(
+            verify_window(&pack, Some(&wrong_anchor)),
+            Ok(WindowVerification::AnchorMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_tampered_window_row_is_not_included() {
+        // The overclaim-1 guard at the pack level: a genuine consistency
+        // proof does not protect the rows; only inclusion does. Mutating a
+        // row's body (coordinates unchanged, so the envelope passes) is
+        // caught by its inclusion proof, not the consistency proof.
+        let (mut pack, _) = valid_window(3, 7);
+        pack.rows[0].invariant_epoch = 999;
+        assert_eq!(
+            verify_window(&pack, None).unwrap(),
+            WindowVerification::RowNotIncluded { leaf_index: 3 }
+        );
+    }
+
+    #[test]
+    fn a_rewritten_prior_prefix_is_an_inconsistent_extension() {
+        // The to-checkpoint is over the real history; the from-checkpoint
+        // claims a different prefix root (the prior period was rewritten).
+        // Consistency must reject - and this is a genuine fork, not a
+        // corrupted proof.
+        let rows = rows_tagged(7, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let to_cp = real_checkpoint(&leaves, 7, None);
+        let forged: Vec<Hash> = rows_tagged(3, 'b')
+            .iter()
+            .map(|r| audit_leaf_hash(r).unwrap())
+            .collect();
+        let from_cp = real_checkpoint(&forged, 3, None);
+        let pack = assemble_window_pack(&rows, from_cp, to_cp).unwrap();
+        assert_eq!(
+            verify_window(&pack, None).unwrap(),
+            WindowVerification::InconsistentExtension {
+                from_tree_size: 3,
+                to_tree_size: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn a_wrong_window_row_count_is_malformed() {
+        let (mut pack, _) = valid_window(3, 7);
+        pack.rows.pop();
+        pack.inclusion_proofs.pop();
+        match verify_window(&pack, None) {
+            Err(PackError::Malformed { detail }) => assert!(detail.contains("covers 4 rows")),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_wrong_declared_leaf_index_is_malformed() {
+        let (mut pack, _) = valid_window(3, 7);
+        pack.inclusion_proofs[1].leaf_index = 99;
+        match verify_window(&pack, None) {
+            Err(PackError::Malformed { detail }) => assert!(detail.contains("leaf_index")),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_forged_checkpoint_hash_is_malformed() {
+        let (mut pack, _) = valid_window(3, 7);
+        pack.to_checkpoint.checkpoint_hash = "cp-forged".into();
+        pack.manifest.to_checkpoint_hash = "cp-forged".into();
+        match verify_window(&pack, None) {
+            Err(PackError::Malformed { detail }) => {
+                assert!(detail.contains("does not match its contents"))
+            }
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_window_field_is_rejected() {
+        let (pack, _) = valid_window(3, 7);
+        let mut v = serde_json::to_value(&pack).unwrap();
+        v["surprise"] = serde_json::json!("not part of the proof");
+        assert!(serde_json::from_value::<WindowEvidencePack>(v).is_err());
     }
 }

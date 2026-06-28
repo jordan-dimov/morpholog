@@ -34,8 +34,8 @@ use morpholog_core::{
 };
 use morpholog_postgres::{
     AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
-    PackManifest, PgProposalOutcome, TreeHeadSignature, TreeVerification, VerifyOutcome,
-    VerifyReport,
+    PackManifest, PgProposalOutcome, RowInclusionProof, TreeHeadSignature, TreeVerification,
+    VerifyOutcome, VerifyReport, WindowEvidencePack, WindowPackManifest, WindowVerification,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -544,6 +544,85 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "tree_verification_signature_required.json",
         &to_value(&TreeVerification::SignatureRequired { tree_size: 2 }),
     );
+
+    // `evidence export --from-*`: the windowed pack (v2).
+    assert_golden(
+        "window_evidence_pack.json",
+        &to_value(&WindowEvidencePack {
+            manifest: WindowPackManifest {
+                pack_format_version: 2,
+                pack_kind: "window".into(),
+                from_tree_size: 2,
+                to_tree_size: 3,
+                from_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+                to_checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+                from_root_hash: format!("sha256:{}", "a".repeat(64)),
+                to_root_hash: format!("sha256:{}", "c".repeat(64)),
+            },
+            from_checkpoint: sample_checkpoint(),
+            to_checkpoint: Checkpoint {
+                tree_size: 3,
+                root_hash: format!("sha256:{}", "c".repeat(64)),
+                prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
+                checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+                signatures: Vec::new(),
+            },
+            consistency_proof: vec![format!("sha256:{}", "e".repeat(64))],
+            rows: vec![sample_audit_row()],
+            inclusion_proofs: vec![RowInclusionProof {
+                leaf_index: 2,
+                proof: vec![format!("sha256:{}", "f".repeat(64))],
+            }],
+        }),
+    );
+
+    // `evidence verify` window verdicts.
+    assert_golden(
+        "window_verification_intact.json",
+        &to_value(&WindowVerification::Intact {
+            from_tree_size: 2,
+            to_tree_size: 3,
+            rows: 1,
+        }),
+    );
+    assert_golden(
+        "window_verification_inconsistent_extension.json",
+        &to_value(&WindowVerification::InconsistentExtension {
+            from_tree_size: 2,
+            to_tree_size: 3,
+        }),
+    );
+    assert_golden(
+        "window_verification_row_not_included.json",
+        &to_value(&WindowVerification::RowNotIncluded { leaf_index: 2 }),
+    );
+    assert_golden(
+        "window_verification_anchor_mismatch.json",
+        &to_value(&WindowVerification::AnchorMismatch {
+            tree_size: 2,
+            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+            pack_checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+        }),
+    );
+    assert_golden(
+        "window_verification_signature_invalid.json",
+        &to_value(&WindowVerification::SignatureInvalid {
+            tree_size: 3,
+            key_id: "audit-2026-q3".into(),
+            purpose: "audit_checkpoint_v1".into(),
+            public_key: format!("ed25519-pub:{}", "c".repeat(64)),
+        }),
+    );
+    assert_golden(
+        "window_verification_signature_required.json",
+        &to_value(&WindowVerification::SignatureRequired { tree_size: 3 }),
+    );
+    assert_golden(
+        "window_verification_malformed.json",
+        &to_value(&WindowVerification::Malformed {
+            detail: "window covers 2 rows but the pack carries 1".into(),
+        }),
+    );
 }
 
 // ============================================================
@@ -706,6 +785,29 @@ fn every_golden_validates_against_its_defs_entry() {
             "tree_verification_signature_required.json",
             "tree_verification",
         ),
+        ("window_evidence_pack.json", "window_evidence_pack"),
+        ("window_verification_intact.json", "window_verification"),
+        (
+            "window_verification_inconsistent_extension.json",
+            "window_verification",
+        ),
+        (
+            "window_verification_row_not_included.json",
+            "window_verification",
+        ),
+        (
+            "window_verification_anchor_mismatch.json",
+            "window_verification",
+        ),
+        (
+            "window_verification_signature_invalid.json",
+            "window_verification",
+        ),
+        (
+            "window_verification_signature_required.json",
+            "window_verification",
+        ),
+        ("window_verification_malformed.json", "window_verification"),
     ];
     for (file, def) in cases {
         let golden: serde_json::Value = serde_json::from_str(
