@@ -155,6 +155,15 @@ fn property_schema(kind: &ParamKind) -> Value {
                 "anyOf": alternatives,
             })
         }
+        // A collection: a JSON array whose items take the element kind
+        // inferred from the loop binding. With a concrete element kind it
+        // is decodable through the named codec like any scalar; an
+        // unobserved element (`Unconstrained`) leaves the items untyped.
+        ParamKind::Collection(element) => json!({
+            "type": "array",
+            "description": "collection; send as a JSON array, one entry per item",
+            "items": property_schema(element),
+        }),
     }
 }
 

@@ -520,6 +520,14 @@ pub enum ParamKind {
     /// render this as a disjunctive contract (JSON Schema `anyOf`,
     /// for instance) or surface it as a modelling diagnostic.
     Ambiguous(Vec<PredicateArgKind>),
+    /// The parameter is a collection (iterated by `for` / `forall`),
+    /// and its element kind is the projection of how the loop binding
+    /// is used in the body - `Collection(Concrete(Subject))` for a list
+    /// of subjects. The element is itself a [`ParamKind`], so an
+    /// unobserved element is `Collection(Unconstrained)` (the embedder
+    /// cannot type the items) and nesting is expressible. This is the
+    /// shape an external engine submits a whole batch through.
+    Collection(Box<ParamKind>),
 }
 
 /// Errors that prevent per-transformation argument-kind analysis.
@@ -598,7 +606,22 @@ pub fn transformation_param_kinds(
                 .get(param)
                 .cloned()
                 .unwrap_or_default();
-            (param.clone(), project(observed))
+            // A parameter ITERATED as a collection carries an element kind:
+            // the projection of how its loop binding was used (an unobserved
+            // element projects to `Unconstrained`). A parameter observed as a
+            // collection only through a Collection-declared predicate arg has
+            // no element information, so it stays the opaque `Concrete(Collection)`.
+            // A parameter used both as a collection and a scalar stays a
+            // genuine conflict (the ordinary `Ambiguous` projection).
+            let kind = if observed.len() == 1
+                && observed.contains(&PredicateArgKind::Collection)
+                && let Some(element) = collector.collection_elements.get(param)
+            {
+                ParamKind::Collection(Box::new(project(element.clone())))
+            } else {
+                project(observed)
+            };
+            (param.clone(), kind)
         })
         .collect())
 }
@@ -660,6 +683,12 @@ struct ParamCollector<'a> {
     /// committing to one kind.
     definition_params: HashMap<String, Vec<BTreeSet<PredicateArgKind>>>,
     observations: HashMap<Var, BTreeSet<PredicateArgKind>>,
+    /// Element-kind observations per collection variable: when `for x in
+    /// coll` (or `forall`) iterates a variable `coll`, the loop binding's
+    /// observed kinds ARE `coll`'s element kinds, captured at the `For`
+    /// node before the binding's loop-local observations are discarded.
+    /// Projected into [`ParamKind::Collection`] for collection parameters.
+    collection_elements: HashMap<Var, BTreeSet<PredicateArgKind>>,
     /// Flow-sensitive equivalence-class membership per currently-live
     /// variable. Maintained as the walker advances: a `Let` or
     /// `LetNewSubject` rebinding `name` removes `name` from its
@@ -695,6 +724,7 @@ impl<'a> ParamCollector<'a> {
             intents,
             definition_params: HashMap::new(),
             observations: HashMap::new(),
+            collection_elements: HashMap::new(),
             current_class: HashMap::new(),
         };
         // Pre-walk each definition body, callees before callers, and
@@ -709,6 +739,7 @@ impl<'a> ParamCollector<'a> {
                     intents: collector.intents.clone(),
                     definition_params: collector.definition_params.clone(),
                     observations: HashMap::new(),
+                    collection_elements: HashMap::new(),
                     current_class: HashMap::new(),
                 };
                 sub.walk_prop(&def.body);
@@ -881,6 +912,21 @@ impl<'a> ParamCollector<'a> {
 
                 for inner in body {
                     self.walk_stmt(inner);
+                }
+
+                // The loop binding's body-time observations ARE the
+                // collection's element kinds. Capture them against the
+                // collection variable (when it is a plain variable - a
+                // parameter or a let-bound list) before the binding's
+                // loop-local state is discarded below.
+                if let ValueExpr::Term(Term::Var(coll_var)) = collection
+                    && let Some(elem_obs) = self.observations.get(binding)
+                {
+                    let elem_obs = elem_obs.clone();
+                    self.collection_elements
+                        .entry(coll_var.clone())
+                        .or_default()
+                        .extend(elem_obs);
                 }
 
                 // Discard the body's effects on the binding's state.
