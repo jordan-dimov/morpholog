@@ -162,15 +162,10 @@ where
                                 return Ok(());
                             }
                         }
-                        // All senders dropped. No further shutdown
-                        // signals possible; the caller has lost the
-                        // ability to stop us through this channel,
-                        // so termination is the only safe option.
-                        // Returning Ok(()) treats this as a clean
-                        // shutdown (the channel close is the
-                        // signal); returning Err would imply the
-                        // worker hit a database problem, which it
-                        // did not.
+                        // All senders dropped: no shutdown signal can
+                        // arrive again, so terminate. Ok(()) not Err -
+                        // the channel close is a clean shutdown, not a
+                        // database failure.
                         Err(_) => return Ok(()),
                     }
                 }

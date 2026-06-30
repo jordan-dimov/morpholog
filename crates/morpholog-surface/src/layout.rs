@@ -100,12 +100,6 @@ pub fn apply_layout(
             // diagnostic per gap is enough; the flag avoids piling
             // up duplicates for files with many tab-indented
             // comment lines.
-            //
-            // For each line after a `\n` in the gap, extract the
-            // leading whitespace run and check for tabs. This
-            // catches plain leading tabs (`\trest`), tabs after
-            // spaces (`  \trest`), and tabs in pure-whitespace
-            // lines.
             if !tab_diagnosed_for_this_gap {
                 for line in gap.split('\n').skip(1) {
                     let indent_end = line

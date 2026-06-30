@@ -54,9 +54,8 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
 }
 
 /// Print the validated programme's internal representation as pretty
-/// JSON - `check --ir`, the debugging view (formerly the `parse`
-/// subcommand; now behind validation, so only a sound programme
-/// renders).
+/// JSON - `check --ir`, the debugging view. Behind validation, so only a
+/// sound programme renders.
 ///
 /// `Program` does not derive `Serialize` directly today, so the CLI
 /// emits a projection: declarations roundtrip structurally, while
