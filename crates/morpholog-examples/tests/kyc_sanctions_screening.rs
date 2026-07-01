@@ -17,7 +17,7 @@
 
 mod common;
 
-use common::{date, must_accept, propose_with_test_actor, subj};
+use common::{date, must_accept, must_reject, propose_with_test_actor, subj};
 use morpholog_core::{EvalValue, Outcome, Program, State};
 use morpholog_examples::kyc_sanctions_screening::{self, PEP, SANCTIONS};
 
@@ -551,25 +551,19 @@ fn adjudicated_marker_without_a_disposition_is_rejected() {
         .transformation("adjudicate_without_disposition")
         .expect("just pushed");
 
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         bad,
         vec![subj("scr_sanctions_1")],
         &state,
         &program.invariants,
         &program.definitions,
-    )
-    .expect("kernel must not error");
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("adjudicated_match_resolves_exactly_one_way"),
-            "expected the xor invariant to reject a marker with no disposition, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => {
-            panic!("an adjudicated marker with neither disposition must be rejected")
-        }
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("adjudicated_match_resolves_exactly_one_way"),
+        "expected the xor invariant to reject a marker with no disposition, got: {reason}"
+    );
 }
 
 // ============================================================

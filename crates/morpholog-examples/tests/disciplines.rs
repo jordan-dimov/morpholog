@@ -13,7 +13,7 @@ use common::{subj, ts};
 use morpholog_core::{Outcome, Program, State, ValidationError};
 use morpholog_examples::{biometric_identification_oversight as bio, laytime_demurrage as lay};
 use morpholog_surface::parse_program;
-use morpholog_test_support::{must_accept, must_accept_as, propose_with_test_actor};
+use morpholog_test_support::{must_accept, must_accept_as, must_reject};
 
 fn parsed(source: &str) -> Program {
     let program = parse_program(source).expect("scenario programme should parse");
@@ -87,21 +87,17 @@ fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
 #[test]
 fn a_duplicate_under_unique_by_is_refused_with_the_generated_name() {
     let (p, state) = registry_with_figure();
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         p.transformation("record").unwrap(),
         vec![subj("f1"), subj("acme"), common::dec(999)],
         &state,
         &p.invariants,
         &p.definitions,
-    )
-    .expect("kernel must not error");
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason.to_string().contains("figure_unique_by_figure_id"),
-            "the generated invariant is named: {reason}"
-        ),
-        Outcome::Accepted { .. } => panic!("a duplicate figure id must be refused"),
-    }
+    );
+    assert!(
+        reason.to_string().contains("figure_unique_by_figure_id"),
+        "the generated invariant is named: {reason}"
+    );
 }
 
 // `current pointer by`: the singleton holds through the pointer's
@@ -119,23 +115,19 @@ fn the_pointer_moves_atomically_and_its_singleton_holds() {
     );
     // A second `record` for the same owner would admit a second
     // pointer beside the moved one.
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         p.transformation("record").unwrap(),
         vec![subj("f3"), subj("acme"), common::dec(80)],
         &state,
         &p.invariants,
         &p.definitions,
-    )
-    .expect("kernel must not error");
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("current_figure_unique_by_owner"),
-            "the pointer singleton is named: {reason}"
-        ),
-        Outcome::Accepted { .. } => panic!("two current pointers must be refused"),
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("current_figure_unique_by_owner"),
+        "the pointer singleton is named: {reason}"
+    );
 }
 
 // `superseded via`: the lineage can never fork - one prior, at most
@@ -150,23 +142,19 @@ fn the_lineage_cannot_fork() {
         &p.invariants,
         &p.definitions,
     );
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         p.transformation("fork_history").unwrap(),
         vec![subj("f9"), subj("f1")],
         &state,
         &p.invariants,
         &p.definitions,
-    )
-    .expect("kernel must not error");
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("figure_supersedes_unique_by_prior"),
-            "the no-fork rule is named: {reason}"
-        ),
-        Outcome::Accepted { .. } => panic!("a forked lineage must be refused"),
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("figure_supersedes_unique_by_prior"),
+        "the no-fork rule is named: {reason}"
+    );
 }
 
 // ============================================================

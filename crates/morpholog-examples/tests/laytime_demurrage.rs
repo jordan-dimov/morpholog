@@ -12,9 +12,7 @@
 mod common;
 
 use common::{dur, must_accept, propose_with_test_actor, qty, subj, ts};
-use morpholog_core::{
-    Definition, EvalValue, Invariant, Outcome, State, Transformation, enumerate_derived,
-};
+use morpholog_core::{Definition, EvalValue, Invariant, State, Transformation, enumerate_derived};
 use morpholog_examples::laytime_demurrage as lay;
 
 fn invariants() -> Vec<Invariant> {
@@ -26,12 +24,7 @@ fn definitions() -> Vec<Definition> {
 }
 
 fn must_reject(t: &Transformation, args: Vec<EvalValue>, pre: &State) {
-    let outcome = propose_with_test_actor(t, args, pre, &invariants(), &definitions())
-        .expect("proposal should evaluate cleanly");
-    assert!(
-        matches!(outcome, Outcome::Rejected { .. }),
-        "expected rejection, got {outcome:?}"
-    );
+    common::must_reject(t, args, pre, &invariants(), &definitions());
 }
 
 /// Fixture: voyage v1, 48 hours of allowed laytime, NOR tendered at

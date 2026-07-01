@@ -22,11 +22,10 @@
 
 mod common;
 
-use common::{claim_instance, dec, has_claim, must_accept, must_accept_as, propose_as, subj};
+use common::{claim_instance, dec, has_claim, must_accept, must_accept_as, must_reject_as, subj};
 use morpholog_core::ir_builder::invariant;
 use morpholog_core::{
-    Definition, EvalError, EvalValue, Invariant, Outcome, Prop, State, Subject, Term, Value,
-    eval_invariant,
+    Definition, EvalError, EvalValue, Invariant, Prop, State, Subject, Term, Value, eval_invariant,
 };
 use morpholog_examples::approval_controls;
 
@@ -65,18 +64,14 @@ fn grant_limit(state: State, actor: &str, doc_type: &str, limit: i64) -> State {
 #[test]
 fn approve_without_authority_is_rejected_at_require() {
     let pre = State::default();
-    let outcome = propose_as(
+    let reason = must_reject_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "jordan",
         &pre,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("require"),
         "got reason: {reason}"
@@ -110,18 +105,14 @@ fn approve_uses_proposing_actor_not_a_caller_parameter() {
     // jordan's behalf because $actor binds to the proposing actor,
     // not to a parameter the caller controls.
     let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "alice",
         &pre,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { .. } = outcome else {
-        panic!("alice should not be able to approve without authority");
-    };
+    );
 }
 
 #[test]
@@ -154,16 +145,14 @@ fn revoked_authority_blocks_future_but_preserves_past() {
         "MayApprove",
         &[subj("jordan"), subj("vendor_onboarding")],
     ));
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_document(),
         vec![subj("doc_002"), subj("vendor_onboarding")],
         "jordan",
         &after_revoke,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================
@@ -172,16 +161,14 @@ fn revoked_authority_blocks_future_but_preserves_past() {
 
 #[test]
 fn limit_approval_without_grant_is_rejected() {
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(100)],
         "jordan",
         &State::default(),
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -229,16 +216,14 @@ fn limit_approval_exactly_at_limit_commits() {
 #[test]
 fn limit_approval_above_limit_is_rejected() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_over"), subj("invoice"), dec(1001)],
         "jordan",
         &pre,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -247,28 +232,24 @@ fn limit_grant_is_per_actor_and_per_doc_type() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
 
     // alice cannot approve under jordan's invoice limit.
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_alice"), subj("invoice"), dec(10)],
         "alice",
         &pre,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 
     // jordan cannot use her invoice limit for contracts.
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("ct_001"), subj("contract"), dec(10)],
         "jordan",
         &pre,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -323,16 +304,14 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
         "ApprovalLimit",
         &[subj("jordan"), subj("invoice"), dec(1000)],
     ));
-    let outcome = propose_as(
+    must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_002"), subj("invoice"), dec(500)],
         "jordan",
         &after_revoke,
         &empty_invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]

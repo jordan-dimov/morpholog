@@ -9,8 +9,8 @@
 
 mod common;
 
-use common::{claim_instance, dec, dec_str, has_claim, must_accept, propose_with_test_actor, subj};
-use morpholog_core::{Definition, Invariant, Outcome, State, enumerate_derived};
+use common::{claim_instance, dec, dec_str, has_claim, must_accept, must_reject, subj};
+use morpholog_core::{Definition, Invariant, State, enumerate_derived};
 use morpholog_examples::borrowing_base;
 
 fn invariants() -> Vec<Invariant> {
@@ -63,15 +63,13 @@ fn draw_over_advance_limit_is_rejected() {
     // 81 > 0.8 * 100 = 80: the advance-limit invariant (a multiplication)
     // rejects the candidate state.
     let pre = facility_with_collateral(100);
-    let outcome = propose_with_test_actor(
+    must_reject(
         &borrowing_base::draw(),
         vec![subj("f1"), subj("draw_1"), dec(81)],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -86,15 +84,13 @@ fn cumulative_draws_respect_the_advance_limit() {
         &invariants(),
         &definitions(),
     );
-    let outcome = propose_with_test_actor(
+    must_reject(
         &borrowing_base::draw(),
         vec![subj("f1"), subj("draw_2"), dec(40)],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -136,15 +132,13 @@ fn zero_value_collateral_pledge_is_rejected() {
         &invariants(),
         &definitions(),
     );
-    let outcome = propose_with_test_actor(
+    must_reject(
         &borrowing_base::pledge_collateral(),
         vec![subj("f1"), subj("asset_1"), dec(0)],
         &state,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -152,15 +146,13 @@ fn negative_drawdown_is_rejected() {
     // A drawdown moves money out, never in; drawdown_amount_is_non_negative
     // rejects a negative amount (which would otherwise model a repayment).
     let pre = facility_with_collateral(100);
-    let outcome = propose_with_test_actor(
+    must_reject(
         &borrowing_base::draw(),
         vec![subj("f1"), subj("draw_1"), dec(-10)],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -168,13 +160,11 @@ fn advance_rate_above_one_is_rejected() {
     // An advance rate is a fraction in [0, 1]; advance_rate_within_unit_interval
     // rejects a rate above 1 (lending more than the collateral is worth).
     let empty = State::default();
-    let outcome = propose_with_test_actor(
+    must_reject(
         &borrowing_base::open_facility(),
         vec![subj("f1"), dec_str("1.5")],
         &empty,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }

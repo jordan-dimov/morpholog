@@ -28,8 +28,8 @@
 //!   tests that do not model authority. Authority-focused tests
 //!   build their own [`Transition`] with a specific actor.
 //! - `propose_with_test_actor`, `must_accept`, `must_accept_as`,
-//!   `propose_as`: ergonomic wrappers over the kernel's
-//!   [`propose`] surface.
+//!   `must_reject`, `must_reject_as`, `propose_as`: ergonomic
+//!   wrappers over the kernel's [`propose`] surface.
 //!
 //! Helpers are `#[allow(dead_code)]` because not every test crate
 //! uses every helper. `expect_used` and `unwrap_used` are allowed at
@@ -43,8 +43,8 @@
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome, State,
-    Subject, Transformation, Transition, propose,
+    ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome,
+    RejectionReason, State, Subject, Transformation, Transition, propose,
 };
 use rust_decimal::Decimal;
 
@@ -248,6 +248,49 @@ pub fn must_accept_as(
                 "expected Accepted from `{}`, got Rejected: {reason}",
                 t.name
             )
+        }
+    }
+}
+
+/// Propose with [`test_actor`] and require the outcome to be
+/// [`Outcome::Rejected`]. Returns the [`RejectionReason`] so callers
+/// can assert on which rule refused. Panics on acceptance or kernel
+/// error - the mirror of [`must_accept`].
+pub fn must_reject(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    pre: &State,
+    invariants: &[Invariant],
+    definitions: &[Definition],
+) -> RejectionReason {
+    let transition = test_transition(t, args);
+    match propose(t, &transition, pre, invariants, definitions).expect("propose should not error") {
+        Outcome::Rejected { reason } => reason,
+        Outcome::Accepted { .. } => {
+            panic!("expected Rejected from `{}`, got Accepted", t.name)
+        }
+    }
+}
+
+/// [`must_reject`] with a caller-supplied actor. Used by authority
+/// tests that need to assert which actor was refused.
+pub fn must_reject_as(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    actor: impl Into<Subject>,
+    pre: &State,
+    invariants: &[Invariant],
+    definitions: &[Definition],
+) -> RejectionReason {
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor: actor.into(),
+    };
+    match propose(t, &transition, pre, invariants, definitions).expect("propose should not error") {
+        Outcome::Rejected { reason } => reason,
+        Outcome::Accepted { .. } => {
+            panic!("expected Rejected from `{}`, got Accepted", t.name)
         }
     }
 }

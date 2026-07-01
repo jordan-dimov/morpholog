@@ -14,7 +14,7 @@
 mod common;
 
 use common::{claim_instance, dec, has_claim, must_accept, subj};
-use morpholog_core::{Outcome, State, eval_invariant};
+use morpholog_core::{State, eval_invariant};
 use morpholog_examples::double_entry_ledger;
 
 #[test]
@@ -106,7 +106,7 @@ fn unbalanced_entry_rejected_by_invariant() {
     // the journal entry and its lines, and the candidate state
     // violates `balanced_posted_entry`. Atomic rollback: no claim
     // is admitted.
-    let outcome = common::propose_with_test_actor(
+    let reason = common::must_reject(
         &double_entry_ledger::post_split_entry(),
         vec![
             subj("entry_001"),
@@ -122,12 +122,7 @@ fn unbalanced_entry_rejected_by_invariant() {
         &State::default(),
         &double_entry_ledger::all_invariants(),
         &double_entry_ledger::definitions(),
-    )
-    .expect("propose should not error");
-
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("balanced_posted_entry"),
         "got reason: {reason}"
@@ -153,7 +148,7 @@ fn closed_period_rejects_normal_posting() {
         &[subj("p_2026_04")]
     ));
 
-    let outcome = common::propose_with_test_actor(
+    let reason = common::must_reject(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -166,12 +161,7 @@ fn closed_period_rejects_normal_posting() {
         &after_close,
         &double_entry_ledger::all_invariants(),
         &double_entry_ledger::definitions(),
-    )
-    .expect("propose should not error");
-
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("require"),
         "got reason: {reason}"
@@ -188,18 +178,13 @@ fn double_close_rejected() {
         &double_entry_ledger::definitions(),
     );
 
-    let outcome = common::propose_with_test_actor(
+    let reason = common::must_reject(
         &double_entry_ledger::close_period(),
         vec![subj("p_2026_04")],
         &after_close,
         &double_entry_ledger::all_invariants(),
         &double_entry_ledger::definitions(),
-    )
-    .expect("propose should not error");
-
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("require"),
         "got reason: {reason}"
@@ -364,7 +349,7 @@ fn cannot_restate_already_restated_entry() {
         &double_entry_ledger::definitions(),
     );
 
-    let outcome = common::propose_with_test_actor(
+    let reason = common::must_reject(
         &double_entry_ledger::restate_entry(),
         vec![
             subj("entry_003"),
@@ -378,12 +363,7 @@ fn cannot_restate_already_restated_entry() {
         &s2,
         &double_entry_ledger::all_invariants(),
         &double_entry_ledger::definitions(),
-    )
-    .expect("propose should not error");
-
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("require"),
         "got reason: {reason}"

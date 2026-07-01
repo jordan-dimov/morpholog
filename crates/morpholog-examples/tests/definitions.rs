@@ -13,8 +13,8 @@
 
 mod common;
 
-use common::{dec, subj};
-use morpholog_core::{EvalError, Outcome, Program, State, ValidationError};
+use common::{dec, must_reject, subj};
+use morpholog_core::{EvalError, Program, State, ValidationError};
 use morpholog_examples::clinical_trial_enrolment;
 use morpholog_surface::parse_program;
 use morpholog_test_support::{has_claim, must_accept, propose_with_test_actor};
@@ -132,15 +132,13 @@ fn a_suspended_sponsor_fails_the_nested_condition() {
         &p.invariants,
         &p.definitions,
     );
-    let outcome = propose_with_test_actor(
+    must_reject(
         p.transformation("enrol").unwrap(),
         vec![subj("nina"), subj("chess_club")],
         &state,
         &p.invariants,
         &p.definitions,
-    )
-    .expect("kernel must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // Two sponsors in good standing: the call yields two distinct
@@ -286,15 +284,13 @@ fn a_call_wrapped_in_pre_reads_the_pre_state() {
         &p.definitions,
     );
     // Lowering it is refused by the same invariant.
-    let outcome = propose_with_test_actor(
+    must_reject(
         p.transformation("move_tally").unwrap(),
         vec![dec(10), dec(3)],
         &state,
         &p.invariants,
         &p.definitions,
-    )
-    .expect("kernel must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================

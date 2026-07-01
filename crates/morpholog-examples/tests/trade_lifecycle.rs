@@ -17,7 +17,8 @@
 mod common;
 
 use common::{
-    date, dec, has_claim, must_accept, must_accept_as, propose_as, propose_with_test_actor, subj,
+    date, dec, has_claim, must_accept, must_accept_as, must_reject, must_reject_as, propose_as,
+    propose_with_test_actor, subj,
 };
 use morpholog_core::{Definition, Invariant, Outcome, State};
 use morpholog_examples::trade_lifecycle;
@@ -122,7 +123,7 @@ fn capture_records_identity_terms_and_trader_price() {
 #[test]
 fn duplicate_capture_is_rejected() {
     let pre = captured(100);
-    let outcome = propose_with_test_actor(
+    must_reject(
         &trade_lifecycle::capture_trade(),
         vec![
             subj("t1"),
@@ -137,9 +138,7 @@ fn duplicate_capture_is_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================
@@ -152,31 +151,27 @@ fn confirm_before_capture_is_rejected() {
     // `TradeCaptured(trade, commodity, _) and MayConfirm(...)` cannot be
     // satisfied.
     let pre = grant(State::default(), "mo", "power");
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::confirm_trade(),
         vec![subj("t1"), subj("cp1"), subj("conf1"), subj("op1"), dec(50)],
         "mo",
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
 fn confirm_by_unauthorised_actor_is_rejected() {
     let pre = captured(100);
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::confirm_trade(),
         vec![subj("t1"), subj("cp1"), subj("conf1"), subj("op1"), dec(50)],
         "rando",
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -184,16 +179,14 @@ fn confirm_by_actor_authorised_for_a_different_commodity_is_rejected() {
     // `mo_gas` may confirm gas, but `t1` is a power trade. The gate ties
     // the authority to the trade's own commodity, so this is refused.
     let pre = grant(captured(100), "mo_gas", "gas");
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::confirm_trade(),
         vec![subj("t1"), subj("cp1"), subj("conf1"), subj("op1"), dec(50)],
         "mo_gas",
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -219,16 +212,14 @@ fn authorised_confirm_sets_the_official_price_in_force() {
 #[test]
 fn second_confirmation_is_rejected() {
     let pre = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::confirm_trade(),
         vec![subj("t1"), subj("cp1"), subj("conf2"), subj("op2"), dec(53)],
         "mo",
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================
@@ -290,7 +281,7 @@ fn amending_an_unknown_version_is_rejected() {
     // The version being amended must exist: the gate
     // `require TradeTerms(trade, prior_version_id, _, _, _)` fails for tv9.
     let pre = grant(captured(100), "mo", "power");
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::amend_trade_terms(),
         vec![
             subj("t1"),
@@ -304,9 +295,7 @@ fn amending_an_unknown_version_is_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -328,7 +317,7 @@ fn amending_an_already_amended_version_is_rejected() {
         &invariants(),
         &definitions(),
     );
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::amend_trade_terms(),
         vec![
             subj("t1"),
@@ -342,9 +331,7 @@ fn amending_an_already_amended_version_is_rejected() {
         &amended,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -353,7 +340,7 @@ fn two_versions_on_the_same_effective_date_are_rejected() {
     // effective 2026-01-15 (tv1's date) violates
     // trade_terms_unique_by_trade_effective_from.
     let pre = grant(captured(100), "mo", "power");
-    let outcome = propose_as(
+    let reason = must_reject_as(
         &trade_lifecycle::amend_trade_terms(),
         vec![
             subj("t1"),
@@ -367,17 +354,13 @@ fn two_versions_on_the_same_effective_date_are_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("trade_terms_unique_by_trade_effective_from"),
-            "expected the per-effective-date uniqueness invariant, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => panic!("two versions on one effective date must be rejected"),
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("trade_terms_unique_by_trade_effective_from"),
+        "expected the per-effective-date uniqueness invariant, got: {reason}"
+    );
 }
 
 #[test]
@@ -386,7 +369,7 @@ fn reusing_a_version_id_for_a_different_record_is_rejected() {
     // the *new* version id would make tv1 name a second, conflicting record
     // - trade_terms_unique_by_version_id refuses it.
     let pre = grant(captured(100), "mo", "power");
-    let outcome = propose_as(
+    let reason = must_reject_as(
         &trade_lifecycle::amend_trade_terms(),
         vec![
             subj("t1"),
@@ -400,19 +383,13 @@ fn reusing_a_version_id_for_a_different_record_is_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("trade_terms_unique_by_version_id"),
-            "expected the version-id uniqueness invariant, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => {
-            panic!("reusing a version id for a new record must be rejected")
-        }
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("trade_terms_unique_by_version_id"),
+        "expected the version-id uniqueness invariant, got: {reason}"
+    );
 }
 
 // ============================================================
@@ -469,16 +446,14 @@ fn correct_by_actor_authorised_for_a_different_commodity_is_rejected() {
         "mo_gas",
         "gas",
     );
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::correct_official_price(),
         vec![subj("t1"), subj("op1"), subj("op2"), dec(49)],
         "mo_gas",
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -503,16 +478,14 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
         &invariants(),
         &definitions(),
     );
-    let outcome = propose_as(
+    must_reject_as(
         &trade_lifecycle::confirm_trade(),
         vec![subj("t2"), subj("cp2"), subj("conf2"), subj("op1"), dec(40)],
         "mo",
         &state,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================
@@ -523,7 +496,7 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
 fn settle_before_confirmation_is_rejected() {
     // No official price in force to settle on.
     let pre = captured(100);
-    let outcome = propose_with_test_actor(
+    must_reject(
         &trade_lifecycle::settle_trade(),
         vec![
             subj("t1"),
@@ -535,9 +508,7 @@ fn settle_before_confirmation_is_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -562,7 +533,7 @@ fn settlement_over_the_effective_quantity_is_rejected() {
     // Terms in force on the settlement date are qty 100; settling 150
     // breaks settled_within_effective_terms.
     let pre = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let outcome = propose_with_test_actor(
+    must_reject(
         &trade_lifecycle::settle_trade(),
         vec![
             subj("t1"),
@@ -574,9 +545,7 @@ fn settlement_over_the_effective_quantity_is_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -618,7 +587,7 @@ fn slices_summing_over_the_effective_quantity_are_rejected() {
     // total in settled_within_effective_terms.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let first = settle(confirmed, 60, "s1", "op1", "2026-01-20");
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &trade_lifecycle::settle_trade(),
         vec![
             subj("t1"),
@@ -630,19 +599,13 @@ fn slices_summing_over_the_effective_quantity_are_rejected() {
         &first,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("settled_within_effective_terms"),
-            "expected the cumulative effective cap to reject the over-total slice, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => {
-            panic!("slices summing over the effective quantity must be rejected")
-        }
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("settled_within_effective_terms"),
+        "expected the cumulative effective cap to reject the over-total slice, got: {reason}"
+    );
 }
 
 #[test]
@@ -820,25 +783,19 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
             ),
         ],
     );
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &bad,
         vec![subj("t1"), subj("s1"), subj("op1"), date("2026-01-20")],
         &confirmed,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("trade_settled_unique_by_settlement_id"),
-            "expected the id-uniqueness invariant to reject conflicting tuples, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => {
-            panic!("two conflicting settlements under one id must be rejected")
-        }
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("trade_settled_unique_by_settlement_id"),
+        "expected the id-uniqueness invariant to reject conflicting tuples, got: {reason}"
+    );
 }
 
 #[test]
@@ -899,7 +856,7 @@ fn settlement_before_any_effective_terms_is_rejected() {
     // before the trade had any terms - has no quantity to be capped
     // against. The settle gate refuses it on the ordinary path.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let outcome = propose_with_test_actor(
+    must_reject(
         &trade_lifecycle::settle_trade(),
         vec![
             subj("t1"),
@@ -911,9 +868,7 @@ fn settlement_before_any_effective_terms_is_rejected() {
         &confirmed,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -939,7 +894,7 @@ fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
             ],
         )],
     );
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &bad,
         vec![
             subj("t1"),
@@ -951,19 +906,13 @@ fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
         &confirmed,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("settled_date_has_effective_terms"),
-            "expected the no-effective-terms backstop to reject, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => {
-            panic!("a settlement effective before any terms must be rejected")
-        }
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("settled_date_has_effective_terms"),
+        "expected the no-effective-terms backstop to reject, got: {reason}"
+    );
 }
 
 #[test]
@@ -971,7 +920,7 @@ fn negative_terms_quantity_is_rejected() {
     // A terms quantity must be positive; an amendment to -10 is refused by
     // trade_terms_quantity_is_positive.
     let pre = grant(captured(100), "mo", "power");
-    let outcome = propose_as(
+    let reason = must_reject_as(
         &trade_lifecycle::amend_trade_terms(),
         vec![
             subj("t1"),
@@ -985,17 +934,13 @@ fn negative_terms_quantity_is_rejected() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason
-                .to_string()
-                .contains("trade_terms_quantity_is_positive"),
-            "expected the positive-terms-quantity invariant, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => panic!("a negative terms quantity must be rejected"),
-    }
+    );
+    assert!(
+        reason
+            .to_string()
+            .contains("trade_terms_quantity_is_positive"),
+        "expected the positive-terms-quantity invariant, got: {reason}"
+    );
 }
 
 #[test]
@@ -1004,7 +949,7 @@ fn negative_settlement_quantity_is_rejected() {
     // settled_quantity_is_positive, so a negative slice cannot make room
     // under the running cap for an over-large positive one.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &trade_lifecycle::settle_trade(),
         vec![
             subj("t1"),
@@ -1016,15 +961,11 @@ fn negative_settlement_quantity_is_rejected() {
         &confirmed,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    match outcome {
-        Outcome::Rejected { reason } => assert!(
-            reason.to_string().contains("settled_quantity_is_positive"),
-            "expected the positive-settlement-quantity invariant, got: {reason}"
-        ),
-        Outcome::Accepted { .. } => panic!("a negative settlement quantity must be rejected"),
-    }
+    );
+    assert!(
+        reason.to_string().contains("settled_quantity_is_positive"),
+        "expected the positive-settlement-quantity invariant, got: {reason}"
+    );
 }
 
 // ---- Position limit: abs of the net buys-minus-sells ----
