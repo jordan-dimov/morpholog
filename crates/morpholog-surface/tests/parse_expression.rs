@@ -67,7 +67,12 @@ macro_rules! value_ok {
     ($name:ident, $src:expr, $expected:expr) => {
         #[test]
         fn $name() {
-            assert_eq!(parse_value_expr($src).unwrap(), $expected);
+            assert_eq!(
+                parse_value_expr($src).unwrap(),
+                $expected,
+                "source: {}",
+                $src
+            );
         }
     };
 }
@@ -75,7 +80,12 @@ macro_rules! prop_ok {
     ($name:ident, $src:expr, $expected:expr) => {
         #[test]
         fn $name() {
-            assert_eq!(parse_expression($src).unwrap(), $expected);
+            assert_eq!(
+                parse_expression($src).unwrap(),
+                $expected,
+                "source: {}",
+                $src
+            );
         }
     };
 }
@@ -83,7 +93,11 @@ macro_rules! prop_err {
     ($name:ident, $src:expr) => {
         #[test]
         fn $name() {
-            assert!(!parse_expression($src).unwrap_err().is_empty());
+            assert!(
+                !parse_expression($src).unwrap_err().is_empty(),
+                "source: {}",
+                $src
+            );
         }
     };
 }
@@ -91,7 +105,11 @@ macro_rules! value_err {
     ($name:ident, $src:expr) => {
         #[test]
         fn $name() {
-            assert!(!parse_value_expr($src).unwrap_err().is_empty());
+            assert!(
+                !parse_value_expr($src).unwrap_err().is_empty(),
+                "source: {}",
+                $src
+            );
         }
     };
 }
