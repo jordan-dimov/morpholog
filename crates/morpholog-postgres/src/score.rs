@@ -86,9 +86,9 @@ pub async fn score_candidate(pool: &PgPool, program: &Program) -> Result<Candida
 }
 
 /// Score a candidate against a portable evidence pack - offline, no
-/// database. The pack is verified first (the #161 offline verifier) and
-/// scoring is refused unless it is `Intact`: scoring a pack that does not
-/// verify would be meaningless. With `anchor` supplied the check also
+/// database. The pack is verified first and scoring is refused unless it
+/// is `Intact`: scoring a pack that does not verify would be
+/// meaningless. With `anchor` supplied the check also
 /// catches a coordinated rewrite. The report is identical to the database
 /// path, so a genuine pack reproduces the live score exactly.
 pub fn score_candidate_against_pack(

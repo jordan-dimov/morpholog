@@ -57,239 +57,226 @@ fn var_value(name: &str) -> ValueExpr {
     ValueExpr::Term(var(name))
 }
 
+// ---- Test machinery: one line per uniform parse case ----
+//
+// `value_ok!`/`prop_ok!` pin `parse -> assert_eq` cases; `*_err!` pin
+// inputs the parser must reject. Tests that inspect only part of the
+// tree (via `matches!` / `let-else`) or assert a specific diagnostic
+// stay written out in full below.
+macro_rules! value_ok {
+    ($name:ident, $src:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(
+                parse_value_expr($src).unwrap(),
+                $expected,
+                "source: {}",
+                $src
+            );
+        }
+    };
+}
+macro_rules! prop_ok {
+    ($name:ident, $src:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(
+                parse_expression($src).unwrap(),
+                $expected,
+                "source: {}",
+                $src
+            );
+        }
+    };
+}
+macro_rules! prop_err {
+    ($name:ident, $src:expr) => {
+        #[test]
+        fn $name() {
+            assert!(
+                !parse_expression($src).unwrap_err().is_empty(),
+                "source: {}",
+                $src
+            );
+        }
+    };
+}
+macro_rules! value_err {
+    ($name:ident, $src:expr) => {
+        #[test]
+        fn $name() {
+            assert!(
+                !parse_value_expr($src).unwrap_err().is_empty(),
+                "source: {}",
+                $src
+            );
+        }
+    };
+}
+
 // ---- Atoms (value-shaped: parse_value_expr) ----
 
-#[test]
-fn parses_variable() {
-    let got = parse_value_expr("amount").unwrap();
-    assert_eq!(got, var_value("amount"));
-}
-
-#[test]
-fn parses_decimal_literal_integer() {
-    let got = parse_value_expr("42").unwrap();
-    assert_eq!(got, dec_value("42"));
-}
-
-#[test]
-fn parses_decimal_literal_with_point() {
-    let got = parse_value_expr("1250.75").unwrap();
-    assert_eq!(got, dec_value("1250.75"));
-}
-
-#[test]
-fn parses_actor_as_special_term() {
-    let got = parse_value_expr("actor").unwrap();
-    assert_eq!(got, ValueExpr::Term(Term::Actor));
-}
-
-#[test]
-fn parses_wildcard() {
-    let got = parse_value_expr("_").unwrap();
-    assert_eq!(got, ValueExpr::Term(Term::Wildcard));
-}
+value_ok!(parses_variable, "amount", var_value("amount"));
+value_ok!(parses_decimal_literal_integer, "42", dec_value("42"));
+value_ok!(
+    parses_decimal_literal_with_point,
+    "1250.75",
+    dec_value("1250.75")
+);
+value_ok!(
+    parses_actor_as_special_term,
+    "actor",
+    ValueExpr::Term(Term::Actor)
+);
+value_ok!(parses_wildcard, "_", ValueExpr::Term(Term::Wildcard));
 
 // ---- Claim calls (proposition-shaped: parse_expression) ----
 
-#[test]
-fn parses_claim_call_no_args() {
-    let got = parse_expression("Marker()").unwrap();
-    assert_eq!(
-        got,
-        Prop::Claim {
-            predicate: "Marker".into(),
-            args: vec![],
-        }
-    );
-}
-
-#[test]
-fn parses_claim_call_with_args() {
-    let got = parse_expression("Policy(policy_id, limit)").unwrap();
-    assert_eq!(
-        got,
-        Prop::Claim {
-            predicate: "Policy".into(),
-            args: vec![var("policy_id"), var("limit")],
-        }
-    );
-}
-
-#[test]
-fn parses_claim_call_with_actor() {
-    let got = parse_expression("MayApprove(actor, doc_type)").unwrap();
-    assert_eq!(
-        got,
-        Prop::Claim {
-            predicate: "MayApprove".into(),
-            args: vec![Term::Actor, var("doc_type")],
-        }
-    );
-}
-
-#[test]
-fn parses_claim_call_with_wildcards_and_literals() {
-    let got = parse_expression("ClaimReported(claim_id, _, 100)").unwrap();
-    assert_eq!(
-        got,
-        Prop::Claim {
-            predicate: "ClaimReported".into(),
-            args: vec![var("claim_id"), Term::Wildcard, dec("100")],
-        }
-    );
-}
-
-#[test]
-fn parens_change_grouping() {
-    // A parenthesised value expression in value position.
-    let inner = parse_value_expr("(amount)").unwrap();
-    assert_eq!(inner, var_value("amount"));
-}
+prop_ok!(
+    parses_claim_call_no_args,
+    "Marker()",
+    Prop::Claim {
+        predicate: "Marker".into(),
+        args: vec![]
+    }
+);
+prop_ok!(
+    parses_claim_call_with_args,
+    "Policy(policy_id, limit)",
+    Prop::Claim {
+        predicate: "Policy".into(),
+        args: vec![var("policy_id"), var("limit")]
+    }
+);
+prop_ok!(
+    parses_claim_call_with_actor,
+    "MayApprove(actor, doc_type)",
+    Prop::Claim {
+        predicate: "MayApprove".into(),
+        args: vec![Term::Actor, var("doc_type")]
+    }
+);
+prop_ok!(
+    parses_claim_call_with_wildcards_and_literals,
+    "ClaimReported(claim_id, _, 100)",
+    Prop::Claim {
+        predicate: "ClaimReported".into(),
+        args: vec![var("claim_id"), Term::Wildcard, dec("100")]
+    }
+);
+// A parenthesised value expression in value position.
+value_ok!(parens_change_grouping, "(amount)", var_value("amount"));
 
 // ---- Arithmetic (value-shaped) ----
 
-#[test]
-fn parses_addition() {
-    let got = parse_value_expr("a + b").unwrap();
-    assert_eq!(got, arith(ArithOp::Add, var_value("a"), var_value("b")));
-}
-
-#[test]
-fn parses_subtraction() {
-    let got = parse_value_expr("a - b").unwrap();
-    assert_eq!(got, arith(ArithOp::Sub, var_value("a"), var_value("b")));
-}
-
-#[test]
-fn arithmetic_is_left_associative() {
-    // `a + b - c` parses as `(a + b) - c`.
-    let got = parse_value_expr("a + b - c").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Sub,
-            arith(ArithOp::Add, var_value("a"), var_value("b")),
-            var_value("c"),
-        )
-    );
-}
-
-#[test]
-fn parses_multiplication() {
-    let got = parse_value_expr("a * b").unwrap();
-    assert_eq!(got, arith(ArithOp::Mul, var_value("a"), var_value("b")));
-}
-
-#[test]
-fn parses_division() {
-    let got = parse_value_expr("a / b").unwrap();
-    assert_eq!(got, arith(ArithOp::Div, var_value("a"), var_value("b")));
-}
-
-#[test]
-fn multiplication_binds_tighter_than_addition() {
-    // `a + b * c` parses as `Add(a, Mul(b, c))` - the multiplicative
-    // layer binds tighter than the additive one.
-    let got = parse_value_expr("a + b * c").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Add,
-            var_value("a"),
-            arith(ArithOp::Mul, var_value("b"), var_value("c")),
-        )
-    );
-}
-
-#[test]
-fn division_is_left_associative() {
-    // `a / b / c` parses as `Div(Div(a, b), c)`.
-    let got = parse_value_expr("a / b / c").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Div,
-            arith(ArithOp::Div, var_value("a"), var_value("b")),
-            var_value("c"),
-        )
-    );
-}
-
-#[test]
-fn mul_and_div_share_one_precedence_level() {
-    // `a * b / c` parses as `Div(Mul(a, b), c)` - same level, left-assoc.
-    let got = parse_value_expr("a * b / c").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Div,
-            arith(ArithOp::Mul, var_value("a"), var_value("b")),
-            var_value("c"),
-        )
-    );
-}
-
-#[test]
-fn parses_modulo() {
-    let got = parse_value_expr("a % b").unwrap();
-    assert_eq!(got, arith(ArithOp::Mod, var_value("a"), var_value("b")));
-}
-
-#[test]
-fn modulo_shares_multiplicative_precedence() {
-    // `a + b % c` parses as `Add(a, Mod(b, c))` - `%` binds with `*`/`/`,
-    // tighter than `+`. The parity shape `(file + rank) % 2` relies on
-    // the explicit parens, since `+` is the looser operator.
-    let got = parse_value_expr("a + b % c").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Add,
-            var_value("a"),
-            arith(ArithOp::Mod, var_value("b"), var_value("c")),
-        )
-    );
-}
-
-#[test]
-fn parses_min() {
-    let got = parse_value_expr("min(a, b)").unwrap();
-    assert_eq!(got, arith(ArithOp::Min, var_value("a"), var_value("b")));
-}
-
-#[test]
-fn parses_max_with_arithmetic_arg() {
-    // `max(0, a - b)` - the second arg is a full value expression.
-    let got = parse_value_expr("max(0, a - b)").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Max,
-            dec_value("0"),
-            arith(ArithOp::Sub, var_value("a"), var_value("b")),
-        )
-    );
-}
-
-#[test]
-fn parses_nested_min_max() {
-    // `min(cap, max(floor, x))` - the collar shape.
-    let got = parse_value_expr("min(cap, max(floor, x))").unwrap();
-    assert_eq!(
-        got,
-        arith(
-            ArithOp::Min,
-            var_value("cap"),
-            arith(ArithOp::Max, var_value("floor"), var_value("x")),
-        )
-    );
-}
-
-#[test]
-fn parses_abs() {
-    let got = parse_value_expr("abs(x)").unwrap();
-    assert_eq!(got, ValueExpr::Abs(Box::new(var_value("x"))));
-}
+value_ok!(
+    parses_addition,
+    "a + b",
+    arith(ArithOp::Add, var_value("a"), var_value("b"))
+);
+value_ok!(
+    parses_subtraction,
+    "a - b",
+    arith(ArithOp::Sub, var_value("a"), var_value("b"))
+);
+// `a + b - c` parses as `(a + b) - c`.
+value_ok!(
+    arithmetic_is_left_associative,
+    "a + b - c",
+    arith(
+        ArithOp::Sub,
+        arith(ArithOp::Add, var_value("a"), var_value("b")),
+        var_value("c")
+    )
+);
+value_ok!(
+    parses_multiplication,
+    "a * b",
+    arith(ArithOp::Mul, var_value("a"), var_value("b"))
+);
+value_ok!(
+    parses_division,
+    "a / b",
+    arith(ArithOp::Div, var_value("a"), var_value("b"))
+);
+// `a + b * c` parses as `Add(a, Mul(b, c))` - the multiplicative layer
+// binds tighter than the additive one.
+value_ok!(
+    multiplication_binds_tighter_than_addition,
+    "a + b * c",
+    arith(
+        ArithOp::Add,
+        var_value("a"),
+        arith(ArithOp::Mul, var_value("b"), var_value("c"))
+    )
+);
+// `a / b / c` parses as `Div(Div(a, b), c)`.
+value_ok!(
+    division_is_left_associative,
+    "a / b / c",
+    arith(
+        ArithOp::Div,
+        arith(ArithOp::Div, var_value("a"), var_value("b")),
+        var_value("c")
+    )
+);
+// `a * b / c` parses as `Div(Mul(a, b), c)` - same level, left-assoc.
+value_ok!(
+    mul_and_div_share_one_precedence_level,
+    "a * b / c",
+    arith(
+        ArithOp::Div,
+        arith(ArithOp::Mul, var_value("a"), var_value("b")),
+        var_value("c")
+    )
+);
+value_ok!(
+    parses_modulo,
+    "a % b",
+    arith(ArithOp::Mod, var_value("a"), var_value("b"))
+);
+// `a + b % c` parses as `Add(a, Mod(b, c))` - `%` binds with `*`/`/`,
+// tighter than `+`. The parity shape `(file + rank) % 2` relies on the
+// explicit parens, since `+` is the looser operator.
+value_ok!(
+    modulo_shares_multiplicative_precedence,
+    "a + b % c",
+    arith(
+        ArithOp::Add,
+        var_value("a"),
+        arith(ArithOp::Mod, var_value("b"), var_value("c"))
+    )
+);
+value_ok!(
+    parses_min,
+    "min(a, b)",
+    arith(ArithOp::Min, var_value("a"), var_value("b"))
+);
+// `max(0, a - b)` - the second arg is a full value expression.
+value_ok!(
+    parses_max_with_arithmetic_arg,
+    "max(0, a - b)",
+    arith(
+        ArithOp::Max,
+        dec_value("0"),
+        arith(ArithOp::Sub, var_value("a"), var_value("b"))
+    )
+);
+// `min(cap, max(floor, x))` - the collar shape.
+value_ok!(
+    parses_nested_min_max,
+    "min(cap, max(floor, x))",
+    arith(
+        ArithOp::Min,
+        var_value("cap"),
+        arith(ArithOp::Max, var_value("floor"), var_value("x"))
+    )
+);
+value_ok!(
+    parses_abs,
+    "abs(x)",
+    ValueExpr::Abs(Box::new(var_value("x")))
+);
 
 #[test]
 fn parses_abs_of_a_sum() {
@@ -304,67 +291,48 @@ fn parses_abs_of_a_sum() {
 
 // ---- Comparators ----
 
-#[test]
-fn parses_le_with_decimal_literal() {
-    let got = parse_expression("amount <= 100").unwrap();
-    assert_eq!(
-        got,
-        cmp(
-            CompareOp::Le,
-            OrderedDomain::Decimal,
-            var_value("amount"),
-            dec_value("100")
-        )
-    );
-}
-
-#[test]
-fn parses_eq() {
-    let got = parse_expression("a = b").unwrap();
-    assert_eq!(
-        got,
-        Prop::Eq(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
-}
-
-#[test]
-fn parses_neq_between_variables() {
-    let got = parse_expression("a != b").unwrap();
-    assert_eq!(
-        got,
-        Prop::Neq(Box::new(var_value("a")), Box::new(var_value("b")))
-    );
-}
-
-#[test]
-fn neq_accepts_arithmetic_operand() {
-    // `!=` is symmetric with `=`: `Prop::Neq` takes full expressions, so
-    // `a + 1 != b` parses to `Neq(Add(a, 1), b)` rather than being
-    // rejected as it was when Neq operated on terms only.
-    let got = parse_expression("a + 1 != b").unwrap();
-    assert_eq!(
-        got,
-        Prop::Neq(
-            Box::new(arith(ArithOp::Add, var_value("a"), dec_value("1"))),
-            Box::new(var_value("b")),
-        )
-    );
-}
-
-#[test]
-fn arithmetic_binds_tighter_than_comparison() {
-    // `a + 5 <= limit` parses as `(a + 5) <= limit`.
-    let got = parse_expression("a + 5 <= limit").unwrap();
-    assert_eq!(
-        got,
-        cmp(
-            CompareOp::Le,
-            OrderedDomain::Decimal,
-            arith(ArithOp::Add, var_value("a"), dec_value("5")),
-            var_value("limit"),
-        )
-    );
-}
+prop_ok!(
+    parses_le_with_decimal_literal,
+    "amount <= 100",
+    cmp(
+        CompareOp::Le,
+        OrderedDomain::Decimal,
+        var_value("amount"),
+        dec_value("100")
+    )
+);
+prop_ok!(
+    parses_eq,
+    "a = b",
+    Prop::Eq(Box::new(var_value("a")), Box::new(var_value("b")))
+);
+prop_ok!(
+    parses_neq_between_variables,
+    "a != b",
+    Prop::Neq(Box::new(var_value("a")), Box::new(var_value("b")))
+);
+// `!=` is symmetric with `=`: `Prop::Neq` takes full expressions, so
+// `a + 1 != b` parses to `Neq(Add(a, 1), b)` rather than being rejected
+// as it was when Neq operated on terms only.
+prop_ok!(
+    neq_accepts_arithmetic_operand,
+    "a + 1 != b",
+    Prop::Neq(
+        Box::new(arith(ArithOp::Add, var_value("a"), dec_value("1"))),
+        Box::new(var_value("b"))
+    )
+);
+// `a + 5 <= limit` parses as `(a + 5) <= limit`.
+prop_ok!(
+    arithmetic_binds_tighter_than_comparison,
+    "a + 5 <= limit",
+    cmp(
+        CompareOp::Le,
+        OrderedDomain::Decimal,
+        arith(ArithOp::Add, var_value("a"), dec_value("5")),
+        var_value("limit")
+    )
+);
 
 // ---- Boolean composition ----
 
@@ -722,26 +690,10 @@ fn realistic_netting_require_fragment() {
 
 // ---- Error cases ----
 
-#[test]
-fn empty_input_is_error() {
-    let errs = parse_expression("").expect_err("empty input should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn dangling_operator_is_error() {
-    let errs = parse_expression("a +").expect_err("dangling operator should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn claim_call_with_arithmetic_arg_is_error() {
-    // `Foo(x + 1, y)` is not representable: claim args are Terms,
-    // not Exprs. The parser rejects with a clean diagnostic.
-    let errs =
-        parse_expression("Foo(x + 1, y)").expect_err("claim-call arithmetic arg should fail");
-    assert!(!errs.is_empty());
-}
+prop_err!(empty_input_is_error, "");
+prop_err!(dangling_operator_is_error, "a +");
+// `Foo(x + 1, y)` is not representable: claim args are Terms, not Exprs.
+prop_err!(claim_call_with_arithmetic_arg_is_error, "Foo(x + 1, y)");
 
 /// `true` and `false` are reserved at the lexer level but not
 /// parseable in v0 (no `Value::Bool` in the IR). They must fail
@@ -975,11 +927,7 @@ fn sum_target_can_be_a_decimal_literal_for_counting() {
     assert_eq!(value, Term::Literal(Value::Decimal("1".to_string())));
 }
 
-#[test]
-fn sum_target_must_be_variable_not_wildcard() {
-    let errs = parse_value_expr("sum(_ | Foo())").expect_err("wildcard target should fail");
-    assert!(!errs.is_empty());
-}
+value_err!(sum_target_must_be_variable_not_wildcard, "sum(_ | Foo())");
 
 // ---- comparators ----
 
@@ -1213,51 +1161,29 @@ fn in_as_comparator_inside_forall_body() {
 // strict date literal lexing
 // ============================================================
 
-/// The parser must refuse value-shaped primaries in
-/// unparenthesised `forall` source position, even though they
-/// would parse as `primary` elsewhere. Per the surface doctrine,
-/// the kernel's `Forall.source` is predicate-shaped (calls
-/// `find_matches`), so the parser cannot let surface syntax
-/// produce ill-shaped IR.
-#[test]
-fn forall_source_rejects_decimal_literal() {
-    let errs = parse_expression("forall x in 5: P(x)").expect_err("decimal source should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn forall_source_rejects_date_literal() {
-    let errs = parse_expression("forall x in @2026-05-22: P(x)")
-        .expect_err("date-literal source should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn forall_source_rejects_subject_literal() {
-    let errs = parse_expression("forall x in #BANK_DEBT_SERVICE: P(x)")
-        .expect_err("subject-literal source should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn forall_source_rejects_wildcard() {
-    let errs = parse_expression("forall x in _: P(x)").expect_err("wildcard source should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn forall_source_rejects_value_expression() {
-    let errs = parse_expression("forall x in value Foo(_): P(x)")
-        .expect_err("value-shaped source should fail");
-    assert!(!errs.is_empty());
-}
-
-#[test]
-fn forall_source_rejects_sum_expression() {
-    let errs = parse_expression("forall x in sum(v | Foo(v)): P(x)")
-        .expect_err("sum-shaped source should fail");
-    assert!(!errs.is_empty());
-}
+// The parser must refuse value-shaped primaries in unparenthesised
+// `forall` source position, even though they would parse as `primary`
+// elsewhere. The kernel's `Forall.source` is predicate-shaped (calls
+// `find_matches`), so the parser cannot let surface syntax produce
+// ill-shaped IR.
+prop_err!(forall_source_rejects_decimal_literal, "forall x in 5: P(x)");
+prop_err!(
+    forall_source_rejects_date_literal,
+    "forall x in @2026-05-22: P(x)"
+);
+prop_err!(
+    forall_source_rejects_subject_literal,
+    "forall x in #BANK_DEBT_SERVICE: P(x)"
+);
+prop_err!(forall_source_rejects_wildcard, "forall x in _: P(x)");
+prop_err!(
+    forall_source_rejects_value_expression,
+    "forall x in value Foo(_): P(x)"
+);
+prop_err!(
+    forall_source_rejects_sum_expression,
+    "forall x in sum(v | Foo(v)): P(x)"
+);
 
 /// Parenthesised proposition sources pass through as-is - the user
 /// signalled explicit intent by parenthesising. A value-shaped

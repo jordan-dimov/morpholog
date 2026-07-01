@@ -1,6 +1,5 @@
-//! End-to-end test of `morpholog check --ir` (the IR debugging view,
-//! formerly the `parse` subcommand) against real `.morph` fixture
-//! files. Spawns the built binary, asserts
+//! End-to-end test of `morpholog check --ir` (the IR debugging view)
+//! against real `.morph` fixture files. Spawns the built binary, asserts
 //! on stdout/stderr/exit code.
 //!
 //! Distinct from the in-crate argument-parsing tests (which only

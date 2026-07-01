@@ -1197,9 +1197,7 @@ mod tests {
         );
     }
 
-    /// The kernel error enums moved from hand-rolled `Display` to
-    /// `thiserror`'s derive. These pins prove the messages stayed
-    /// byte-for-byte identical across that conversion - covering each
+    /// Pins the kernel error `Display` strings byte-for-byte, one per
     /// tricky formatting class: a plain variant, a field-interpolated
     /// tuple, a `\`-continued long string, named struct fields with a
     /// nested `Display`, and a joined-expression message.
