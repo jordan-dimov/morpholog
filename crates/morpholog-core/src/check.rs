@@ -1507,46 +1507,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refine_unknown_to_known_yields_known() {
-        let refined = InferredKind::UnknownOrAny
-            .refine(InferredKind::Known(PredicateArgKind::Decimal))
-            .expect("compatible");
-        assert_eq!(refined, InferredKind::Known(PredicateArgKind::Decimal));
-    }
-
-    #[test]
-    fn refine_known_then_unknown_keeps_known() {
-        let refined = InferredKind::Known(PredicateArgKind::Decimal)
-            .refine(InferredKind::UnknownOrAny)
-            .expect("compatible");
-        assert_eq!(refined, InferredKind::Known(PredicateArgKind::Decimal));
-    }
-
-    #[test]
-    fn refine_any_then_decimal_yields_decimal() {
-        // The `Any`-declared slot was the first observation; a
-        // later specific use refines the variable to that specific
-        // kind rather than leaving it permissive.
-        let refined = InferredKind::Known(PredicateArgKind::Any)
-            .refine(InferredKind::Known(PredicateArgKind::Decimal))
-            .expect("compatible");
-        assert_eq!(refined, InferredKind::Known(PredicateArgKind::Decimal));
-    }
-
-    #[test]
-    fn refine_decimal_then_any_keeps_decimal() {
-        let refined = InferredKind::Known(PredicateArgKind::Decimal)
-            .refine(InferredKind::Known(PredicateArgKind::Any))
-            .expect("compatible");
-        assert_eq!(refined, InferredKind::Known(PredicateArgKind::Decimal));
-    }
-
-    #[test]
-    fn refine_decimal_then_subject_conflicts() {
-        let err = InferredKind::Known(PredicateArgKind::Decimal)
-            .refine(InferredKind::Known(PredicateArgKind::Subject))
-            .expect_err("conflict");
-        assert_eq!(err, (PredicateArgKind::Decimal, PredicateArgKind::Subject));
+    fn refine_keeps_the_more_specific_kind_or_reports_conflict() {
+        use InferredKind::{Known, UnknownOrAny};
+        use PredicateArgKind::{Any, Decimal, Subject};
+        // `a.refine(b)`: the unknown/any side yields to the other, the
+        // more specific kind wins (an `Any` slot refines to a later
+        // concrete use), and an incompatible pair reports itself.
+        let cases = [
+            (UnknownOrAny, Known(Decimal), Ok(Known(Decimal))),
+            (Known(Decimal), UnknownOrAny, Ok(Known(Decimal))),
+            (Known(Any), Known(Decimal), Ok(Known(Decimal))),
+            (Known(Decimal), Known(Any), Ok(Known(Decimal))),
+            (Known(Decimal), Known(Subject), Err((Decimal, Subject))),
+        ];
+        for (a, b, expected) in cases {
+            let desc = format!("{a:?}.refine({b:?})");
+            assert_eq!(a.refine(b), expected, "{desc}");
+        }
     }
 
     #[test]
@@ -2333,30 +2310,25 @@ mod tests {
     }
 
     #[test]
-    fn eq_with_distinct_known_kinds_flags_operand_mismatch() {
-        // Eq is strict: Decimal == Subject must surface as a kind
-        // mismatch, not be silently coerced.
-        let mut p = empty_program();
-        p.invariants = vec![invariant("bad_eq", eq(term(dec("100")), term(subj("S"))))];
-        let errs = check_program(&p);
-        assert_eq!(errs.len(), 1);
-        assert!(matches!(
-            errs[0],
-            ValidationError::EqualityKindMismatch { operator: "=", .. }
-        ));
-    }
-
-    #[test]
-    fn neq_with_distinct_known_kinds_flags_operand_mismatch() {
-        // Neq's operands are Terms; strict-equality rules still apply.
-        let mut p = empty_program();
-        p.invariants = vec![invariant("bad_neq", neq(dec("100"), subj("S")))];
-        let errs = check_program(&p);
-        assert_eq!(errs.len(), 1);
-        assert!(matches!(
-            errs[0],
-            ValidationError::EqualityKindMismatch { operator: "!=", .. }
-        ));
+    fn strict_equality_flags_distinct_operand_kinds() {
+        // Eq and Neq are strict: Decimal vs Subject must surface as a
+        // kind mismatch, not be silently coerced.
+        for (name, body, operator) in [
+            ("bad_eq", eq(term(dec("100")), term(subj("S"))), "="),
+            ("bad_neq", neq(dec("100"), subj("S")), "!="),
+        ] {
+            let mut p = empty_program();
+            p.invariants = vec![invariant(name, body)];
+            let errs = check_program(&p);
+            assert_eq!(errs.len(), 1, "{operator}: {errs:?}");
+            assert!(
+                matches!(
+                    errs[0],
+                    ValidationError::EqualityKindMismatch { operator: op, .. } if op == operator
+                ),
+                "{operator}: got {errs:?}"
+            );
+        }
     }
 
     #[test]
