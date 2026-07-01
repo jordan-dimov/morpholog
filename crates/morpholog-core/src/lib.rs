@@ -566,104 +566,55 @@ mod tests {
         ValueExpr::Term(Term::Literal(Value::Date(s.to_string())))
     }
 
-    /// `DateLe(a, b)` admits when `a < b`. The successful match
-    /// returns the unchanged binding set, mirroring decimal `Le`.
+    /// `DateLe(a, b)` admits `a <= b` and returns the unchanged
+    /// binding set, mirroring decimal `Le`; `a > b` is the lawful
+    /// no-match path, distinct from `TypeMismatch`. Equal dates
+    /// admitting pins the **inclusive** validity-window semantics -
+    /// `effective_to == action_date` is admissible, not rejected.
     #[test]
-    fn date_le_admits_before() {
-        let expr = date_le_(
-            Box::new(date_lit("2026-03-11")),
-            Box::new(date_lit("2026-03-12")),
-        );
-        let matches =
-            find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new())).unwrap();
-        assert_eq!(matches.len(), 1, "earlier date must admit under DateLe");
-    }
-
-    /// Boundary case: equal dates admit. Pins the **inclusive**
-    /// validity-window semantics - `effective_to == action_date` is
-    /// admissible, not rejected.
-    #[test]
-    fn date_le_admits_equal() {
-        let expr = date_le_(
-            Box::new(date_lit("2026-03-12")),
-            Box::new(date_lit("2026-03-12")),
-        );
-        let matches =
-            find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new())).unwrap();
-        assert_eq!(
-            matches.len(),
-            1,
-            "equal dates must admit under DateLe (inclusive window semantics)"
-        );
-    }
-
-    /// `DateLe(a, b)` with `a > b` returns no matches - the lawful
-    /// rejection path, distinct from `TypeMismatch`.
-    #[test]
-    fn date_le_rejects_after() {
-        let expr = date_le_(
-            Box::new(date_lit("2026-03-13")),
-            Box::new(date_lit("2026-03-12")),
-        );
-        let matches =
-            find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new())).unwrap();
-        assert!(matches.is_empty(), "later date must reject under DateLe");
-    }
-
-    /// Mixed operand kinds raise `TypeMismatch`, not silent rejection:
-    /// a decimal passed where a date was expected must not admit.
-    #[test]
-    fn date_le_type_mismatch_decimal_vs_date() {
-        let expr = date_le_(
-            Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                "1".to_string(),
-            )))),
-            Box::new(date_lit("2026-03-12")),
-        );
-        let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
-            .expect_err("decimal lhs must be a TypeMismatch");
-        match err {
-            EvalError::TypeMismatch(msg) => assert!(msg.contains("civil-date")),
-            other => panic!("expected TypeMismatch, got {other:?}"),
+    fn date_le_pins_direction_and_inclusivity() {
+        let cases = [
+            ("2026-03-11", "2026-03-12", 1), // earlier admits
+            ("2026-03-12", "2026-03-12", 1), // equal admits: inclusive window
+            ("2026-03-13", "2026-03-12", 0), // later is a lawful no-match
+        ];
+        for (lhs, rhs, expected) in cases {
+            let expr = date_le_(Box::new(date_lit(lhs)), Box::new(date_lit(rhs)));
+            let matches =
+                find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new())).unwrap();
+            assert_eq!(matches.len(), expected, "DateLe({lhs}, {rhs})");
         }
     }
 
-    /// Symmetric to the above: a date on the left and a non-date on
-    /// the right also raises `TypeMismatch`. Pins that the type guard
-    /// covers both positions.
+    /// Mixed operand kinds raise `TypeMismatch`, not silent rejection,
+    /// and the type guard covers both positions. A malformed
+    /// `Value::Date` source string surfaces the same way at
+    /// evaluation time, mirroring an invalid `Value::Decimal`: there
+    /// is no separate IR validation pass; parsing is the evaluator's
+    /// concern.
     #[test]
-    fn date_le_type_mismatch_date_vs_subject() {
-        let expr = date_le_(
-            Box::new(date_lit("2026-03-12")),
-            Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
-                "oops".into(),
-            )))),
-        );
-        let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
-            .expect_err("subject rhs must be a TypeMismatch");
-        match err {
-            EvalError::TypeMismatch(msg) => assert!(msg.contains("civil-date")),
-            other => panic!("expected TypeMismatch, got {other:?}"),
-        }
-    }
-
-    /// A malformed `Value::Date` source string surfaces as
-    /// `TypeMismatch` at evaluation time, mirroring how an invalid
-    /// `Value::Decimal` surfaces. There is no separate IR validation
-    /// pass; parsing is the evaluator's concern.
-    #[test]
-    fn date_le_invalid_iso_string_is_type_mismatch() {
-        let expr = date_le_(
-            Box::new(date_lit("not-a-date")),
-            Box::new(date_lit("2026-03-12")),
-        );
-        let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
-            .expect_err("invalid ISO string must be a TypeMismatch");
-        match err {
-            EvalError::TypeMismatch(msg) => {
-                assert!(msg.contains("invalid civil date"), "msg was: {msg}")
+    fn date_le_operand_type_guards_raise_type_mismatch() {
+        let dec_lit = ValueExpr::Term(Term::Literal(Value::Decimal("1".to_string())));
+        let subj_lit = ValueExpr::Term(Term::Literal(Value::Subject("oops".into())));
+        let cases = [
+            (dec_lit, date_lit("2026-03-12"), "civil-date"),
+            (date_lit("2026-03-12"), subj_lit, "civil-date"),
+            (
+                date_lit("not-a-date"),
+                date_lit("2026-03-12"),
+                "invalid civil date",
+            ),
+        ];
+        for (lhs, rhs, fragment) in cases {
+            let expr = date_le_(Box::new(lhs), Box::new(rhs));
+            let err = find_matches(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
+                .expect_err("mixed or malformed operands must be a TypeMismatch");
+            match err {
+                EvalError::TypeMismatch(msg) => {
+                    assert!(msg.contains(fragment), "msg was: {msg}")
+                }
+                other => panic!("expected TypeMismatch, got {other:?}"),
             }
-            other => panic!("expected TypeMismatch, got {other:?}"),
         }
     }
 
