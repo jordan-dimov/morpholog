@@ -11,6 +11,23 @@
 use morpholog_core::PredicateArgKind;
 use morpholog_surface::parse_program;
 
+// ---- Test machinery: one case per source the parser must refuse ----
+//
+// `parse_err!` pins whole-programme sources that must fail to parse,
+// with any diagnostic. Tests that inspect a specific diagnostic
+// message or its spans stay written out in full.
+macro_rules! parse_err {
+    ($name:ident, $src:expr) => {
+        #[test]
+        fn $name() {
+            match parse_program($src) {
+                Err(errs) => assert!(!errs.is_empty(), "source: {}", $src),
+                Ok(_) => panic!("source should fail to parse:\n{}", $src),
+            }
+        }
+    };
+}
+
 #[test]
 fn happy_path_one_program_three_predicates() {
     let source = r#"
@@ -173,12 +190,10 @@ fn program_with_no_predicates_is_valid() {
     assert!(program.predicates.is_empty());
 }
 
-#[test]
-fn missing_program_header_is_error() {
-    let source = "predicate Foo(a: Subject)\n";
-    let errs = parse_program(source).expect_err("missing header should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    missing_program_header_is_error,
+    "predicate Foo(a: Subject)\n"
+);
 
 #[test]
 fn empty_source_is_error() {
@@ -191,28 +206,18 @@ fn empty_source_is_error() {
     );
 }
 
-#[test]
-fn unknown_kind_keyword_surfaces_as_error() {
-    // `Money` is not a known kind keyword; the lexer treats it as
-    // an identifier, and the parser then fails to match where a
-    // kind token is required.
-    let source = r#"
-program demo
-predicate Foo(amount: Money)
-"#;
-    let errs = parse_program(source).expect_err("unknown kind should fail");
-    assert!(!errs.is_empty());
-}
+// `Money` is not a known kind keyword; the lexer treats it as an
+// identifier, and the parser then fails to match where a kind token
+// is required.
+parse_err!(
+    unknown_kind_keyword_surfaces_as_error,
+    "\nprogram demo\npredicate Foo(amount: Money)\n"
+);
 
-#[test]
-fn missing_colon_in_arg_surfaces_as_error() {
-    let source = r#"
-program demo
-predicate Foo(amount Decimal)
-"#;
-    let errs = parse_program(source).expect_err("missing colon should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    missing_colon_in_arg_surfaces_as_error,
+    "\nprogram demo\npredicate Foo(amount Decimal)\n"
+);
 
 #[test]
 fn duplicate_predicate_carries_both_spans() {
@@ -386,19 +391,15 @@ invariant b: Bar(y)
     assert_eq!(program.invariants.len(), 2);
 }
 
-#[test]
-fn missing_colon_after_invariant_name_is_error() {
-    let source = "program demo\ninvariant cap Foo(x)\n";
-    let errs = parse_program(source).expect_err("missing colon should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    missing_colon_after_invariant_name_is_error,
+    "program demo\ninvariant cap Foo(x)\n"
+);
 
-#[test]
-fn invariant_without_body_is_error() {
-    let source = "program demo\ninvariant cap:\n";
-    let errs = parse_program(source).expect_err("missing body should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    invariant_without_body_is_error,
+    "program demo\ninvariant cap:\n"
+);
 
 #[test]
 fn duplicate_invariant_carries_both_spans() {
@@ -423,26 +424,22 @@ invariant cap: Bar(y)
     assert_ne!(dup.primary, dup.secondary[0].0);
 }
 
-#[test]
-fn version_syntax_is_rejected() {
-    // the parser deliberately does not have version syntax. `(v1)` after
-    // the invariant name fails with an unexpected-token error on
-    // the `(`. When versioning gains real meaning, both formatter
-    // and parser grow the clause together.
-    let source = "program demo\ninvariant cap(v1): Foo(x)\n";
-    let errs = parse_program(source).expect_err("version syntax should fail in v0");
-    assert!(!errs.is_empty());
-}
+// The parser deliberately does not have version syntax. `(v1)` after
+// the invariant name fails with an unexpected-token error on the `(`.
+// When versioning gains real meaning, both formatter and parser grow
+// the clause together.
+parse_err!(
+    version_syntax_is_rejected,
+    "program demo\ninvariant cap(v1): Foo(x)\n"
+);
 
-#[test]
-fn invariant_cannot_use_reserved_keyword_as_name() {
-    // `program`, `predicate`, `invariant`, and the others are
-    // lexer-reserved. Using one as an invariant name fails because
-    // the lexer never produces an Ident for it.
-    let source = "program demo\ninvariant invariant: Foo(x)\n";
-    let errs = parse_program(source).expect_err("reserved keyword as name should fail");
-    assert!(!errs.is_empty());
-}
+// `program`, `predicate`, `invariant`, and the others are
+// lexer-reserved. Using one as a declaration name fails because the
+// lexer never produces an Ident for it.
+parse_err!(
+    invariant_cannot_use_reserved_keyword_as_name,
+    "program demo\ninvariant invariant: Foo(x)\n"
+);
 
 // ============================================================
 // Transformation declarations + gate statements
@@ -591,53 +588,42 @@ fn parses_admit_statement() {
     assert_eq!(claim.args.len(), 1);
 }
 
-#[test]
-fn reserved_keyword_cannot_be_transformation_name() {
-    // Trying to use `predicate` as a transformation name fails:
-    // the lexer recognises `predicate` as Token::KwPredicate, so
-    // the parser never sees an Ident at that position.
-    let source = "program demo\n\
-                  transformation predicate():\n\
-                  \x20\x20\x20\x20require A()\n";
-    let errs = parse_program(source).expect_err("reserved keyword as name should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    reserved_keyword_cannot_be_transformation_name,
+    "program demo\n\
+     transformation predicate():\n\
+     \x20\x20\x20\x20require A()\n"
+);
 
 // ============================================================
 // Review tightenings: bind is parser-restricted to a claim pattern
 // ============================================================
 
-/// `bind` accepts only a claim pattern. Arbitrary propositions
-/// (booleans, comparisons, etc.) are rejected at the surface even
-/// though `Stmt::BindOne` can technically hold any `Prop` in the
-/// kernel. See `parser/stmt.rs` module-level doc for the doctrine
-/// rationale.
-#[test]
-fn bind_rejects_boolean_expression() {
-    let source = "program demo\n\
-                  transformation t():\n\
-                  \x20\x20\x20\x20bind not Foo(x)\n";
-    let errs = parse_program(source).expect_err("bind not Foo(x) should fail");
-    assert!(!errs.is_empty());
-}
+// `bind` accepts only a claim pattern. Arbitrary propositions
+// (booleans, comparisons, etc.) are rejected at the surface even
+// though `Stmt::BindOne` can technically hold any `Prop` in the
+// kernel. See `parser/stmt.rs` module-level doc for the doctrine
+// rationale.
+parse_err!(
+    bind_rejects_boolean_expression,
+    "program demo\n\
+     transformation t():\n\
+     \x20\x20\x20\x20bind not Foo(x)\n"
+);
 
-#[test]
-fn bind_rejects_comparison() {
-    let source = "program demo\n\
-                  transformation t():\n\
-                  \x20\x20\x20\x20bind amount <= limit\n";
-    let errs = parse_program(source).expect_err("bind amount <= limit should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    bind_rejects_comparison,
+    "program demo\n\
+     transformation t():\n\
+     \x20\x20\x20\x20bind amount <= limit\n"
+);
 
-#[test]
-fn bind_rejects_value_lookup() {
-    let source = "program demo\n\
-                  transformation t():\n\
-                  \x20\x20\x20\x20bind value Policy(x, _)\n";
-    let errs = parse_program(source).expect_err("bind value Policy(...) should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    bind_rejects_value_lookup,
+    "program demo\n\
+     transformation t():\n\
+     \x20\x20\x20\x20bind value Policy(x, _)\n"
+);
 
 #[test]
 fn bind_accepts_claim_pattern() {
@@ -660,19 +646,17 @@ fn bind_accepts_claim_pattern() {
     assert_eq!(args.len(), 3);
 }
 
-/// Top-level indentation (a top-level decl line that is not at
-/// column 0) currently surfaces as a parse error because the
-/// resulting `Indent` token isn't a valid top-level construct.
-/// The diagnostic is generic but the behaviour is pinned so any
-/// future improvement (e.g. a dedicated "unexpected top-level
-/// indentation" diagnostic) lands as a deliberate change.
-#[test]
-fn unexpected_top_level_indentation_is_rejected() {
-    let source = "program demo\n\
-                  \x20\x20\x20\x20predicate Foo(x: Subject)\n";
-    let errs = parse_program(source).expect_err("top-level indent should fail");
-    assert!(!errs.is_empty());
-}
+// Top-level indentation (a top-level decl line that is not at
+// column 0) currently surfaces as a parse error because the
+// resulting `Indent` token isn't a valid top-level construct.
+// The diagnostic is generic but the behaviour is pinned so any
+// future improvement (e.g. a dedicated "unexpected top-level
+// indentation" diagnostic) lands as a deliberate change.
+parse_err!(
+    unexpected_top_level_indentation_is_rejected,
+    "program demo\n\
+     \x20\x20\x20\x20predicate Foo(x: Subject)\n"
+);
 
 #[test]
 fn parses_retract_statement() {
@@ -795,37 +779,27 @@ fn for_inside_mixed_transformation_body() {
     assert!(matches!(body[2], Stmt::Assert(_)));
 }
 
-#[test]
-fn empty_for_body_is_rejected() {
-    // A `for ... :` with no body content (immediately followed by
-    // outer-level statements) should fail to parse because the
-    // body production requires at least one statement.
-    let source = "program demo\n\
-                  transformation t(items):\n\
-                  \x20\x20\x20\x20for item in items:\n\
-                  \x20\x20\x20\x20admit Done()\n";
-    let errs = parse_program(source).expect_err("empty for body should fail");
-    assert!(!errs.is_empty());
-}
+// A `for ... :` with no body content (immediately followed by
+// outer-level statements) fails to parse because the body production
+// requires at least one statement.
+parse_err!(
+    empty_for_body_is_rejected,
+    "program demo\n\
+     transformation t(items):\n\
+     \x20\x20\x20\x20for item in items:\n\
+     \x20\x20\x20\x20admit Done()\n"
+);
 
-#[test]
-fn top_level_admit_is_rejected() {
-    // Statements outside a transformation body are not legal top-
-    // level declarations.
-    let source = "program demo\n\
-                  admit Foo()\n";
-    let errs = parse_program(source).expect_err("top-level admit should fail");
-    assert!(!errs.is_empty());
-}
+// Statements outside a transformation body are not legal top-level
+// declarations.
+parse_err!(top_level_admit_is_rejected, "program demo\nadmit Foo()\n");
 
-#[test]
-fn top_level_for_is_rejected() {
-    let source = "program demo\n\
-                  for x in xs:\n\
-                  \x20\x20\x20\x20admit Foo(x)\n";
-    let errs = parse_program(source).expect_err("top-level for should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    top_level_for_is_rejected,
+    "program demo\n\
+     for x in xs:\n\
+     \x20\x20\x20\x20admit Foo(x)\n"
+);
 
 // Admit/emit reject wildcards at parse time because the kernel
 // rejects them at runtime; the parser refuses to produce IR the
@@ -938,16 +912,14 @@ fn parses_derived_with_multiple_keys() {
     assert_eq!(d.keys, vec!["account", "period"]);
 }
 
-#[test]
-fn derived_with_no_value_clauses_is_rejected() {
-    let source = "program demo\n\
-                  predicate Foo(x: Subject)\n\
-                  \n\
-                  derived Empty(x):\n\
-                  \x20\x20\x20\x20over Foo(x)\n";
-    let errs = parse_program(source).expect_err("derived with no value should fail");
-    assert!(!errs.is_empty());
-}
+parse_err!(
+    derived_with_no_value_clauses_is_rejected,
+    "program demo\n\
+     predicate Foo(x: Subject)\n\
+     \n\
+     derived Empty(x):\n\
+     \x20\x20\x20\x20over Foo(x)\n"
+);
 
 #[test]
 fn duplicate_derived_name_carries_both_spans() {
@@ -1100,19 +1072,18 @@ transformation t(v):
     assert!(program.validate().is_ok());
 }
 
-#[test]
-fn negative_duration_literals_are_deliberately_unsupported_in_surface() {
-    // The constructor payload lexes as a single identifier, so a
-    // leading sign cannot appear. Negative spans arise from
-    // arithmetic (`a - b`), never from literals; if a model ever
-    // genuinely needs a negative literal, that example reopens this.
-    let source = "program neg
+// The `duration(...)` payload lexes as a single identifier, so a
+// leading sign cannot appear. Negative spans arise from arithmetic
+// (`a - b`), never from literals; if a model ever genuinely needs a
+// negative literal, that example reopens this.
+parse_err!(
+    negative_duration_literals_are_deliberately_unsupported_in_surface,
+    "program neg
 predicate P(x: Duration)
 transformation t(v):
     admit P(duration(-PT6H))
-";
-    parse_program(source).expect_err("a signed duration literal must not parse");
-}
+"
+);
 
 #[test]
 fn every_time_comparator_form_parses_and_round_trips() {
