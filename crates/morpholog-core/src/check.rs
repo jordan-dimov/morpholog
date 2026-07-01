@@ -1965,12 +1965,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn or_binding_in_all_branches_exports_to_later_use() {
-        // The KYC shape: `(B(x, m) or C(x, m)) and (n <= m)`. Both
-        // disjuncts bind `m`, so whichever witness the runtime carries
-        // forward, `m` is bound at the comparator. No UnboundVariable.
+    // The branch-binding-export family: an invariant
+    // `A(x, n) implies (B(x, m) <op> C(...)) and n <= m`. The
+    // intersection rule exports `m` to the comparator only when EVERY
+    // branch binds it; if one branch leaves it unbound the runtime may
+    // carry that witness forward, so `m` must stay unbound. Checked
+    // across both short-circuiting connectives and both binding shapes.
+    #[derive(Clone, Copy)]
+    enum BranchOp {
+        Or,
+        Xor,
+    }
+
+    fn branch_export_program(op: BranchOp, both_branches_bind_m: bool) -> Program {
         let mut p = empty_program();
+        let (c_decl, c_args) = if both_branches_bind_m {
+            (
+                pdecl(
+                    "C",
+                    &[
+                        ("x", PredicateArgKind::Subject),
+                        ("m", PredicateArgKind::Decimal),
+                    ],
+                ),
+                vec![var("x"), var("m")],
+            )
+        } else {
+            (
+                pdecl("C", &[("x", PredicateArgKind::Subject)]),
+                vec![var("x")],
+            )
+        };
         p.predicates = vec![
             pdecl(
                 "A",
@@ -1986,174 +2011,65 @@ mod tests {
                     ("m", PredicateArgKind::Decimal),
                 ],
             ),
-            pdecl(
-                "C",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("m", PredicateArgKind::Decimal),
-                ],
-            ),
+            c_decl,
         ];
+        let b = claim("B", vec![var("x"), var("m")]);
+        let c = claim("C", c_args);
+        let branches = match op {
+            BranchOp::Or => or(vec![b, c]),
+            BranchOp::Xor => xor(b, c),
+        };
         p.invariants = vec![invariant(
-            "ok",
+            "inv",
             implies(
                 claim("A", vec![var("x"), var("n")]),
-                and(vec![
-                    or(vec![
-                        claim("B", vec![var("x"), var("m")]),
-                        claim("C", vec![var("x"), var("m")]),
-                    ]),
-                    le(term(var("n")), term(var("m"))),
-                ]),
+                and(vec![branches, le(term(var("n")), term(var("m")))]),
             ),
         )];
-        let errs = check_program(&p);
-        assert!(
-            errs.is_empty(),
-            "`m` bound in both or-branches must export to the later use; got {errs:?}"
-        );
+        p
     }
 
     #[test]
-    fn or_binding_in_one_branch_only_does_not_export() {
-        // Same shape, but only the first disjunct binds `m`; the
-        // second (`C(x)`) does not. The runtime may carry the
-        // `C`-branch witness forward, leaving `m` unbound at the
-        // comparator - so the intersection rule must NOT export it.
-        let mut p = empty_program();
-        p.predicates = vec![
-            pdecl(
-                "A",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("n", PredicateArgKind::Decimal),
-                ],
+    fn branch_binding_exports_only_when_every_branch_binds() {
+        for (op, both_bind, expect_ok, label) in [
+            (
+                BranchOp::Or,
+                true,
+                true,
+                "or: both branches bind m -> exports",
             ),
-            pdecl(
-                "B",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("m", PredicateArgKind::Decimal),
-                ],
+            (
+                BranchOp::Or,
+                false,
+                false,
+                "or: one branch binds m -> no export",
             ),
-            pdecl("C", &[("x", PredicateArgKind::Subject)]),
-        ];
-        p.invariants = vec![invariant(
-            "bad",
-            implies(
-                claim("A", vec![var("x"), var("n")]),
-                and(vec![
-                    or(vec![
-                        claim("B", vec![var("x"), var("m")]),
-                        claim("C", vec![var("x")]),
-                    ]),
-                    le(term(var("n")), term(var("m"))),
-                ]),
+            (
+                BranchOp::Xor,
+                true,
+                true,
+                "xor: both operands bind m -> exports",
             ),
-        )];
-        let errs = check_program(&p);
-        assert!(
-            errs.iter().any(|e| matches!(
-                e,
-                ValidationError::UnboundVariable { variable: v, .. } if v == "m"
-            )),
-            "`m` bound in only one branch must not export; got {errs:?}"
-        );
-    }
-
-    #[test]
-    fn xor_binding_in_both_operands_exports_to_later_use() {
-        // `m` is bound by both xor operands, so it is guaranteed bound
-        // after the xor (same intersection rule as `or`) and the later
-        // `n <= m` comparator sees it.
-        let mut p = empty_program();
-        p.predicates = vec![
-            pdecl(
-                "A",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("n", PredicateArgKind::Decimal),
-                ],
+            (
+                BranchOp::Xor,
+                false,
+                false,
+                "xor: one operand binds m -> no export",
             ),
-            pdecl(
-                "B",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("m", PredicateArgKind::Decimal),
-                ],
-            ),
-            pdecl(
-                "C",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("m", PredicateArgKind::Decimal),
-                ],
-            ),
-        ];
-        p.invariants = vec![invariant(
-            "ok",
-            implies(
-                claim("A", vec![var("x"), var("n")]),
-                and(vec![
-                    xor(
-                        claim("B", vec![var("x"), var("m")]),
-                        claim("C", vec![var("x"), var("m")]),
-                    ),
-                    le(term(var("n")), term(var("m"))),
-                ]),
-            ),
-        )];
-        let errs = check_program(&p);
-        assert!(
-            errs.is_empty(),
-            "`m` bound in both xor operands must export to the later use; got {errs:?}"
-        );
-    }
-
-    #[test]
-    fn xor_binding_in_one_operand_only_does_not_export() {
-        // Only the first operand binds `m`; the second (`C(x)`) does not.
-        // The runtime may carry the `C`-operand witness forward, leaving
-        // `m` unbound at the comparator - so xor must NOT export it.
-        let mut p = empty_program();
-        p.predicates = vec![
-            pdecl(
-                "A",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("n", PredicateArgKind::Decimal),
-                ],
-            ),
-            pdecl(
-                "B",
-                &[
-                    ("x", PredicateArgKind::Subject),
-                    ("m", PredicateArgKind::Decimal),
-                ],
-            ),
-            pdecl("C", &[("x", PredicateArgKind::Subject)]),
-        ];
-        p.invariants = vec![invariant(
-            "bad",
-            implies(
-                claim("A", vec![var("x"), var("n")]),
-                and(vec![
-                    xor(
-                        claim("B", vec![var("x"), var("m")]),
-                        claim("C", vec![var("x")]),
-                    ),
-                    le(term(var("n")), term(var("m"))),
-                ]),
-            ),
-        )];
-        let errs = check_program(&p);
-        assert!(
-            errs.iter().any(|e| matches!(
-                e,
-                ValidationError::UnboundVariable { variable: v, .. } if v == "m"
-            )),
-            "`m` bound in only one xor operand must not export; got {errs:?}"
-        );
+        ] {
+            let errs = check_program(&branch_export_program(op, both_bind));
+            if expect_ok {
+                assert!(errs.is_empty(), "{label}: expected no errors; got {errs:?}");
+            } else {
+                assert!(
+                    errs.iter().any(|e| matches!(
+                        e,
+                        ValidationError::UnboundVariable { variable: v, .. } if v == "m"
+                    )),
+                    "{label}: expected UnboundVariable(m); got {errs:?}"
+                );
+            }
+        }
     }
 
     #[test]
