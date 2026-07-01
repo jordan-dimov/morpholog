@@ -1273,76 +1273,68 @@ async fn run_args_named_commits_with_the_friendly_codec() {
     assert_eq!(receipt["status"], "committed");
 }
 
+/// Propose `post_simple_entry` on the temp ledger programme with the
+/// named codec and require a hard error whose stderr carries every
+/// needle. The shared scaffold of the `--args-named` error family.
+async fn propose_named_expect_stderr(args_named: &str, needles: &[&str]) {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let (status, _stdout, stderr) = run_cli(&[
+        "propose",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    assert!(!status.success(), "expected a hard error; stderr: {stderr}");
+    for needle in needles {
+        assert!(
+            stderr.contains(needle),
+            "stderr should contain `{needle}`; got: {stderr}"
+        );
+    }
+}
+
 /// Missing a declared parameter in the `--args-named` object is a
 /// hard error before any database work. The error names the missing
 /// parameter and points at `morpholog schema` for the accepted
 /// shape.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_missing_required_errors_with_schema_hint() {
-    reset_db().await;
-    let path = write_temp_ledger_morph();
-    let args_named = r#"{
-        "entry_id":"018f0000-0000-7000-8000-000000000011",
-        "posting_date":"018f0000-0000-7000-8000-000000000012",
-        "period":"018f0000-0000-7000-8000-000000000013",
-        "debit_account":"018f0000-0000-7000-8000-000000000014",
-        "credit_account":"018f0000-0000-7000-8000-000000000015"
-    }"#;
-    let (status, _stdout, stderr) = run_cli(&[
-        "propose",
-        path.to_str().unwrap(),
-        "post_simple_entry",
-        "--actor",
-        "alex",
-        "--args-named",
-        args_named,
-    ]);
-    assert!(!status.success(), "missing required parameter must error");
-    assert!(
-        stderr.contains("missing required parameter `amount`"),
-        "stderr should name the missing parameter; got: {stderr}"
-    );
-    assert!(
-        stderr.contains("morpholog schema"),
-        "error should point at the schema subcommand; got: {stderr}"
-    );
+    propose_named_expect_stderr(
+        r#"{
+            "entry_id":"018f0000-0000-7000-8000-000000000011",
+            "posting_date":"018f0000-0000-7000-8000-000000000012",
+            "period":"018f0000-0000-7000-8000-000000000013",
+            "debit_account":"018f0000-0000-7000-8000-000000000014",
+            "credit_account":"018f0000-0000-7000-8000-000000000015"
+        }"#,
+        &["missing required parameter `amount`", "morpholog schema"],
+    )
+    .await;
 }
 
 /// An unknown key in `--args-named` is a hard error. The error lists
-/// the parameters that ARE accepted, so a typo surfaces clearly
-/// rather than as "missing required" (which would point at the
-/// wrong target).
+/// the parameters that ARE accepted (here `amount` and `entry_id`),
+/// so a typo surfaces clearly rather than as "missing required"
+/// (which would point at the wrong target).
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_unknown_key_errors_with_expected_names() {
-    reset_db().await;
-    let path = write_temp_ledger_morph();
-    let args_named = r#"{
-        "entry_id":"018f0000-0000-7000-8000-000000000021",
-        "posting_date":"018f0000-0000-7000-8000-000000000022",
-        "period":"018f0000-0000-7000-8000-000000000023",
-        "debit_account":"018f0000-0000-7000-8000-000000000024",
-        "credit_account":"018f0000-0000-7000-8000-000000000025",
-        "amount":"100",
-        "amaount":"100"
-    }"#;
-    let (status, _stdout, stderr) = run_cli(&[
-        "propose",
-        path.to_str().unwrap(),
-        "post_simple_entry",
-        "--actor",
-        "alex",
-        "--args-named",
-        args_named,
-    ]);
-    assert!(!status.success(), "unknown key must error");
-    assert!(
-        stderr.contains("unknown parameter(s) `amaount`"),
-        "stderr should name the unknown key; got: {stderr}"
-    );
-    assert!(
-        stderr.contains("amount") && stderr.contains("entry_id"),
-        "stderr should list the expected parameter names; got: {stderr}"
-    );
+    propose_named_expect_stderr(
+        r#"{
+            "entry_id":"018f0000-0000-7000-8000-000000000021",
+            "posting_date":"018f0000-0000-7000-8000-000000000022",
+            "period":"018f0000-0000-7000-8000-000000000023",
+            "debit_account":"018f0000-0000-7000-8000-000000000024",
+            "credit_account":"018f0000-0000-7000-8000-000000000025",
+            "amount":"100",
+            "amaount":"100"
+        }"#,
+        &["unknown parameter(s) `amaount`", "amount", "entry_id"],
+    )
+    .await;
 }
 
 /// `explain --args-named --json` parses the embedder-facing codec
@@ -1437,8 +1429,6 @@ async fn run_args_named_accepts_symbolic_subject_values() {
 /// alignment.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_decimal_outside_schema_pattern_errors() {
-    reset_db().await;
-    let path = write_temp_ledger_morph();
     for bad in ["+1", "00.12", "1.", ".5"] {
         let args_named = format!(
             r#"{{
@@ -1450,23 +1440,7 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
                 "amount":"{bad}"
             }}"#
         );
-        let (status, _stdout, stderr) = run_cli(&[
-            "propose",
-            path.to_str().unwrap(),
-            "post_simple_entry",
-            "--actor",
-            "alex",
-            "--args-named",
-            &args_named,
-        ]);
-        assert!(
-            !status.success(),
-            "decimal `{bad}` is outside the schema pattern and must be rejected"
-        );
-        assert!(
-            stderr.contains("does not match the schema pattern"),
-            "stderr should name the schema-pattern mismatch for `{bad}`; got: {stderr}"
-        );
+        propose_named_expect_stderr(&args_named, &["does not match the schema pattern"]).await;
     }
 }
 
@@ -1475,30 +1449,18 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
 /// should be.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_wrong_type_errors_with_kind_label() {
-    reset_db().await;
-    let path = write_temp_ledger_morph();
-    let args_named = r#"{
-        "entry_id":"018f0000-0000-7000-8000-000000000051",
-        "posting_date":"018f0000-0000-7000-8000-000000000052",
-        "period":"018f0000-0000-7000-8000-000000000053",
-        "debit_account":"018f0000-0000-7000-8000-000000000054",
-        "credit_account":"018f0000-0000-7000-8000-000000000055",
-        "amount": true
-    }"#;
-    let (status, _stdout, stderr) = run_cli(&[
-        "propose",
-        path.to_str().unwrap(),
-        "post_simple_entry",
-        "--actor",
-        "alex",
-        "--args-named",
-        args_named,
-    ]);
-    assert!(!status.success(), "wrong JSON type must error");
-    assert!(
-        stderr.contains("`amount` is Decimal but received boolean"),
-        "stderr should name the parameter, the expected kind, and the actual JSON type; got: {stderr}"
-    );
+    propose_named_expect_stderr(
+        r#"{
+            "entry_id":"018f0000-0000-7000-8000-000000000051",
+            "posting_date":"018f0000-0000-7000-8000-000000000052",
+            "period":"018f0000-0000-7000-8000-000000000053",
+            "debit_account":"018f0000-0000-7000-8000-000000000054",
+            "credit_account":"018f0000-0000-7000-8000-000000000055",
+            "amount": true
+        }"#,
+        &["`amount` is Decimal but received boolean"],
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1907,12 +1869,10 @@ fn seed_two_pending_outbox_rows() {
     let _ = post_balanced_entry("filter_seed_b", 200);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn inspect_outbox_defaults_to_pending() {
-    reset_db().await;
+/// One pending row and one delivered row, so the status filters can
+/// tell pending / delivered / all apart.
+fn seed_one_pending_and_one_delivered_row() {
     seed_two_pending_outbox_rows();
-    // Drive one row through to `delivered` so we can confirm it
-    // does NOT appear in the default (pending) listing.
     let claim_out: Value = serde_json::from_str(
         &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
     )
@@ -1929,73 +1889,31 @@ async fn inspect_outbox_defaults_to_pending() {
         "delivered",
     ]);
     assert!(s.success());
-
-    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox"]);
-    assert!(status.success());
-    let rows: Value = serde_json::from_str(&stdout).unwrap();
-    let arr = rows.as_array().expect("inspect outbox emits a JSON array");
-    assert_eq!(
-        arr.len(),
-        1,
-        "default should show the remaining pending row only"
-    );
-    assert_eq!(arr[0]["status"], "pending");
 }
 
+/// No `--status` defaults to pending; `all` and `delivered` expose
+/// the rest. One pending + one delivered row, one filter per case.
 #[tokio::test(flavor = "current_thread")]
-async fn inspect_outbox_status_all_shows_every_row() {
+async fn inspect_outbox_status_filters_partition_the_rows() {
     reset_db().await;
-    seed_two_pending_outbox_rows();
-    // Drive one row to `delivered`.
-    let claim_out: Value = serde_json::from_str(
-        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
-    )
-    .unwrap();
-    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
-    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
-    run_cli(&[
-        "outbox",
-        "complete",
-        &intent_id,
-        "--worker-id",
-        &worker_id,
-        "--outcome",
-        "delivered",
-    ]);
-
-    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "all"]);
-    assert!(status.success());
-    let rows: Value = serde_json::from_str(&stdout).unwrap();
-    let arr = rows.as_array().unwrap();
-    assert_eq!(arr.len(), 2, "all should show both rows; got {arr:?}");
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn inspect_outbox_status_delivered_shows_only_delivered_rows() {
-    reset_db().await;
-    seed_two_pending_outbox_rows();
-    let claim_out: Value = serde_json::from_str(
-        &run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]).1,
-    )
-    .unwrap();
-    let intent_id = claim_out["row"]["intent_id"].as_str().unwrap().to_string();
-    let worker_id = claim_out["row"]["locked_by"].as_str().unwrap().to_string();
-    run_cli(&[
-        "outbox",
-        "complete",
-        &intent_id,
-        "--worker-id",
-        &worker_id,
-        "--outcome",
-        "delivered",
-    ]);
-
-    let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "delivered"]);
-    assert!(status.success());
-    let rows: Value = serde_json::from_str(&stdout).unwrap();
-    let arr = rows.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["status"], "delivered");
+    seed_one_pending_and_one_delivered_row();
+    let cases: [(&[&str], usize, Option<&str>); 3] = [
+        (&[], 1, Some("pending")),
+        (&["--status", "all"], 2, None),
+        (&["--status", "delivered"], 1, Some("delivered")),
+    ];
+    for (flags, expected_len, expected_status) in cases {
+        let mut argv = vec!["inspect", "outbox"];
+        argv.extend_from_slice(flags);
+        let (status, stdout, _stderr) = run_cli(&argv);
+        assert!(status.success());
+        let rows: Value = serde_json::from_str(&stdout).unwrap();
+        let arr = rows.as_array().expect("inspect outbox emits a JSON array");
+        assert_eq!(arr.len(), expected_len, "flags {flags:?}; got {arr:?}");
+        if let Some(expected) = expected_status {
+            assert_eq!(arr[0]["status"], expected, "flags {flags:?}");
+        }
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
