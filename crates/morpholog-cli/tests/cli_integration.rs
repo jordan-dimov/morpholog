@@ -1273,12 +1273,11 @@ async fn run_args_named_commits_with_the_friendly_codec() {
     assert_eq!(receipt["status"], "committed");
 }
 
-/// Propose `post_simple_entry` on the temp ledger programme with the
-/// named codec and require a hard error whose stderr carries every
-/// needle. The shared scaffold of the `--args-named` error family.
-async fn propose_named_expect_stderr(args_named: &str, needles: &[&str]) {
-    reset_db().await;
-    let path = write_temp_ledger_morph();
+/// Propose `post_simple_entry` from an already-written programme with
+/// the named codec and require a hard error whose stderr carries
+/// every needle. The shared scaffold of the `--args-named` error
+/// family; takes the path so a multi-case test resets and writes once.
+fn propose_named_expect_stderr_at(path: &std::path::Path, args_named: &str, needles: &[&str]) {
     let (status, _stdout, stderr) = run_cli(&[
         "propose",
         path.to_str().unwrap(),
@@ -1295,6 +1294,14 @@ async fn propose_named_expect_stderr(args_named: &str, needles: &[&str]) {
             "stderr should contain `{needle}`; got: {stderr}"
         );
     }
+}
+
+/// One-off convenience over [`propose_named_expect_stderr_at`]:
+/// reset the database and write the temp ledger for a single case.
+async fn propose_named_expect_stderr(args_named: &str, needles: &[&str]) {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    propose_named_expect_stderr_at(&path, args_named, needles);
 }
 
 /// Missing a declared parameter in the `--args-named` object is a
@@ -1429,6 +1436,8 @@ async fn run_args_named_accepts_symbolic_subject_values() {
 /// alignment.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_decimal_outside_schema_pattern_errors() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
     for bad in ["+1", "00.12", "1.", ".5"] {
         let args_named = format!(
             r#"{{
@@ -1440,7 +1449,7 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
                 "amount":"{bad}"
             }}"#
         );
-        propose_named_expect_stderr(&args_named, &["does not match the schema pattern"]).await;
+        propose_named_expect_stderr_at(&path, &args_named, &["does not match the schema pattern"]);
     }
 }
 
@@ -1892,27 +1901,30 @@ fn seed_one_pending_and_one_delivered_row() {
 }
 
 /// No `--status` defaults to pending; `all` and `delivered` expose
-/// the rest. One pending + one delivered row, one filter per case.
+/// the rest. One pending + one delivered row; each filter's view is
+/// pinned as the exact (sorted) status list it must return.
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_outbox_status_filters_partition_the_rows() {
     reset_db().await;
     seed_one_pending_and_one_delivered_row();
-    let cases: [(&[&str], usize, Option<&str>); 3] = [
-        (&[], 1, Some("pending")),
-        (&["--status", "all"], 2, None),
-        (&["--status", "delivered"], 1, Some("delivered")),
+    let cases: [(&[&str], &[&str]); 3] = [
+        (&[], &["pending"]),
+        (&["--status", "all"], &["delivered", "pending"]),
+        (&["--status", "delivered"], &["delivered"]),
     ];
-    for (flags, expected_len, expected_status) in cases {
+    for (flags, expected_statuses) in cases {
         let mut argv = vec!["inspect", "outbox"];
         argv.extend_from_slice(flags);
         let (status, stdout, _stderr) = run_cli(&argv);
         assert!(status.success());
         let rows: Value = serde_json::from_str(&stdout).unwrap();
         let arr = rows.as_array().expect("inspect outbox emits a JSON array");
-        assert_eq!(arr.len(), expected_len, "flags {flags:?}; got {arr:?}");
-        if let Some(expected) = expected_status {
-            assert_eq!(arr[0]["status"], expected, "flags {flags:?}");
-        }
+        let mut statuses: Vec<&str> = arr
+            .iter()
+            .map(|row| row["status"].as_str().expect("status is a string"))
+            .collect();
+        statuses.sort_unstable();
+        assert_eq!(statuses, expected_statuses, "flags {flags:?}; got {arr:?}");
     }
 }
 
