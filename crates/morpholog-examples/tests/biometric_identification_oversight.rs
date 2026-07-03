@@ -13,10 +13,10 @@
 
 mod common;
 
-use common::{must_accept_as, propose_with_test_actor, subj, ts};
+use common::{must_accept_as, must_reject, subj, ts};
 use morpholog_core::{
-    Definition, EvalValue, Invariant, Outcome, Rejection, State, Subject, Transformation,
-    Transition, Verdict, enumerate_derived, propose,
+    Definition, EvalValue, Invariant, Rejection, State, Subject, Transformation, Transition,
+    Verdict, enumerate_derived,
 };
 use morpholog_examples::biometric_identification_oversight as bio;
 
@@ -30,17 +30,7 @@ fn definitions() -> Vec<Definition> {
 
 /// Propose as a named actor and require a lawful business rejection.
 fn must_reject_as(t: &Transformation, args: Vec<EvalValue>, actor: &str, pre: &State) {
-    let transition = Transition {
-        transformation_name: t.name.clone(),
-        args,
-        actor: Subject::from(actor),
-    };
-    let outcome = propose(t, &transition, pre, &invariants(), &definitions())
-        .expect("proposal should evaluate cleanly");
-    assert!(
-        matches!(outcome, Outcome::Rejected { .. }),
-        "expected rejection, got {outcome:?}"
-    );
+    common::must_reject_as(t, args, actor, pre, &invariants(), &definitions());
 }
 
 /// Fixture: a deployed system with model version v1 in service for
@@ -498,7 +488,7 @@ fn use_cannot_be_closed_before_a_match_it_already_produced() {
 #[test]
 fn decision_with_no_verifications_is_a_lawful_rejection() {
     let state = match_awaiting_verification();
-    let outcome = propose_with_test_actor(
+    must_reject(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
@@ -509,7 +499,5 @@ fn decision_with_no_verifications_is_a_lawful_rejection() {
         &state,
         &invariants(),
         &definitions(),
-    )
-    .expect("witness search over empty extension must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }

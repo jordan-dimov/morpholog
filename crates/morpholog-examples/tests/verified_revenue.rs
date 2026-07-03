@@ -121,15 +121,13 @@ fn cannot_correct_already_superseded_verification() {
         &invariants(),
         &definitions(),
     );
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(85), subj("ver_003"), subj("ver_001")],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -138,15 +136,13 @@ fn second_admission_against_existing_current_is_rejected() {
     // (asset, period) has at most one current verification at any
     // moment. To replace it, use correct_independent_verification.
     let pre = admit_iv(State::default(), 91, "ver_001");
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(95), subj("ver_002")],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================
@@ -286,7 +282,7 @@ fn investor_standing_does_not_admit_bank_decision() {
         "investor_relations",
         "grant_inv_001",
     );
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -298,9 +294,7 @@ fn investor_standing_does_not_admit_bank_decision() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -369,7 +363,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
     ));
     // A new decision against the same verification is rejected.
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -381,9 +375,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         &after_revoke,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -409,7 +401,7 @@ fn cannot_regrant_after_revocation() {
         &invariants(),
         &definitions(),
     );
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -420,9 +412,7 @@ fn cannot_regrant_after_revocation() {
         &after_revoke,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -432,7 +422,7 @@ fn cannot_grant_standing_on_nonexistent_verification() {
     // ids are rejected at admission time. This is what attaches the
     // word "standing" to a real admitted figure rather than just a
     // shape in the database.
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_phantom"),
@@ -443,9 +433,7 @@ fn cannot_grant_standing_on_nonexistent_verification() {
         &State::default(),
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -463,7 +451,7 @@ fn cannot_grant_standing_on_superseded_verification() {
     );
 
     // Attempt to grant standing on the now-superseded ver_001.
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -474,9 +462,7 @@ fn cannot_grant_standing_on_superseded_verification() {
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 
     // But standing CAN be granted on ver_002 (the current figure).
     let post = must_accept(
@@ -592,7 +578,7 @@ fn correction_retracts_standing_on_prior_verification() {
 
     // A bank decision against ver_002 is rejected until the bank
     // re-grants standing on the corrected figure.
-    let outcome = common::propose_with_test_actor(
+    common::must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -604,9 +590,7 @@ fn correction_retracts_standing_on_prior_verification() {
         &post,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 
     // After re-granting, the decision admits.
     let after_regrant = must_accept(

@@ -288,18 +288,13 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     )];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
-    let outcome = common::propose_with_test_actor(
+    let reason = common::must_reject(
         &t,
         netting_args(),
         &pre,
         &settlement_netting::all_invariants(),
         &settlement_netting::definitions(),
-    )
-    .expect("propose should not error");
-
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("no_double_netting"),
         "got: {reason}"

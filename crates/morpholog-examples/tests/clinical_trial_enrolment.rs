@@ -25,7 +25,9 @@
 
 mod common;
 
-use common::{claim_instance, date, has_claim, must_accept, must_accept_as, propose_as, subj};
+use common::{
+    claim_instance, date, has_claim, must_accept, must_accept_as, must_reject_as, propose_as, subj,
+};
 use morpholog_core::{Definition, EvalValue, Invariant, Outcome, State, eval_invariant};
 use morpholog_examples::clinical_trial_enrolment::{
     self as cte, ROLE_RANDOMISE_PARTICIPANT, all_invariants,
@@ -307,16 +309,14 @@ fn expired_consent_form_rejects() {
     // Close the consent form window the day before randomisation.
     s.consent_to = "2026-03-11";
     let pre = happy_path_state(&s);
-    let outcome = propose_as(
+    must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -387,16 +387,14 @@ fn expired_eligibility_assessment_rejects() {
     // Assessment expired the day before randomisation.
     s.assessment_expires_on = "2026-03-11";
     let pre = happy_path_state(&s);
-    let outcome = propose_as(
+    must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -405,16 +403,14 @@ fn expired_delegation_rejects() {
     // Delegation ended before randomisation.
     s.delegation_to = "2026-03-10";
     let pre = happy_path_state(&s);
-    let outcome = propose_as(
+    must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -423,16 +419,14 @@ fn expired_protocol_window_rejects() {
     // Protocol window closed before randomisation.
     s.proto_v1_to = "2026-03-11";
     let pre = happy_path_state(&s);
-    let outcome = propose_as(
+    must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -449,16 +443,14 @@ fn open_important_protocol_deviation_rejects() {
         &invariants(),
         &definitions(),
     );
-    let outcome = propose_as(
+    must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================
@@ -474,16 +466,14 @@ fn failed_eligibility_assessment_rejects() {
     let mut s = default_setup();
     s.assessment_actual_result = "FAIL";
     let pre = happy_path_state(&s);
-    let outcome = propose_as(
+    must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose must not error");
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 // ============================================================

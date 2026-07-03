@@ -27,8 +27,8 @@
 mod common;
 
 use common::{
-    claim_instance, dec, dec_str, has_claim, must_accept, must_accept_as, propose_as,
-    propose_with_test_actor, subj,
+    claim_instance, dec, dec_str, has_claim, must_accept, must_accept_as, must_reject,
+    must_reject_as, propose_as, subj,
 };
 use morpholog_core::{
     ClaimInstance, Definition, Invariant, Outcome, State, enumerate_derived, eval_invariant,
@@ -103,17 +103,13 @@ fn issue_policy_admits_initial_headroom_equal_to_aggregate_limit() {
 #[test]
 fn duplicate_policy_id_violates_uniqueness_invariant() {
     let pre = issue(State::default(), "policy_001", 100_000);
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &insurance_claim_settlement::issue_policy(),
         vec![subj("policy_001"), dec(50_000)],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("policy_unique_by_policy_id"),
         "expected policy_unique_by_policy_id invariant violation, got: {reason}"
@@ -123,17 +119,13 @@ fn duplicate_policy_id_violates_uniqueness_invariant() {
 #[test]
 fn report_claim_without_policy_is_rejected_at_require() {
     let pre = State::default();
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &insurance_claim_settlement::report_claim(),
         vec![subj("claim_001"), subj("policy_001"), dec(20_000)],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("require"),
         "got reason: {reason}"
@@ -155,17 +147,13 @@ fn report_claim_with_policy_admits_claim_reported() {
 fn duplicate_claim_id_violates_uniqueness_invariant() {
     let pre = issue(State::default(), "policy_001", 100_000);
     let pre = report(pre, "claim_001", "policy_001", 20_000);
-    let outcome = propose_with_test_actor(
+    let reason = must_reject(
         &insurance_claim_settlement::report_claim(),
         vec![subj("claim_001"), subj("policy_001"), dec(30_000)],
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason
             .to_string()
@@ -295,18 +283,14 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
 #[test]
 fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
     let pre = happy_pre(); // alex has 50k limit
-    let outcome = propose_as(
+    let reason = must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
         "alex",
         &pre,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason.to_string().contains("require"),
         "got reason: {reason}"
@@ -535,18 +519,14 @@ fn settlement_id_must_be_unique_across_payments() {
         &definitions(),
     );
     // Second settlement reusing settlement_001 against a different claim.
-    let outcome = propose_as(
+    let reason = must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_001"), dec(10_000)],
         "alex",
         &s,
         &invariants(),
         &definitions(),
-    )
-    .expect("propose should not error");
-    let Outcome::Rejected { reason } = outcome else {
-        panic!("expected Rejected, got {outcome:?}");
-    };
+    );
     assert!(
         reason
             .to_string()
@@ -995,16 +975,14 @@ fn settlement_capped_at_per_claim_limit() {
     s = set_terms(s, "p1", 1_000, 50_000);
     s = report(s, "c1", "p1", 70_000);
 
-    let over = propose_as(
+    must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s_over"), dec(50_001)],
         "alex",
         &s,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(over, Outcome::Rejected { .. }));
+    );
 
     let ok = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
@@ -1030,16 +1008,14 @@ fn loss_below_deductible_yields_no_payout() {
     s = set_terms(s, "p1", 1_000, 50_000);
     s = report(s, "c1", "p1", 500);
 
-    let outcome = propose_as(
+    must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s1"), dec(1)],
         "alex",
         &s,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Rejected { .. }));
+    );
 }
 
 #[test]
@@ -1051,16 +1027,14 @@ fn settlement_pays_loss_net_of_deductible() {
     s = set_terms(s, "p1", 1_000, 50_000);
     s = report(s, "c1", "p1", 30_000);
 
-    let over = propose_as(
+    must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s_over"), dec(29_001)],
         "alex",
         &s,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(over, Outcome::Rejected { .. }));
+    );
 
     let ok = must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
@@ -1084,23 +1058,19 @@ fn nonsensical_coverage_terms_are_rejected() {
     // terms that would make the eligible-payout rule meaningless.
     let s = issue(State::default(), "p1", 1_000_000);
 
-    let negative_deductible = propose_with_test_actor(
+    must_reject(
         &insurance_claim_settlement::set_coverage_terms(),
         vec![subj("p1"), dec(-1), dec(50_000)],
         &s,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(negative_deductible, Outcome::Rejected { .. }));
+    );
 
-    let zero_limit = propose_with_test_actor(
+    must_reject(
         &insurance_claim_settlement::set_coverage_terms(),
         vec![subj("p1"), dec(1_000), dec(0)],
         &s,
         &invariants(),
         &definitions(),
-    )
-    .unwrap();
-    assert!(matches!(zero_limit, Outcome::Rejected { .. }));
+    );
 }

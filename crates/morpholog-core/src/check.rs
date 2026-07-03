@@ -2135,55 +2135,48 @@ mod tests {
     // Value-expression inference + comparators / arithmetic
     // ============================================================
 
+    /// One mixed operand pair (a date and a decimal), each comparator:
+    /// `<=` is the decimal comparator and flags the date; `on_or_before`
+    /// is the date comparator and flags the decimal. The canonical
+    /// "wrong comparator" mistake the kernel surfaces as TypeMismatch
+    /// at runtime.
     #[test]
-    fn le_with_date_literal_left_operand_flags_operand_mismatch() {
-        // `<=` is the decimal comparator. A date literal on either
-        // side is the canonical "wrong comparator" mistake the
-        // kernel surfaces as TypeMismatch at runtime.
-        let mut p = empty_program();
-        p.invariants = vec![invariant(
-            "bad_le",
-            le(term(date("2026-01-01")), term(dec("100"))),
-        )];
-        let errs = check_program(&p);
-        assert_eq!(errs.len(), 1, "expected one operand error; got {errs:?}");
-        match &errs[0] {
-            ValidationError::OperandKindMismatch {
-                operator,
-                expected,
-                actual,
-                ..
-            } => {
-                assert_eq!(*operator, "<=");
-                assert_eq!(*expected, PredicateArgKind::Decimal);
-                assert_eq!(*actual, PredicateArgKind::Date);
+    fn comparator_operand_mismatches_flag_operator_and_kinds() {
+        type Comparator = fn(ValueExpr, ValueExpr) -> Prop;
+        let cases: [(Comparator, &str, PredicateArgKind, PredicateArgKind); 2] = [
+            (le, "<=", PredicateArgKind::Decimal, PredicateArgKind::Date),
+            (
+                date_le,
+                "on_or_before",
+                PredicateArgKind::Date,
+                PredicateArgKind::Decimal,
+            ),
+        ];
+        for (comparator, want_op, want_expected, want_actual) in cases {
+            let mut p = empty_program();
+            p.invariants = vec![invariant(
+                "bad_compare",
+                comparator(term(date("2026-01-01")), term(dec("100"))),
+            )];
+            let errs = check_program(&p);
+            assert_eq!(
+                errs.len(),
+                1,
+                "{want_op}: expected one operand error; got {errs:?}"
+            );
+            match &errs[0] {
+                ValidationError::OperandKindMismatch {
+                    operator,
+                    expected,
+                    actual,
+                    ..
+                } => {
+                    assert_eq!(*operator, want_op);
+                    assert_eq!(*expected, want_expected);
+                    assert_eq!(*actual, want_actual);
+                }
+                other => panic!("expected OperandKindMismatch, got {other:?}"),
             }
-            other => panic!("expected OperandKindMismatch, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn date_le_with_decimal_literal_flags_operand_mismatch() {
-        // `on_or_before` is the date comparator; decimal here is wrong.
-        let mut p = empty_program();
-        p.invariants = vec![invariant(
-            "bad_date_le",
-            date_le(term(date("2026-01-01")), term(dec("100"))),
-        )];
-        let errs = check_program(&p);
-        assert_eq!(errs.len(), 1);
-        match &errs[0] {
-            ValidationError::OperandKindMismatch {
-                operator,
-                expected,
-                actual,
-                ..
-            } => {
-                assert_eq!(*operator, "on_or_before");
-                assert_eq!(*expected, PredicateArgKind::Date);
-                assert_eq!(*actual, PredicateArgKind::Decimal);
-            }
-            other => panic!("expected OperandKindMismatch, got {other:?}"),
         }
     }
 
