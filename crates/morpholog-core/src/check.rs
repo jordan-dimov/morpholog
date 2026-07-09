@@ -1384,9 +1384,10 @@ fn prop_mentions_pre(prop: &Prop) -> bool {
 /// for it is a guaranteed runtime error, and a ground argument is
 /// dead weight.
 fn occurs_in_prop(name: &Var, prop: &Prop) -> bool {
-    fold::any_term_in_prop(prop, &|t, binders| {
-        matches!(t, Term::Var(v) if v == name && !binders.contains(&v))
-    })
+    fold::any_term_in_prop(
+        prop,
+        &|t, binders| matches!(t, Term::Var(v) if v == name && !binders.contains(&v)),
+    )
 }
 
 /// The arithmetic rule matrix over known operand kinds. `None` means

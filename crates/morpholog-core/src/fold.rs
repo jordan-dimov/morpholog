@@ -35,9 +35,9 @@ pub(crate) fn any_prop_node(prop: &Prop, f: &impl Fn(&Prop) -> bool) -> bool {
 pub(crate) fn any_prop_node_in_value(expr: &ValueExpr, f: &impl Fn(&Prop) -> bool) -> bool {
     match expr {
         ValueExpr::Term(_) => false,
-        ValueExpr::ValueOf { default, .. } => {
-            default.as_ref().is_some_and(|d| any_prop_node_in_value(d, f))
-        }
+        ValueExpr::ValueOf { default, .. } => default
+            .as_ref()
+            .is_some_and(|d| any_prop_node_in_value(d, f)),
         ValueExpr::Sum { body, .. } => any_prop_node(body, f),
         ValueExpr::Arith { left, right, .. } => {
             any_prop_node_in_value(left, f) || any_prop_node_in_value(right, f)
@@ -71,9 +71,7 @@ fn any_term_prop_scoped<'p>(
     scope: &mut Vec<&'p Var>,
 ) -> bool {
     match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => {
-            args.iter().any(|t| f(t, scope))
-        }
+        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.iter().any(|t| f(t, scope)),
         Prop::In(a, b) => f(a, scope) || f(b, scope),
         Prop::And(items) | Prop::Or(items) => {
             items.iter().any(|p| any_term_prop_scoped(p, f, scope))
@@ -120,9 +118,7 @@ fn any_term_value_scoped<'p>(
                     .as_ref()
                     .is_some_and(|d| any_term_value_scoped(d, f, scope))
         }
-        ValueExpr::Sum { value, body } => {
-            f(value, scope) || any_term_prop_scoped(body, f, scope)
-        }
+        ValueExpr::Sum { value, body } => f(value, scope) || any_term_prop_scoped(body, f, scope),
         ValueExpr::Arith { left, right, .. } => {
             any_term_value_scoped(left, f, scope) || any_term_value_scoped(right, f, scope)
         }

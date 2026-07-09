@@ -130,20 +130,21 @@ fn finish<T>(
 /// decimal. An ill-typed contextual keyword after a bare number (e.g.
 /// a time comparator) reads as a unit and fails downstream -
 /// acceptable, since that expression was already ill-typed.
-fn decimal_or_quantity_term<'a, I>()
--> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+fn decimal_or_quantity_term<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
     let ident = select! { Token::Ident(s) => s };
     let decimal_lit = select! { Token::DecimalLit(s) => s };
-    decimal_lit.then(ident.or_not()).map(|(s, unit)| match unit {
-        Some(u) => Term::Literal(Value::Quantity {
-            amount: s,
-            unit: Unit::from(u),
-        }),
-        None => Term::Literal(Value::Decimal(s)),
-    })
+    decimal_lit
+        .then(ident.or_not())
+        .map(|(s, unit)| match unit {
+            Some(u) => Term::Literal(Value::Quantity {
+                amount: s,
+                unit: Unit::from(u),
+            }),
+            None => Term::Literal(Value::Decimal(s)),
+        })
 }
 
 /// A `Term` is the limited atom that claim-call args and `In` operands
