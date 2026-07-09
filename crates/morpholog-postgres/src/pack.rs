@@ -7,11 +7,13 @@
 //! no database access - and, against an externally-held anchor, catches a
 //! coordinated rewrite.
 //!
-//! **Honest v1 boundary.** A pack is a *complete prefix* of the log. It
-//! proves that exported prefix is genuine and matches an anchor that left
-//! the database. It is not yet logarithmic inclusion/consistency proofs,
-//! selective disclosure, or subject-scoped - those need the Certificate
-//! Transparency proof APIs / a subject-indexed commitment (deferred).
+//! Three pack kinds share the module: the v1 *complete prefix* (every
+//! covered row, root recomputed from all of them), the v2 *window*
+//! (consistency plus per-row inclusion between two checkpoints), and the
+//! v3 *selective* pack (a chosen subset, each row proven included,
+//! nothing else revealed). None can prove subject completeness - that a
+//! pack holds *all* of one subject's history needs a subject-indexed
+//! commitment (deferred).
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
