@@ -11,6 +11,7 @@ use morpholog_postgres::{InitOutcome, initialise_schema};
 
 use crate::InitArgs;
 use crate::commands::{connect, print_json};
+use morpholog_cli::envelopes::InitReport;
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
@@ -18,14 +19,14 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         .await
         .context("initialise_schema failed")?
     {
-        InitOutcome::Initialised => print_json(&serde_json::json!({
-            "status": "initialised",
-            "schema": "morpholog",
-        })),
-        InitOutcome::AlreadyInitialised if args.skip_if_exists => print_json(&serde_json::json!({
-            "status": "already-initialised",
-            "schema": "morpholog",
-        })),
+        InitOutcome::Initialised => print_json(&InitReport {
+            schema: "morpholog",
+            status: "initialised",
+        }),
+        InitOutcome::AlreadyInitialised if args.skip_if_exists => print_json(&InitReport {
+            schema: "morpholog",
+            status: "already-initialised",
+        }),
         InitOutcome::AlreadyInitialised => {
             eprintln!(
                 "error: the `morpholog` schema already exists in this database. \
