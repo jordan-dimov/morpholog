@@ -31,6 +31,8 @@ fn ex() -> &'static Example {
     EX.get_or_init(|| Example::new(&kyc_sanctions_screening::program()))
 }
 
+// `program` is only a transformation source (some tests extend it
+// with extra transformations); the rules always come from `ex()`.
 fn run(program: &Program, name: &str, args: Vec<EvalValue>, state: State) -> State {
     let t = program
         .transformation(name)

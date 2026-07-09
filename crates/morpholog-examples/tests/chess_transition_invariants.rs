@@ -482,6 +482,8 @@ fn run_start_game(program: &Program) -> State {
 
 /// Look up `transformation_name` in `program`, propose it with the
 /// supplied args against `state`, and `must_accept` the result.
+/// `program` is only a transformation source; the rules always come
+/// from `ex()`.
 fn run_named(
     program: &Program,
     transformation_name: &str,
