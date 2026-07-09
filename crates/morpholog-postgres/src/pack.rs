@@ -829,13 +829,18 @@ fn assemble_selective_pack(
     if selected.is_empty() {
         return Err(AssembleSelectiveError::EmptySelection);
     }
+    let index_by_id: std::collections::HashMap<Uuid, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.transition_id, i))
+        .collect();
+    let mut seen = std::collections::HashSet::with_capacity(selected.len());
     let mut indices: Vec<usize> = Vec::with_capacity(selected.len());
     for id in selected {
-        let index = rows
-            .iter()
-            .position(|r| r.transition_id == *id)
+        let index = *index_by_id
+            .get(id)
             .ok_or(AssembleSelectiveError::UnknownTransition(*id))?;
-        if indices.contains(&index) {
+        if !seen.insert(*id) {
             return Err(AssembleSelectiveError::DuplicateTransition(*id));
         }
         indices.push(index);
@@ -919,7 +924,10 @@ pub async fn export_selective(
     tx.commit().await.map_err(classify)?;
 
     assemble_selective_pack(&rows, covering, transitions).map_err(|e| match e {
-        AssembleSelectiveError::UnknownTransition(id) => PgError::TransitionNotFound(id),
+        AssembleSelectiveError::UnknownTransition(id) => PgError::TransitionNotCovered {
+            id,
+            tree_size: to_size,
+        },
         other => PgError::InvalidState(other.to_string()),
     })
 }

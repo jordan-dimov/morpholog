@@ -115,12 +115,16 @@ async fn export_refuses_an_unknown_or_uncovered_transition() {
     let err = export_selective(&pool, Some(covering.tree_size), &[ghost])
         .await
         .unwrap_err();
-    assert!(matches!(err, PgError::TransitionNotFound(id) if id == ghost));
+    assert!(matches!(err, PgError::TransitionNotCovered { id, .. } if id == ghost));
 
+    // The late transition EXISTS in the audit log - the error must say
+    // "not covered by this checkpoint", not "not found".
     let err = export_selective(&pool, Some(covering.tree_size), &[late])
         .await
         .unwrap_err();
-    assert!(matches!(err, PgError::TransitionNotFound(id) if id == late));
+    assert!(
+        matches!(err, PgError::TransitionNotCovered { id, tree_size } if id == late && tree_size == covering.tree_size)
+    );
 }
 
 #[tokio::test]
