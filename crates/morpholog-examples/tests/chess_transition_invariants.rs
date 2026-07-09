@@ -18,9 +18,15 @@
 
 mod common;
 
-use common::{dec, must_accept, must_reject, propose_with_test_actor, subj};
+use common::{Example, dec, subj};
 use morpholog_core::{EvalValue, Outcome, Program, State};
 use morpholog_examples::chess_transition_invariants;
+use std::sync::OnceLock;
+
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&chess_transition_invariants::program()))
+}
 
 // ============================================================
 // IR-shape sanity
@@ -78,12 +84,10 @@ fn capturing_a_king_is_rejected() {
 
     let program = chess_transition_invariants::program();
     let capturing = program.transformation("capturing_move").expect("exists");
-    let reason = must_reject(
+    let reason = ex().must_reject(
         capturing,
         vec![dec(1), dec(1), dec(1), dec(8), subj("black")],
         &pre,
-        &program.invariants,
-        &program.definitions,
     );
     assert!(
         reason.to_string().contains("exactly_one_black_king"),
@@ -162,12 +166,10 @@ fn piece_count_drift_is_rejected() {
 
     // Knight b1 -> c3 (file 2 rank 1 -> file 3 rank 3; c3 is empty in the
     // opening); the knight ends up on both squares.
-    let reason = must_reject(
+    let reason = ex().must_reject(
         drifting,
         vec![dec(2), dec(1), dec(3), dec(3), subj("black")],
         &state,
-        &program.invariants,
-        &program.definitions,
     );
     assert!(
         reason.to_string().contains("piece_count_matches_board"),
@@ -225,13 +227,7 @@ fn dropping_the_piece_counter_is_rejected() {
         .transformation("counterless_move")
         .expect("just pushed");
 
-    let reason = must_reject(
-        counterless,
-        vec![subj("black")],
-        &state,
-        &program.invariants,
-        &program.definitions,
-    );
+    let reason = ex().must_reject(counterless, vec![subj("black")], &state);
     assert!(
         reason
             .to_string()
@@ -323,12 +319,10 @@ fn bishop_changing_square_color_is_rejected() {
     let state = run_start_game(&program);
 
     let bishop = program.transformation("quiet_move").expect("exists");
-    let reason = must_reject(
+    let reason = ex().must_reject(
         bishop,
         vec![dec(3), dec(1), dec(4), dec(3), subj("black")],
         &state,
-        &program.invariants,
-        &program.definitions,
     );
     assert!(
         reason
@@ -453,14 +447,13 @@ fn transition_invariant_catches_missing_move_count_bump() {
     let buggy = program
         .transformation("buggy_quiet_move")
         .expect("just pushed");
-    let outcome = propose_with_test_actor(
-        buggy,
-        vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
-        &state,
-        &program.invariants,
-        &program.definitions,
-    )
-    .expect("kernel must not error");
+    let outcome = ex()
+        .propose(
+            buggy,
+            vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
+            &state,
+        )
+        .expect("kernel must not error");
 
     match outcome {
         Outcome::Rejected { reason } => {
@@ -489,6 +482,8 @@ fn run_start_game(program: &Program) -> State {
 
 /// Look up `transformation_name` in `program`, propose it with the
 /// supplied args against `state`, and `must_accept` the result.
+/// `program` is only a transformation source; the rules always come
+/// from `ex()`.
 fn run_named(
     program: &Program,
     transformation_name: &str,
@@ -498,5 +493,5 @@ fn run_named(
     let t = program
         .transformation(transformation_name)
         .unwrap_or_else(|| panic!("transformation `{transformation_name}` not found"));
-    must_accept(t, args, state, &program.invariants, &program.definitions)
+    ex().must_accept(t, args, state)
 }

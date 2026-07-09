@@ -11,10 +11,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{claim_instance, coll, date, has_claim, propose_as, qty, subj, test_actor};
+use common::{Example, claim_instance, coll, date, has_claim, qty, subj, test_actor};
 use morpholog_core::{EvalError, Outcome, State};
 use morpholog_examples::margin_call_run;
+
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&margin_call_run::program()))
+}
 
 /// A book at the start of the day: two accounts have fallen below their
 /// maintenance floor (each must be called), one sits comfortably above it
@@ -57,7 +63,7 @@ fn book() -> State {
 /// Propose a margin run calling `accounts` - the batch handed over as one
 /// collection argument.
 fn run(accounts: Vec<&str>, state: &State) -> Result<Outcome, EvalError> {
-    propose_as(
+    ex().propose_as(
         &margin_call_run::issue_margin_run(),
         vec![
             subj("run_2026_06_29"),
@@ -66,8 +72,6 @@ fn run(accounts: Vec<&str>, state: &State) -> Result<Outcome, EvalError> {
         ],
         test_actor(),
         state,
-        &margin_call_run::all_invariants(),
-        &[],
     )
 }
 

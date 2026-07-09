@@ -12,12 +12,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{claim_instance, dec, subj};
+use common::{Example, claim_instance, dec, subj};
 use morpholog_core::{
     ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, Subject, ValueExpr, eval_invariant,
 };
 use morpholog_examples::settlement_netting;
+
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&settlement_netting::program()))
+}
 
 // ============================================================
 // IR shape - the example's invariants and transformation look
@@ -184,14 +190,9 @@ fn netting_args() -> Vec<EvalValue> {
 fn propose_accepts_well_formed_netting() {
     let pre = netting_pre_state(vec![]);
     let t = settlement_netting::create_net_settlement();
-    let outcome = common::propose_with_test_actor(
-        &t,
-        netting_args(),
-        &pre,
-        &settlement_netting::all_invariants(),
-        &settlement_netting::definitions(),
-    )
-    .expect("propose should not error");
+    let outcome = ex()
+        .propose(&t, netting_args(), &pre)
+        .expect("propose should not error");
 
     let Outcome::Accepted {
         asserted_claims,
@@ -288,13 +289,7 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     )];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
-    let reason = common::must_reject(
-        &t,
-        netting_args(),
-        &pre,
-        &settlement_netting::all_invariants(),
-        &settlement_netting::definitions(),
-    );
+    let reason = ex().must_reject(&t, netting_args(), &pre);
     assert!(
         reason.to_string().contains("no_double_netting"),
         "got: {reason}"

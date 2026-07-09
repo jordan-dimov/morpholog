@@ -17,19 +17,27 @@
 
 mod common;
 
-use common::{date, must_accept, must_reject, propose_with_test_actor, subj};
+use common::{Example, date, subj};
 use morpholog_core::{EvalValue, Outcome, Program, State};
 use morpholog_examples::kyc_sanctions_screening::{self, PEP, SANCTIONS};
+use std::sync::OnceLock;
 
 // ============================================================
 // Helpers
 // ============================================================
 
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&kyc_sanctions_screening::program()))
+}
+
+// `program` is only a transformation source (some tests extend it
+// with extra transformations); the rules always come from `ex()`.
 fn run(program: &Program, name: &str, args: Vec<EvalValue>, state: State) -> State {
     let t = program
         .transformation(name)
         .unwrap_or_else(|| panic!("transformation `{name}` not found"));
-    must_accept(t, args, state, &program.invariants, &program.definitions)
+    ex().must_accept(t, args, state)
 }
 
 fn try_run(
@@ -41,7 +49,7 @@ fn try_run(
     let t = program
         .transformation(name)
         .unwrap_or_else(|| panic!("transformation `{name}` not found"));
-    propose_with_test_actor(t, args, state, &program.invariants, &program.definitions)
+    ex().propose(t, args, state)
 }
 
 /// Register the customer and clear screenings against both sanctions
@@ -551,13 +559,7 @@ fn adjudicated_marker_without_a_disposition_is_rejected() {
         .transformation("adjudicate_without_disposition")
         .expect("just pushed");
 
-    let reason = must_reject(
-        bad,
-        vec![subj("scr_sanctions_1")],
-        &state,
-        &program.invariants,
-        &program.definitions,
-    );
+    let reason = ex().must_reject(bad, vec![subj("scr_sanctions_1")], &state);
     assert!(
         reason
             .to_string()

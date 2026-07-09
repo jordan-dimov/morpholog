@@ -43,7 +43,7 @@
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome,
+    ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome, Program,
     RejectionReason, State, Subject, Transformation, Transition, propose,
 };
 use rust_decimal::Decimal;
@@ -292,6 +292,87 @@ pub fn must_reject_as(
         Outcome::Accepted { .. } => {
             panic!("expected Rejected from `{}`, got Accepted", t.name)
         }
+    }
+}
+
+// ============================================================
+// Example fixture
+// ============================================================
+
+/// A programme's rules bound once, so propose-family calls carry only
+/// what varies per call. `Example::new(&trade_lifecycle::program())`
+/// replaces threading `&invariants(), &definitions()` through every
+/// call in a test file. The free helpers stay for tests that drive a
+/// deliberate rule subset or an ad-hoc programme.
+pub struct Example {
+    invariants: Vec<Invariant>,
+    definitions: Vec<Definition>,
+}
+
+impl Example {
+    pub fn new(program: &Program) -> Self {
+        Self {
+            invariants: program.invariants.clone(),
+            definitions: program.definitions.clone(),
+        }
+    }
+
+    /// [`propose_with_test_actor`] against this example's rules.
+    pub fn propose(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        pre: &State,
+    ) -> Result<Outcome, EvalError> {
+        propose_with_test_actor(t, args, pre, &self.invariants, &self.definitions)
+    }
+
+    /// [`propose_as`] against this example's rules.
+    pub fn propose_as(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        actor: impl Into<Subject>,
+        pre: &State,
+    ) -> Result<Outcome, EvalError> {
+        propose_as(t, args, actor, pre, &self.invariants, &self.definitions)
+    }
+
+    /// [`must_accept`] against this example's rules.
+    pub fn must_accept(&self, t: &Transformation, args: Vec<EvalValue>, pre: State) -> State {
+        must_accept(t, args, pre, &self.invariants, &self.definitions)
+    }
+
+    /// [`must_accept_as`] against this example's rules.
+    pub fn must_accept_as(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        actor: impl Into<Subject>,
+        pre: State,
+    ) -> State {
+        must_accept_as(t, args, actor, pre, &self.invariants, &self.definitions)
+    }
+
+    /// [`must_reject`] against this example's rules.
+    pub fn must_reject(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        pre: &State,
+    ) -> RejectionReason {
+        must_reject(t, args, pre, &self.invariants, &self.definitions)
+    }
+
+    /// [`must_reject_as`] against this example's rules.
+    pub fn must_reject_as(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        actor: impl Into<Subject>,
+        pre: &State,
+    ) -> RejectionReason {
+        must_reject_as(t, args, actor, pre, &self.invariants, &self.definitions)
     }
 }
 

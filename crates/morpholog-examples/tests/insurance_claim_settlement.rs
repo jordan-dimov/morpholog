@@ -25,51 +25,38 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{
-    claim_instance, dec, dec_str, has_claim, must_accept, must_accept_as, must_reject,
-    must_reject_as, propose_as, subj,
-};
-use morpholog_core::{
-    ClaimInstance, Definition, Invariant, Outcome, State, enumerate_derived, eval_invariant,
-};
+use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
+use morpholog_core::{ClaimInstance, Outcome, State, enumerate_derived, eval_invariant};
 use morpholog_examples::insurance_claim_settlement;
 
-fn invariants() -> Vec<Invariant> {
-    insurance_claim_settlement::all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    insurance_claim_settlement::definitions()
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&insurance_claim_settlement::program()))
 }
 
 fn issue(state: State, policy_id: &str, aggregate_limit: i64) -> State {
-    must_accept(
+    ex().must_accept(
         &insurance_claim_settlement::issue_policy(),
         vec![subj(policy_id), dec(aggregate_limit)],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
 fn report(state: State, claim_id: &str, policy_id: &str, claimed_amount: i64) -> State {
-    must_accept(
+    ex().must_accept(
         &insurance_claim_settlement::report_claim(),
         vec![subj(claim_id), subj(policy_id), dec(claimed_amount)],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
 fn grant(state: State, actor: &str, limit: i64) -> State {
-    must_accept(
+    ex().must_accept(
         &insurance_claim_settlement::grant_settlement_authority(),
         vec![subj(actor), dec(limit)],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -103,12 +90,10 @@ fn issue_policy_admits_initial_headroom_equal_to_aggregate_limit() {
 #[test]
 fn duplicate_policy_id_violates_uniqueness_invariant() {
     let pre = issue(State::default(), "policy_001", 100_000);
-    let reason = must_reject(
+    let reason = ex().must_reject(
         &insurance_claim_settlement::issue_policy(),
         vec![subj("policy_001"), dec(50_000)],
         &pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         reason.to_string().contains("policy_unique_by_policy_id"),
@@ -119,12 +104,10 @@ fn duplicate_policy_id_violates_uniqueness_invariant() {
 #[test]
 fn report_claim_without_policy_is_rejected_at_require() {
     let pre = State::default();
-    let reason = must_reject(
+    let reason = ex().must_reject(
         &insurance_claim_settlement::report_claim(),
         vec![subj("claim_001"), subj("policy_001"), dec(20_000)],
         &pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         reason.to_string().contains("require"),
@@ -147,12 +130,10 @@ fn report_claim_with_policy_admits_claim_reported() {
 fn duplicate_claim_id_violates_uniqueness_invariant() {
     let pre = issue(State::default(), "policy_001", 100_000);
     let pre = report(pre, "claim_001", "policy_001", 20_000);
-    let reason = must_reject(
+    let reason = ex().must_reject(
         &insurance_claim_settlement::report_claim(),
         vec![subj("claim_001"), subj("policy_001"), dec(30_000)],
         &pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         reason
@@ -175,13 +156,11 @@ fn happy_pre() -> State {
 #[test]
 fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
     let pre = happy_pre();
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
         "alex",
         pre,
-        &invariants(),
-        &definitions(),
     );
     // The authorisation records who decided.
     assert!(has_claim(
@@ -236,9 +215,13 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         args: vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
         actor: Subject::from("alex"),
     };
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &invariants(), &definitions())
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &pre,
+        &insurance_claim_settlement::all_invariants(),
+        &insurance_claim_settlement::definitions(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(
@@ -283,13 +266,11 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
 #[test]
 fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
     let pre = happy_pre(); // alex has 50k limit
-    let reason = must_reject_as(
+    let reason = ex().must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
         "alex",
         &pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         reason.to_string().contains("require"),
@@ -300,13 +281,11 @@ fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
 #[test]
 fn authorise_settlement_at_actor_boundary_admits() {
     let pre = happy_pre(); // alex has 50k limit
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(50_000)],
         "alex",
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -335,13 +314,11 @@ fn cap_pre() -> State {
 
 fn after_first_settlement(amount: i64) -> State {
     let pre = cap_pre();
-    must_accept_as(
+    ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(amount)],
         "alex",
         pre,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -349,13 +326,11 @@ fn after_first_settlement(amount: i64) -> State {
 fn second_settlement_under_remaining_aggregate_admits() {
     let pre = after_first_settlement(40_000); // 40k of 100k consumed
     let pre = report(pre, "claim_002", "policy_001", 30_000);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(30_000)],
         "alex",
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -374,13 +349,11 @@ fn second_settlement_at_aggregate_boundary_admits() {
     // 60 + 40 = 100 (exact fill).
     let pre = after_first_settlement(60_000);
     let pre = report(pre, "claim_002", "policy_001", 40_000);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(40_000)],
         "alex",
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -415,9 +388,13 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
         args: vec![subj("claim_002"), subj("settlement_002"), dec(50_000)],
         actor: Subject::from("alex"),
     };
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &invariants(), &definitions())
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &pre,
+        &insurance_claim_settlement::all_invariants(),
+        &insurance_claim_settlement::definitions(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(
@@ -466,23 +443,19 @@ fn aggregate_limit_scoped_per_policy() {
     let s = issue(s, "policy_002", 100_000);
     let s = report(s, "claim_001", "policy_001", 100_000);
     let s = grant(s, "alex", 100_000);
-    let s = must_accept_as(
+    let s = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(100_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
     // policy_002 should still accept a fresh settlement up to its own limit.
     let s = report(s, "claim_002", "policy_002", 80_000);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(80_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -510,22 +483,18 @@ fn settlement_id_must_be_unique_across_payments() {
     let s = report(s, "claim_002", "policy_001", 10_000);
     let s = grant(s, "alex", 100_000);
 
-    let s = must_accept_as(
+    let s = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(10_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
     // Second settlement reusing settlement_001 against a different claim.
-    let reason = must_reject_as(
+    let reason = ex().must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_001"), dec(10_000)],
         "alex",
         &s,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         reason
@@ -598,29 +567,23 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
     let s = report(s, "claim_003", "policy_002", 100_000);
     let s = grant(s, "alex", 200_000);
 
-    let s = must_accept_as(
+    let s = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(50_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
-    let s = must_accept_as(
+    let s = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(25_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
-    let s = must_accept_as(
+    let s = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_003"), subj("settlement_003"), dec(100_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
 
     let rows = enumerate_derived(
@@ -673,13 +636,11 @@ fn policy_limit_usage_empty_when_no_settlements_paid() {
 #[test]
 fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
     let pre = happy_pre();
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
         "alex",
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         has_claim(&post, "PolicyHeadroom", &[subj("policy_001"), dec(70_000)]),
@@ -788,15 +749,14 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
         ],
     );
 
-    let outcome = propose_as(
-        &buggy,
-        vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
-        "alex",
-        &pre,
-        &invariants(),
-        &definitions(),
-    )
-    .expect("kernel must not error");
+    let outcome = ex()
+        .propose_as(
+            &buggy,
+            vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
+            "alex",
+            &pre,
+        )
+        .expect("kernel must not error");
 
     match outcome {
         Outcome::Rejected { reason } => {
@@ -921,15 +881,9 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
         ],
     );
 
-    let outcome = propose_as(
-        &buggy,
-        vec![dec(30_000)],
-        "alex",
-        &pre,
-        &invariants(),
-        &definitions(),
-    )
-    .expect("kernel must not error");
+    let outcome = ex()
+        .propose_as(&buggy, vec![dec(30_000)], "alex", &pre)
+        .expect("kernel must not error");
 
     match outcome {
         Outcome::Rejected { reason } => {
@@ -957,12 +911,10 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
 // net-of-deductible amount in between.
 
 fn set_terms(state: State, policy_id: &str, deductible: i64, per_claim_limit: i64) -> State {
-    must_accept(
+    ex().must_accept(
         &insurance_claim_settlement::set_coverage_terms(),
         vec![subj(policy_id), dec(deductible), dec(per_claim_limit)],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -975,22 +927,18 @@ fn settlement_capped_at_per_claim_limit() {
     s = set_terms(s, "p1", 1_000, 50_000);
     s = report(s, "c1", "p1", 70_000);
 
-    must_reject_as(
+    ex().must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s_over"), dec(50_001)],
         "alex",
         &s,
-        &invariants(),
-        &definitions(),
     );
 
-    let ok = must_accept_as(
+    let ok = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s_ok"), dec(50_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &ok,
@@ -1008,13 +956,11 @@ fn loss_below_deductible_yields_no_payout() {
     s = set_terms(s, "p1", 1_000, 50_000);
     s = report(s, "c1", "p1", 500);
 
-    must_reject_as(
+    ex().must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s1"), dec(1)],
         "alex",
         &s,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -1027,22 +973,18 @@ fn settlement_pays_loss_net_of_deductible() {
     s = set_terms(s, "p1", 1_000, 50_000);
     s = report(s, "c1", "p1", 30_000);
 
-    must_reject_as(
+    ex().must_reject_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s_over"), dec(29_001)],
         "alex",
         &s,
-        &invariants(),
-        &definitions(),
     );
 
-    let ok = must_accept_as(
+    let ok = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("c1"), subj("s_ok"), dec(29_000)],
         "alex",
         s,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &ok,
@@ -1058,19 +1000,15 @@ fn nonsensical_coverage_terms_are_rejected() {
     // terms that would make the eligible-payout rule meaningless.
     let s = issue(State::default(), "p1", 1_000_000);
 
-    must_reject(
+    ex().must_reject(
         &insurance_claim_settlement::set_coverage_terms(),
         vec![subj("p1"), dec(-1), dec(50_000)],
         &s,
-        &invariants(),
-        &definitions(),
     );
 
-    must_reject(
+    ex().must_reject(
         &insurance_claim_settlement::set_coverage_terms(),
         vec![subj("p1"), dec(1_000), dec(0)],
         &s,
-        &invariants(),
-        &definitions(),
     );
 }

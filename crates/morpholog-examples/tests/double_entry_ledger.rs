@@ -12,14 +12,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{claim_instance, dec, has_claim, must_accept, subj};
+use common::{Example, claim_instance, dec, has_claim, subj};
 use morpholog_core::{State, eval_invariant};
 use morpholog_examples::double_entry_ledger;
 
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&double_entry_ledger::program()))
+}
+
 #[test]
 fn simple_entry_balances_and_commits() {
-    let state = must_accept(
+    let state = ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -30,8 +36,6 @@ fn simple_entry_balances_and_commits() {
             dec(100),
         ],
         State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
     assert_eq!(state.len(), 3, "1 JournalEntry + 2 JournalLine");
@@ -57,7 +61,7 @@ fn split_entry_balances_and_commits() {
     // Debit 100 to cash; credit 70 to revenue + 30 to deferred revenue.
     // Sums: debits = 100; credits = 70 + 30 = 100. Balance invariant
     // holds.
-    let state = must_accept(
+    let state = ex().must_accept(
         &double_entry_ledger::post_split_entry(),
         vec![
             subj("entry_001"),
@@ -71,8 +75,6 @@ fn split_entry_balances_and_commits() {
             dec(30),
         ],
         State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
     assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
@@ -106,7 +108,7 @@ fn unbalanced_entry_rejected_by_invariant() {
     // the journal entry and its lines, and the candidate state
     // violates `balanced_posted_entry`. Atomic rollback: no claim
     // is admitted.
-    let reason = common::must_reject(
+    let reason = ex().must_reject(
         &double_entry_ledger::post_split_entry(),
         vec![
             subj("entry_001"),
@@ -120,8 +122,6 @@ fn unbalanced_entry_rejected_by_invariant() {
             dec(25),
         ],
         &State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
     assert!(
         reason.to_string().contains("balanced_posted_entry"),
@@ -134,12 +134,10 @@ fn closed_period_rejects_normal_posting() {
     // Close the period, then try to post a normal entry to it.
     // `require not PeriodClosed(period)` catches it at admission;
     // no claim is admitted.
-    let after_close = must_accept(
+    let after_close = ex().must_accept(
         &double_entry_ledger::close_period(),
         vec![subj("p_2026_04")],
         State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
     assert!(has_claim(
@@ -148,7 +146,7 @@ fn closed_period_rejects_normal_posting() {
         &[subj("p_2026_04")]
     ));
 
-    let reason = common::must_reject(
+    let reason = ex().must_reject(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -159,8 +157,6 @@ fn closed_period_rejects_normal_posting() {
             dec(100),
         ],
         &after_close,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
     assert!(
         reason.to_string().contains("require"),
@@ -170,20 +166,16 @@ fn closed_period_rejects_normal_posting() {
 
 #[test]
 fn double_close_rejected() {
-    let after_close = must_accept(
+    let after_close = ex().must_accept(
         &double_entry_ledger::close_period(),
         vec![subj("p_2026_04")],
         State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
-    let reason = common::must_reject(
+    let reason = ex().must_reject(
         &double_entry_ledger::close_period(),
         vec![subj("p_2026_04")],
         &after_close,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
     assert!(
         reason.to_string().contains("require"),
@@ -194,7 +186,7 @@ fn double_close_rejected() {
 #[test]
 fn restatement_into_closed_period_preserves_original() {
     // 1. Post an entry: cash debit 100, revenue credit 100.
-    let s1 = must_accept(
+    let s1 = ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -205,23 +197,19 @@ fn restatement_into_closed_period_preserves_original() {
             dec(100),
         ],
         State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
     // 2. Close the period.
-    let s2 = must_accept(
+    let s2 = ex().must_accept(
         &double_entry_ledger::close_period(),
         vec![subj("p_2026_04")],
         s1,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
     // 3. Restate the entry with a corrected amount (101 instead of
     //    100). The restatement transformation does *not* check
     //    PeriodClosed - restatement is the path for closed periods.
-    let s3 = must_accept(
+    let s3 = ex().must_accept(
         &double_entry_ledger::restate_entry(),
         vec![
             subj("entry_002"),
@@ -233,8 +221,6 @@ fn restatement_into_closed_period_preserves_original() {
             dec(101),
         ],
         s2,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
     // Final state contains:
@@ -318,7 +304,7 @@ fn cannot_restate_already_restated_entry() {
     // check at admission, or (if that were bypassed somehow) by
     // the at_most_one_direct_successor invariant on candidate
     // state.
-    let s1 = must_accept(
+    let s1 = ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -329,11 +315,9 @@ fn cannot_restate_already_restated_entry() {
             dec(100),
         ],
         State::default(),
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
-    let s2 = must_accept(
+    let s2 = ex().must_accept(
         &double_entry_ledger::restate_entry(),
         vec![
             subj("entry_002"),
@@ -345,11 +329,9 @@ fn cannot_restate_already_restated_entry() {
             dec(101),
         ],
         s1,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
 
-    let reason = common::must_reject(
+    let reason = ex().must_reject(
         &double_entry_ledger::restate_entry(),
         vec![
             subj("entry_003"),
@@ -361,8 +343,6 @@ fn cannot_restate_already_restated_entry() {
             dec(102),
         ],
         &s2,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     );
     assert!(
         reason.to_string().contains("require"),

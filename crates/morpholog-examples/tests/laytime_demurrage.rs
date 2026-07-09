@@ -10,47 +10,35 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{dur, must_accept, propose_with_test_actor, qty, subj, ts};
-use morpholog_core::{Definition, EvalValue, Invariant, State, Transformation, enumerate_derived};
+use common::{Example, dur, qty, subj, ts};
+use morpholog_core::{EvalValue, State, enumerate_derived};
 use morpholog_examples::laytime_demurrage as lay;
 
-fn invariants() -> Vec<Invariant> {
-    lay::all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    lay::definitions()
-}
-
-fn must_reject(t: &Transformation, args: Vec<EvalValue>, pre: &State) {
-    common::must_reject(t, args, pre, &invariants(), &definitions());
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&lay::program()))
 }
 
 /// Fixture: voyage v1, 48 hours of allowed laytime, NOR tendered at
 /// 14:00Z on 2026-10-24, clock commenced (so counting starts at
 /// 20:00Z after the six-hour turn time, with the zero-length seed).
 fn commenced_voyage() -> State {
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::tender_nor(),
         vec![subj("nor1"), subj("v1"), ts("2026-10-24T14:00:00Z")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_accept(
+    ex().must_accept(
         &lay::commence_laytime(),
         vec![subj("v1"), subj("seed1")],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -80,7 +68,7 @@ fn intervals_accumulate_and_demurrage_is_the_excess_past_the_allowance() {
     let state = commenced_voyage();
     // A full day counted, then 34 more hours: 58 counted against 48
     // allowed, so ten hours on demurrage.
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::record_counting_interval(),
         vec![
             subj("i1"),
@@ -89,10 +77,8 @@ fn intervals_accumulate_and_demurrage_is_the_excess_past_the_allowance() {
             ts("2026-10-25T20:00:00Z"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::record_counting_interval(),
         vec![
             subj("i2"),
@@ -101,15 +87,11 @@ fn intervals_accumulate_and_demurrage_is_the_excess_past_the_allowance() {
             ts("2026-10-27T06:00:00Z"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::complete_cargo_ops(),
         vec![subj("v1"), ts("2026-10-27T06:00:00Z")],
         state,
-        &invariants(),
-        &definitions(),
     );
     assert_eq!(excess_for(&state), dur("PT10H"));
 }
@@ -117,7 +99,7 @@ fn intervals_accumulate_and_demurrage_is_the_excess_past_the_allowance() {
 #[test]
 fn a_voyage_inside_its_allowance_shows_zero_demurrage_not_negative() {
     let state = commenced_voyage();
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::record_counting_interval(),
         vec![
             subj("i1"),
@@ -126,8 +108,6 @@ fn a_voyage_inside_its_allowance_shows_zero_demurrage_not_negative() {
             ts("2026-10-25T08:00:00Z"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
     // Twelve hours counted against forty-eight allowed: the max floor
     // reports zero, never a negative span.
@@ -138,21 +118,17 @@ fn a_voyage_inside_its_allowance_shows_zero_demurrage_not_negative() {
 fn counting_cannot_be_recorded_before_the_clock_starts() {
     // Fixture and notice, but no commencement: the bind on
     // LaytimeCommenced has nothing to match.
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::tender_nor(),
         vec![subj("nor1"), subj("v1"), ts("2026-10-24T14:00:00Z")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_reject(
+    ex().must_reject(
         &lay::record_counting_interval(),
         vec![
             subj("i1"),
@@ -169,7 +145,7 @@ fn an_interval_starting_before_commencement_is_refused() {
     let state = commenced_voyage();
     // 19:00 is after the NOR but before the 20:00 commencement: the
     // `commenced_at at_or_before from` gate refuses it.
-    must_reject(
+    ex().must_reject(
         &lay::record_counting_interval(),
         vec![
             subj("i1"),
@@ -184,7 +160,7 @@ fn an_interval_starting_before_commencement_is_refused() {
 #[test]
 fn an_interval_ending_before_it_begins_is_refused() {
     let state = commenced_voyage();
-    must_reject(
+    ex().must_reject(
         &lay::record_counting_interval(),
         vec![
             subj("i1"),
@@ -199,7 +175,7 @@ fn an_interval_ending_before_it_begins_is_refused() {
 #[test]
 fn the_laytime_commenced_unique_by_voyage_per_voyage() {
     let state = commenced_voyage();
-    must_reject(
+    ex().must_reject(
         &lay::commence_laytime(),
         vec![subj("v1"), subj("seed2")],
         &state,
@@ -208,7 +184,7 @@ fn the_laytime_commenced_unique_by_voyage_per_voyage() {
 
 #[test]
 fn a_notice_needs_a_fixture_behind_it() {
-    must_reject(
+    ex().must_reject(
         &lay::tender_nor(),
         vec![subj("nor1"), subj("v_unknown"), ts("2026-10-24T14:00:00Z")],
         &State::default(),
@@ -222,12 +198,10 @@ fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
     // the LaytimeCommenced conjunct in the domain, this read would hit
     // the empty-duration-sum landmine the seed pattern exists to
     // defuse. The review of this PR caught exactly that.)
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
-        &invariants(),
-        &definitions(),
     );
     let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions())
         .expect("pre-commencement inspection must not error");
@@ -241,26 +215,20 @@ fn two_voyages_enumerate_deterministically() {
     // new value kinds (subject keys, duration keys) - the silent
     // failure mode there would be rows in a varying order.
     let state = commenced_voyage();
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v2"), subj("mv_borealis"), subj("sines"), dur("PT24H")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::tender_nor(),
         vec![subj("nor2"), subj("v2"), ts("2026-11-01T08:00:00Z")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::commence_laytime(),
         vec![subj("v2"), subj("seed2")],
         state,
-        &invariants(),
-        &definitions(),
     );
     let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
     assert_eq!(rows.len(), 2, "two commenced voyages, two rows");
@@ -280,37 +248,29 @@ fn two_voyages_enumerate_deterministically() {
 
 #[test]
 fn cargo_book_caps_at_the_declared_capacity() {
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::declare_capacity(),
         vec![subj("v1"), subj("seed_parcel"), qty("45000", "t")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::load_parcel(),
         vec![subj("p1"), subj("v1"), qty("30000", "t")],
         state,
-        &invariants(),
-        &definitions(),
     );
     // To the boundary: the comparison is exact, tonnes against tonnes.
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::load_parcel(),
         vec![subj("p2"), subj("v1"), qty("15000", "t")],
         state,
-        &invariants(),
-        &definitions(),
     );
     // One more tonne does not fit.
-    must_reject(
+    ex().must_reject(
         &lay::load_parcel(),
         vec![subj("p3"), subj("v1"), qty("1", "t")],
         &state,
@@ -324,7 +284,7 @@ fn cargo_book_caps_at_the_declared_capacity() {
 /// 5.5 days, so the due figure is exactly 137500 USD.
 fn voyage_on_demurrage() -> State {
     let state = commenced_voyage();
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::record_counting_interval(),
         vec![
             subj("i1"),
@@ -333,22 +293,16 @@ fn voyage_on_demurrage() -> State {
             ts("2026-11-01T08:00:00Z"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::agree_demurrage_rate(),
         vec![subj("v1"), subj("seed_settlement"), qty("25000", "USD")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_accept(
+    ex().must_accept(
         &lay::complete_cargo_ops(),
         vec![subj("v1"), ts("2026-11-01T08:00:00Z")],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -362,15 +316,13 @@ fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
     assert_eq!(rows[0].args[3], qty("137500.00", "USD"));
 
     // Settle the whole figure, to the cent.
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::settle_demurrage(),
         vec![subj("s1"), subj("v1"), qty("137500.00", "USD")],
         state,
-        &invariants(),
-        &definitions(),
     );
     // A cent past what the delay is worth is refused.
-    must_reject(
+    ex().must_reject(
         &lay::settle_demurrage(),
         vec![subj("s2"), subj("v1"), qty("0.01", "USD")],
         &state,
@@ -380,14 +332,13 @@ fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
 #[test]
 fn tonnes_offered_as_dollars_do_not_evaluate_let_alone_commit() {
     let state = voyage_on_demurrage();
-    let err = propose_with_test_actor(
-        &lay::settle_demurrage(),
-        vec![subj("s1"), subj("v1"), qty("5", "t")],
-        &state,
-        &invariants(),
-        &definitions(),
-    )
-    .expect_err("a tonne is not a dollar: kernel error, not rejection");
+    let err = ex()
+        .propose(
+            &lay::settle_demurrage(),
+            vec![subj("s1"), subj("v1"), qty("5", "t")],
+            &state,
+        )
+        .expect_err("a tonne is not a dollar: kernel error, not rejection");
     let msg = format!("{err}");
     assert!(
         msg.contains("Decimal[USD]") && msg.contains("Decimal[t]"),
@@ -413,14 +364,12 @@ fn settlement_before_the_rate_is_agreed_is_refused() {
     // ops are completed first, so the rate really is the only thing
     // missing.
     let state = commenced_voyage();
-    let state = must_accept(
+    let state = ex().must_accept(
         &lay::complete_cargo_ops(),
         vec![subj("v1"), ts("2026-10-25T08:00:00Z")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_reject(
+    ex().must_reject(
         &lay::settle_demurrage(),
         vec![subj("s1"), subj("v1"), qty("1000", "USD")],
         &state,

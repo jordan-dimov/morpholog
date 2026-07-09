@@ -24,21 +24,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{
-    claim_instance, date, has_claim, must_accept, must_accept_as, must_reject_as, propose_as, subj,
-};
-use morpholog_core::{Definition, EvalValue, Invariant, Outcome, State, eval_invariant};
-use morpholog_examples::clinical_trial_enrolment::{
-    self as cte, ROLE_RANDOMISE_PARTICIPANT, all_invariants,
-};
+use common::{Example, claim_instance, date, has_claim, subj};
+use morpholog_core::{EvalValue, Outcome, State, eval_invariant};
+use morpholog_examples::clinical_trial_enrolment::{self as cte, ROLE_RANDOMISE_PARTICIPANT};
 
-fn invariants() -> Vec<Invariant> {
-    all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    morpholog_examples::clinical_trial_enrolment::definitions()
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&cte::program()))
 }
 
 /// Build a state with the full happy-path setup for randomising
@@ -101,14 +95,8 @@ fn default_setup() -> Setup {
 /// per-test overrides re-build state with one specific claim swapped.
 fn happy_path_state(s: &Setup) -> State {
     let mut state = State::default();
-    state = must_accept(
-        &cte::open_trial(),
-        vec![subj(s.trial)],
-        state,
-        &invariants(),
-        &definitions(),
-    );
-    state = must_accept(
+    state = ex().must_accept(&cte::open_trial(), vec![subj(s.trial)], state);
+    state = ex().must_accept(
         &cte::approve_protocol_version(),
         vec![
             subj(s.trial),
@@ -119,10 +107,8 @@ fn happy_path_state(s: &Setup) -> State {
             subj("approval_001"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::approve_consent_form_version(),
         vec![
             subj(s.trial),
@@ -133,10 +119,8 @@ fn happy_path_state(s: &Setup) -> State {
             subj("approval_002"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::delegate_investigator(),
         vec![
             subj(s.investigator),
@@ -146,17 +130,13 @@ fn happy_path_state(s: &Setup) -> State {
             date(s.delegation_to),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::screen_participant(),
         vec![subj(s.participant), subj(s.trial), date("2026-03-07")],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::record_consent(),
         vec![
             subj(s.participant),
@@ -166,10 +146,8 @@ fn happy_path_state(s: &Setup) -> State {
             subj(s.investigator),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::record_eligibility_criterion(),
         vec![
             subj(s.proto_v1),
@@ -177,10 +155,8 @@ fn happy_path_state(s: &Setup) -> State {
             subj(s.criterion_required_result),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::record_eligibility_assessment(),
         vec![
             subj(s.participant),
@@ -190,8 +166,6 @@ fn happy_path_state(s: &Setup) -> State {
             date(s.assessment_expires_on),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
     state
 }
@@ -213,13 +187,11 @@ fn randomise_args(s: &Setup) -> Vec<EvalValue> {
 fn happy_path_admits_randomisation() {
     let s = default_setup();
     let pre = happy_path_state(&s);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(
         has_claim(
@@ -250,13 +222,11 @@ fn boundary_equality_admits_at_protocol_end() {
     s.assessment_expires_on = s.proto_v1_to; // must still cover the date
     s.consent_to = s.proto_v1_to;
     let pre = happy_path_state(&s);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -278,13 +248,11 @@ fn boundary_equality_admits_at_assessment_expiry() {
     let mut s = default_setup();
     s.randomised_on = s.assessment_expires_on; // "2026-03-23"
     let pre = happy_path_state(&s);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -309,13 +277,11 @@ fn expired_consent_form_rejects() {
     // Close the consent form window the day before randomisation.
     s.consent_to = "2026-03-11";
     let pre = happy_path_state(&s);
-    must_reject_as(
+    ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -351,7 +317,7 @@ fn consent_after_randomisation_violates_the_invariant() {
         ),
     ]);
     assert!(
-        !eval_invariant(&inv, &randomised_before_consent, None, &definitions()).unwrap(),
+        !eval_invariant(&inv, &randomised_before_consent, None, &cte::definitions()).unwrap(),
         "randomisation before consent must violate the invariant",
     );
 
@@ -378,7 +344,7 @@ fn consent_after_randomisation_violates_the_invariant() {
             ],
         ),
     ]);
-    assert!(eval_invariant(&inv, &consent_first, None, &definitions()).unwrap());
+    assert!(eval_invariant(&inv, &consent_first, None, &cte::definitions()).unwrap());
 }
 
 #[test]
@@ -387,13 +353,11 @@ fn expired_eligibility_assessment_rejects() {
     // Assessment expired the day before randomisation.
     s.assessment_expires_on = "2026-03-11";
     let pre = happy_path_state(&s);
-    must_reject_as(
+    ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -403,13 +367,11 @@ fn expired_delegation_rejects() {
     // Delegation ended before randomisation.
     s.delegation_to = "2026-03-10";
     let pre = happy_path_state(&s);
-    must_reject_as(
+    ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -419,13 +381,11 @@ fn expired_protocol_window_rejects() {
     // Protocol window closed before randomisation.
     s.proto_v1_to = "2026-03-11";
     let pre = happy_path_state(&s);
-    must_reject_as(
+    ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -435,21 +395,17 @@ fn open_important_protocol_deviation_rejects() {
     let mut pre = happy_path_state(&s);
     // Open a deviation, then attempt randomisation. The Not(...)
     // gate rejects.
-    pre = must_accept_as(
+    pre = ex().must_accept_as(
         &cte::open_important_protocol_deviation(),
         vec![subj(s.participant), subj(s.trial), subj("dev_001")],
         s.investigator,
         pre,
-        &invariants(),
-        &definitions(),
     );
-    must_reject_as(
+    ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -466,13 +422,11 @@ fn failed_eligibility_assessment_rejects() {
     let mut s = default_setup();
     s.assessment_actual_result = "FAIL";
     let pre = happy_path_state(&s);
-    must_reject_as(
+    ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -489,15 +443,13 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
     // invariant.
     let s = default_setup();
     let pre = happy_path_state(&s);
-    let post_randomise = must_accept_as(
+    let post_randomise = ex().must_accept_as(
         &cte::randomise_participant(),
         randomise_args(&s),
         s.investigator,
         pre,
-        &invariants(),
-        &definitions(),
     );
-    let post_amend = must_accept(
+    let post_amend = ex().must_accept(
         &cte::approve_protocol_version(),
         vec![
             subj(s.trial),
@@ -508,8 +460,6 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
             subj("approval_003"),
         ],
         post_randomise,
-        &invariants(),
-        &definitions(),
     );
     // The earlier admission survives the amendment.
     assert!(has_claim(
@@ -548,7 +498,7 @@ fn later_randomisation_must_use_active_protocol_version() {
     let mut s = default_setup();
     s.consent_to = "2026-12-31";
     let mut state = happy_path_state(&s);
-    state = must_accept(
+    state = ex().must_accept(
         &cte::approve_protocol_version(),
         vec![
             subj(s.trial),
@@ -559,10 +509,8 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj("approval_003"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::record_eligibility_criterion(),
         vec![
             subj("proto_v2"),
@@ -570,10 +518,8 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj(s.criterion_required_result),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::record_consent(),
         vec![
             subj("p_002"),
@@ -583,10 +529,8 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj(s.investigator),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
-    state = must_accept(
+    state = ex().must_accept(
         &cte::record_eligibility_assessment(),
         vec![
             subj("p_002"),
@@ -596,31 +540,28 @@ fn later_randomisation_must_use_active_protocol_version() {
             date("2026-04-30"),
         ],
         state,
-        &invariants(),
-        &definitions(),
     );
     // Attempt under proto_v1 on 2026-04-15: protocol window has
     // closed, must reject.
-    let rejected = propose_as(
-        &cte::randomise_participant(),
-        vec![
-            subj("p_002"),
-            subj(s.trial),
-            subj(s.proto_v1),
-            date("2026-04-15"),
-        ],
-        s.investigator,
-        &state,
-        &invariants(),
-        &definitions(),
-    )
-    .expect("propose must not error");
+    let rejected = ex()
+        .propose_as(
+            &cte::randomise_participant(),
+            vec![
+                subj("p_002"),
+                subj(s.trial),
+                subj(s.proto_v1),
+                date("2026-04-15"),
+            ],
+            s.investigator,
+            &state,
+        )
+        .expect("propose must not error");
     assert!(
         matches!(rejected, Outcome::Rejected { .. }),
         "proto_v1 window has closed before 2026-04-15; must reject"
     );
     // Attempt under proto_v2 on 2026-04-15: admits.
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &cte::randomise_participant(),
         vec![
             subj("p_002"),
@@ -630,8 +571,6 @@ fn later_randomisation_must_use_active_protocol_version() {
         ],
         s.investigator,
         state,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,

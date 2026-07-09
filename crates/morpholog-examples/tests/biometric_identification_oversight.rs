@@ -12,25 +12,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{must_accept_as, must_reject, subj, ts};
-use morpholog_core::{
-    Definition, EvalValue, Invariant, Rejection, State, Subject, Transformation, Transition,
-    Verdict, enumerate_derived,
-};
+use common::{Example, subj, ts};
+use morpholog_core::{Rejection, State, Subject, Transition, Verdict, enumerate_derived};
 use morpholog_examples::biometric_identification_oversight as bio;
 
-fn invariants() -> Vec<Invariant> {
-    bio::all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    bio::definitions()
-}
-
-/// Propose as a named actor and require a lawful business rejection.
-fn must_reject_as(t: &Transformation, args: Vec<EvalValue>, actor: &str, pre: &State) {
-    common::must_reject_as(t, args, actor, pre, &invariants(), &definitions());
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&bio::program()))
 }
 
 /// Fixture: a deployed system with model version v1 in service for
@@ -39,15 +29,13 @@ fn must_reject_as(t: &Transformation, args: Vec<EvalValue>, actor: &str, pre: &S
 /// one candidate match recorded by the system itself - a claim with
 /// no standing yet.
 fn match_awaiting_verification() -> State {
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::deploy_system(),
         vec![subj("cam_system"), subj("city_operator")],
         "compliance_office",
         State::default(),
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::place_version_in_service(),
         vec![
             subj("cam_system"),
@@ -57,26 +45,20 @@ fn match_awaiting_verification() -> State {
         ],
         "compliance_office",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::assign_oversight(),
         vec![subj("anna"), subj("cam_system")],
         "compliance_office",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::assign_oversight(),
         vec![subj("ben"), subj("cam_system")],
         "compliance_office",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::start_use(),
         vec![
             subj("use_1"),
@@ -87,12 +69,10 @@ fn match_awaiting_verification() -> State {
         ],
         "cam_system",
         state,
-        &invariants(),
-        &definitions(),
     );
     // The machine actor: the embedding system proposes its own raw
     // output, through the same gates as anyone else.
-    must_accept_as(
+    ex().must_accept_as(
         &bio::record_match(),
         vec![
             subj("match_1"),
@@ -103,8 +83,6 @@ fn match_awaiting_verification() -> State {
         ],
         "cam_system",
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -119,15 +97,13 @@ fn programme_validates() {
 // window.
 #[test]
 fn use_cannot_start_under_a_version_not_in_service() {
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::deploy_system(),
         vec![subj("cam_system"), subj("city_operator")],
         "compliance_office",
         State::default(),
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::place_version_in_service(),
         vec![
             subj("cam_system"),
@@ -137,11 +113,9 @@ fn use_cannot_start_under_a_version_not_in_service() {
         ],
         "compliance_office",
         state,
-        &invariants(),
-        &definitions(),
     );
     // November is outside the assessed window: refused.
-    must_reject_as(
+    ex().must_reject_as(
         &bio::start_use(),
         vec![
             subj("use_x"),
@@ -160,15 +134,13 @@ fn use_cannot_start_under_a_version_not_in_service() {
 #[test]
 fn decision_with_one_verification_is_refused() {
     let state = match_awaiting_verification();
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_reject_as(
+    ex().must_reject_as(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
@@ -233,13 +205,11 @@ fn the_refused_decision_explains_itself_in_the_statutes_terms() {
 #[test]
 fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
     let state = match_awaiting_verification();
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
     let transition = Transition {
         transformation_name: bio::decide_on_identification().name.clone(),
@@ -269,15 +239,13 @@ fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
 #[test]
 fn the_same_overseer_cannot_be_both_voices() {
     let state = match_awaiting_verification();
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_reject_as(
+    ex().must_reject_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:05:00Z")],
         "anna",
@@ -290,23 +258,19 @@ fn the_same_overseer_cannot_be_both_voices() {
 #[test]
 fn two_distinct_verifications_admit_the_decision() {
     let state = match_awaiting_verification();
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
         "ben",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
@@ -316,18 +280,14 @@ fn two_distinct_verifications_admit_the_decision() {
         ],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
     // Article 12(3)(a): the period of each use, derived once the use
     // ends - eight and a half hours, exactly.
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::end_use(),
         vec![subj("use_1"), ts("2026-10-12T16:30:00Z")],
         "cam_system",
         state,
-        &invariants(),
-        &definitions(),
     );
     let rows = enumerate_derived(&bio::use_period(), &state, &bio::definitions()).unwrap();
     assert_eq!(rows.len(), 1, "one completed use: {rows:?}");
@@ -339,23 +299,19 @@ fn two_distinct_verifications_admit_the_decision() {
 #[test]
 fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
     let state = match_awaiting_verification();
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
         "ben",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
@@ -365,20 +321,16 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
         ],
         "ben",
         state,
-        &invariants(),
-        &definitions(),
     );
     // Anna's authority is revoked - her training lapsed, say.
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::revoke_oversight(),
         vec![subj("anna"), subj("cam_system")],
         "compliance_office",
         state,
-        &invariants(),
-        &definitions(),
     );
     // A second match arrives; anna can no longer verify it.
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::record_match(),
         vec![
             subj("match_2"),
@@ -389,10 +341,8 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
         ],
         "cam_system",
         state,
-        &invariants(),
-        &definitions(),
     );
-    must_reject_as(
+    ex().must_reject_as(
         &bio::verify_match(),
         vec![subj("match_2"), ts("2026-10-12T12:30:00Z")],
         "anna",
@@ -415,26 +365,22 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
 #[test]
 fn decision_dated_before_the_second_verification_is_refused() {
     let state = match_awaiting_verification();
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
         "anna",
         state,
-        &invariants(),
-        &definitions(),
     );
-    let state = must_accept_as(
+    let state = ex().must_accept_as(
         &bio::verify_match(),
         vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
         "ben",
         state,
-        &invariants(),
-        &definitions(),
     );
     // Both verifications exist, but the decision is back-dated to
     // 10:10 - after anna, before ben. Two records is not enough; both
     // must precede the decision.
-    must_reject_as(
+    ex().must_reject_as(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
@@ -454,7 +400,7 @@ fn a_match_cannot_be_recorded_under_the_wrong_actor() {
     let state = match_awaiting_verification();
     // An analyst - not the camera system - tries to add a match to
     // the same use. Refused: the actor is not the system.
-    must_reject_as(
+    ex().must_reject_as(
         &bio::record_match(),
         vec![
             subj("match_forged"),
@@ -474,7 +420,7 @@ fn use_cannot_be_closed_before_a_match_it_already_produced() {
     let state = match_awaiting_verification();
     // The match is at 09:30; closing the use at 09:00 is refused by
     // the invariant, whatever transformation attempts it.
-    must_reject_as(
+    ex().must_reject_as(
         &bio::end_use(),
         vec![subj("use_1"), ts("2026-10-12T09:00:00Z")],
         "cam_system",
@@ -488,7 +434,7 @@ fn use_cannot_be_closed_before_a_match_it_already_produced() {
 #[test]
 fn decision_with_no_verifications_is_a_lawful_rejection() {
     let state = match_awaiting_verification();
-    must_reject(
+    ex().must_reject(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
@@ -497,7 +443,5 @@ fn decision_with_no_verifications_is_a_lawful_rejection() {
             ts("2026-10-12T11:00:00Z"),
         ],
         &state,
-        &invariants(),
-        &definitions(),
     );
 }
