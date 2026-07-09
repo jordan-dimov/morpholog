@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::Context;
 use morpholog_core::{BatchScore, CandidateScore, Program, invariants_using_pre};
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, score_candidate, score_candidate_against_pack,
+    Checkpoint, EvidencePack, SplitBoundary, score_candidate, score_candidate_against_pack,
     score_candidate_against_packs,
 };
 
@@ -34,6 +34,12 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
+    let split = args
+        .train_until
+        .as_deref()
+        .map(parse_boundary)
+        .transpose()?;
+
     // Batch over a directory of packs: a single JSON report, offline.
     if let Some(dir) = &args.packs {
         let report = score_against_packs(&parsed.program, dir)?;
@@ -41,9 +47,12 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
     }
 
     let report = match &args.pack {
-        Some(pack_path) => {
-            score_against_pack(&parsed.program, pack_path, args.anchor_file.as_deref())?
-        }
+        Some(pack_path) => score_against_pack(
+            &parsed.program,
+            pack_path,
+            args.anchor_file.as_deref(),
+            split,
+        )?,
         None => {
             let url = args.database_url.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -52,12 +61,27 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
                 )
             })?;
             let pool = connect(url).await?;
-            score_candidate(&pool, &parsed.program)
+            score_candidate(&pool, &parsed.program, split)
                 .await
                 .context("score_candidate failed")?
         }
     };
     print_json(&report)
+}
+
+/// Parse a `--train-until` boundary: a transition id first, else an
+/// RFC 3339 timestamp.
+fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
+    if let Ok(id) = raw.parse::<uuid::Uuid>() {
+        return Ok(SplitBoundary::Transition(id));
+    }
+    let at = raw.parse::<chrono::DateTime<chrono::Utc>>().map_err(|e| {
+        anyhow::anyhow!(
+            "--train-until takes a transition id or an RFC 3339 timestamp \
+             (e.g. 2026-07-01T00:00:00Z); `{raw}` parses as neither: {e}"
+        )
+    })?;
+    Ok(SplitBoundary::AtOrBefore(at))
 }
 
 /// Score the candidate against every `*.json` evidence pack in `dir`, in one
@@ -110,6 +134,7 @@ fn score_against_pack(
     program: &Program,
     pack_path: &Path,
     anchor_path: Option<&Path>,
+    split: Option<SplitBoundary>,
 ) -> anyhow::Result<CandidateScore> {
     let bytes = std::fs::read(pack_path)
         .with_context(|| format!("reading pack file {}", pack_path.display()))?;
@@ -131,6 +156,6 @@ fn score_against_pack(
         None => None,
     };
 
-    score_candidate_against_pack(program, &pack, anchor.as_ref())
+    score_candidate_against_pack(program, &pack, anchor.as_ref(), split)
         .context("scoring against the evidence pack failed")
 }

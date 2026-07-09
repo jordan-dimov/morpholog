@@ -696,6 +696,61 @@ async fn evaluate_scores_a_candidate_against_history() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn evaluate_train_until_reports_per_slice_scores() {
+    reset_db().await;
+    let boundary = post_balanced_entry("ev1", 100);
+    post_balanced_entry("ev2", 200);
+
+    let candidate = "program candidate\n\n\
+         predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)\n\n\
+         invariant no_entries:\n    not (exists e: JournalEntry(e, _, _))\n";
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut f, candidate.as_bytes()).unwrap();
+
+    let (status, stdout, stderr) = run_cli(&[
+        "evaluate",
+        f.path().to_str().unwrap(),
+        "--train-until",
+        &boundary.to_string(),
+    ]);
+    assert!(status.success(), "{stderr}\n{stdout}");
+    let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
+    let split = &report["split"];
+    assert_eq!(
+        split["boundary"]["resolved_transition_id"],
+        boundary.to_string(),
+        "got: {stdout}"
+    );
+    // The first entry introduces the violation inside the train slice;
+    // the test slice inherits it and reports clean.
+    assert_eq!(split["train"]["transitions_replayed"], 1);
+    assert_eq!(split["test"]["transitions_replayed"], 1);
+    assert_eq!(split["train"]["invariants"][0]["would_refuse"], 1);
+    assert_eq!(split["test"]["invariants"][0]["would_refuse"], 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evaluate_train_until_conflicts_with_packs() {
+    let output = Command::new(morpholog_bin())
+        .args([
+            "evaluate",
+            "whatever.morph",
+            "--packs",
+            "somewhere",
+            "--train-until",
+            "2026-07-01T00:00:00Z",
+        ])
+        .output()
+        .expect("spawn morpholog binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("--train-until") && stderr.contains("--packs"),
+        "expected the clap conflict naming both flags, got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn evaluate_rejects_a_pre_candidate_before_connecting() {
     // A transition-relational candidate (uses pre(...)): v1 cannot score it.
     let candidate = "program candidate\n\n\

@@ -65,7 +65,9 @@ pub use propose::{
     propose_against_pg_with_trace,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
-pub use score::{score_candidate, score_candidate_against_pack, score_candidate_against_packs};
+pub use score::{
+    SplitBoundary, score_candidate, score_candidate_against_pack, score_candidate_against_packs,
+};
 pub use signing::{
     SigningError, TreeHead, generate_signing_key, parse_public_key, parse_signature,
     render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,

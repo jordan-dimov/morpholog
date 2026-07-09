@@ -110,10 +110,13 @@ pub async fn list_claims_at_for_predicates(
 /// A timestamp earlier than every committed transition is
 /// [`PgError::NoTransitionAtOrBefore`]: there is no state to
 /// reconstruct at or before that instant.
-pub async fn resolve_transition_at_or_before(
-    pool: &PgPool,
+pub async fn resolve_transition_at_or_before<'e, E>(
+    executor: E,
     at: DateTime<Utc>,
-) -> Result<Uuid, PgError> {
+) -> Result<Uuid, PgError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query!(
         "SELECT transition_id FROM morpholog.audit
          WHERE committed_at <= $1
@@ -121,7 +124,7 @@ pub async fn resolve_transition_at_or_before(
          LIMIT 1",
         at,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(classify)?;
     row.map(|r| r.transition_id)

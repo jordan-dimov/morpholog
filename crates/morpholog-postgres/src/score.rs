@@ -7,17 +7,61 @@
 //! same `ReplaySet`. Two sources feed the same fold: the live database,
 //! and a portable evidence pack (offline, no connection).
 
-use crate::as_of::ReplaySet;
-use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
+use crate::as_of::{ReplaySet, resolve_transition_at_or_before};
+use crate::audit::{AuditRow, REPLAY_CHUNK, audit_cursor_for, list_audit_rows_page};
 use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
 use crate::txn::{TxIsolation, begin_isolated_tx};
+use chrono::{DateTime, Utc};
 use morpholog_core::{
     BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, EvalError, Program,
-    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, State,
+    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SplitBoundaryReport, State,
 };
 use sqlx::PgPool;
+use uuid::Uuid;
+
+/// A train/test boundary for a split replay: everything at or before
+/// it is the training slice, everything after is the held-out test
+/// slice. Resolved to the canonical `(committed_at, transition_id)`
+/// cursor before folding, so both forms split at exactly one point in
+/// the total replay order.
+#[derive(Debug, Clone, Copy)]
+pub enum SplitBoundary {
+    /// Split immediately after this transition.
+    Transition(Uuid),
+    /// Split after the last transition committed at or before this
+    /// instant.
+    AtOrBefore(DateTime<Utc>),
+}
+
+impl SplitBoundary {
+    /// The canonical form of what was asked, for the report.
+    fn requested(&self) -> String {
+        match self {
+            SplitBoundary::Transition(id) => id.to_string(),
+            SplitBoundary::AtOrBefore(at) => at.to_rfc3339(),
+        }
+    }
+}
+
+/// A resolved boundary waiting to be marked: the cursor to compare
+/// rows against, and the report the scorer records at the mark.
+struct PendingSplit {
+    cursor: (DateTime<Utc>, Uuid),
+    report: SplitBoundaryReport,
+}
+
+fn pending_split(boundary: SplitBoundary, cursor: (DateTime<Utc>, Uuid)) -> PendingSplit {
+    PendingSplit {
+        cursor,
+        report: SplitBoundaryReport {
+            requested: boundary.requested(),
+            resolved_transition_id: cursor.1.to_string(),
+            resolved_committed_at: cursor.0.to_rfc3339(),
+        },
+    }
+}
 
 /// Construct the scorer, mapping its refusal of an unscorable candidate
 /// onto the adapter's error - a `pre(...)` candidate is rejected before
@@ -40,8 +84,17 @@ fn fold_rows<'a>(
     pre_state: &mut State,
     scorer: &mut CandidateScorer,
     rows: impl IntoIterator<Item = &'a AuditRow>,
+    split: &mut Option<PendingSplit>,
 ) -> Result<(), EvalError> {
     for row in rows {
+        // Mark the boundary before the first row beyond it; a boundary
+        // at or past the end of history is marked by the caller after
+        // the fold (an empty test slice, not a lost one).
+        if let Some(pending) =
+            split.take_if(|p| (row.committed_at, row.transition_id) > p.cursor)
+        {
+            scorer.mark_split(pending.report);
+        }
         for r in &row.retracted_claims {
             replay.retract(r);
         }
@@ -59,10 +112,30 @@ fn fold_rows<'a>(
 /// under `SERIALIZABLE READ ONLY DEFERRABLE`, folds each transition's
 /// claims into a `ReplaySet`, and asks the scorer whether the candidate's
 /// invariants would have refused that commit. Commits nothing.
-pub async fn score_candidate(pool: &PgPool, program: &Program) -> Result<CandidateScore, PgError> {
+pub async fn score_candidate(
+    pool: &PgPool,
+    program: &Program,
+    split: Option<SplitBoundary>,
+) -> Result<CandidateScore, PgError> {
     // Reject an unscorable candidate before opening any transaction.
     let mut scorer = build_scorer(program)?;
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
+    // The boundary resolves inside the replay snapshot, so it and the
+    // replayed rows describe the same world even under concurrent
+    // writers.
+    let mut pending = match split {
+        Some(boundary) => {
+            let id = match boundary {
+                SplitBoundary::Transition(id) => id,
+                SplitBoundary::AtOrBefore(at) => {
+                    resolve_transition_at_or_before(&mut *tx, at).await?
+                }
+            };
+            let cursor = audit_cursor_for(&mut tx, id).await?;
+            Some(pending_split(boundary, cursor))
+        }
+        None => None,
+    };
     let mut replay = ReplaySet::new();
     let mut pre_state = State::from_claims(Vec::new());
 
@@ -72,7 +145,13 @@ pub async fn score_candidate(pool: &PgPool, program: &Program) -> Result<Candida
         if page.is_empty() {
             break;
         }
-        fold_rows(&mut replay, &mut pre_state, &mut scorer, &page)?;
+        fold_rows(
+            &mut replay,
+            &mut pre_state,
+            &mut scorer,
+            &page,
+            &mut pending,
+        )?;
         if let Some(last) = page.last() {
             cursor = Some((last.committed_at, last.transition_id));
         }
@@ -81,6 +160,10 @@ pub async fn score_candidate(pool: &PgPool, program: &Program) -> Result<Candida
         }
     }
     tx.commit().await.map_err(classify)?;
+    // A boundary at or past the end of history: an empty test slice.
+    if let Some(p) = pending.take() {
+        scorer.mark_split(p.report);
+    }
 
     Ok(scorer.into_report())
 }
@@ -95,6 +178,7 @@ pub fn score_candidate_against_pack(
     program: &Program,
     pack: &EvidencePack,
     anchor: Option<&Checkpoint>,
+    split: Option<SplitBoundary>,
 ) -> Result<CandidateScore, PgError> {
     let mut scorer = build_scorer(program)?;
 
@@ -117,9 +201,34 @@ pub fn score_candidate_against_pack(
     let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
     rows.sort_by_key(|r| (r.committed_at, r.transition_id));
 
+    // The boundary resolves against the pack's own rows, so the same
+    // boundary splits the offline replay exactly where it splits the
+    // live one over the covered prefix.
+    let mut pending = match split {
+        Some(b @ SplitBoundary::Transition(id)) => Some(pending_split(
+            b,
+            rows.iter()
+                .find(|r| r.transition_id == id)
+                .map(|r| (r.committed_at, r.transition_id))
+                .ok_or(PgError::TransitionNotFound(id))?,
+        )),
+        Some(b @ SplitBoundary::AtOrBefore(at)) => Some(pending_split(
+            b,
+            rows.iter()
+                .rev()
+                .find(|r| r.committed_at <= at)
+                .map(|r| (r.committed_at, r.transition_id))
+                .ok_or(PgError::NoTransitionAtOrBefore(at))?,
+        )),
+        None => None,
+    };
+
     let mut replay = ReplaySet::new();
     let mut pre_state = State::from_claims(Vec::new());
-    fold_rows(&mut replay, &mut pre_state, &mut scorer, rows)?;
+    fold_rows(&mut replay, &mut pre_state, &mut scorer, rows, &mut pending)?;
+    if let Some(p) = pending.take() {
+        scorer.mark_split(p.report);
+    }
 
     Ok(scorer.into_report())
 }
@@ -145,7 +254,7 @@ pub fn score_candidate_against_packs(
     let cases = named_packs
         .iter()
         .map(|(name, pack)| {
-            let outcome = match score_candidate_against_pack(program, pack, None) {
+            let outcome = match score_candidate_against_pack(program, pack, None, None) {
                 Ok(score) => CaseOutcome::Scored {
                     transitions_replayed: score.transitions_replayed,
                     invariants: score.invariants,

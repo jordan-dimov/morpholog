@@ -395,6 +395,18 @@ pub(crate) struct EvaluateArgs {
     /// Single-pack only - a single anchor is meaningless across a batch.
     #[arg(long, requires = "pack", conflicts_with = "packs")]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+
+    /// Split the replay into a training slice (everything at or before
+    /// this boundary) and a held-out test slice (everything after),
+    /// reported separately - the overfitting guard: a rule discovered
+    /// on the training slice is honestly judged on history it never
+    /// saw. Takes a transition id or an RFC 3339 timestamp. One
+    /// continuous replay: rule state carries across the boundary and
+    /// each violation counts in the slice that introduced it. Not
+    /// available with `--packs`, where each per-case pack is already
+    /// the unit a harness assigns to a slice.
+    #[arg(long, conflicts_with = "packs")]
+    pub(crate) train_until: Option<String>,
 }
 
 /// Evidence-pack subcommands. `export` is database-backed; `verify` is
