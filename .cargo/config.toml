@@ -7,3 +7,9 @@
 # `[env]` default and makes those steps verify against the live schema.
 [env]
 SQLX_OFFLINE = "true"
+
+# The PG-backed integration suites share one database and TRUNCATE it on
+# entry, so they only pass single-threaded. Precommit passes --test-threads=1
+# explicitly; this makes a plain `cargo test` safe too. Total test runtime is
+# sub-second, so serial execution costs nothing.
+RUST_TEST_THREADS = "1"
