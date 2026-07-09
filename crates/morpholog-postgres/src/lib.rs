@@ -55,9 +55,10 @@ pub use outbox::{
     process_one_outbox_row, record_compensation, release_outbox_claim, system_actor,
 };
 pub use pack::{
-    EvidencePack, PackError, PackManifest, RowInclusionProof, WindowEvidencePack,
-    WindowPackManifest, WindowStart, WindowVerification, export_pack, export_window, verify_pack,
-    verify_window,
+    EvidencePack, PackError, PackManifest, RowInclusionProof, SelectiveEvidencePack,
+    SelectivePackManifest, SelectiveVerification, WindowEvidencePack, WindowPackManifest,
+    WindowStart, WindowVerification, export_pack, export_selective, export_window, verify_pack,
+    verify_selective, verify_window,
 };
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,

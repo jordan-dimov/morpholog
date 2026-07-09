@@ -15,6 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
 use crate::checkpoints::{
@@ -31,6 +32,8 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 const PACK_FORMAT_V1: u32 = 1;
 const PACK_FORMAT_V2: u32 = 2;
 const PACK_KIND_WINDOW: &str = "window";
+const PACK_FORMAT_V3: u32 = 3;
+const PACK_KIND_SELECTIVE: &str = "selective";
 
 /// A thin convenience header on the pack. The authoritative data is
 /// `checkpoints` + `rows`; the manifest just summarises the covering
@@ -701,6 +704,381 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Selective evidence packs (sparse disclosure over the same proof substrate).
+//
+// A selective pack carries a CHOSEN subset of the rows a covering checkpoint
+// commits to, each with its inclusion proof; undisclosed rows are simply
+// absent, in any form. It proves each disclosed row is genuine and at its
+// claimed position - the position is proven by the row's Merkle path, never
+// by its position in the pack. It deliberately does NOT prove the selection
+// is complete (all rows relevant to a party or obligation - that needs a
+// subject-indexed commitment, deferred), and - like a window - it checks
+// checkpoint signatures cryptographically only: signing-key authority is a
+// full-prefix property a sparse pack cannot establish. Disclosed leaf
+// indices necessarily reveal positions and count.
+// ---------------------------------------------------------------------------
+
+/// The selective pack's convenience header: the covering checkpoint's
+/// coordinates. The authoritative data is the checkpoint, the rows, and
+/// the inclusion proofs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectivePackManifest {
+    pub pack_format_version: u32,
+    pub pack_kind: String,
+    pub tree_size: i64,
+    pub root_hash: String,
+    pub checkpoint_hash: String,
+}
+
+/// A selective evidence pack: a chosen subset of audit rows, each proven
+/// included at its declared position in the covering checkpoint's tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectiveEvidencePack {
+    pub manifest: SelectivePackManifest,
+    pub checkpoint: Checkpoint,
+    /// The disclosed rows, ordered by ascending leaf index.
+    pub rows: Vec<AuditRow>,
+    /// One inclusion proof per disclosed row, in the same order.
+    pub inclusion_proofs: Vec<RowInclusionProof>,
+}
+
+/// The verdict of verifying a selective pack. A sibling of
+/// [`WindowVerification`] without the consistency variant: a selective
+/// pack proves inclusion under one checkpoint, not period continuity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SelectiveVerification {
+    /// Every disclosed row is included at its declared position, and the
+    /// checkpoint's signatures (if any) verify cryptographically.
+    /// `rows_disclosed` counts what this pack chose to show - it says
+    /// nothing about how many rows the tree holds or the selection missed.
+    Intact {
+        tree_size: i64,
+        rows_disclosed: usize,
+    },
+    /// A disclosed row is not included at its declared position - it is
+    /// not the row the checkpoint committed to.
+    RowNotIncluded { leaf_index: i64 },
+    /// An externally held anchor disagrees with the pack's checkpoint.
+    AnchorMismatch {
+        tree_size: i64,
+        anchor_checkpoint_hash: String,
+        pack_checkpoint_hash: String,
+    },
+    /// The checkpoint carries a signature that does not verify over its
+    /// tree head (cryptographic check only; authority is not judged here).
+    SignatureInvalid {
+        tree_size: i64,
+        key_id: String,
+        purpose: String,
+        public_key: String,
+    },
+    /// `--require-signatures` was asked for and the checkpoint carries no
+    /// signature - a policy verdict the verifier opts into.
+    SignatureRequired { tree_size: i64 },
+    /// Not a well-formed v3 artefact; it never had a chance to prove
+    /// anything.
+    Malformed { detail: String },
+}
+
+/// Why a selection cannot be assembled. Prover-side refusals, never
+/// verifier verdicts: the verifier only ever sees disclosed rows, so
+/// unknown or duplicate selections must die at export.
+#[derive(Debug)]
+enum AssembleSelectiveError {
+    Encoding(serde_json::Error),
+    UnknownTransition(Uuid),
+    DuplicateTransition(Uuid),
+    EmptySelection,
+}
+
+impl std::fmt::Display for AssembleSelectiveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssembleSelectiveError::Encoding(e) => {
+                write!(f, "could not encode an audit row: {e}")
+            }
+            AssembleSelectiveError::UnknownTransition(id) => write!(
+                f,
+                "transition {id} is not in the prefix the covering checkpoint commits to"
+            ),
+            AssembleSelectiveError::DuplicateTransition(id) => {
+                write!(f, "transition {id} was selected more than once")
+            }
+            AssembleSelectiveError::EmptySelection => {
+                write!(f, "a selective pack must disclose at least one row")
+            }
+        }
+    }
+}
+
+/// Build a selective pack from the canonical `[0, tree_size)` rows and the
+/// covering checkpoint - the pure core of [`export_selective`], testable
+/// without a database. The disclosed rows come out in ascending leaf-index
+/// order regardless of the selection's order.
+fn assemble_selective_pack(
+    rows: &[AuditRow],
+    checkpoint: Checkpoint,
+    selected: &[Uuid],
+) -> Result<SelectiveEvidencePack, AssembleSelectiveError> {
+    if selected.is_empty() {
+        return Err(AssembleSelectiveError::EmptySelection);
+    }
+    let mut indices: Vec<usize> = Vec::with_capacity(selected.len());
+    for id in selected {
+        let index = rows
+            .iter()
+            .position(|r| r.transition_id == *id)
+            .ok_or(AssembleSelectiveError::UnknownTransition(*id))?;
+        if indices.contains(&index) {
+            return Err(AssembleSelectiveError::DuplicateTransition(*id));
+        }
+        indices.push(index);
+    }
+    indices.sort_unstable();
+
+    let leaves: Vec<Hash> = rows
+        .iter()
+        .map(audit_leaf_hash)
+        .collect::<Result<_, _>>()
+        .map_err(AssembleSelectiveError::Encoding)?;
+    let inclusion_proofs = indices
+        .iter()
+        .map(|&index| RowInclusionProof {
+            leaf_index: index as i64,
+            proof: inclusion_proof(&leaves, index)
+                .iter()
+                .map(render_hash)
+                .collect(),
+        })
+        .collect();
+
+    let manifest = SelectivePackManifest {
+        pack_format_version: PACK_FORMAT_V3,
+        pack_kind: PACK_KIND_SELECTIVE.to_string(),
+        tree_size: checkpoint.tree_size,
+        root_hash: checkpoint.root_hash.clone(),
+        checkpoint_hash: checkpoint.checkpoint_hash.clone(),
+    };
+    Ok(SelectiveEvidencePack {
+        manifest,
+        checkpoint,
+        rows: indices.iter().map(|&i| rows[i].clone()).collect(),
+        inclusion_proofs,
+    })
+}
+
+/// Export a selective evidence pack: the chosen transitions, each proven
+/// included under the covering checkpoint (at `tree_size`, or the latest).
+/// Reads under `SERIALIZABLE READ ONLY DEFERRABLE`. The prover reads the
+/// whole covered prefix - proofs need every leaf - but the pack carries
+/// only the selection.
+pub async fn export_selective(
+    pool: &PgPool,
+    tree_size: Option<i64>,
+    transitions: &[Uuid],
+) -> Result<SelectiveEvidencePack, PgError> {
+    let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
+    let checkpoints = load_checkpoint_chain(&mut tx).await?;
+    let covering = match tree_size {
+        Some(n) => checkpoints.iter().find(|c| c.tree_size == n).cloned(),
+        None => checkpoints.last().cloned(),
+    };
+    let Some(covering) = covering else {
+        return Err(PgError::NoCheckpoint);
+    };
+
+    let to_size = covering.tree_size;
+    let mut rows: Vec<AuditRow> = Vec::new();
+    let mut cursor = None;
+    while (rows.len() as i64) < to_size {
+        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
+        if page.is_empty() {
+            break;
+        }
+        for row in page {
+            cursor = Some((row.committed_at, row.transition_id));
+            rows.push(row);
+            if (rows.len() as i64) >= to_size {
+                break;
+            }
+        }
+    }
+    if rows.len() as i64 != to_size {
+        return Err(PgError::InvalidState(format!(
+            "the covering checkpoint commits to {} audit rows but only {} were present",
+            to_size,
+            rows.len()
+        )));
+    }
+    tx.commit().await.map_err(classify)?;
+
+    assemble_selective_pack(&rows, covering, transitions).map_err(|e| match e {
+        AssembleSelectiveError::UnknownTransition(id) => PgError::TransitionNotFound(id),
+        other => PgError::InvalidState(other.to_string()),
+    })
+}
+
+/// Verify a selective pack offline - no database. Validates the v3
+/// envelope, matches the supplied anchor against the pack's one covering
+/// checkpoint, checks every disclosed row's inclusion proof, and finally
+/// the checkpoint signatures cryptographically. It proves the disclosed
+/// rows genuine at their positions - never that the selection is complete.
+pub fn verify_selective(
+    pack: &SelectiveEvidencePack,
+    anchor: Option<&Checkpoint>,
+) -> Result<SelectiveVerification, PackError> {
+    validate_selective_envelope(pack)?;
+    let cp = &pack.checkpoint;
+
+    if let Some(anchor) = anchor
+        && !same_tree_head(anchor, cp)
+    {
+        return Ok(SelectiveVerification::AnchorMismatch {
+            tree_size: cp.tree_size,
+            anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
+            pack_checkpoint_hash: cp.checkpoint_hash.clone(),
+        });
+    }
+
+    let malformed = |detail: String| PackError::Malformed { detail };
+    let root =
+        parse_hash(&cp.root_hash).ok_or_else(|| malformed("root_hash is not sha256".into()))?;
+
+    for (row, rp) in pack.rows.iter().zip(&pack.inclusion_proofs) {
+        let leaf = audit_leaf_hash(row)?;
+        let proof = parse_hashes(&rp.proof)?;
+        match verify_inclusion_proof(
+            rp.leaf_index as usize,
+            cp.tree_size as usize,
+            &leaf,
+            &root,
+            &proof,
+        ) {
+            Ok(()) => {}
+            Err(ProofError::Malformed | ProofError::BadParameters) => {
+                return Err(malformed(format!(
+                    "inclusion proof for leaf {} is malformed",
+                    rp.leaf_index
+                )));
+            }
+            Err(ProofError::RootMismatch) => {
+                return Ok(SelectiveVerification::RowNotIncluded {
+                    leaf_index: rp.leaf_index,
+                });
+            }
+        }
+    }
+
+    if let Some(TreeVerification::SignatureInvalid {
+        tree_size,
+        key_id,
+        purpose,
+        public_key,
+    }) = signature_crypto_violation(cp)
+    {
+        return Ok(SelectiveVerification::SignatureInvalid {
+            tree_size,
+            key_id,
+            purpose,
+            public_key,
+        });
+    }
+
+    Ok(SelectiveVerification::Intact {
+        tree_size: cp.tree_size,
+        rows_disclosed: pack.rows.len(),
+    })
+}
+
+/// The v3 envelope rules a well-formed selective pack must satisfy before
+/// its proofs are worth checking. Row order carries no proof weight - the
+/// declared leaf indices do - but the envelope still demands ascending,
+/// in-range, duplicate-free indices so a malformed pack is named before
+/// any cryptography runs.
+fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackError> {
+    let malformed = |detail: String| PackError::Malformed { detail };
+    let m = &pack.manifest;
+    if m.pack_format_version != PACK_FORMAT_V3 {
+        return Err(malformed(format!(
+            "unsupported pack_format_version {}",
+            m.pack_format_version
+        )));
+    }
+    if m.pack_kind != PACK_KIND_SELECTIVE {
+        return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
+    }
+
+    let cp = &pack.checkpoint;
+    if cp.tree_size < 0 {
+        return Err(malformed("the checkpoint tree_size is negative".into()));
+    }
+    let expected = checkpoint_hash(
+        cp.tree_size,
+        &cp.root_hash,
+        cp.prev_checkpoint_hash.as_deref(),
+    );
+    if expected != cp.checkpoint_hash {
+        return Err(malformed(format!(
+            "checkpoint hash {} does not match its contents",
+            cp.checkpoint_hash
+        )));
+    }
+
+    if pack.rows.is_empty() {
+        return Err(malformed(
+            "a selective pack must disclose at least one row".into(),
+        ));
+    }
+    if pack.inclusion_proofs.len() != pack.rows.len() {
+        return Err(malformed(format!(
+            "{} rows but {} inclusion proofs",
+            pack.rows.len(),
+            pack.inclusion_proofs.len()
+        )));
+    }
+    for rp in &pack.inclusion_proofs {
+        if rp.leaf_index < 0 || rp.leaf_index >= cp.tree_size {
+            return Err(malformed(format!(
+                "leaf_index {} is outside the checkpoint's tree of {} leaves",
+                rp.leaf_index, cp.tree_size
+            )));
+        }
+    }
+    for pair in pack.inclusion_proofs.windows(2) {
+        if pair[0].leaf_index >= pair[1].leaf_index {
+            return Err(malformed(format!(
+                "leaf indices must be strictly increasing; {} is followed by {}",
+                pair[0].leaf_index, pair[1].leaf_index
+            )));
+        }
+    }
+
+    let mut rows = pack.rows.clone();
+    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
+    for pair in rows.windows(2) {
+        if (pair[0].committed_at, pair[0].transition_id)
+            == (pair[1].committed_at, pair[1].transition_id)
+        {
+            return Err(malformed(format!(
+                "two rows share coordinates ({}, {})",
+                pair[0].committed_at, pair[0].transition_id
+            )));
+        }
+    }
+
+    if m.tree_size != cp.tree_size
+        || m.root_hash != cp.root_hash
+        || m.checkpoint_hash != cp.checkpoint_hash
+    {
+        return Err(malformed("manifest disagrees with the checkpoint".into()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,5 +1397,189 @@ mod tests {
         let mut v = serde_json::to_value(&pack).unwrap();
         v["surprise"] = serde_json::json!("not part of the proof");
         assert!(serde_json::from_value::<WindowEvidencePack>(v).is_err());
+    }
+
+    // -- selective packs ----------------------------------------------------
+
+    /// A valid selective pack over a `to`-row history, disclosing the rows
+    /// at `pick` (indices). Returns the pack and its covering checkpoint.
+    fn valid_selective(to: usize, pick: &[usize]) -> (SelectiveEvidencePack, Checkpoint) {
+        let rows = rows_tagged(to, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let covering = real_checkpoint(&leaves, to, None);
+        let ids: Vec<Uuid> = pick.iter().map(|&i| rows[i].transition_id).collect();
+        let pack = assemble_selective_pack(&rows, covering.clone(), &ids).unwrap();
+        (pack, covering)
+    }
+
+    #[test]
+    fn a_selective_pack_round_trips_and_matches_its_anchor() {
+        let (pack, anchor) = valid_selective(7, &[1, 4, 6]);
+        let intact = SelectiveVerification::Intact {
+            tree_size: 7,
+            rows_disclosed: 3,
+        };
+        assert_eq!(verify_selective(&pack, None).unwrap(), intact);
+        assert_eq!(verify_selective(&pack, Some(&anchor)).unwrap(), intact);
+    }
+
+    #[test]
+    fn a_selection_is_assembled_in_leaf_order_regardless_of_request_order() {
+        let rows = rows_tagged(5, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let covering = real_checkpoint(&leaves, 5, None);
+        let ids = vec![rows[4].transition_id, rows[0].transition_id];
+        let pack = assemble_selective_pack(&rows, covering, &ids).unwrap();
+        let indices: Vec<i64> = pack.inclusion_proofs.iter().map(|p| p.leaf_index).collect();
+        assert_eq!(indices, vec![0, 4]);
+        assert!(matches!(
+            verify_selective(&pack, None),
+            Ok(SelectiveVerification::Intact { .. })
+        ));
+    }
+
+    #[test]
+    fn a_tampered_disclosed_row_is_not_included() {
+        let (mut pack, _) = valid_selective(7, &[2, 5]);
+        pack.rows[1].transformation_name = "forged".into();
+        assert_eq!(
+            verify_selective(&pack, None).unwrap(),
+            SelectiveVerification::RowNotIncluded { leaf_index: 5 }
+        );
+    }
+
+    #[test]
+    fn swapped_inclusion_proofs_are_row_not_included() {
+        // Only the declared leaf index binds a row to its position; array
+        // order carries no proof weight. Swapping two proofs must therefore
+        // fail inclusion, not pass by coincidence of ordering.
+        let (mut pack, _) = valid_selective(7, &[2, 5]);
+        let a = pack.inclusion_proofs[0].proof.clone();
+        let b = pack.inclusion_proofs[1].proof.clone();
+        pack.inclusion_proofs[0].proof = b;
+        pack.inclusion_proofs[1].proof = a;
+        assert!(matches!(
+            verify_selective(&pack, None),
+            Ok(SelectiveVerification::RowNotIncluded { .. })
+        ));
+    }
+
+    #[test]
+    fn prover_refusals_are_errors_not_packs() {
+        let rows = rows_tagged(3, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let covering = real_checkpoint(&leaves, 3, None);
+
+        let ghost = Uuid::from_u128(99);
+        assert!(matches!(
+            assemble_selective_pack(&rows, covering.clone(), &[ghost]),
+            Err(AssembleSelectiveError::UnknownTransition(id)) if id == ghost
+        ));
+        let dup = rows[1].transition_id;
+        assert!(matches!(
+            assemble_selective_pack(&rows, covering.clone(), &[dup, dup]),
+            Err(AssembleSelectiveError::DuplicateTransition(id)) if id == dup
+        ));
+        assert!(matches!(
+            assemble_selective_pack(&rows, covering, &[]),
+            Err(AssembleSelectiveError::EmptySelection)
+        ));
+    }
+
+    #[test]
+    fn selective_envelope_rules_are_each_enforced() {
+        let expect_malformed =
+            |pack: &SelectiveEvidencePack, needle: &str| match verify_selective(pack, None) {
+                Err(PackError::Malformed { detail }) => assert!(
+                    detail.contains(needle),
+                    "expected detail to mention {needle:?}, got {detail:?}"
+                ),
+                other => panic!("expected Malformed for {needle:?}, got {other:?}"),
+            };
+
+        let (pack, _) = valid_selective(7, &[1, 4]);
+
+        let mut p = pack.clone();
+        p.manifest.pack_format_version = 9;
+        expect_malformed(&p, "pack_format_version");
+
+        let mut p = pack.clone();
+        p.manifest.pack_kind = "window".to_string();
+        expect_malformed(&p, "pack_kind");
+
+        let mut p = pack.clone();
+        p.manifest.tree_size = 6;
+        expect_malformed(&p, "manifest disagrees");
+
+        let mut p = pack.clone();
+        p.manifest.root_hash = format!("sha256:{}", "b".repeat(64));
+        expect_malformed(&p, "manifest disagrees");
+
+        let mut p = pack.clone();
+        p.checkpoint.checkpoint_hash = "forged".to_string();
+        expect_malformed(&p, "does not match its contents");
+
+        let mut p = pack.clone();
+        p.inclusion_proofs[0].leaf_index = -1;
+        expect_malformed(&p, "outside the checkpoint");
+
+        let mut p = pack.clone();
+        p.inclusion_proofs[1].leaf_index = 7;
+        expect_malformed(&p, "outside the checkpoint");
+
+        let mut p = pack.clone();
+        p.inclusion_proofs.swap(0, 1);
+        expect_malformed(&p, "strictly increasing");
+
+        let mut p = pack.clone();
+        p.inclusion_proofs.pop();
+        expect_malformed(&p, "inclusion proofs");
+
+        let mut p = pack.clone();
+        p.rows.clear();
+        p.inclusion_proofs.clear();
+        expect_malformed(&p, "at least one row");
+    }
+
+    #[test]
+    fn a_wrong_anchor_is_a_selective_anchor_mismatch() {
+        let (pack, _) = valid_selective(7, &[1, 4]);
+        let other: Vec<Hash> = rows_tagged(7, 'z')
+            .iter()
+            .map(|r| audit_leaf_hash(r).unwrap())
+            .collect();
+        let wrong_anchor = real_checkpoint(&other, 7, None);
+        assert!(matches!(
+            verify_selective(&pack, Some(&wrong_anchor)),
+            Ok(SelectiveVerification::AnchorMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_selective_pack_reveals_nothing_about_undisclosed_rows() {
+        // Row 0 is disclosed deliberately: its id coincides with the
+        // fixture's shared actor value, so it cannot witness a leak.
+        let (pack, _) = valid_selective(7, &[0, 4]);
+        let bytes = serde_json::to_string(&pack).unwrap();
+        let rows = rows_tagged(7, 'a');
+        for (i, row) in rows.iter().enumerate() {
+            let id = row.transition_id.to_string();
+            if i == 0 || i == 4 {
+                assert!(bytes.contains(&id), "disclosed row {i} must be present");
+            } else {
+                assert!(
+                    !bytes.contains(&id),
+                    "undisclosed row {i} leaked its transition id"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_selective_pack_rejects_unknown_fields() {
+        let (pack, _) = valid_selective(3, &[0]);
+        let mut v = serde_json::to_value(&pack).unwrap();
+        v["surprise"] = serde_json::json!("not part of the proof");
+        assert!(serde_json::from_value::<SelectiveEvidencePack>(v).is_err());
     }
 }
