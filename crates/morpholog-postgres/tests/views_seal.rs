@@ -75,6 +75,34 @@ async fn an_in_place_redefinition_is_named_mismatched() {
 }
 
 #[tokio::test]
+async fn a_catalogue_redefined_with_different_columns_is_still_named() {
+    let pool = test_pool().await;
+    apply_views(&pool).await;
+
+    // The tamperer did not even keep the column set: the inventory is
+    // unreadable, but the verdict must still be structured tampering
+    // (via the seal's own inventory and the hash comparison), never an
+    // operational error.
+    sqlx::raw_sql(&format!(
+        "DROP VIEW {SCHEMA}._morpholog_catalog; \
+         CREATE VIEW {SCHEMA}._morpholog_catalog AS SELECT 'forged'::text AS not_view_name"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    match verify_views(&pool, SCHEMA).await.unwrap() {
+        ViewsVerification::Tampered { mismatched, .. } => {
+            assert!(
+                mismatched.contains(&"_morpholog_catalog".to_string()),
+                "got mismatched: {mismatched:?}"
+            );
+        }
+        other => panic!("expected Tampered, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_dropped_view_is_named_missing() {
     let pool = test_pool().await;
     apply_views(&pool).await;

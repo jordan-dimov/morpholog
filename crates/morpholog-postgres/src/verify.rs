@@ -166,10 +166,24 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
             crate::sql_views::quote_ident(schema),
             crate::sql_views::quote_ident(crate::sql_views::CATALOG_VIEW),
         );
-        intended = sqlx::query_scalar::<_, String>(&catalog_sql)
+        intended = match sqlx::query_scalar::<_, String>(&catalog_sql)
             .fetch_all(pool)
             .await
-            .map_err(classify)?;
+        {
+            Ok(names) => names,
+            // A catalogue redefined without a readable `view_name`
+            // column (dropped, renamed, or retyped) is tampering, not
+            // an operational failure: fall back to the seal's own
+            // inventory and let the hash comparison below name the
+            // catalogue mismatched. Anything else stays an error.
+            Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("42703") => {
+                sealed.keys().cloned().collect()
+            }
+            Err(sqlx::Error::ColumnDecode { .. } | sqlx::Error::ColumnNotFound(_)) => {
+                sealed.keys().cloned().collect()
+            }
+            Err(e) => return Err(classify(e)),
+        };
     } else {
         // The catalogue itself is gone: name it, and fall back to the
         // seal's own inventory so its views are still checked.
