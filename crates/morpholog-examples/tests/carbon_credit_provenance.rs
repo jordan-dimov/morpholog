@@ -11,12 +11,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{claim_instance, date, dec, has_claim, must_accept, subj};
+use common::{Example, claim_instance, date, dec, has_claim, subj};
 use morpholog_core::{
     EvalValue, GateKind, Rejection, State, Subject, Transition, Verdict, explain,
 };
 use morpholog_examples::carbon_credit_provenance as cc;
+
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&cc::program()))
+}
 
 fn transition(name: &str, args: Vec<EvalValue>, actor: &str) -> Transition {
     Transition {
@@ -253,60 +259,29 @@ fn double_retirement_is_a_present_blocker() {
 
 #[test]
 fn revoking_accreditation_blocks_new_issuance_but_preserves_history() {
-    let inv = cc::all_invariants();
     let s = State::default();
-    let s = must_accept(
-        &cc::grant_accreditation(),
-        vec![subj("acme_verifier")],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
-    let s = must_accept(
-        &cc::verify_measurement(),
-        vec![subj("m1"), dec(100)],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
-    let s = must_accept(
+    let s = ex().must_accept(&cc::grant_accreditation(), vec![subj("acme_verifier")], s);
+    let s = ex().must_accept(&cc::verify_measurement(), vec![subj("m1"), dec(100)], s);
+    let s = ex().must_accept(
         &cc::attest_measurement(),
         vec![subj("m1"), subj("acme_verifier")],
         s,
-        &inv,
-        &cc::definitions(),
     );
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::issue_credit(),
         vec![subj("c1"), subj("m1"), subj("acme_verifier"), subj("acct1")],
         s,
-        &inv,
-        &cc::definitions(),
     );
     // A second measurement, attested while the verifier is still accredited.
-    let s = must_accept(
-        &cc::verify_measurement(),
-        vec![subj("m2"), dec(50)],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
-    let s = must_accept(
+    let s = ex().must_accept(&cc::verify_measurement(), vec![subj("m2"), dec(50)], s);
+    let s = ex().must_accept(
         &cc::attest_measurement(),
         vec![subj("m2"), subj("acme_verifier")],
         s,
-        &inv,
-        &cc::definitions(),
     );
 
     // Revoke the accreditation.
-    let s = must_accept(
-        &cc::revoke_accreditation(),
-        vec![subj("acme_verifier")],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
+    let s = ex().must_accept(&cc::revoke_accreditation(), vec![subj("acme_verifier")], s);
 
     // History survives: the already-issued credit keeps its standing.
     assert!(
@@ -334,53 +309,28 @@ fn revoking_accreditation_blocks_new_issuance_but_preserves_history() {
 
 #[test]
 fn issue_transfer_retire_commit_in_sequence() {
-    let inv = cc::all_invariants();
     let s = State::default();
-    let s = must_accept(
-        &cc::grant_accreditation(),
-        vec![subj("acme_verifier")],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
-    let s = must_accept(
-        &cc::verify_measurement(),
-        vec![subj("m1"), dec(100)],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
-    let s = must_accept(
+    let s = ex().must_accept(&cc::grant_accreditation(), vec![subj("acme_verifier")], s);
+    let s = ex().must_accept(&cc::verify_measurement(), vec![subj("m1"), dec(100)], s);
+    let s = ex().must_accept(
         &cc::attest_measurement(),
         vec![subj("m1"), subj("acme_verifier")],
         s,
-        &inv,
-        &cc::definitions(),
     );
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::issue_credit(),
         vec![subj("c1"), subj("m1"), subj("acme_verifier"), subj("acct1")],
         s,
-        &inv,
-        &cc::definitions(),
     );
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::transfer_credit(),
         vec![subj("c1"), subj("acct1"), subj("acct2")],
         s,
-        &inv,
-        &cc::definitions(),
     );
     assert!(has_claim(&s, "HeldBy", &[subj("c1"), subj("acct2")]));
     assert!(!has_claim(&s, "HeldBy", &[subj("c1"), subj("acct1")]));
 
-    let s = must_accept(
-        &cc::retire_credit(),
-        vec![subj("c1"), subj("acct2")],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
+    let s = ex().must_accept(&cc::retire_credit(), vec![subj("c1"), subj("acct2")], s);
     assert!(has_claim(&s, "Retired", &[subj("c1"), subj("acct2")]));
     // Terminal: no custody remains after retirement.
     assert!(!has_claim(&s, "HeldBy", &[subj("c1"), subj("acct2")]));
@@ -394,52 +344,31 @@ fn issue_transfer_retire_commit_in_sequence() {
 /// A state in which `acct1` has retired exactly one credit of `quantity`
 /// tonnes (the full grant -> verify -> attest -> issue -> retire chain).
 fn state_with_one_retired_credit(quantity: i64) -> State {
-    let inv = cc::all_invariants();
     let s = State::default();
-    let s = must_accept(
-        &cc::grant_accreditation(),
-        vec![subj("acme_verifier")],
-        s,
-        &inv,
-        &cc::definitions(),
-    );
-    let s = must_accept(
+    let s = ex().must_accept(&cc::grant_accreditation(), vec![subj("acme_verifier")], s);
+    let s = ex().must_accept(
         &cc::verify_measurement(),
         vec![subj("m1"), dec(quantity)],
         s,
-        &inv,
-        &cc::definitions(),
     );
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::attest_measurement(),
         vec![subj("m1"), subj("acme_verifier")],
         s,
-        &inv,
-        &cc::definitions(),
     );
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::issue_credit(),
         vec![subj("c1"), subj("m1"), subj("acme_verifier"), subj("acct1")],
         s,
-        &inv,
-        &cc::definitions(),
     );
-    must_accept(
-        &cc::retire_credit(),
-        vec![subj("c1"), subj("acct1")],
-        s,
-        &inv,
-        &cc::definitions(),
-    )
+    ex().must_accept(&cc::retire_credit(), vec![subj("c1"), subj("acct1")], s)
 }
 
 fn with_obligation(state: State, quantity: i64, due_on: &str) -> State {
-    must_accept(
+    ex().must_accept(
         &cc::raise_obligation(),
         vec![subj("o1"), subj("acct1"), dec(quantity), date(due_on)],
         state,
-        &cc::all_invariants(),
-        &cc::definitions(),
     )
 }
 
@@ -447,12 +376,10 @@ fn with_obligation(state: State, quantity: i64, due_on: &str) -> State {
 fn discharge_succeeds_once_enough_is_retired() {
     let s = state_with_one_retired_credit(100);
     let s = with_obligation(s, 100, "2026-12-31");
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::discharge_obligation(),
         vec![subj("o1"), date("2026-06-01")],
         s,
-        &cc::all_invariants(),
-        &cc::definitions(),
     );
     assert!(has_claim(&s, "ObligationSatisfied", &[subj("o1")]));
 }
@@ -501,12 +428,10 @@ fn discharge_after_the_deadline_is_refused() {
 fn sweep_records_a_breach_past_due_and_under_target() {
     let s = with_obligation(state_with_one_retired_credit(100), 200, "2026-12-31");
     // The outside coordinator sweeps with a date past the deadline.
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::sweep_obligation(),
         vec![subj("o1"), date("2027-01-01")],
         s,
-        &cc::all_invariants(),
-        &cc::definitions(),
     );
     assert!(has_claim(&s, "ObligationBreached", &[subj("o1")]));
 }
@@ -532,12 +457,10 @@ fn sweep_before_the_due_date_does_not_breach() {
 #[test]
 fn sweep_does_not_breach_a_satisfied_obligation() {
     let s = with_obligation(state_with_one_retired_credit(100), 100, "2026-12-31");
-    let s = must_accept(
+    let s = ex().must_accept(
         &cc::discharge_obligation(),
         vec![subj("o1"), date("2026-06-01")],
         s,
-        &cc::all_invariants(),
-        &cc::definitions(),
     );
     // Past due, but already satisfied: the not-satisfied gate blocks the
     // sweep, so the two outcomes never coexist.

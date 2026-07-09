@@ -18,17 +18,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{dec, has_claim, must_accept, subj};
-use morpholog_core::{Definition, Invariant, Outcome, State};
+use common::{Example, dec, has_claim, subj};
+use morpholog_core::{Outcome, State};
 use morpholog_examples::verified_revenue;
 
-fn invariants() -> Vec<Invariant> {
-    verified_revenue::all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    verified_revenue::definitions()
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&verified_revenue::program()))
 }
 
 fn asset() -> morpholog_core::EvalValue {
@@ -40,22 +38,18 @@ fn period() -> morpholog_core::EvalValue {
 }
 
 fn admit_iv(state: State, amount: i64, ver: &str) -> State {
-    must_accept(
+    ex().must_accept(
         &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(amount), subj(ver)],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
 fn grant(state: State, ver: &str, purpose: &str, authority: &str, grant_id: &str) -> State {
-    must_accept(
+    ex().must_accept(
         &verified_revenue::grant_standing(),
         vec![subj(ver), subj(purpose), subj(authority), subj(grant_id)],
         state,
-        &invariants(),
-        &definitions(),
     )
 }
 
@@ -70,12 +64,10 @@ fn admit_then_correct_preserves_history_and_moves_pointer() {
     // CurrentVerification pointer moves to the corrected figure;
     // Supersedes records the lineage.
     let pre = admit_iv(State::default(), 91, "ver_001");
-    let post = must_accept(
+    let post = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
-        &invariants(),
-        &definitions(),
     );
 
     // Both verifications in admitted state.
@@ -114,19 +106,15 @@ fn cannot_correct_already_superseded_verification() {
     // correct_independent_verification together prevent parallel
     // restatement chains.
     let pre = admit_iv(State::default(), 91, "ver_001");
-    let pre = must_accept(
+    let pre = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
-        &invariants(),
-        &definitions(),
     );
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(85), subj("ver_003"), subj("ver_001")],
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -136,12 +124,10 @@ fn second_admission_against_existing_current_is_rejected() {
     // (asset, period) has at most one current verification at any
     // moment. To replace it, use correct_independent_verification.
     let pre = admit_iv(State::default(), 91, "ver_001");
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(95), subj("ver_002")],
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -205,9 +191,13 @@ fn decision_admits_only_with_matching_standing() {
         ],
         actor: Subject::from("test_actor"),
     };
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &pre, &invariants(), &definitions())
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &pre,
+        &verified_revenue::all_invariants(),
+        &verified_revenue::definitions(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -244,7 +234,7 @@ fn decision_admits_only_with_matching_standing() {
         "credit_committee",
         "grant_001",
     );
-    let post = must_accept(
+    let post = ex().must_accept(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -254,8 +244,6 @@ fn decision_admits_only_with_matching_standing() {
             subj("ver_001"),
         ],
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -282,7 +270,7 @@ fn investor_standing_does_not_admit_bank_decision() {
         "investor_relations",
         "grant_inv_001",
     );
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -292,8 +280,6 @@ fn investor_standing_does_not_admit_bank_decision() {
             subj("ver_001"),
         ],
         &pre,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -309,7 +295,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         "credit_committee",
         "grant_001",
     );
-    let pre = must_accept(
+    let pre = ex().must_accept(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -319,10 +305,8 @@ fn revoking_standing_blocks_future_but_preserves_past() {
             subj("ver_001"),
         ],
         pre,
-        &invariants(),
-        &definitions(),
     );
-    let after_revoke = must_accept(
+    let after_revoke = ex().must_accept(
         &verified_revenue::revoke_standing(),
         vec![
             subj("ver_001"),
@@ -330,8 +314,6 @@ fn revoking_standing_blocks_future_but_preserves_past() {
             subj("revoke_001"),
         ],
         pre,
-        &invariants(),
-        &definitions(),
     );
 
     // Historical decision survives.
@@ -363,7 +345,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
     ));
     // A new decision against the same verification is rejected.
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -373,8 +355,6 @@ fn revoking_standing_blocks_future_but_preserves_past() {
             subj("ver_001"),
         ],
         &after_revoke,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -390,7 +370,7 @@ fn cannot_regrant_after_revocation() {
         "credit_committee",
         "grant_001",
     );
-    let after_revoke = must_accept(
+    let after_revoke = ex().must_accept(
         &verified_revenue::revoke_standing(),
         vec![
             subj("ver_001"),
@@ -398,10 +378,8 @@ fn cannot_regrant_after_revocation() {
             subj("revoke_001"),
         ],
         pre,
-        &invariants(),
-        &definitions(),
     );
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -410,8 +388,6 @@ fn cannot_regrant_after_revocation() {
             subj("grant_002"),
         ],
         &after_revoke,
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -422,7 +398,7 @@ fn cannot_grant_standing_on_nonexistent_verification() {
     // ids are rejected at admission time. This is what attaches the
     // word "standing" to a real admitted figure rather than just a
     // shape in the database.
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_phantom"),
@@ -431,8 +407,6 @@ fn cannot_grant_standing_on_nonexistent_verification() {
             subj("grant_001"),
         ],
         &State::default(),
-        &invariants(),
-        &definitions(),
     );
 }
 
@@ -442,16 +416,14 @@ fn cannot_grant_standing_on_superseded_verification() {
     // grant_standing requires CurrentVerification - new standing must
     // attach to the live figure (ver_002), not the historical one.
     let pre = admit_iv(State::default(), 91, "ver_001");
-    let pre = must_accept(
+    let pre = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
-        &invariants(),
-        &definitions(),
     );
 
     // Attempt to grant standing on the now-superseded ver_001.
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -460,12 +432,10 @@ fn cannot_grant_standing_on_superseded_verification() {
             subj("grant_001"),
         ],
         &pre,
-        &invariants(),
-        &definitions(),
     );
 
     // But standing CAN be granted on ver_002 (the current figure).
-    let post = must_accept(
+    let post = ex().must_accept(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_002"),
@@ -474,8 +444,6 @@ fn cannot_grant_standing_on_superseded_verification() {
             subj("grant_002"),
         ],
         pre,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -511,7 +479,7 @@ fn correction_retracts_standing_on_prior_verification() {
         "investor_relations",
         "grant_inv_001",
     );
-    let pre = must_accept(
+    let pre = ex().must_accept(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -521,18 +489,14 @@ fn correction_retracts_standing_on_prior_verification() {
             subj("ver_001"),
         ],
         pre,
-        &invariants(),
-        &definitions(),
     );
 
     // Verifier corrects to 88. Both standings on ver_001 should be
     // retracted.
-    let post = must_accept(
+    let post = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
         pre,
-        &invariants(),
-        &definitions(),
     );
 
     // Historical verification + decision still in state.
@@ -578,7 +542,7 @@ fn correction_retracts_standing_on_prior_verification() {
 
     // A bank decision against ver_002 is rejected until the bank
     // re-grants standing on the corrected figure.
-    common::must_reject(
+    ex().must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -588,12 +552,10 @@ fn correction_retracts_standing_on_prior_verification() {
             subj("ver_002"),
         ],
         &post,
-        &invariants(),
-        &definitions(),
     );
 
     // After re-granting, the decision admits.
-    let after_regrant = must_accept(
+    let after_regrant = ex().must_accept(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_002"),
@@ -602,10 +564,8 @@ fn correction_retracts_standing_on_prior_verification() {
             subj("grant_bank_002"),
         ],
         post,
-        &invariants(),
-        &definitions(),
     );
-    let final_state = must_accept(
+    let final_state = ex().must_accept(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -615,8 +575,6 @@ fn correction_retracts_standing_on_prior_verification() {
             subj("ver_002"),
         ],
         after_regrant,
-        &invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &final_state,

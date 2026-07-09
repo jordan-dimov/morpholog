@@ -28,12 +28,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{claim_instance, dec, must_accept, subj};
+use common::{Example, claim_instance, dec, subj};
 use morpholog_core::{
     ArithOp, DerivedClaim, DerivedValue, EvalValue, Prop, State, Term, ValueExpr, enumerate_derived,
 };
 use morpholog_examples::double_entry_ledger;
+
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&double_entry_ledger::program()))
+}
 use rust_decimal::Decimal;
 
 /// Helper: post one journal entry against the ledger.
@@ -46,7 +52,7 @@ fn post(
     credit_account: &str,
     amount: i64,
 ) -> State {
-    must_accept(
+    ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj(entry_id),
@@ -57,8 +63,6 @@ fn post(
             dec(amount),
         ],
         state,
-        &double_entry_ledger::all_invariants(),
-        &double_entry_ledger::definitions(),
     )
 }
 

@@ -21,39 +21,31 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use std::sync::OnceLock;
 
-use common::{claim_instance, dec, has_claim, must_accept, must_accept_as, must_reject_as, subj};
+use common::{Example, claim_instance, dec, has_claim, subj};
 use morpholog_core::ir_builder::invariant;
-use morpholog_core::{
-    Definition, EvalError, EvalValue, Invariant, Prop, State, Subject, Term, Value, eval_invariant,
-};
+use morpholog_core::{EvalError, EvalValue, Prop, State, Subject, Term, Value, eval_invariant};
 use morpholog_examples::approval_controls;
 
-fn empty_invariants() -> Vec<Invariant> {
-    approval_controls::all_invariants()
-}
-
-fn definitions() -> Vec<Definition> {
-    approval_controls::definitions()
+fn ex() -> &'static Example {
+    static EX: OnceLock<Example> = OnceLock::new();
+    EX.get_or_init(|| Example::new(&approval_controls::program()))
 }
 
 fn grant_authority(state: State, actor: &str, doc_type: &str) -> State {
-    must_accept(
+    ex().must_accept(
         &approval_controls::grant_approval_authority(),
         vec![subj(actor), subj(doc_type)],
         state,
-        &empty_invariants(),
-        &definitions(),
     )
 }
 
 fn grant_limit(state: State, actor: &str, doc_type: &str, limit: i64) -> State {
-    must_accept(
+    ex().must_accept(
         &approval_controls::grant_approval_limit(),
         vec![subj(actor), subj(doc_type), dec(limit)],
         state,
-        &empty_invariants(),
-        &definitions(),
     )
 }
 
@@ -64,13 +56,11 @@ fn grant_limit(state: State, actor: &str, doc_type: &str, limit: i64) -> State {
 #[test]
 fn approve_without_authority_is_rejected_at_require() {
     let pre = State::default();
-    let reason = must_reject_as(
+    let reason = ex().must_reject_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "jordan",
         &pre,
-        &empty_invariants(),
-        &definitions(),
     );
     assert!(
         reason.to_string().contains("require"),
@@ -81,13 +71,11 @@ fn approve_without_authority_is_rejected_at_require() {
 #[test]
 fn approve_with_authority_carries_proposing_actor_on_asserted_claim() {
     let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "jordan",
         pre,
-        &empty_invariants(),
-        &definitions(),
     );
     assert!(
         has_claim(
@@ -105,33 +93,27 @@ fn approve_uses_proposing_actor_not_a_caller_parameter() {
     // jordan's behalf because $actor binds to the proposing actor,
     // not to a parameter the caller controls.
     let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "alice",
         &pre,
-        &empty_invariants(),
-        &definitions(),
     );
 }
 
 #[test]
 fn revoked_authority_blocks_future_but_preserves_past() {
     let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    let after_approval = must_accept_as(
+    let after_approval = ex().must_accept_as(
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "jordan",
         pre,
-        &empty_invariants(),
-        &definitions(),
     );
-    let after_revoke = must_accept(
+    let after_revoke = ex().must_accept(
         &approval_controls::revoke_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
         after_approval,
-        &empty_invariants(),
-        &definitions(),
     );
 
     // History survives, future is blocked.
@@ -145,13 +127,11 @@ fn revoked_authority_blocks_future_but_preserves_past() {
         "MayApprove",
         &[subj("jordan"), subj("vendor_onboarding")],
     ));
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_document(),
         vec![subj("doc_002"), subj("vendor_onboarding")],
         "jordan",
         &after_revoke,
-        &empty_invariants(),
-        &definitions(),
     );
 }
 
@@ -161,26 +141,22 @@ fn revoked_authority_blocks_future_but_preserves_past() {
 
 #[test]
 fn limit_approval_without_grant_is_rejected() {
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(100)],
         "jordan",
         &State::default(),
-        &empty_invariants(),
-        &definitions(),
     );
 }
 
 #[test]
 fn limit_approval_under_limit_commits_with_actor_and_amount() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(750)],
         "jordan",
         pre,
-        &empty_invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -193,13 +169,11 @@ fn limit_approval_under_limit_commits_with_actor_and_amount() {
 fn limit_approval_exactly_at_limit_commits() {
     // Le is inclusive at the boundary.
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_at_limit"), subj("invoice"), dec(1000)],
         "jordan",
         pre,
-        &empty_invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -216,13 +190,11 @@ fn limit_approval_exactly_at_limit_commits() {
 #[test]
 fn limit_approval_above_limit_is_rejected() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_over"), subj("invoice"), dec(1001)],
         "jordan",
         &pre,
-        &empty_invariants(),
-        &definitions(),
     );
 }
 
@@ -232,23 +204,19 @@ fn limit_grant_is_per_actor_and_per_doc_type() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
 
     // alice cannot approve under jordan's invoice limit.
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_alice"), subj("invoice"), dec(10)],
         "alice",
         &pre,
-        &empty_invariants(),
-        &definitions(),
     );
 
     // jordan cannot use her invoice limit for contracts.
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("ct_001"), subj("contract"), dec(10)],
         "jordan",
         &pre,
-        &empty_invariants(),
-        &definitions(),
     );
 }
 
@@ -259,13 +227,11 @@ fn multiple_grants_take_the_satisfying_one() {
     // shape of the require finds *some* satisfying limit.
     let pre = grant_limit(State::default(), "jordan", "invoice", 500);
     let pre = grant_limit(pre, "jordan", "invoice", 5000);
-    let post = must_accept_as(
+    let post = ex().must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_3k"), subj("invoice"), dec(3000)],
         "jordan",
         pre,
-        &empty_invariants(),
-        &definitions(),
     );
     assert!(has_claim(
         &post,
@@ -277,20 +243,16 @@ fn multiple_grants_take_the_satisfying_one() {
 #[test]
 fn revoking_a_limit_blocks_future_but_preserves_past() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let after_approval = must_accept_as(
+    let after_approval = ex().must_accept_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(800)],
         "jordan",
         pre,
-        &empty_invariants(),
-        &definitions(),
     );
-    let after_revoke = must_accept(
+    let after_revoke = ex().must_accept(
         &approval_controls::revoke_approval_limit(),
         vec![subj("jordan"), subj("invoice"), dec(1000)],
         after_approval,
-        &empty_invariants(),
-        &definitions(),
     );
 
     // History survives, future blocked.
@@ -304,13 +266,11 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
         "ApprovalLimit",
         &[subj("jordan"), subj("invoice"), dec(1000)],
     ));
-    must_reject_as(
+    ex().must_reject_as(
         &approval_controls::approve_within_limit(),
         vec![subj("inv_002"), subj("invoice"), dec(500)],
         "jordan",
         &after_revoke,
-        &empty_invariants(),
-        &definitions(),
     );
 }
 
@@ -341,8 +301,8 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         &approval_controls::approve_within_limit(),
         &transition,
         &pre,
-        &empty_invariants(),
-        &definitions(),
+        &approval_controls::all_invariants(),
+        &approval_controls::definitions(),
     )
     .expect_err("non-decimal limit must surface as EvalError, not Rejected");
     match err {
