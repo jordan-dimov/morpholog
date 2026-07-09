@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM pg_catalog.pg_class c\n             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n             WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'\n           ) AS \"sealed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sealed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name",
+        "Name"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9ecb5728eb7d502898901b406b010bb0c439a3b7a5d3e65d6197e85eaf19c4d3"
+}

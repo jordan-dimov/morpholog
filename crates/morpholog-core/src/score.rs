@@ -35,8 +35,10 @@ use crate::format::canonical_hash;
 use crate::ir::{Definition, Invariant, Program};
 use crate::state::State;
 
-/// Bumped when the report shape or scoring semantics change, so a stored
-/// experiment result is never silently misread.
+/// Bumped when the base report shape or the scoring semantics change
+/// incompatibly, so a stored experiment result is never silently
+/// misread. Additive optional fields (absent unless requested) do not
+/// bump it.
 pub const SCORE_FORMAT_VERSION: u32 = 1;
 /// Names the exact scoring rule, so the report is self-describing.
 pub const SCORE_SEMANTICS: &str = "fresh_state_violation_v1";
@@ -82,6 +84,54 @@ pub struct CandidateScore {
     pub program_hash: String,
     pub transitions_replayed: u64,
     pub invariants: Vec<InvariantScore>,
+    /// Per-slice attribution when the replay was split into a training
+    /// and a held-out test slice. Absent for an unsplit run, so the
+    /// unsplit report is unchanged. The whole-history totals above
+    /// always cover both slices.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split: Option<SplitScore>,
+}
+
+/// The train/test attribution of one replay. One continuous replay:
+/// the rule state entering the first test transition is the state the
+/// training slice built, and each fresh violation is attributed to
+/// the slice containing the transition that introduced it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SplitScore {
+    pub boundary: SplitBoundaryReport,
+    pub train: SliceScore,
+    pub test: SliceScore,
+}
+
+/// What boundary the split actually used - a stored experiment must
+/// be self-describing, especially when the request was a timestamp
+/// that the driver resolved to a transition.
+#[derive(Debug, Clone, Serialize)]
+pub struct SplitBoundaryReport {
+    /// The boundary as requested, in canonical form.
+    pub requested: String,
+    /// The last training transition it resolved to.
+    pub resolved_transition_id: String,
+    /// That transition's commit instant (RFC 3339).
+    pub resolved_committed_at: String,
+}
+
+/// One slice's share of the replay.
+#[derive(Debug, Clone, Serialize)]
+pub struct SliceScore {
+    pub transitions_replayed: u64,
+    pub invariants: Vec<SliceInvariantScore>,
+}
+
+/// Per candidate invariant, the fresh violations introduced inside one
+/// slice. `initially_holds` stays on the whole-history entry - it
+/// describes the empty initial state, which no slice owns.
+#[derive(Debug, Clone, Serialize)]
+pub struct SliceInvariantScore {
+    pub invariant: String,
+    pub version: u32,
+    pub would_refuse: u64,
+    pub refused_transitions: Vec<String>,
 }
 
 /// Per candidate invariant: the commits it would have refused. This is an
@@ -160,6 +210,11 @@ pub struct CandidateScorer<'p> {
     held: Vec<bool>,
     refused: Vec<Vec<String>>,
     transitions: u64,
+    /// Where the training slice ended, when the driver marked a split:
+    /// the boundary's identity, the transition count, and each
+    /// invariant's refusal count at the boundary. Everything beyond
+    /// the counts belongs to the test slice.
+    split_mark: Option<(SplitBoundaryReport, u64, Vec<usize>)>,
 }
 
 impl<'p> CandidateScorer<'p> {
@@ -184,7 +239,25 @@ impl<'p> CandidateScorer<'p> {
             held,
             refused,
             transitions: 0,
+            split_mark: None,
         })
+    }
+
+    /// Mark the train/test boundary: transitions observed so far are
+    /// the training slice, everything observed after is the held-out
+    /// test slice. The fold does not restart - the rule state carries
+    /// across, so the first test transition is judged against the
+    /// state history actually built.
+    pub fn mark_split(&mut self, boundary: SplitBoundaryReport) {
+        assert!(
+            self.split_mark.is_none(),
+            "mark_split called twice: one boundary per replay"
+        );
+        self.split_mark = Some((
+            boundary,
+            self.transitions,
+            self.refused.iter().map(Vec::len).collect(),
+        ));
     }
 
     /// Observe one replayed transition: `pre` is the state before it, `post`
@@ -208,6 +281,42 @@ impl<'p> CandidateScorer<'p> {
     }
 
     pub fn into_report(self) -> CandidateScore {
+        let split = self
+            .split_mark
+            .as_ref()
+            .map(|(boundary, train_n, train_counts)| {
+                let slice = |take_train: bool| SliceScore {
+                    transitions_replayed: if take_train {
+                        *train_n
+                    } else {
+                        self.transitions - train_n
+                    },
+                    invariants: self
+                        .invariants
+                        .iter()
+                        .zip(&self.refused)
+                        .zip(train_counts)
+                        .map(|((inv, refused), &k)| {
+                            let ids = if take_train {
+                                &refused[..k]
+                            } else {
+                                &refused[k..]
+                            };
+                            SliceInvariantScore {
+                                invariant: inv.name.to_string(),
+                                version: inv.version,
+                                would_refuse: ids.len() as u64,
+                                refused_transitions: ids.to_vec(),
+                            }
+                        })
+                        .collect(),
+                };
+                SplitScore {
+                    boundary: boundary.clone(),
+                    train: slice(true),
+                    test: slice(false),
+                }
+            });
         let invariants = self
             .invariants
             .iter()
@@ -228,6 +337,7 @@ impl<'p> CandidateScorer<'p> {
             program_hash: self.program_hash,
             transitions_replayed: self.transitions,
             invariants,
+            split,
         }
     }
 }
@@ -286,6 +396,45 @@ mod tests {
         assert_eq!(inv.invariant, "NoFlag");
         assert_eq!(inv.would_refuse, 2);
         assert_eq!(inv.refused_transitions, vec!["t1", "t4"]);
+    }
+
+    #[test]
+    fn a_split_attributes_each_violation_to_its_introducing_slice() {
+        let program = no_flag_program();
+        let mut scorer = CandidateScorer::new(&program).unwrap();
+        // t1 introduces a violation in the train slice; t2 (inherited)
+        // never counts; t3 recovers; t4 introduces one in the test
+        // slice. The whole-history totals cover both slices.
+        scorer.observe(&flagged(), &empty(), "t1").unwrap();
+        scorer.observe(&flagged(), &flagged(), "t2").unwrap();
+        scorer.mark_split(SplitBoundaryReport {
+            requested: "t2".to_string(),
+            resolved_transition_id: "t2".to_string(),
+            resolved_committed_at: "2026-01-01T00:00:00Z".to_string(),
+        });
+        scorer.observe(&empty(), &flagged(), "t3").unwrap();
+        scorer.observe(&flagged(), &empty(), "t4").unwrap();
+        let report = scorer.into_report();
+
+        assert_eq!(report.transitions_replayed, 4);
+        assert_eq!(report.invariants[0].would_refuse, 2);
+        let split = report.split.expect("split was marked");
+        assert_eq!(split.boundary.resolved_transition_id, "t2");
+        assert_eq!(split.train.transitions_replayed, 2);
+        assert_eq!(split.test.transitions_replayed, 2);
+        assert_eq!(split.train.invariants[0].refused_transitions, vec!["t1"]);
+        assert_eq!(split.test.invariants[0].refused_transitions, vec!["t4"]);
+    }
+
+    #[test]
+    fn an_unsplit_report_serializes_without_a_split_field() {
+        let program = no_flag_program();
+        let report = CandidateScorer::new(&program).unwrap().into_report();
+        let value = serde_json::to_value(&report).unwrap();
+        assert!(
+            value.get("split").is_none(),
+            "unsplit reports must stay byte-identical to before the split existed"
+        );
     }
 
     #[test]

@@ -1,0 +1,49 @@
+{
+  "score_format_version": 1,
+  "semantics": "fresh_state_violation_v1",
+  "program": "candidate",
+  "program_hash": "sha256:e69aa18def1afcc3a76c26d2bf458fca6f4955c32852bfc85b2a37e47a1b98f4",
+  "transitions_replayed": 2,
+  "invariants": [
+    {
+      "invariant": "no_flagged",
+      "version": 1,
+      "initially_holds": true,
+      "would_refuse": 1,
+      "refused_transitions": [
+        "01900000-0000-7000-8000-000000000001"
+      ]
+    }
+  ],
+  "split": {
+    "boundary": {
+      "requested": "2026-06-01T12:00:00+00:00",
+      "resolved_transition_id": "01900000-0000-7000-8000-000000000001",
+      "resolved_committed_at": "2026-06-01T12:00:00+00:00"
+    },
+    "train": {
+      "transitions_replayed": 1,
+      "invariants": [
+        {
+          "invariant": "no_flagged",
+          "version": 1,
+          "would_refuse": 1,
+          "refused_transitions": [
+            "01900000-0000-7000-8000-000000000001"
+          ]
+        }
+      ]
+    },
+    "test": {
+      "transitions_replayed": 1,
+      "invariants": [
+        {
+          "invariant": "no_flagged",
+          "version": 1,
+          "would_refuse": 0,
+          "refused_transitions": []
+        }
+      ]
+    }
+  }
+}

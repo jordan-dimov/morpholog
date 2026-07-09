@@ -334,6 +334,15 @@ pub(crate) struct VerifyArgs {
     /// Off by default - signing is opt-in.
     #[arg(long)]
     pub(crate) require_signatures: bool,
+
+    /// Also verify the generated SQL view surface in this schema: each
+    /// catalogued view's live definition (as PostgreSQL stores it) must
+    /// hash to the seal recorded when the views were applied, so a view
+    /// redefined in place under the same name is evident. The report
+    /// gains a `views` verdict; a tampered surface exits one. A surface
+    /// generated before sealing reports `not_sealed` and passes.
+    #[arg(long, value_name = "SCHEMA")]
+    pub(crate) views_schema: Option<String>,
 }
 
 /// Arguments for `checkpoint`: the connection, plus an optional Ed25519
@@ -395,6 +404,18 @@ pub(crate) struct EvaluateArgs {
     /// Single-pack only - a single anchor is meaningless across a batch.
     #[arg(long, requires = "pack", conflicts_with = "packs")]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
+
+    /// Split the replay into a training slice (everything at or before
+    /// this boundary) and a held-out test slice (everything after),
+    /// reported separately - the overfitting guard: a rule discovered
+    /// on the training slice is honestly judged on history it never
+    /// saw. Takes a transition id or an RFC 3339 timestamp. One
+    /// continuous replay: rule state carries across the boundary and
+    /// each violation counts in the slice that introduced it. Not
+    /// available with `--packs`, where each per-case pack is already
+    /// the unit a harness assigns to a slice.
+    #[arg(long, conflicts_with = "packs")]
+    pub(crate) train_until: Option<String>,
 }
 
 /// Evidence-pack subcommands. `export` is database-backed; `verify` is

@@ -506,6 +506,111 @@
         }
       }
     },
+    "invariant_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invariant", "version", "initially_holds", "would_refuse", "refused_transitions"],
+      "properties": {
+        "invariant": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "initially_holds": { "type": "boolean" },
+        "would_refuse": { "type": "integer", "minimum": 0 },
+        "refused_transitions": { "type": "array", "items": { "type": "string", "format": "uuid" } }
+      }
+    },
+    "slice_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transitions_replayed", "invariants"],
+      "properties": {
+        "transitions_replayed": { "type": "integer", "minimum": 0 },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["invariant", "version", "would_refuse", "refused_transitions"],
+            "properties": {
+              "invariant": { "type": "string" },
+              "version": { "type": "integer", "minimum": 1 },
+              "would_refuse": { "type": "integer", "minimum": 0 },
+              "refused_transitions": { "type": "array", "items": { "type": "string", "format": "uuid" } }
+            }
+          }
+        }
+      }
+    },
+    "score_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score_format_version", "semantics", "program", "program_hash", "transitions_replayed", "invariants"],
+      "properties": {
+        "score_format_version": { "type": "integer", "minimum": 1 },
+        "semantics": { "type": "string" },
+        "program": { "type": "string" },
+        "program_hash": { "type": "string", "pattern": "^sha256:" },
+        "transitions_replayed": { "type": "integer", "minimum": 0 },
+        "invariants": { "type": "array", "items": { "$ref": "#/$defs/invariant_score" } },
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["boundary", "train", "test"],
+          "properties": {
+            "boundary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["requested", "resolved_transition_id", "resolved_committed_at"],
+              "properties": {
+                "requested": { "type": "string" },
+                "resolved_transition_id": { "type": "string", "format": "uuid" },
+                "resolved_committed_at": { "type": "string", "format": "date-time" }
+              }
+            },
+            "train": { "$ref": "#/$defs/slice_score" },
+            "test": { "$ref": "#/$defs/slice_score" }
+          }
+        }
+      }
+    },
+    "batch_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score_format_version", "semantics", "program", "program_hash", "cases"],
+      "properties": {
+        "score_format_version": { "type": "integer", "minimum": 1 },
+        "semantics": { "type": "string" },
+        "program": { "type": "string" },
+        "program_hash": { "type": "string", "pattern": "^sha256:" },
+        "cases": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["pack", "status", "transitions_replayed", "invariants"],
+                "properties": {
+                  "pack": { "type": "string" },
+                  "status": { "const": "scored" },
+                  "transitions_replayed": { "type": "integer", "minimum": 0 },
+                  "invariants": { "type": "array", "items": { "$ref": "#/$defs/invariant_score" } }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["pack", "status", "error"],
+                "properties": {
+                  "pack": { "type": "string" },
+                  "status": { "const": "failed" },
+                  "error": { "type": "string" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
     "check_report": {
       "type": "object",
       "additionalProperties": false,
@@ -712,13 +817,45 @@
         }
       ]
     },
+    "views_verification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "views_checked"],
+          "properties": {
+            "status": { "const": "intact" },
+            "views_checked": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "mismatched", "missing"],
+          "properties": {
+            "status": { "const": "tampered" },
+            "mismatched": { "type": "array", "items": { "type": "string" } },
+            "missing": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "const": "not_sealed" }
+          }
+        }
+      ]
+    },
     "verify_report": {
       "type": "object",
       "additionalProperties": false,
       "required": ["replay", "tree"],
       "properties": {
         "replay": { "$ref": "#/$defs/verify_outcome" },
-        "tree": { "$ref": "#/$defs/tree_verification" }
+        "tree": { "$ref": "#/$defs/tree_verification" },
+        "views": { "$ref": "#/$defs/views_verification" }
       }
     },
     "pack_manifest": {

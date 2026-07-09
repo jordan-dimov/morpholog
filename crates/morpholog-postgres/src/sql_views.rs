@@ -133,7 +133,12 @@ const MAX_IDENT_BYTES: usize = 63;
 
 /// The catalogue view's name. Carries the model hash and the intended
 /// view inventory for drift-checking.
-const CATALOG_VIEW: &str = "_morpholog_catalog";
+pub(crate) const CATALOG_VIEW: &str = "_morpholog_catalog";
+
+/// The seal table's name: each generated view's definition as
+/// PostgreSQL stores it, hashed at apply time. A table, not a view -
+/// it is the recorded observation, not part of the generated surface.
+pub const VIEW_DEFS_TABLE: &str = "_morpholog_view_defs";
 
 /// The SQL `SELECT` expression and the kind note for one declared
 /// argument position. The expression is over the CTE-bound `arguments`
@@ -288,7 +293,7 @@ fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) 
 /// Double-quote a SQL identifier, doubling any embedded quote. Every
 /// identifier in the generated script is quoted, even safe ones, so the
 /// renderer never depends on PostgreSQL's case-folding.
-fn quote_ident(s: &str) -> String {
+pub(crate) fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
@@ -468,9 +473,56 @@ fn render(
     }
 
     render_catalog(&mut out, program, schema, model_hash, base, derived);
+    render_seal(&mut out, schema, base, derived);
 
     out.push_str("\nCOMMIT;\n");
     out
+}
+
+/// Render the seal: after the views exist (same transaction), read each
+/// one's definition back from PostgreSQL and store its hash. Reading
+/// `pg_get_viewdef` - not hashing the DDL emitted above - is the
+/// load-bearing detail: an in-place `CREATE OR REPLACE VIEW` under the
+/// same name changes PostgreSQL's stored definition even when the
+/// catalogue and the model hash do not, so `verify --views-schema` can
+/// prove the surface intact. The catalogue view is sealed too - it is
+/// part of the surface being trusted.
+fn render_seal(
+    out: &mut String,
+    schema: &str,
+    base: &[&PredicateDecl],
+    derived: &[&PredicateDecl],
+) {
+    let qualified = format!("{}.{}", quote_ident(schema), quote_ident(VIEW_DEFS_TABLE));
+    let names: Vec<String> = base
+        .iter()
+        .chain(derived.iter())
+        .map(|p| snake_case(p.name.as_str()))
+        .chain(std::iter::once(CATALOG_VIEW.to_string()))
+        .collect();
+
+    out.push_str("\n-- Seal: each view's definition as PostgreSQL stores it, hashed.\n");
+    let _ = writeln!(
+        out,
+        "CREATE TABLE IF NOT EXISTS {qualified} (view_name text PRIMARY KEY, definition_sha256 text NOT NULL);"
+    );
+    let _ = writeln!(out, "TRUNCATE {qualified};");
+    let _ = writeln!(
+        out,
+        "INSERT INTO {qualified} (view_name, definition_sha256)"
+    );
+    let _ = writeln!(
+        out,
+        "SELECT v.name, encode(sha256(convert_to(pg_get_viewdef(format('%I.%I', {}, v.name)::regclass, true), 'UTF8')), 'hex')",
+        quote_literal(schema)
+    );
+    out.push_str("FROM ( VALUES\n");
+    for (idx, name) in names.iter().enumerate() {
+        let cast = if idx == 0 { "::text" } else { "" };
+        let comma = if idx + 1 < names.len() { "," } else { "" };
+        let _ = writeln!(out, "    ({}{cast}){comma}", quote_literal(name));
+    }
+    out.push_str(") AS v(name);\n");
 }
 
 /// Render one predicate's view block: the non-updatable CTE view, then

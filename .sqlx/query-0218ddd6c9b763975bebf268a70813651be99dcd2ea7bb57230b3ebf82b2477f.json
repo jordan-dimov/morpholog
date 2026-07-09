@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT encode(sha256(convert_to(pg_get_viewdef(c.oid, true), 'UTF8')), 'hex') AS \"hash!\"\n           FROM pg_catalog.pg_class c\n           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n           WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'v'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name",
+        "Name"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0218ddd6c9b763975bebf268a70813651be99dcd2ea7bb57230b3ebf82b2477f"
+}

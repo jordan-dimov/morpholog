@@ -441,10 +441,7 @@ fn undeclared_blockers_inner(
         Prop::Or(props) => {
             let mut blockers = BTreeSet::new();
             for p in props {
-                match undeclared_blockers_inner(p, declared, definitions, seen) {
-                    Some(b) => blockers.extend(b),
-                    None => return None,
-                }
+                blockers.extend(undeclared_blockers_inner(p, declared, definitions, seen)?);
             }
             (!blockers.is_empty()).then_some(blockers)
         }
