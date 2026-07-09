@@ -640,6 +640,113 @@ async fn evidence_export_then_verify_offline() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn evidence_selective_export_then_verify_offline() {
+    reset_db().await;
+    let shown_a = post_balanced_entry("sd1", 100);
+    post_balanced_entry("sd_hidden", 200);
+    let shown_b = post_balanced_entry("sd3", 300);
+
+    let (status, cp_stdout, stderr) = run_cli(&["checkpoint"]);
+    assert!(status.success(), "checkpoint should succeed; {stderr}");
+    let mut anchor = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
+
+    // Disclose two of the three committed transitions.
+    let (status, pack_stdout, stderr) = run_cli(&[
+        "evidence",
+        "export",
+        "--transition",
+        &shown_a.to_string(),
+        "--transition",
+        &shown_b.to_string(),
+    ]);
+    assert!(
+        status.success(),
+        "selective export should succeed; {stderr}"
+    );
+    let pack: Value = serde_json::from_str(&pack_stdout).expect("pack is JSON");
+    assert_eq!(pack["manifest"]["pack_kind"], "selective", "{pack_stdout}");
+    assert_eq!(pack["rows"].as_array().unwrap().len(), 2);
+
+    // The reveal-nothing property over the real wire bytes: nothing of the
+    // undisclosed transition survives - not its entry subject, accounts,
+    // claims, or intent payloads.
+    assert!(pack_stdout.contains("sd1"));
+    assert!(
+        !pack_stdout.contains("sd_hidden"),
+        "undisclosed business payload leaked into the pack"
+    );
+
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, pack_stdout.as_bytes()).unwrap();
+    let pack_path = packfile.path().to_str().unwrap();
+
+    // Offline verify (NO --database-url) against the anchor: intact, exit 0.
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "evidence",
+        "verify",
+        pack_path,
+        "--anchor-file",
+        anchor.path().to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "offline verify should pass; {stderr}\n{stdout}"
+    );
+    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(verdict["status"], "intact", "got: {stdout}");
+    assert_eq!(verdict["rows_disclosed"], 2, "got: {stdout}");
+
+    // Edit a disclosed row: verify names its position and exits non-zero.
+    let mut tampered_json: Value = serde_json::from_str(&pack_stdout).unwrap();
+    tampered_json["rows"][0]["transformation_name"] = serde_json::json!("tampered");
+    let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut tamperedfile, tampered_json.to_string().as_bytes()).unwrap();
+    let (status, stdout, _stderr) =
+        run_cli_no_db(&["evidence", "verify", tamperedfile.path().to_str().unwrap()]);
+    assert!(
+        !status.success(),
+        "a tampered selective pack must exit non-zero: {stdout}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        "row_not_included",
+        "got: {stdout}"
+    );
+
+    // Compliance mode: the covering checkpoint is unsigned, so
+    // --require-signatures fails the otherwise-intact pack.
+    let (status, stdout, _stderr) =
+        run_cli_no_db(&["evidence", "verify", pack_path, "--require-signatures"]);
+    assert!(!status.success(), "unsigned must fail the policy: {stdout}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        "signature_required",
+        "got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn evidence_verify_names_an_unknown_future_pack_version() {
+    // A v4 pack must be named as too new, never misread as a malformed v1.
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(
+        &mut packfile,
+        br#"{"manifest": {"pack_format_version": 4}}"#,
+    )
+    .unwrap();
+    let (status, stdout, _stderr) =
+        run_cli_no_db(&["evidence", "verify", packfile.path().to_str().unwrap()]);
+    assert!(!status.success());
+    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
+    assert!(
+        verdict["detail"].as_str().unwrap().contains("newer"),
+        "got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict() {
     // A file that reads but is not a valid pack is a decided verdict on
     // stdout (`malformed_pack`, exit one), not an operational failure on

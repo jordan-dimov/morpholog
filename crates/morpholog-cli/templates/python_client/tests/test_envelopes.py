@@ -305,6 +305,33 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsInstance(pack.inclusion_proofs[0], envelopes.RowInclusionProof)
         self.assertEqual(pack.inclusion_proofs[0].leaf_index, 2)
 
+    def test_selective_evidence_pack_and_every_verdict(self):
+        pack = envelopes.SelectiveEvidencePack.from_json(golden("selective_evidence_pack.json"))
+        self.assertEqual(pack.manifest.pack_format_version, 3)
+        self.assertEqual(pack.manifest.pack_kind, "selective")
+        self.assertIsInstance(pack.checkpoint, envelopes.Checkpoint)
+        self.assertEqual(len(pack.rows), len(pack.inclusion_proofs))
+        self.assertEqual(pack.inclusion_proofs[0].leaf_index, 1)
+
+        cases = [
+            ("selective_verification_intact.json", envelopes.SelectiveIntact),
+            ("selective_verification_row_not_included.json", envelopes.SelectiveRowNotIncluded),
+            ("selective_verification_anchor_mismatch.json", envelopes.SelectiveAnchorMismatch),
+            ("selective_verification_signature_invalid.json", envelopes.SelectiveSignatureInvalid),
+            (
+                "selective_verification_signature_required.json",
+                envelopes.SelectiveSignatureRequired,
+            ),
+            ("selective_verification_malformed.json", envelopes.SelectiveMalformed),
+        ]
+        for name, expected in cases:
+            verdict = envelopes.parse_selective_verification(golden(name))
+            self.assertIsInstance(verdict, expected, name)
+        intact = envelopes.parse_selective_verification(
+            golden("selective_verification_intact.json")
+        )
+        self.assertEqual(intact.rows_disclosed, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

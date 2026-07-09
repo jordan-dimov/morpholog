@@ -462,6 +462,15 @@ pub(crate) struct EvidenceExportArgs {
     /// the full start checkpoint; prefer `--from-anchor` for the trust object.
     #[arg(long)]
     pub(crate) from_tree_size: Option<i64>,
+
+    /// Export a SELECTIVE pack disclosing only this transition (repeat the
+    /// flag for several). Each disclosed row carries a proof that it is
+    /// genuinely at its position under the covering checkpoint; undisclosed
+    /// rows are absent entirely. The pack proves the disclosed rows
+    /// authentic - it does not prove the selection complete, and the
+    /// disclosed positions and count are themselves visible.
+    #[arg(long, conflicts_with_all = ["from_anchor", "from_tree_size"])]
+    pub(crate) transition: Vec<uuid::Uuid>,
 }
 
 /// Arguments for `evidence verify`: a pack file and an optional external
@@ -472,11 +481,12 @@ pub(crate) struct EvidenceVerifyArgs {
     pub(crate) pack_file: std::path::PathBuf,
 
     /// Path to a checkpoint JSON file (as printed by `checkpoint`), held
-    /// outside the database. The checkpoint at the anchor's `tree_size` in
-    /// the pack's chain is verified to match it (an older anchor is fine,
-    /// as long as the pack still covers it) - the check a coordinated
-    /// rewrite cannot pass. Omit to verify only the pack's internal
-    /// consistency.
+    /// outside the database - the check a coordinated rewrite cannot pass.
+    /// For a prefix pack the checkpoint at the anchor's `tree_size` in the
+    /// pack's chain must match it (an older anchor is fine, as long as the
+    /// pack still covers it); a window pack's anchor is its from-checkpoint;
+    /// a selective pack's anchor is its one covering checkpoint. Omit to
+    /// verify only the pack's internal consistency.
     #[arg(long)]
     pub(crate) anchor_file: Option<std::path::PathBuf>,
 

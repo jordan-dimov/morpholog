@@ -401,6 +401,37 @@ class Morpholog:
             args.extend(["--anchor-file", str(anchor_file)])
         return envelopes.parse_window_verification(self._json(*args))
 
+    def evidence_export_selective(
+        self,
+        transitions: "list[str]",
+        tree_size: int | None = None,
+    ) -> envelopes.SelectiveEvidencePack:
+        """Export a SELECTIVE pack disclosing only the named transitions,
+        each proven included at its position under the covering checkpoint
+        (latest, or ``tree_size``). Undisclosed rows are absent entirely.
+        The pack proves the disclosed rows authentic - it does NOT prove
+        the selection complete, and disclosed positions and count are
+        themselves visible."""
+        if not transitions:
+            raise ValueError("a selective pack must disclose at least one transition")
+        args = ["evidence", "export", "--database-url", self.database_url]
+        for transition in transitions:
+            args.extend(["--transition", str(transition)])
+        if tree_size is not None:
+            args.extend(["--tree-size", str(tree_size)])
+        return envelopes.SelectiveEvidencePack.from_json(self._json(*args))
+
+    def evidence_verify_selective(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.SelectiveVerification:
+        """Verify a selective pack offline - no database. Returns the
+        selective verdict; a row not included, anchor mismatch, or
+        malformed pack is a decided verdict on stdout."""
+        args = ["evidence", "verify", str(pack_file)]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.parse_selective_verification(self._json(*args))
+
     # ------------------------------------------------------------
     # The outbox lease protocol.
     # ------------------------------------------------------------

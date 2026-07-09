@@ -35,7 +35,8 @@ use morpholog_core::{
 };
 use morpholog_postgres::{
     AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
-    PackManifest, PgProposalOutcome, RowInclusionProof, TreeHeadSignature, TreeVerification,
+    PackManifest, PgProposalOutcome, RowInclusionProof, SelectiveEvidencePack,
+    SelectivePackManifest, SelectiveVerification, TreeHeadSignature, TreeVerification,
     VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack, WindowPackManifest,
     WindowVerification,
 };
@@ -760,6 +761,70 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             detail: "window covers 2 rows but the pack carries 1".into(),
         }),
     );
+
+    // The selective pack: a chosen subset, each row proven at its position.
+    assert_golden(
+        "selective_evidence_pack.json",
+        &to_value(&SelectiveEvidencePack {
+            manifest: SelectivePackManifest {
+                pack_format_version: 3,
+                pack_kind: "selective".into(),
+                tree_size: 3,
+                root_hash: format!("sha256:{}", "c".repeat(64)),
+                checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+            },
+            checkpoint: Checkpoint {
+                tree_size: 3,
+                root_hash: format!("sha256:{}", "c".repeat(64)),
+                prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
+                checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+                signatures: Vec::new(),
+            },
+            rows: vec![sample_audit_row()],
+            inclusion_proofs: vec![RowInclusionProof {
+                leaf_index: 1,
+                proof: vec![format!("sha256:{}", "f".repeat(64))],
+            }],
+        }),
+    );
+    assert_golden(
+        "selective_verification_intact.json",
+        &to_value(&SelectiveVerification::Intact {
+            tree_size: 3,
+            rows_disclosed: 1,
+        }),
+    );
+    assert_golden(
+        "selective_verification_row_not_included.json",
+        &to_value(&SelectiveVerification::RowNotIncluded { leaf_index: 1 }),
+    );
+    assert_golden(
+        "selective_verification_anchor_mismatch.json",
+        &to_value(&SelectiveVerification::AnchorMismatch {
+            tree_size: 3,
+            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+            pack_checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+        }),
+    );
+    assert_golden(
+        "selective_verification_signature_invalid.json",
+        &to_value(&SelectiveVerification::SignatureInvalid {
+            tree_size: 3,
+            key_id: "audit-2026-q3".into(),
+            purpose: "audit_checkpoint_v1".into(),
+            public_key: format!("ed25519-pub:{}", "c".repeat(64)),
+        }),
+    );
+    assert_golden(
+        "selective_verification_signature_required.json",
+        &to_value(&SelectiveVerification::SignatureRequired { tree_size: 3 }),
+    );
+    assert_golden(
+        "selective_verification_malformed.json",
+        &to_value(&SelectiveVerification::Malformed {
+            detail: "a selective pack must disclose at least one row".into(),
+        }),
+    );
 }
 
 // ============================================================
@@ -930,6 +995,31 @@ fn every_golden_validates_against_its_defs_entry() {
             "tree_verification",
         ),
         ("window_evidence_pack.json", "window_evidence_pack"),
+        ("selective_evidence_pack.json", "selective_evidence_pack"),
+        (
+            "selective_verification_intact.json",
+            "selective_verification",
+        ),
+        (
+            "selective_verification_row_not_included.json",
+            "selective_verification",
+        ),
+        (
+            "selective_verification_anchor_mismatch.json",
+            "selective_verification",
+        ),
+        (
+            "selective_verification_signature_invalid.json",
+            "selective_verification",
+        ),
+        (
+            "selective_verification_signature_required.json",
+            "selective_verification",
+        ),
+        (
+            "selective_verification_malformed.json",
+            "selective_verification",
+        ),
         ("window_verification_intact.json", "window_verification"),
         (
             "window_verification_inconsistent_extension.json",

@@ -7,8 +7,9 @@
 //! product promise.
 
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, TreeVerification, WindowEvidencePack, WindowStart,
-    WindowVerification, export_pack, export_window, verify_pack, verify_window,
+    Checkpoint, EvidencePack, SelectiveEvidencePack, SelectiveVerification, TreeVerification,
+    WindowEvidencePack, WindowStart, WindowVerification, export_pack, export_selective,
+    export_window, verify_pack, verify_selective, verify_window,
 };
 
 use anyhow::Context;
@@ -23,13 +24,23 @@ pub(crate) async fn run(cmd: EvidenceCmd) -> anyhow::Result<()> {
     }
 }
 
-/// `evidence export`: a complete-prefix pack by default, or - with a
-/// `--from-*` start - the window between that earlier checkpoint and the
-/// covering one. Printed as JSON; redirect it to a file. A pack carries the
-/// full audit rows it covers - actors, arguments, claims, intents - so it is
-/// NOT selective disclosure and may contain confidential business data.
+/// `evidence export`: a complete-prefix pack by default, a window between
+/// two checkpoints with a `--from-*` start, or - with `--transition` - a
+/// selective pack disclosing only the named transitions, each proven
+/// included. Printed as JSON; redirect it to a file. Prefix and window
+/// packs carry the FULL audit rows they cover - actors, arguments, claims,
+/// intents - and may contain confidential business data; a selective pack
+/// carries only the chosen rows, and proves them authentic without
+/// proving the selection complete.
 async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
+
+    if !args.transition.is_empty() {
+        let pack = export_selective(&pool, args.tree_size, &args.transition)
+            .await
+            .context("export_selective failed")?;
+        return print_json(&pack);
+    }
 
     // The window start: a whole anchor file (the trust object - export
     // refuses if the stored start has diverged from it), or the weaker
@@ -85,15 +96,32 @@ fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    // The pack kind is part of the contract: peek the format version so a
-    // window pack is not mistaken for a malformed prefix pack. A file that is
-    // not a pack at all is still a decided verdict, not an operational error.
+    // The pack kind is part of the contract: peek the format version so
+    // each pack kind gets its own verifier and verdict shape. An unknown
+    // FUTURE version is named as such rather than falling through to the
+    // prefix path and reading as a malformed v1; a file that is not a pack
+    // at all is still a decided verdict, not an operational error.
     let intact = match pack_format_version(&bytes) {
         Some(2) => {
             let verdict = verify_window_pack(&bytes, anchor.as_ref(), args.require_signatures);
             let intact = matches!(verdict, WindowVerification::Intact { .. });
             print_json(&verdict)?;
             intact
+        }
+        Some(3) => {
+            let verdict = verify_selective_pack(&bytes, anchor.as_ref(), args.require_signatures);
+            let intact = matches!(verdict, SelectiveVerification::Intact { .. });
+            print_json(&verdict)?;
+            intact
+        }
+        Some(n) if n > 3 => {
+            print_json(&TreeVerification::MalformedPack {
+                detail: format!(
+                    "pack_format_version {n} is newer than this binary understands; \
+                     upgrade morpholog to verify it"
+                ),
+            })?;
+            false
         }
         _ => {
             let verdict = verify_prefix_pack(&bytes, anchor.as_ref(), args.require_signatures);
@@ -148,6 +176,36 @@ fn verify_prefix_pack(
             .min()
     {
         return TreeVerification::SignatureRequired { tree_size };
+    }
+    verdict
+}
+
+fn verify_selective_pack(
+    bytes: &[u8],
+    anchor: Option<&Checkpoint>,
+    require_signatures: bool,
+) -> SelectiveVerification {
+    let pack: SelectiveEvidencePack = match serde_json::from_slice(bytes) {
+        Ok(pack) => pack,
+        Err(e) => {
+            return SelectiveVerification::Malformed {
+                detail: e.to_string(),
+            };
+        }
+    };
+    let verdict =
+        verify_selective(&pack, anchor).unwrap_or_else(|e| SelectiveVerification::Malformed {
+            detail: e.to_string(),
+        });
+    // Compliance policy: --require-signatures fails an unsigned covering
+    // checkpoint. Crypto only - authority is a full-prefix property.
+    if require_signatures
+        && matches!(verdict, SelectiveVerification::Intact { .. })
+        && pack.checkpoint.signatures.is_empty()
+    {
+        return SelectiveVerification::SignatureRequired {
+            tree_size: pack.checkpoint.tree_size,
+        };
     }
     verdict
 }

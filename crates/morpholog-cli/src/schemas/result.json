@@ -990,6 +990,99 @@
           }
         }
       ]
+    },
+    "selective_pack_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pack_format_version", "pack_kind", "tree_size", "root_hash", "checkpoint_hash"],
+      "properties": {
+        "pack_format_version": { "type": "integer" },
+        "pack_kind": { "type": "string" },
+        "tree_size": { "type": "integer" },
+        "root_hash": { "type": "string" },
+        "checkpoint_hash": { "type": "string" }
+      }
+    },
+    "selective_evidence_pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "checkpoint", "rows", "inclusion_proofs"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/selective_pack_manifest" },
+        "checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/audit_row" }
+        },
+        "inclusion_proofs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/row_inclusion_proof" }
+        }
+      }
+    },
+    "selective_verification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "rows_disclosed"],
+          "properties": {
+            "status": { "const": "intact" },
+            "tree_size": { "type": "integer" },
+            "rows_disclosed": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "leaf_index"],
+          "properties": {
+            "status": { "const": "row_not_included" },
+            "leaf_index": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "anchor_checkpoint_hash", "pack_checkpoint_hash"],
+          "properties": {
+            "status": { "const": "anchor_mismatch" },
+            "tree_size": { "type": "integer" },
+            "anchor_checkpoint_hash": { "type": "string" },
+            "pack_checkpoint_hash": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "key_id", "purpose", "public_key"],
+          "properties": {
+            "status": { "const": "signature_invalid" },
+            "tree_size": { "type": "integer" },
+            "key_id": { "type": "string" },
+            "purpose": { "type": "string" },
+            "public_key": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size"],
+          "properties": {
+            "status": { "const": "signature_required" },
+            "tree_size": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "detail"],
+          "properties": {
+            "status": { "const": "malformed" },
+            "detail": { "type": "string" }
+          }
+        }
+      ]
     }
   }
 }
