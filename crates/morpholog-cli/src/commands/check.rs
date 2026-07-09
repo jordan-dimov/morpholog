@@ -2,9 +2,9 @@
 
 use crate::CheckArgs;
 use crate::commands::{ParsedSource, compile_or_exit, parse_or_exit, print_json};
+use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
 use morpholog_core::{CompiledProgram, Program};
-use morpholog_surface::{Diagnostic, line_col, parse_program_with_sources};
-use serde::Serialize;
+use morpholog_surface::{Diagnostic, parse_program_with_sources};
 use std::path::Path;
 
 /// Run the `check` subcommand. Parse + validate the source file,
@@ -158,49 +158,6 @@ fn render_lint(lint: &morpholog_core::Lint, strict: bool, parsed: &ParsedSource)
     }
 }
 
-/// One finding in the `--json` output. Byte offsets and 1-based
-/// line/column are present when the finding has a source anchor;
-/// a finding without one (a generated discipline invariant) carries
-/// only severity and message.
-#[derive(Serialize)]
-struct JsonDiagnostic {
-    severity: &'static str,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    start: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    end: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    line: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    column: Option<usize>,
-}
-
-impl JsonDiagnostic {
-    fn new(
-        severity: &'static str,
-        message: String,
-        span: Option<morpholog_surface::Span>,
-        source: &str,
-    ) -> Self {
-        let (line, column) = match &span {
-            Some(s) => {
-                let (l, c) = line_col(source, s.start);
-                (Some(l), Some(c))
-            }
-            None => (None, None),
-        };
-        Self {
-            severity,
-            message,
-            start: span.as_ref().map(|s| s.start),
-            end: span.as_ref().map(|s| s.end),
-            line,
-            column,
-        }
-    }
-}
-
 /// `check --json`: every finding - parse errors, validation errors,
 /// lints - in one stdout object, uniform across layers. Exit
 /// semantics match the plain form (`--strict` promotes hints).
@@ -215,7 +172,7 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
         Err(diagnostics) => {
             failed = true;
             for d in diagnostics {
-                findings.push(JsonDiagnostic::new(
+                findings.push(CheckDiagnostic::new(
                     "error",
                     d.message,
                     Some(d.primary),
@@ -232,7 +189,7 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
                 Err(errors) => {
                     failed = true;
                     for err in &errors {
-                        findings.push(JsonDiagnostic::new(
+                        findings.push(CheckDiagnostic::new(
                             "error",
                             err.to_string(),
                             map.span_for_error(err),
@@ -244,7 +201,7 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
                     for lint in &morpholog_core::lints(&compiled) {
                         let severity = if args.strict { "error" } else { "hint" };
                         failed |= args.strict;
-                        findings.push(JsonDiagnostic::new(
+                        findings.push(CheckDiagnostic::new(
                             severity,
                             lint.to_string(),
                             map.span_for_lint(lint),
@@ -256,10 +213,10 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
         }
     }
 
-    let payload = serde_json::json!({
-        "file": args.file.display().to_string(),
-        "diagnostics": findings,
-    });
+    let payload = CheckReport {
+        diagnostics: findings,
+        file: args.file.display().to_string(),
+    };
     println!("{}", serde_json::to_string_pretty(&payload)?);
     if failed {
         std::process::exit(1);

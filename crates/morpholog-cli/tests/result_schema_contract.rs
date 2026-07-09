@@ -257,19 +257,22 @@ fn audit_rows_serialize_as_pinned() {
 
     // The --named form replaces the two claim arrays with
     // field-keyed bare objects (the named_claim shape) and leaves
-    // everything else byte-identical. The live binary's construction
-    // is pinned by cli_integration; this golden pins the bytes the
-    // Python tests consume.
-    let mut named = to_value(&row);
-    let obj = named.as_object_mut().unwrap();
-    obj.insert(
-        "asserted_claims".to_string(),
-        serde_json::json!([{
-            "predicate": "Account",
-            "args": { "account_id": "acct_1", "balance": "100.50" }
-        }]),
-    );
-    obj.insert("retracted_claims".to_string(), serde_json::json!([]));
+    // everything else byte-identical - through the same projection
+    // the binary runs.
+    let named = morpholog_cli::envelopes::audit_row_named(
+        &row,
+        vec![morpholog_cli::envelopes::NamedClaim {
+            args: [
+                ("account_id".to_string(), serde_json::json!("acct_1")),
+                ("balance".to_string(), serde_json::json!("100.50")),
+            ]
+            .into_iter()
+            .collect(),
+            predicate: "Account".into(),
+        }],
+        vec![],
+    )
+    .unwrap();
     assert_golden("audit_row_named.json", &named);
 }
 
@@ -370,36 +373,53 @@ fn coverage_report_serializes_as_pinned() {
     assert_golden("coverage_report.json", &to_value(&tracker.into_report()));
 }
 
-// Single-shape reports, built as their commands build them.
+// Single-shape reports, serialized from the same envelope structs
+// the commands print.
 #[test]
 fn report_envelopes_serialize_as_pinned() {
+    use morpholog_cli::envelopes::{
+        CheckDiagnostic, CheckReport, HashReport, InitReport, NamedClaim,
+    };
+
     assert_golden(
         "init_report.json",
-        &serde_json::json!({ "status": "initialised", "schema": "morpholog" }),
+        &to_value(&InitReport {
+            schema: "morpholog",
+            status: "initialised",
+        }),
     );
     assert_golden(
         "hash_report.json",
-        &serde_json::json!({
-            "program": "envelopes",
-            "hash": format!("sha256:{}", "0".repeat(64)),
+        &to_value(&HashReport {
+            hash: format!("sha256:{}", "0".repeat(64)),
+            program: "envelopes".to_string(),
         }),
     );
     assert_golden(
         "check_report.json",
-        &serde_json::json!({
-            "file": "model.morph",
-            "diagnostics": [{
-                "severity": "error",
-                "message": "undeclared predicate `Ghost` referenced in invariant `cap`",
-                "start": 412, "end": 447, "line": 19, "column": 1,
+        &to_value(&CheckReport {
+            diagnostics: vec![CheckDiagnostic {
+                column: Some(1),
+                end: Some(447),
+                line: Some(19),
+                message: "undeclared predicate `Ghost` referenced in invariant `cap`".to_string(),
+                severity: "error",
+                start: Some(412),
             }],
+            file: "model.morph".to_string(),
         }),
     );
     assert_golden(
         "named_claim.json",
-        &serde_json::json!({
-            "predicate": "TradeSettled",
-            "args": { "trade": "trade_1", "settled_qty": "5000", "flagged": false },
+        &to_value(&NamedClaim {
+            args: [
+                ("trade".to_string(), serde_json::json!("trade_1")),
+                ("settled_qty".to_string(), serde_json::json!("5000")),
+                ("flagged".to_string(), serde_json::json!(false)),
+            ]
+            .into_iter()
+            .collect(),
+            predicate: "TradeSettled".into(),
         }),
     );
 }

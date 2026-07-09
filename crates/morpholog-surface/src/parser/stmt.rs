@@ -50,14 +50,13 @@
 //! "the next statement keyword". The body of a transformation
 //! parses as `stmt+` with no explicit punctuation.
 
-use super::expr::duration_ctor;
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, Unit, Value, ValueExpr};
+use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, ValueExpr};
 
 use crate::lexer::Token;
 
-use super::expr::{expression_parser, value_expr_parser};
+use super::expr::{expression_parser, term_list_parser, value_expr_parser};
 
 /// Build a parser for a single statement.
 ///
@@ -77,49 +76,7 @@ where
 
     recursive(|statement| {
         let ident = select! { Token::Ident(s) => s };
-        let decimal_lit = select! { Token::DecimalLit(s) => s };
-        let date_lit = select! { Token::DateLit(s) => s };
-        let subject_lit = select! { Token::SubjectLit(s) => s };
-
-        // term ::= Ident | "_" | DecimalLit | TimestampLit | DateLit
-        //        | duration(ISO) | SubjectLit
-        let timestamp_lit = select! { Token::TimestampLit(s) => s };
-        let term = choice((
-            just(Token::Wildcard).to(Term::Wildcard),
-            decimal_lit
-                .then(ident.or_not())
-                .map(|(s, unit)| match unit {
-                    // A numeric literal followed by an identifier in
-                    // term position is a quantity literal: `25000 USD`.
-                    // The identifier is committed as the unit, so an
-                    // ill-typed contextual keyword here (e.g. a time
-                    // comparator after a bare number) reads as a unit
-                    // and fails downstream - acceptable, since that
-                    // expression was already ill-typed.
-                    Some(u) => Term::Literal(Value::Quantity {
-                        amount: s,
-                        unit: Unit::from(u),
-                    }),
-                    None => Term::Literal(Value::Decimal(s)),
-                }),
-            timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
-            date_lit.map(|s| Term::Literal(Value::Date(s))),
-            // Before bare idents so `duration(...)` is the constructor,
-            // not a variable followed by a stray paren.
-            duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
-            subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
-            ident.map(|name| {
-                if name == "actor" {
-                    Term::Actor
-                } else {
-                    Term::Var(name.into())
-                }
-            }),
-        ));
-        let term_list = term
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<Term>>();
+        let term_list = term_list_parser();
 
         // claim_pattern ::= Ident "(" term_list ")"
         //

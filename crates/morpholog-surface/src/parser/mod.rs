@@ -63,3 +63,48 @@ mod stmt;
 
 pub use expr::{parse_expression, parse_value_expr};
 pub use program::{parse_program, parse_program_with_sources};
+
+use crate::diagnostics::Diagnostic;
+use crate::lexer::Token;
+use chumsky::input::ValueInput;
+use chumsky::prelude::*;
+
+/// A body in the inline-or-indented shape shared by invariants,
+/// definitions, quantifiers, and discipline clauses: the layout pass
+/// emits `Indent`/`Dedent` around an indented body; the inline form
+/// has no layout tokens.
+fn indented_or_inline<'a, I, O>(
+    body: impl Parser<'a, I, O, extra::Err<Rich<'a, Token>>> + Clone,
+) -> impl Parser<'a, I, O, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    choice((
+        just(Token::Indent)
+            .ignore_then(body.clone())
+            .then_ignore(just(Token::Dedent)),
+        body,
+    ))
+}
+
+/// Map lexer failures to diagnostics. Shared by every parse entry
+/// point, so the "lex error:" prefix has one home.
+fn lex_error_diagnostics(errs: Vec<Rich<'_, char>>) -> Vec<Diagnostic> {
+    errs.into_iter()
+        .map(|e| Diagnostic::error(format!("lex error: {}", e.reason()), e.span().into_range()))
+        .collect()
+}
+
+/// Map parser failures to diagnostics - the "parse error:" twin of
+/// [`lex_error_diagnostics`].
+fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
+    errs.into_iter()
+        .map(|e| {
+            let span = e.span();
+            Diagnostic::error(
+                format!("parse error: {}", e.reason()),
+                span.start()..span.end(),
+            )
+        })
+        .collect()
+}

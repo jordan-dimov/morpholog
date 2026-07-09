@@ -27,8 +27,8 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
     // Validation is the gate, not an input: only a valid programme
     // gets an authoritative hash.
     validate_or_exit(&parsed);
-    print_json(&serde_json::json!({
-        "program": parsed.program.name,
-        "hash": canonical_hash(&parsed.program),
-    }))
+    print_json(&morpholog_cli::envelopes::HashReport {
+        hash: canonical_hash(&parsed.program),
+        program: parsed.program.name.clone(),
+    })
 }

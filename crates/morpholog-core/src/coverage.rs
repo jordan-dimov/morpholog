@@ -68,6 +68,7 @@ use serde::Serialize;
 
 use crate::definitions::DefinitionIndex;
 use crate::eval::{EvalContext, EvalError, definition_call_frame, find_matches};
+use crate::fold::mentions_pre;
 use crate::ir::{Definition, InvariantOrigin, PredicateName, Program, Prop};
 use crate::lint::collect_implications;
 use crate::predicates_referenced_by_prop;
@@ -545,28 +546,6 @@ impl<'p> CoverageTracker<'p> {
             invariants,
             transformations,
         }
-    }
-}
-
-/// Does this proposition contain `pre(...)`? Definitions cannot (a
-/// validated programme bans `pre` inside bodies), so the walk does
-/// not descend through calls.
-pub(crate) fn mentions_pre(prop: &Prop) -> bool {
-    match prop {
-        Prop::Pre(_) => true,
-        Prop::Claim { .. }
-        | Prop::Defined { .. }
-        | Prop::In(_, _)
-        | Prop::Eq(_, _)
-        | Prop::Neq(_, _)
-        | Prop::Compare { .. } => false,
-        Prop::And(props) | Prop::Or(props) => props.iter().any(mentions_pre),
-        Prop::Xor(left, right) | Prop::Implies { left, right } => {
-            mentions_pre(left) || mentions_pre(right)
-        }
-        Prop::Not(inner) => mentions_pre(inner),
-        Prop::Exists { body, .. } => mentions_pre(body),
-        Prop::Forall { source, body, .. } => mentions_pre(source) || mentions_pre(body),
     }
 }
 

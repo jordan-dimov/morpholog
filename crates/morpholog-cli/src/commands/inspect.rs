@@ -167,19 +167,11 @@ fn audit_row_named_json(
     file: &std::path::Path,
     row: &morpholog_postgres::AuditRow,
 ) -> anyhow::Result<serde_json::Value> {
-    let mut value = serde_json::to_value(row)?;
-    let Some(obj) = value.as_object_mut() else {
-        bail!("an AuditRow serialises as an object");
-    };
-    obj.insert(
-        "asserted_claims".to_string(),
-        serde_json::Value::Array(decode_claims_named(program, file, &row.asserted_claims)?),
-    );
-    obj.insert(
-        "retracted_claims".to_string(),
-        serde_json::Value::Array(decode_claims_named(program, file, &row.retracted_claims)?),
-    );
-    Ok(value)
+    Ok(morpholog_cli::envelopes::audit_row_named(
+        row,
+        decode_claims_named(program, file, &row.asserted_claims)?,
+        decode_claims_named(program, file, &row.retracted_claims)?,
+    )?)
 }
 
 /// Run `inspect coverage <file.morph>`: replay the audit log through
@@ -223,7 +215,7 @@ fn decode_claims_named(
     program: &morpholog_core::Program,
     file: &Path,
     claims: &[ClaimInstance],
-) -> anyhow::Result<Vec<serde_json::Value>> {
+) -> anyhow::Result<Vec<morpholog_cli::envelopes::NamedClaim>> {
     // The vocabulary is static for the whole invocation; index it once
     // rather than scanning the declarations per returned claim.
     let decls: std::collections::HashMap<&str, &morpholog_core::PredicateDecl> = program
@@ -258,10 +250,10 @@ fn decode_claims_named(
             .zip(claim.args.iter())
             .map(|(arg, value)| (arg.name.clone(), eval_value_to_bare_json(value)))
             .collect();
-        rows.push(serde_json::json!({
-            "predicate": claim.predicate,
-            "args": fields,
-        }));
+        rows.push(morpholog_cli::envelopes::NamedClaim {
+            args: fields,
+            predicate: claim.predicate.clone(),
+        });
     }
     Ok(rows)
 }

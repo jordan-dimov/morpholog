@@ -38,17 +38,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
 /// every top-level transformation-body statement) in the source, so
 /// findings produced over the IR can be rendered with carets.
 pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), Vec<Diagnostic>> {
-    let raw_tokens = match lex(source) {
-        Ok(t) => t,
-        Err(errs) => {
-            return Err(errs
-                .into_iter()
-                .map(|e| {
-                    Diagnostic::error(format!("lex error: {}", e.reason()), e.span().into_range())
-                })
-                .collect());
-        }
-    };
+    let raw_tokens = lex(source).map_err(super::lex_error_diagnostics)?;
 
     if raw_tokens.is_empty() {
         // Span 0..1 (or 0..0 for a zero-length source) is the
@@ -71,16 +61,7 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
     let stream = token_stream(&tokens);
     let (parsed, errs) = program_parser().parse(stream).into_output_errors();
 
-    let mut diagnostics: Vec<Diagnostic> = errs
-        .into_iter()
-        .map(|e| {
-            let span = e.span();
-            Diagnostic::error(
-                format!("parse error: {}", e.reason()),
-                span.start()..span.end(),
-            )
-        })
-        .collect();
+    let mut diagnostics = super::parse_error_diagnostics(errs);
 
     let Some(raw) = parsed else {
         if diagnostics.is_empty() {
@@ -363,14 +344,9 @@ where
         .repeated()
         .at_least(1)
         .collect::<Vec<Discipline>>();
-    let disciplines = choice((
-        just(Token::Indent)
-            .ignore_then(discipline_seq.clone())
-            .then_ignore(just(Token::Dedent)),
-        discipline_seq,
-    ))
-    .or_not()
-    .map(Option::unwrap_or_default);
+    let disciplines = super::indented_or_inline(discipline_seq)
+        .or_not()
+        .map(Option::unwrap_or_default);
 
     // predicate_decl ::= "predicate" Ident "(" arg_list? ")" discipline_clause*
     let predicate_decl = just(Token::KwPredicate)
@@ -426,12 +402,7 @@ where
     // adds a clause (e.g. `version <N>`) and the parser starts
     // accepting it. Today, an attempted `invariant Name (v1):`
     // surfaces as an unexpected-token diagnostic on the `(`.
-    let invariant_body = choice((
-        just(Token::Indent)
-            .ignore_then(expression_parser())
-            .then_ignore(just(Token::Dedent)),
-        expression_parser(),
-    ));
+    let invariant_body = super::indented_or_inline(expression_parser());
     let invariant_decl = just(Token::KwInvariant)
         .ignore_then(ident)
         .then_ignore(just(Token::Colon))
@@ -458,12 +429,7 @@ where
     // shape. Calls are claim-shaped references resolved by name after
     // the whole programme is collected (a reference may precede the
     // definition it names).
-    let definition_body = choice((
-        just(Token::Indent)
-            .ignore_then(expression_parser())
-            .then_ignore(just(Token::Dedent)),
-        expression_parser(),
-    ));
+    let definition_body = super::indented_or_inline(expression_parser());
     let definition_param_list = ident
         .separated_by(just(Token::Comma))
         .allow_trailing()

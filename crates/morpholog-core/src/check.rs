@@ -31,6 +31,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::fold;
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
     ArithOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value,
@@ -1359,126 +1360,34 @@ fn is_actor(t: &Term) -> bool {
 /// tree. Used to flag `actor` in invariant and derived-claim
 /// bodies, where the runtime raises `EvalError::UnboundActor`
 /// because no proposing transition is in scope.
-///
-/// A standalone exhaustive walk rather than a hook in the kind
-/// visitor: `actor` can sit in any term position (claim arg,
-/// comparator operand, `sum` target, `in` operand), and a
-/// dedicated scan with no `_` arm guarantees a future `Prop` or
-/// `ValueExpr` variant cannot let an `actor` slip through unnoticed.
-/// Crosses into [`value_mentions_actor`] for comparator operands.
 fn prop_mentions_actor(prop: &Prop) -> bool {
-    match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.iter().any(is_actor),
-        Prop::In(a, b) => is_actor(a) || is_actor(b),
-        Prop::And(items) | Prop::Or(items) => items.iter().any(prop_mentions_actor),
-        Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => prop_mentions_actor(p),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            prop_mentions_actor(left) || prop_mentions_actor(right)
-        }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            value_mentions_actor(left) || value_mentions_actor(right)
-        }
-        Prop::Forall { source, body, .. } => {
-            prop_mentions_actor(source) || prop_mentions_actor(body)
-        }
-    }
+    fold::any_term_in_prop(prop, &|t, _| is_actor(t))
 }
 
-/// Whether a value expression references `Term::Actor` anywhere in its
-/// tree. The value-sort companion to [`prop_mentions_actor`]; the two
-/// recurse into each other (`Sum`'s body is a `Prop`).
+/// Value-sort companion to [`prop_mentions_actor`].
 fn value_mentions_actor(expr: &ValueExpr) -> bool {
-    match expr {
-        ValueExpr::Term(t) => is_actor(t),
-        ValueExpr::ValueOf { args, default, .. } => {
-            args.iter().any(is_actor) || default.as_ref().is_some_and(|d| value_mentions_actor(d))
-        }
-        ValueExpr::Sum { value, body } => is_actor(value) || prop_mentions_actor(body),
-        ValueExpr::Arith { left, right, .. } => {
-            value_mentions_actor(left) || value_mentions_actor(right)
-        }
-        ValueExpr::Abs(inner) => value_mentions_actor(inner),
-    }
+    fold::any_term_in_value(expr, &|t, _| is_actor(t))
 }
 
 /// Whether a proposition contains `Prop::Pre` anywhere in its tree.
 /// Used to ban `pre(...)` inside definition bodies (bodies are
 /// context-free; a call wrapped in `pre(...)` at the use site covers
-/// the legitimate cases). A call's body is scanned at its own
-/// declaration, so `Defined` contributes nothing here.
+/// the legitimate cases).
 fn prop_mentions_pre(prop: &Prop) -> bool {
-    match prop {
-        Prop::Pre(_) => true,
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => false,
-        Prop::And(items) | Prop::Or(items) => items.iter().any(prop_mentions_pre),
-        Prop::Not(p) | Prop::Exists { body: p, .. } => prop_mentions_pre(p),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            prop_mentions_pre(left) || prop_mentions_pre(right)
-        }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            value_mentions_pre(left) || value_mentions_pre(right)
-        }
-        Prop::Forall { source, body, .. } => prop_mentions_pre(source) || prop_mentions_pre(body),
-    }
+    fold::mentions_pre(prop)
 }
 
-/// Value-sort companion to [`prop_mentions_pre`].
-fn value_mentions_pre(expr: &ValueExpr) -> bool {
-    match expr {
-        ValueExpr::Term(_) => false,
-        ValueExpr::ValueOf { default, .. } => {
-            default.as_ref().is_some_and(|d| value_mentions_pre(d))
-        }
-        ValueExpr::Sum { body, .. } => prop_mentions_pre(body),
-        ValueExpr::Arith { left, right, .. } => {
-            value_mentions_pre(left) || value_mentions_pre(right)
-        }
-        ValueExpr::Abs(inner) => value_mentions_pre(inner),
-    }
-}
-
-/// Whether `name` occurs in any term position of the proposition.
-/// Used to flag a definition parameter the body never references:
-/// such a parameter can never be given a value by the body, so a
-/// call with an unbound argument for it is a guaranteed runtime
-/// error, and a ground argument is dead weight.
+/// Whether `name` occurs in any term position of the proposition,
+/// honouring quantifier shadowing. Used to flag a definition
+/// parameter the body never references: such a parameter can never
+/// be given a value by the body, so a call with an unbound argument
+/// for it is a guaranteed runtime error, and a ground argument is
+/// dead weight.
 fn occurs_in_prop(name: &Var, prop: &Prop) -> bool {
-    let is_name = |t: &Term| matches!(t, Term::Var(v) if v == name);
-    match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.iter().any(is_name),
-        Prop::In(a, b) => is_name(a) || is_name(b),
-        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| occurs_in_prop(name, p)),
-        Prop::Not(p) | Prop::Pre(p) => occurs_in_prop(name, p),
-        // A quantifier binder shadows the name for its body.
-        Prop::Exists { binding, body } => binding != name && occurs_in_prop(name, body),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            occurs_in_prop(name, left) || occurs_in_prop(name, right)
-        }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            occurs_in_value(name, left) || occurs_in_value(name, right)
-        }
-        Prop::Forall {
-            binding,
-            source,
-            body,
-        } => occurs_in_prop(name, source) || (binding != name && occurs_in_prop(name, body)),
-    }
-}
-
-/// Value-sort companion to [`occurs_in_prop`].
-fn occurs_in_value(name: &Var, expr: &ValueExpr) -> bool {
-    let is_name = |t: &Term| matches!(t, Term::Var(v) if v == name);
-    match expr {
-        ValueExpr::Term(t) => is_name(t),
-        ValueExpr::ValueOf { args, default, .. } => {
-            args.iter().any(is_name) || default.as_ref().is_some_and(|d| occurs_in_value(name, d))
-        }
-        ValueExpr::Sum { value, body } => is_name(value) || occurs_in_prop(name, body),
-        ValueExpr::Arith { left, right, .. } => {
-            occurs_in_value(name, left) || occurs_in_value(name, right)
-        }
-        ValueExpr::Abs(inner) => occurs_in_value(name, inner),
-    }
+    fold::any_term_in_prop(
+        prop,
+        &|t, binders| matches!(t, Term::Var(v) if v == name && !binders.contains(&v)),
+    )
 }
 
 /// The arithmetic rule matrix over known operand kinds. `None` means

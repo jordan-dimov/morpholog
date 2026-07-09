@@ -259,6 +259,69 @@ transformation tick(slot, n):
     assert_eq!(inv.first_fired.as_deref(), Some("t2"));
 }
 
+// A pre-read nested inside a comparison operand is still a pre-read:
+// the tracker must carry pre-state and exempt the antecedent from
+// delta pruning, exactly as it does for a prop-level pre(...). The
+// comparison direction makes the fire depend on the real previous
+// state (an empty pre-state sums to 0 and fails it), and the firing
+// transition's delta misses the footprint (only the prune exemption
+// reaches it).
+#[test]
+fn pre_nested_in_a_comparison_operand_still_cues_pre_state() {
+    let source = r#"
+program pre_in_compare
+
+predicate Count(slot: Subject, n: Decimal)
+predicate Audit(slot: Subject)
+
+invariant growth_is_audited:
+    (Count(s, n) and (n <= sum(1 | pre(Count(s, _))))) implies Audit(s)
+
+transformation tick(slot, n):
+    admit Count(slot, n)
+
+transformation audit(slot):
+    admit Audit(slot)
+"#;
+    let program = parse_program(source).expect("parses");
+    program.validate().expect("validates");
+    let mut tracker = CoverageTracker::new(&program);
+    assert!(tracker.needs_pre_state());
+
+    let count = ClaimInstance {
+        predicate: "Count".into(),
+        args: vec![
+            EvalValue::Subject(Subject::from("s1")),
+            EvalValue::Decimal("1".parse().unwrap()),
+        ],
+    };
+    let audit = subject_claim("Audit", &["s1"]);
+    let empty = State::from_claims(vec![]);
+    let s1 = State::from_claims(vec![count.clone()]);
+    let s2 = State::from_claims(vec![count, audit]);
+
+    // Empty pre-state: the sum is 0, the comparison fails, no fire.
+    tracker
+        .observe(&s1, &empty, &delta(&["Count"]), "t1", "tick")
+        .unwrap();
+    // The audit step touches nothing in the antecedent's footprint;
+    // only the never-pruned exemption evaluates it, and it fires only
+    // because the carried pre-state holds the Count.
+    tracker
+        .observe(&s2, &s1, &delta(&["Audit"]), "t2", "audit")
+        .unwrap();
+
+    let report = tracker.into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "growth_is_audited")
+        .unwrap();
+    assert_eq!(inv.verdict, CoverageVerdict::Fired);
+    assert_eq!(inv.transitions_fired, 1);
+    assert_eq!(inv.first_fired.as_deref(), Some("t2"));
+}
+
 // Generated discipline invariants are implication-shaped, carry their
 // provenance, and participate in coverage like authored rules; the
 // carbon example's prohibitions classify always-on.

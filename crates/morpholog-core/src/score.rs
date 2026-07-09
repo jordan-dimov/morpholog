@@ -28,9 +28,9 @@
 
 use serde::Serialize;
 
-use crate::coverage::mentions_pre;
 use crate::derive::eval_invariant;
 use crate::eval::EvalError;
+use crate::fold::mentions_pre;
 use crate::format::canonical_hash;
 use crate::ir::{Definition, Invariant, Program};
 use crate::state::State;
