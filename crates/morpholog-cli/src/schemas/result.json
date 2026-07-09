@@ -817,13 +817,45 @@
         }
       ]
     },
+    "views_verification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "views_checked"],
+          "properties": {
+            "status": { "const": "intact" },
+            "views_checked": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "mismatched", "missing"],
+          "properties": {
+            "status": { "const": "tampered" },
+            "mismatched": { "type": "array", "items": { "type": "string" } },
+            "missing": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "const": "not_sealed" }
+          }
+        }
+      ]
+    },
     "verify_report": {
       "type": "object",
       "additionalProperties": false,
       "required": ["replay", "tree"],
       "properties": {
         "replay": { "$ref": "#/$defs/verify_outcome" },
-        "tree": { "$ref": "#/$defs/tree_verification" }
+        "tree": { "$ref": "#/$defs/tree_verification" },
+        "views": { "$ref": "#/$defs/views_verification" }
       }
     },
     "pack_manifest": {

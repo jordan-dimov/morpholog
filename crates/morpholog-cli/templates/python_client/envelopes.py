@@ -895,19 +895,79 @@ def parse_tree_verification(payload: object) -> TreeVerification:
 
 
 @dataclass(frozen=True)
+class ViewsIntact:
+    """Every catalogued view's live definition matches its seal."""
+
+    views_checked: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ViewsIntact":
+        data = _strict("intact views", payload, {"status", "views_checked"})
+        return cls(views_checked=data["views_checked"])
+
+
+@dataclass(frozen=True)
+class ViewsTampered:
+    """The view surface disagrees with its seal: `mismatched` views were
+    redefined in place, `missing` views lack a seal row or a live
+    definition."""
+
+    mismatched: list
+    missing: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ViewsTampered":
+        data = _strict("tampered views", payload, {"status", "mismatched", "missing"})
+        return cls(mismatched=list(data["mismatched"]), missing=list(data["missing"]))
+
+
+@dataclass(frozen=True)
+class ViewsNotSealed:
+    """No seal table in the schema: the views predate sealing or were
+    never applied. Visible, not a failure."""
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ViewsNotSealed":
+        _strict("unsealed views", payload, {"status"})
+        return cls()
+
+
+ViewsVerification = ViewsIntact | ViewsTampered | ViewsNotSealed
+
+
+def parse_views_verification(payload: object) -> ViewsVerification:
+    """Parse a `views` verdict by its `status` tag."""
+    if not isinstance(payload, dict):
+        raise EnvelopeError(f"not a views verdict: {payload!r}")
+    match payload.get("status"):
+        case "intact":
+            return ViewsIntact.from_json(payload)
+        case "tampered":
+            return ViewsTampered.from_json(payload)
+        case "not_sealed":
+            return ViewsNotSealed.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a views verdict: {payload!r}")
+
+
+@dataclass(frozen=True)
 class VerifyReport:
     """The `verify` envelope: the replay verdict beside the
-    tamper-evidence verdict."""
+    tamper-evidence verdict, plus the generated-view-surface verdict
+    when the verifier asked for it (`--views-schema`)."""
 
     replay: ReplayConsistent | ReplayDivergent
     tree: TreeVerification
+    views: ViewsVerification | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> "VerifyReport":
-        data = _strict("verify report", payload, {"replay", "tree"})
+        data = _strict("verify report", payload, {"replay", "tree"}, optional={"views"})
+        views = data.get("views")
         return cls(
             replay=parse_verify_outcome(data["replay"]),
             tree=parse_tree_verification(data["tree"]),
+            views=None if views is None else parse_views_verification(views),
         )
 
 

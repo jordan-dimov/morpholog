@@ -334,6 +334,15 @@ pub(crate) struct VerifyArgs {
     /// Off by default - signing is opt-in.
     #[arg(long)]
     pub(crate) require_signatures: bool,
+
+    /// Also verify the generated SQL view surface in this schema: each
+    /// catalogued view's live definition (as PostgreSQL stores it) must
+    /// hash to the seal recorded when the views were applied, so a view
+    /// redefined in place under the same name is evident. The report
+    /// gains a `views` verdict; a tampered surface exits one. A surface
+    /// generated before sealing reports `not_sealed` and passes.
+    #[arg(long, value_name = "SCHEMA")]
+    pub(crate) views_schema: Option<String>,
 }
 
 /// Arguments for `checkpoint`: the connection, plus an optional Ed25519

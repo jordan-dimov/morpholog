@@ -1,0 +1,16 @@
+{
+  "replay": {
+    "claims": 3,
+    "status": "consistent",
+    "transitions": 2
+  },
+  "tree": {
+    "checkpoints": 1,
+    "status": "intact",
+    "tree_size": 2
+  },
+  "views": {
+    "status": "intact",
+    "views_checked": 4
+  }
+}

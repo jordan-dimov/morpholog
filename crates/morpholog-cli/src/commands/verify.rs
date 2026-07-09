@@ -3,8 +3,8 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    Checkpoint, TreeVerification, VerifyOutcome, VerifyReport, first_unsigned_checkpoint_size,
-    verify_audit_tree, verify_replay,
+    Checkpoint, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    first_unsigned_checkpoint_size, verify_audit_tree, verify_replay, verify_views,
 };
 
 use crate::VerifyArgs;
@@ -46,12 +46,30 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         tree = TreeVerification::SignatureRequired { tree_size };
     }
 
-    let report = VerifyReport { replay, tree };
+    // The views leg is opt-in: only a deployment that generated a view
+    // surface has one to verify.
+    let views = match &args.views_schema {
+        Some(schema) => Some(
+            verify_views(&pool, schema)
+                .await
+                .context("verify_views failed")?,
+        ),
+        None => None,
+    };
+
+    let report = VerifyReport {
+        replay,
+        tree,
+        views,
+    };
     print_json(&report)?;
 
     let diverged = matches!(report.replay, VerifyOutcome::Divergent { .. });
     let tampered = !matches!(report.tree, TreeVerification::Intact { .. });
-    if diverged || tampered {
+    // NotSealed is visible in the JSON but not a failure: an unsealed
+    // surface has nothing to contradict.
+    let surface_tampered = matches!(report.views, Some(ViewsVerification::Tampered { .. }));
+    if diverged || tampered || surface_tampered {
         std::process::exit(1);
     }
     Ok(())

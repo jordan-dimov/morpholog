@@ -84,12 +84,146 @@ pub enum VerifyOutcome {
 }
 /// The `morpholog verify` envelope: the replay verdict (claims table vs
 /// audit log) beside the tamper-evidence verdict (the audit Merkle tree
-/// against its checkpoints), so one read carries both. Field order is
-/// the wire contract; `replay` then `tree`.
+/// against its checkpoints), so one read carries both, plus - when the
+/// verifier asked for it - the generated-view-surface verdict. Field
+/// order is the wire contract; `replay` then `tree`, `views` only when
+/// requested.
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifyReport {
     pub replay: VerifyOutcome,
     pub tree: TreeVerification,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub views: Option<ViewsVerification>,
+}
+
+/// The verdict over a generated SQL view surface: the seal the apply
+/// script recorded (each view's `pg_get_viewdef` hashed in the same
+/// transaction that created it) compared against a live re-read. The
+/// read-side analogue of the model hash: a view redefined in place
+/// under the same name passes the catalogue inventory but not this.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ViewsVerification {
+    /// Every catalogued view (and the catalogue itself) has a seal, a
+    /// live definition, and the two hashes agree.
+    Intact { views_checked: u64 },
+    /// The surface disagrees with its seal: `mismatched` names views
+    /// whose live definition no longer hashes to the sealed value;
+    /// `missing` names views the surface expects but that lack a seal
+    /// row or a live definition (dropped, replaced by a table, or
+    /// unsealed out of band).
+    Tampered {
+        mismatched: Vec<String>,
+        missing: Vec<String>,
+    },
+    /// No seal table in the schema: the views predate sealing or were
+    /// never applied. Nothing to compare - visible, not a failure.
+    NotSealed,
+}
+
+/// Verify the generated view surface in `schema`. Cross-checks the
+/// intended inventory (`_morpholog_catalog`), the seal
+/// (`_morpholog_view_defs`), and the live views: a view missing from
+/// any leg is named, so deleting a seal row hides nothing.
+pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerification, PgError> {
+    let sealed_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'
+           ) AS "sealed!""#,
+        schema,
+        crate::sql_views::VIEW_DEFS_TABLE,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(classify)?;
+    if !sealed_exists {
+        return Ok(ViewsVerification::NotSealed);
+    }
+
+    // The schema is a runtime input, so these two reads cannot be
+    // compile-checked macros; the identifier is quoted with the same
+    // rule the generator quotes it.
+    let sealed_sql = format!(
+        "SELECT view_name, definition_sha256 FROM {}.{}",
+        crate::sql_views::quote_ident(schema),
+        crate::sql_views::quote_ident(crate::sql_views::VIEW_DEFS_TABLE),
+    );
+    let sealed: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(&sealed_sql)
+        .fetch_all(pool)
+        .await
+        .map_err(classify)?
+        .into_iter()
+        .collect();
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut intended: Vec<String>;
+    let catalog_live = live_view_hash(pool, schema, crate::sql_views::CATALOG_VIEW).await?;
+    if catalog_live.is_some() {
+        let catalog_sql = format!(
+            "SELECT DISTINCT view_name FROM {}.{}",
+            crate::sql_views::quote_ident(schema),
+            crate::sql_views::quote_ident(crate::sql_views::CATALOG_VIEW),
+        );
+        intended = sqlx::query_scalar::<_, String>(&catalog_sql)
+            .fetch_all(pool)
+            .await
+            .map_err(classify)?;
+    } else {
+        // The catalogue itself is gone: name it, and fall back to the
+        // seal's own inventory so its views are still checked.
+        missing.push(crate::sql_views::CATALOG_VIEW.to_string());
+        intended = sealed.keys().cloned().collect();
+    }
+    intended.push(crate::sql_views::CATALOG_VIEW.to_string());
+    intended.sort();
+    intended.dedup();
+
+    let mut mismatched: Vec<String> = Vec::new();
+    let mut views_checked: u64 = 0;
+    for name in &intended {
+        match (sealed.get(name), live_view_hash(pool, schema, name).await?) {
+            (Some(sealed_hash), Some(live_hash)) if *sealed_hash == live_hash => {
+                views_checked += 1;
+            }
+            (Some(_), Some(_)) => mismatched.push(name.clone()),
+            _ if missing.contains(name) => {}
+            _ => missing.push(name.clone()),
+        }
+    }
+    if mismatched.is_empty() && missing.is_empty() {
+        Ok(ViewsVerification::Intact { views_checked })
+    } else {
+        mismatched.sort();
+        missing.sort();
+        Ok(ViewsVerification::Tampered {
+            mismatched,
+            missing,
+        })
+    }
+}
+
+/// The live definition hash of one view, exactly as the seal records
+/// it: `sha256(pg_get_viewdef(oid, true))` over PostgreSQL's own
+/// stored text. `None` when no view of that name exists in the schema
+/// (dropped, or replaced by a non-view relation).
+async fn live_view_hash(
+    pool: &PgPool,
+    schema: &str,
+    view: &str,
+) -> Result<Option<String>, PgError> {
+    sqlx::query_scalar!(
+        r#"SELECT encode(sha256(convert_to(pg_get_viewdef(c.oid, true), 'UTF8')), 'hex') AS "hash!"
+           FROM pg_catalog.pg_class c
+           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'v'"#,
+        schema,
+        view,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(classify)
 }
 /// Replay the audit log through a [`CoverageTracker`], then count
 /// the rejection log into it, and report, per invariant of

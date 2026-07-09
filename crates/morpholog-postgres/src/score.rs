@@ -90,9 +90,7 @@ fn fold_rows<'a>(
         // Mark the boundary before the first row beyond it; a boundary
         // at or past the end of history is marked by the caller after
         // the fold (an empty test slice, not a lost one).
-        if let Some(pending) =
-            split.take_if(|p| (row.committed_at, row.transition_id) > p.cursor)
-        {
+        if let Some(pending) = split.take_if(|p| (row.committed_at, row.transition_id) > p.cursor) {
             scorer.mark_split(pending.report);
         }
         for r in &row.retracted_claims {

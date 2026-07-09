@@ -218,6 +218,23 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsInstance(report.tree, envelopes.TreeIntact)
         self.assertEqual(report.tree.checkpoints, 1)
 
+    def test_verify_report_with_views_and_the_views_verdicts(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_with_views.json"))
+        self.assertIsInstance(report.views, envelopes.ViewsIntact)
+        self.assertEqual(report.views.views_checked, 4)
+        # Without the opt-in leg, the field is simply absent.
+        bare = envelopes.VerifyReport.from_json(golden("verify_report_consistent.json"))
+        self.assertIsNone(bare.views)
+
+        intact = envelopes.parse_views_verification(golden("views_verification_intact.json"))
+        self.assertIsInstance(intact, envelopes.ViewsIntact)
+        tampered = envelopes.parse_views_verification(golden("views_verification_tampered.json"))
+        self.assertIsInstance(tampered, envelopes.ViewsTampered)
+        self.assertEqual(tampered.mismatched, ["trade_captured"])
+        self.assertEqual(tampered.missing, ["_morpholog_catalog"])
+        unsealed = envelopes.parse_views_verification(golden("views_verification_not_sealed.json"))
+        self.assertIsInstance(unsealed, envelopes.ViewsNotSealed)
+
     def test_verify_report_divergent_and_tampered(self):
         report = envelopes.VerifyReport.from_json(golden("verify_report_divergent.json"))
         self.assertIsInstance(report.replay, envelopes.ReplayDivergent)

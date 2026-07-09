@@ -74,6 +74,6 @@ pub use signing::{
     tree_head_signing_bytes, verify_tree_head,
 };
 pub use verify::{
-    InitOutcome, SCHEMA_SQL, VerifyOutcome, VerifyReport, coverage_replay, initialise_schema,
-    verify_replay,
+    InitOutcome, SCHEMA_SQL, VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay,
+    initialise_schema, verify_replay, verify_views,
 };

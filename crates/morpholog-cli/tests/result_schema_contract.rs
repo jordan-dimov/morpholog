@@ -36,7 +36,8 @@ use morpholog_core::{
 use morpholog_postgres::{
     AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
     PackManifest, PgProposalOutcome, RowInclusionProof, TreeHeadSignature, TreeVerification,
-    VerifyOutcome, VerifyReport, WindowEvidencePack, WindowPackManifest, WindowVerification,
+    VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack, WindowPackManifest,
+    WindowVerification,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -551,7 +552,38 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 checkpoints: 1,
                 tree_size: 2,
             },
+            views: None,
         }),
+    );
+    // With the opt-in views leg: one golden per verdict shape.
+    assert_golden(
+        "verify_report_with_views.json",
+        &to_value(&VerifyReport {
+            replay: VerifyOutcome::Consistent {
+                transitions: 2,
+                claims: 3,
+            },
+            tree: TreeVerification::Intact {
+                checkpoints: 1,
+                tree_size: 2,
+            },
+            views: Some(ViewsVerification::Intact { views_checked: 4 }),
+        }),
+    );
+    assert_golden(
+        "views_verification_intact.json",
+        &to_value(&ViewsVerification::Intact { views_checked: 4 }),
+    );
+    assert_golden(
+        "views_verification_tampered.json",
+        &to_value(&ViewsVerification::Tampered {
+            mismatched: vec!["trade_captured".to_string()],
+            missing: vec!["_morpholog_catalog".to_string()],
+        }),
+    );
+    assert_golden(
+        "views_verification_not_sealed.json",
+        &to_value(&ViewsVerification::NotSealed),
     );
     assert_golden(
         "verify_report_divergent.json",
@@ -560,6 +592,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 only_in_claims_table: vec![kitchen_sink_claim()],
                 only_in_replay: vec![],
             },
+            views: None,
             tree: TreeVerification::Tampered {
                 tree_size: 2,
                 recorded_root: format!("sha256:{}", "a".repeat(64)),
@@ -870,6 +903,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ("named_claim.json", "named_claim"),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),
+        ("verify_report_with_views.json", "verify_report"),
+        ("views_verification_intact.json", "views_verification"),
+        ("views_verification_tampered.json", "views_verification"),
+        ("views_verification_not_sealed.json", "views_verification"),
         ("checkpoint_created.json", "checkpoint_outcome"),
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
