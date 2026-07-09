@@ -91,17 +91,7 @@ pub fn parse_value_expr(source: &str) -> Result<ValueExpr, Vec<Diagnostic>> {
 /// stream to an "expected expression" diagnostic. Shared by both entry
 /// points.
 fn lex_or_diagnostics(source: &str) -> Result<Vec<crate::lexer::SpannedToken>, Vec<Diagnostic>> {
-    let tokens = match lex(source) {
-        Ok(t) => t,
-        Err(errs) => {
-            return Err(errs
-                .into_iter()
-                .map(|e| {
-                    Diagnostic::error(format!("lex error: {}", e.reason()), e.span().into_range())
-                })
-                .collect());
-        }
-    };
+    let tokens = lex(source).map_err(super::lex_error_diagnostics)?;
     if tokens.is_empty() {
         let end = source.len().min(1);
         return Err(vec![Diagnostic::error(
@@ -119,16 +109,7 @@ fn finish<T>(
     errs: Vec<Rich<'_, Token>>,
     source: &str,
 ) -> Result<T, Vec<Diagnostic>> {
-    let diagnostics: Vec<Diagnostic> = errs
-        .into_iter()
-        .map(|e| {
-            let span = e.span();
-            Diagnostic::error(
-                format!("parse error: {}", e.reason()),
-                span.start()..span.end(),
-            )
-        })
-        .collect();
+    let diagnostics = super::parse_error_diagnostics(errs);
 
     let Some(parsed) = parsed else {
         if diagnostics.is_empty() {
@@ -144,6 +125,71 @@ fn finish<T>(
     Ok(parsed)
 }
 
+/// A numeric literal, optionally followed by an identifier read as a
+/// unit: `25000 USD` is a quantity literal, a bare `25000` a plain
+/// decimal. An ill-typed contextual keyword after a bare number (e.g.
+/// a time comparator) reads as a unit and fails downstream -
+/// acceptable, since that expression was already ill-typed.
+fn decimal_or_quantity_term<'a, I>()
+-> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    let ident = select! { Token::Ident(s) => s };
+    let decimal_lit = select! { Token::DecimalLit(s) => s };
+    decimal_lit.then(ident.or_not()).map(|(s, unit)| match unit {
+        Some(u) => Term::Literal(Value::Quantity {
+            amount: s,
+            unit: Unit::from(u),
+        }),
+        None => Term::Literal(Value::Decimal(s)),
+    })
+}
+
+/// A `Term` is the limited atom that claim-call args and `In` operands
+/// accept: variables (including the special `actor`), wildcards, and
+/// decimal / quantity / timestamp / date / duration / subject literals.
+pub(super) fn term_parser<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    let ident = select! { Token::Ident(s) => s };
+    let date_lit = select! { Token::DateLit(s) => s };
+    let subject_lit = select! { Token::SubjectLit(s) => s };
+    let timestamp_lit = select! { Token::TimestampLit(s) => s };
+    choice((
+        just(Token::Wildcard).to(Term::Wildcard),
+        decimal_or_quantity_term(),
+        timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
+        date_lit.map(|s| Term::Literal(Value::Date(s))),
+        // Before bare idents so `duration(...)` is the constructor,
+        // not a variable followed by a stray paren.
+        duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
+        subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
+        ident.map(|name| {
+            if name == "actor" {
+                Term::Actor
+            } else {
+                Term::Var(name.into())
+            }
+        }),
+    ))
+}
+
+/// Comma-separated terms with an optional trailing comma - the
+/// argument list shape shared by claim calls, claim patterns, and
+/// `value` lookups.
+pub(super) fn term_list_parser<'a, I>()
+-> impl Parser<'a, I, Vec<Term>, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    term_parser()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<Term>>()
+}
+
 /// Build the recursive proposition parser. Increasing precedence:
 /// implies (lowest) -> or -> and -> not -> comparison -> prop atom. A
 /// comparison relates two value expressions; the value-expression
@@ -157,53 +203,7 @@ where
 {
     recursive(|expression| {
         let ident = select! { Token::Ident(s) => s };
-        let decimal_lit = select! { Token::DecimalLit(s) => s };
-        let date_lit = select! { Token::DateLit(s) => s };
-        let subject_lit = select! { Token::SubjectLit(s) => s };
-
-        // A `Term` is the limited atom that claim-call args and `In`
-        // operands accept: variables (including the special `actor`),
-        // wildcards, and decimal / timestamp / date / duration /
-        // subject literals.
-        let timestamp_lit = select! { Token::TimestampLit(s) => s };
-        let term = choice((
-            just(Token::Wildcard).to(Term::Wildcard),
-            decimal_lit
-                .then(ident.or_not())
-                .map(|(s, unit)| match unit {
-                    // A numeric literal followed by an identifier in
-                    // term position is a quantity literal: `25000 USD`.
-                    // The identifier is committed as the unit, so an
-                    // ill-typed contextual keyword here (e.g. a time
-                    // comparator after a bare number) reads as a unit
-                    // and fails downstream - acceptable, since that
-                    // expression was already ill-typed.
-                    Some(u) => Term::Literal(Value::Quantity {
-                        amount: s,
-                        unit: Unit::from(u),
-                    }),
-                    None => Term::Literal(Value::Decimal(s)),
-                }),
-            timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
-            date_lit.map(|s| Term::Literal(Value::Date(s))),
-            // Before bare idents so `duration(...)` is the constructor,
-            // not a variable followed by a stray paren.
-            duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
-            subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
-            ident.map(|name| {
-                if name == "actor" {
-                    Term::Actor
-                } else {
-                    Term::Var(name.into())
-                }
-            }),
-        ));
-
-        let term_list = term
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<Term>>();
+        let term_list = term_list_parser();
 
         // The value-expression grammar. Built here, inside the
         // proposition closure, so a `sum` body can reference the
@@ -275,48 +275,35 @@ where
                 choice((
                     just(Token::Eq).to(CmpOp::Eq),
                     just(Token::Neq).to(CmpOp::Neq),
-                    just(Token::Le).to(CmpOp::Le),
-                    just(Token::Lt).to(CmpOp::Lt),
-                    just(Token::Ge).to(CmpOp::Ge),
-                    just(Token::Gt).to(CmpOp::Gt),
-                    just(Token::KwOnOrBefore).to(CmpOp::DateLe),
-                    just(Token::KwOnOrAfter).to(CmpOp::DateGe),
-                    // `before`/`after` are contextual: matched as comparators
-                    // here, but left as ordinary identifiers everywhere else
-                    // so a variable may still be named `before` or `after`
-                    // (the worked examples do exactly that).
-                    select! { Token::Ident(s) if s == "before" => CmpOp::DateLt },
-                    select! { Token::Ident(s) if s == "after" => CmpOp::DateGt },
-                    select! { Token::Ident(s) if s == "at_or_before" => CmpOp::TsLe },
-                    select! { Token::Ident(s) if s == "strictly_before" => CmpOp::TsLt },
-                    select! { Token::Ident(s) if s == "at_or_after" => CmpOp::TsGe },
-                    select! { Token::Ident(s) if s == "strictly_after" => CmpOp::TsGt },
-                    select! { Token::Ident(s) if s == "no_longer_than" => CmpOp::DurLe },
-                    select! { Token::Ident(s) if s == "shorter_than" => CmpOp::DurLt },
-                    select! { Token::Ident(s) if s == "no_shorter_than" => CmpOp::DurGe },
-                    select! { Token::Ident(s) if s == "longer_than" => CmpOp::DurGt },
+                    just(Token::Le).to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Decimal)),
+                    just(Token::Lt).to(CmpOp::Compare(CompareOp::Lt, OrderedDomain::Decimal)),
+                    just(Token::Ge).to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Decimal)),
+                    just(Token::Gt).to(CmpOp::Compare(CompareOp::Gt, OrderedDomain::Decimal)),
+                    just(Token::KwOnOrBefore)
+                        .to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Date)),
+                    just(Token::KwOnOrAfter)
+                        .to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Date)),
+                    // The remaining comparators are contextual: matched
+                    // here, but left as ordinary identifiers everywhere
+                    // else so a variable may still be named `before` or
+                    // `after` (the worked examples do exactly that).
+                    contextual_cmp("before", CompareOp::Lt, OrderedDomain::Date),
+                    contextual_cmp("after", CompareOp::Gt, OrderedDomain::Date),
+                    contextual_cmp("at_or_before", CompareOp::Le, OrderedDomain::Timestamp),
+                    contextual_cmp("strictly_before", CompareOp::Lt, OrderedDomain::Timestamp),
+                    contextual_cmp("at_or_after", CompareOp::Ge, OrderedDomain::Timestamp),
+                    contextual_cmp("strictly_after", CompareOp::Gt, OrderedDomain::Timestamp),
+                    contextual_cmp("no_longer_than", CompareOp::Le, OrderedDomain::Duration),
+                    contextual_cmp("shorter_than", CompareOp::Lt, OrderedDomain::Duration),
+                    contextual_cmp("no_shorter_than", CompareOp::Ge, OrderedDomain::Duration),
+                    contextual_cmp("longer_than", CompareOp::Gt, OrderedDomain::Duration),
                     just(Token::KwIn).to(CmpOp::In),
                 ))
                 .then(arith.clone()),
             )
             .validate(|(lhs, (op, rhs)), e, emitter| match op {
                 CmpOp::Eq => Prop::Eq(Box::new(lhs), Box::new(rhs)),
-                CmpOp::Le => compare(CompareOp::Le, OrderedDomain::Decimal, lhs, rhs),
-                CmpOp::Lt => compare(CompareOp::Lt, OrderedDomain::Decimal, lhs, rhs),
-                CmpOp::Ge => compare(CompareOp::Ge, OrderedDomain::Decimal, lhs, rhs),
-                CmpOp::Gt => compare(CompareOp::Gt, OrderedDomain::Decimal, lhs, rhs),
-                CmpOp::DateLe => compare(CompareOp::Le, OrderedDomain::Date, lhs, rhs),
-                CmpOp::DateLt => compare(CompareOp::Lt, OrderedDomain::Date, lhs, rhs),
-                CmpOp::DateGe => compare(CompareOp::Ge, OrderedDomain::Date, lhs, rhs),
-                CmpOp::DateGt => compare(CompareOp::Gt, OrderedDomain::Date, lhs, rhs),
-                CmpOp::TsLe => compare(CompareOp::Le, OrderedDomain::Timestamp, lhs, rhs),
-                CmpOp::TsLt => compare(CompareOp::Lt, OrderedDomain::Timestamp, lhs, rhs),
-                CmpOp::TsGe => compare(CompareOp::Ge, OrderedDomain::Timestamp, lhs, rhs),
-                CmpOp::TsGt => compare(CompareOp::Gt, OrderedDomain::Timestamp, lhs, rhs),
-                CmpOp::DurLe => compare(CompareOp::Le, OrderedDomain::Duration, lhs, rhs),
-                CmpOp::DurLt => compare(CompareOp::Lt, OrderedDomain::Duration, lhs, rhs),
-                CmpOp::DurGe => compare(CompareOp::Ge, OrderedDomain::Duration, lhs, rhs),
-                CmpOp::DurGt => compare(CompareOp::Gt, OrderedDomain::Duration, lhs, rhs),
+                CmpOp::Compare(op, domain) => compare(op, domain, lhs, rhs),
                 CmpOp::Neq => Prop::Neq(Box::new(lhs), Box::new(rhs)),
                 CmpOp::In => {
                     let span: SimpleSpan = e.span();
@@ -454,15 +441,7 @@ where
         // mathematical convention. Compose with outer expressions by
         // parenthesising: `(forall x in xs: body) and outer`.
         //
-        // The body accepts both inline and indented forms. The layout
-        // pass emits `Indent` / `Dedent` around an indented body; the
-        // inline form has no layout tokens.
-        let quantifier_body = choice((
-            just(Token::Indent)
-                .ignore_then(expression.clone())
-                .then_ignore(just(Token::Dedent)),
-            expression.clone(),
-        ));
+        let quantifier_body = super::indented_or_inline(expression.clone());
 
         let exists_expr = just(Token::KwExists)
             .ignore_then(ident)
@@ -576,48 +555,7 @@ pub(super) fn value_expr_parser<'a, I>()
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    let ident = select! { Token::Ident(s) => s };
-    let decimal_lit = select! { Token::DecimalLit(s) => s };
-    let date_lit = select! { Token::DateLit(s) => s };
-    let subject_lit = select! { Token::SubjectLit(s) => s };
-
-    let timestamp_lit = select! { Token::TimestampLit(s) => s };
-    let term = choice((
-        just(Token::Wildcard).to(Term::Wildcard),
-        decimal_lit
-            .then(ident.or_not())
-            .map(|(s, unit)| match unit {
-                // A numeric literal followed by an identifier in
-                // term position is a quantity literal: `25000 USD`.
-                // The identifier is committed as the unit, so an
-                // ill-typed contextual keyword here (e.g. a time
-                // comparator after a bare number) reads as a unit
-                // and fails downstream - acceptable, since that
-                // expression was already ill-typed.
-                Some(u) => Term::Literal(Value::Quantity {
-                    amount: s,
-                    unit: Unit::from(u),
-                }),
-                None => Term::Literal(Value::Decimal(s)),
-            }),
-        timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
-        date_lit.map(|s| Term::Literal(Value::Date(s))),
-        duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
-        subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
-        ident.map(|name| {
-            if name == "actor" {
-                Term::Actor
-            } else {
-                Term::Var(name.into())
-            }
-        }),
-    ));
-    let term_list = term
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<Term>>();
-
-    value_arith_parser(expression_parser(), term_list)
+    value_arith_parser(expression_parser(), term_list_parser())
 }
 
 /// Build the value-expression arithmetic chain: `primary (("+" | "-")
@@ -637,7 +575,6 @@ where
 {
     recursive(move |value| {
         let ident = select! { Token::Ident(s) => s };
-        let decimal_lit = select! { Token::DecimalLit(s) => s };
         let date_lit = select! { Token::DateLit(s) => s };
         let subject_lit = select! { Token::SubjectLit(s) => s };
 
@@ -646,16 +583,7 @@ where
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
         let timestamp_lit = select! { Token::TimestampLit(s) => s };
-        let decimal_as_value = decimal_lit.then(ident.or_not()).map(|(s, unit)| {
-            // Same quantity-literal rule as term position.
-            ValueExpr::Term(match unit {
-                Some(u) => Term::Literal(Value::Quantity {
-                    amount: s,
-                    unit: Unit::from(u),
-                }),
-                None => Term::Literal(Value::Decimal(s)),
-            })
-        });
+        let decimal_as_value = decimal_or_quantity_term().map(ValueExpr::Term);
         let date_as_value = date_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Date(s))));
         let timestamp_as_value =
             timestamp_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Timestamp(s))));
@@ -685,22 +613,7 @@ where
         // plain identifier, so it must be rejected here.
         let sum_target = choice((
             ident.map(|name| Term::Var(name.into())),
-            decimal_lit
-                .then(ident.or_not())
-                .map(|(s, unit)| match unit {
-                    // A numeric literal followed by an identifier in
-                    // term position is a quantity literal: `25000 USD`.
-                    // The identifier is committed as the unit, so an
-                    // ill-typed contextual keyword here (e.g. a time
-                    // comparator after a bare number) reads as a unit
-                    // and fails downstream - acceptable, since that
-                    // expression was already ill-typed.
-                    Some(u) => Term::Literal(Value::Quantity {
-                        amount: s,
-                        unit: Unit::from(u),
-                    }),
-                    None => Term::Literal(Value::Decimal(s)),
-                }),
+            decimal_or_quantity_term(),
         ));
         let sum_expr = just(Token::KwSum)
             .ignore_then(
@@ -827,46 +740,36 @@ where
 
 /// Discriminator for the comparison operators. Internal to the
 /// parser; the surface uses `=`, `!=`, `<=`, `in`, `on_or_before`
-/// directly.
+/// directly. The ordered comparators all lower to `Prop::Compare`,
+/// so they carry their `(op, domain)` pair from the token choice -
+/// the one place the comparator vocabulary is spelled out.
 #[derive(Debug, Clone, Copy)]
 enum CmpOp {
     Eq,
     Neq,
-    /// Decimal comparators (`<=` `<` `>=` `>`) -> `Prop::Compare` with the
-    /// `Decimal` domain. Operands must be `EvalValue::Decimal` (checked at
-    /// runtime).
-    Le,
-    Lt,
-    Ge,
-    Gt,
-    /// Civil-date comparators (`on_or_before` `before` `on_or_after`
-    /// `after`) -> `Prop::Compare` with the `Date` domain. Operands must
-    /// be `EvalValue::Date` (checked at runtime). `before` and `after`
-    /// are matched contextually (in comparator position only), so they
-    /// remain usable as ordinary variable names elsewhere.
-    /// Instant comparators (`at_or_before` `strictly_before`
-    /// `at_or_after` `strictly_after`) -> `Prop::Compare` with the
-    /// `Timestamp` domain. All four are contextual identifiers.
-    TsLe,
-    TsLt,
-    TsGe,
-    TsGt,
-    /// Span comparators (`no_longer_than` `shorter_than`
-    /// `no_shorter_than` `longer_than`) -> `Prop::Compare` with the
-    /// `Duration` domain. All four are contextual identifiers; read
-    /// them as length comparisons (`counted no_longer_than allowed`).
-    DurLe,
-    DurLt,
-    DurGe,
-    DurGt,
-    DateLe,
-    DateLt,
-    DateGe,
-    DateGt,
+    /// An ordered comparison with its domain picked by surface
+    /// keyword (`<=` decimal, `on_or_before` date, `at_or_before`
+    /// timestamp, `no_longer_than` duration...), never by operand
+    /// kind. Operand kinds are checked at runtime against the domain.
+    Compare(CompareOp, OrderedDomain),
     /// Membership comparator (`x in xs`) -> `Prop::In(Term, Term)`,
     /// term-only on both sides (the IR's `In` operates on terms).
     /// Distinct from the structural `in` in `forall x in source: body`.
     In,
+}
+
+/// A contextual comparator: `word` reads as an ordered comparison in
+/// comparator position only, staying usable as an ordinary identifier
+/// everywhere else.
+fn contextual_cmp<'a, I>(
+    word: &'static str,
+    op: CompareOp,
+    domain: OrderedDomain,
+) -> impl Parser<'a, I, CmpOp, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    select! { Token::Ident(s) if s == word => CmpOp::Compare(op, domain) }
 }
 
 /// Unwrap a term-shaped `ValueExpr::Term(_)`, or `None` for any compound
