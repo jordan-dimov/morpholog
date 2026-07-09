@@ -32,7 +32,30 @@ pub async fn test_pool() -> PgPool {
 
 /// Truncate the governed `morpholog.*` tables - the default reset every
 /// integration test runs on entry.
+///
+/// First waits for other open transactions on the database to drain: a
+/// previous test's pool closes its connections asynchronously, and a
+/// straggler still inside a transaction lowers the audit watermark, so
+/// a checkpoint taken by THIS test can otherwise cover none of its own
+/// rows (withhold-never-lose working as designed, against a transaction
+/// the test cannot see). Bounded, then proceeds - a wait this long means
+/// something is genuinely stuck and the test should fail visibly.
 pub async fn reset_db(pool: &PgPool) {
+    for _ in 0..200 {
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database()
+               AND pid != pg_backend_pid()
+               AND xact_start IS NOT NULL",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("failed to count open transactions");
+        if open == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE")
         .execute(pool)
         .await

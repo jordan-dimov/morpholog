@@ -34,6 +34,16 @@ pub enum PgError {
     /// - smaller, larger, or between known ids - is rejected here.
     #[error("transition_id {0} not found in morpholog.audit")]
     TransitionNotFound(Uuid),
+    /// A transition selected for disclosure is not in the prefix the
+    /// covering checkpoint commits to - it may exist in the audit log
+    /// but after the checkpoint, so [`PgError::TransitionNotFound`]
+    /// would lie. The remedy differs too: checkpoint later, or select
+    /// an earlier covering checkpoint's contents.
+    #[error(
+        "transition {id} is not in the prefix the covering checkpoint \
+         (tree_size {tree_size}) commits to"
+    )]
+    TransitionNotCovered { id: Uuid, tree_size: i64 },
     /// A transformation emitted the same intent (same name and args)
     /// more than once, so two outbox rows collided on the
     /// deterministic idempotency key (SQLSTATE 23505 on the outbox
