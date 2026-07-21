@@ -325,14 +325,27 @@ class Morpholog:
     # Tamper-evidence: replay, checkpoints, evidence packs.
     # ------------------------------------------------------------
 
-    def verify(self, anchor_file: str | None = None) -> envelopes.VerifyReport:
+    def verify(
+        self,
+        anchor_file: str | None = None,
+        require_signatures: bool = False,
+        views_schema: str | None = None,
+    ) -> envelopes.VerifyReport:
         """Replay the audit log against the claims table and check the
         audit Merkle tree against its checkpoints (and an external
-        ``anchor_file`` if given). A divergence or tamper is a decided
+        ``anchor_file`` if given). ``require_signatures`` is compliance
+        mode: an unsigned checkpoint becomes a failing verdict.
+        ``views_schema`` also verifies the generated SQL view surface
+        in that schema against its recorded seals, adding the ``views``
+        verdict to the report. A divergence or tamper is a decided
         verdict on stdout, not an operational error."""
         args = ["verify", "--database-url", self.database_url]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
+        if require_signatures:
+            args.append("--require-signatures")
+        if views_schema is not None:
+            args.extend(["--views-schema", views_schema])
         return envelopes.VerifyReport.from_json(self._json(*args))
 
     def checkpoint(
@@ -360,15 +373,18 @@ class Morpholog:
         return envelopes.EvidencePack.from_json(self._json(*args))
 
     def evidence_verify(
-        self, pack_file: str, anchor_file: str | None = None
+        self,
+        pack_file: str,
+        anchor_file: str | None = None,
+        require_signatures: bool = False,
     ) -> envelopes.TreeVerification:
         """Verify a prefix evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
-        verdict on stdout."""
-        args = ["evidence", "verify", str(pack_file)]
-        if anchor_file is not None:
-            args.extend(["--anchor-file", str(anchor_file)])
-        return envelopes.parse_tree_verification(self._json(*args))
+        verdict on stdout. ``require_signatures`` is compliance mode: an
+        unsigned checkpoint becomes a failing verdict."""
+        return envelopes.parse_tree_verification(
+            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+        )
 
     def evidence_export_window(
         self,
@@ -395,15 +411,18 @@ class Morpholog:
         return envelopes.WindowEvidencePack.from_json(self._json(*args))
 
     def evidence_verify_window(
-        self, pack_file: str, anchor_file: str | None = None
+        self,
+        pack_file: str,
+        anchor_file: str | None = None,
+        require_signatures: bool = False,
     ) -> envelopes.WindowVerification:
         """Verify a window pack offline - no database. Returns the window
         verdict; a tamper, inconsistent extension, or malformed pack is a
-        decided verdict on stdout."""
-        args = ["evidence", "verify", str(pack_file)]
-        if anchor_file is not None:
-            args.extend(["--anchor-file", str(anchor_file)])
-        return envelopes.parse_window_verification(self._json(*args))
+        decided verdict on stdout. ``require_signatures`` is compliance
+        mode, as on ``evidence_verify``."""
+        return envelopes.parse_window_verification(
+            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+        )
 
     def evidence_export_selective(
         self,
@@ -426,15 +445,30 @@ class Morpholog:
         return envelopes.SelectiveEvidencePack.from_json(self._json(*args))
 
     def evidence_verify_selective(
-        self, pack_file: str, anchor_file: str | None = None
+        self,
+        pack_file: str,
+        anchor_file: str | None = None,
+        require_signatures: bool = False,
     ) -> envelopes.SelectiveVerification:
         """Verify a selective pack offline - no database. Returns the
         selective verdict; a row not included, anchor mismatch, or
-        malformed pack is a decided verdict on stdout."""
+        malformed pack is a decided verdict on stdout.
+        ``require_signatures`` is compliance mode, as on
+        ``evidence_verify``."""
+        return envelopes.parse_selective_verification(
+            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+        )
+
+    @staticmethod
+    def _evidence_verify_args(
+        pack_file: str, anchor_file: str | None, require_signatures: bool
+    ) -> list:
         args = ["evidence", "verify", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
-        return envelopes.parse_selective_verification(self._json(*args))
+        if require_signatures:
+            args.append("--require-signatures")
+        return args
 
     # ------------------------------------------------------------
     # The outbox lease protocol.
