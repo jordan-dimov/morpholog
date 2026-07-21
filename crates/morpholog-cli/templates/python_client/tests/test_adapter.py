@@ -218,16 +218,29 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--require-signatures", argv)
             self.assertNotIn("--views-schema", argv)
 
-            os.environ["STUB_STDOUT"] = (
-                golden_dir / "tree_verification_chain_broken.json"
-            ).read_text()
-            argv = argv_after(
-                lambda: self.client.evidence_verify("pack.json", require_signatures=True)
-            )
-            self.assertIn("--require-signatures", argv)
+            # All three pack-verify methods plumb require_signatures
+            # into the shared argv builder; each is asserted on its own
+            # method, replying with its own kind's signature-required
+            # verdict golden.
+            for method, verdict_golden in [
+                (self.client.evidence_verify, "tree_verification_signature_required.json"),
+                (
+                    self.client.evidence_verify_window,
+                    "window_verification_signature_required.json",
+                ),
+                (
+                    self.client.evidence_verify_selective,
+                    "selective_verification_signature_required.json",
+                ),
+            ]:
+                os.environ["STUB_STDOUT"] = (golden_dir / verdict_golden).read_text()
+                argv = argv_after(
+                    lambda m=method: m("pack.json", require_signatures=True)
+                )
+                self.assertIn("--require-signatures", argv)
 
-            argv = argv_after(lambda: self.client.evidence_verify("pack.json"))
-            self.assertNotIn("--require-signatures", argv)
+                argv = argv_after(lambda m=method: m("pack.json"))
+                self.assertNotIn("--require-signatures", argv)
 
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")
