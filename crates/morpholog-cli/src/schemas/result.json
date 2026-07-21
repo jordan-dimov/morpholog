@@ -650,7 +650,17 @@
       "required": ["status", "schema"],
       "properties": {
         "status": { "enum": ["initialised", "already-initialised"] },
-        "schema": { "const": "morpholog" }
+        "schema": { "const": "morpholog" },
+        "least_privilege": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["next_steps", "reader_role", "writer_role"],
+          "properties": {
+            "next_steps": { "type": "array", "items": { "type": "string" } },
+            "reader_role": { "const": "morpholog_reader" },
+            "writer_role": { "const": "morpholog_writer" }
+          }
+        }
       }
     },
     "tree_head_signature": {

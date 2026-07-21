@@ -1,0 +1,13 @@
+{
+  "least_privilege": {
+    "next_steps": [
+      "GRANT morpholog_writer TO <the runtime's login role>;",
+      "GRANT morpholog_reader TO <each reporting or projection login role>;",
+      "GRANT pg_read_all_stats TO <each role that tails the audit>; -- the resume watermark reads pg_stat_activity"
+    ],
+    "reader_role": "morpholog_reader",
+    "writer_role": "morpholog_writer"
+  },
+  "schema": "morpholog",
+  "status": "initialised"
+}

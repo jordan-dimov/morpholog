@@ -122,10 +122,14 @@ class Morpholog:
     # Provisioning and model identity.
     # ------------------------------------------------------------
 
-    def init(self, skip_if_exists: bool = False) -> envelopes.InitReport:
+    def init(
+        self, skip_if_exists: bool = False, least_privilege: bool = False
+    ) -> envelopes.InitReport:
         args = ["init", "--database-url", self.database_url]
         if skip_if_exists:
             args.append("--skip-if-exists")
+        if least_privilege:
+            args.append("--least-privilege")
         return envelopes.InitReport.from_json(self._json(*args))
 
     def hash(self) -> envelopes.HashReport:

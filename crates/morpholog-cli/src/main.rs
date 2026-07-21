@@ -72,7 +72,9 @@ enum Command {
     /// nothing to vendor, nothing to drift. Day-zero only: refuses if
     /// the `morpholog` schema already exists (`--skip-if-exists`
     /// reports and exits zero instead, for idempotent entrypoints);
-    /// never drops, never migrates.
+    /// never drops, never migrates. `--least-privilege` additionally
+    /// locks the governed tables down to dedicated writer and reader
+    /// roles, so the governed path is the only way in by default.
     Init(InitArgs),
 
     /// Propose a change: it commits only if every rule holds.
@@ -508,6 +510,14 @@ pub(crate) struct InitArgs {
     /// deployment entrypoints that may run more than once.
     #[arg(long)]
     pub(crate) skip_if_exists: bool,
+
+    /// Also provision the least-privilege floor: dedicated writer and
+    /// reader group roles, PUBLIC revoked from the governed tables, and
+    /// the audit log append-only even for the writer. The report names
+    /// the membership grants the operator still runs. Idempotent;
+    /// combine with --skip-if-exists to retrofit an existing database.
+    #[arg(long)]
+    pub(crate) least_privilege: bool,
 }
 
 /// An `--as-of` coordinate: an exact `transition_id` (UUIDv7), or an

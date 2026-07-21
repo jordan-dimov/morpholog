@@ -663,14 +663,43 @@ class HashReport:
 
 
 @dataclass(frozen=True)
+class LeastPrivilege:
+    """The `--least-privilege` floor as applied: the two group roles,
+    plus the membership grants only the operator can decide."""
+
+    next_steps: tuple[str, ...]
+    reader_role: str
+    writer_role: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "LeastPrivilege":
+        data = _strict(
+            "least privilege", payload, {"next_steps", "reader_role", "writer_role"}
+        )
+        return cls(
+            next_steps=tuple(data["next_steps"]),
+            reader_role=data["reader_role"],
+            writer_role=data["writer_role"],
+        )
+
+
+@dataclass(frozen=True)
 class InitReport:
     status: str
     schema: str
+    least_privilege: LeastPrivilege | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> "InitReport":
-        data = _strict("init report", payload, {"status", "schema"})
-        return cls(status=data["status"], schema=data["schema"])
+        data = _strict(
+            "init report", payload, {"status", "schema"}, optional={"least_privilege"}
+        )
+        floor = data.get("least_privilege")
+        return cls(
+            status=data["status"],
+            schema=data["schema"],
+            least_privilege=None if floor is None else LeastPrivilege.from_json(floor),
+        )
 
 
 # ------------------------------------------------------------

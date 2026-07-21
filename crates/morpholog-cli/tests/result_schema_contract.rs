@@ -403,12 +403,21 @@ fn coverage_report_serializes_as_pinned() {
 #[test]
 fn report_envelopes_serialize_as_pinned() {
     use morpholog_cli::envelopes::{
-        CheckDiagnostic, CheckReport, HashReport, InitReport, NamedClaim,
+        CheckDiagnostic, CheckReport, HashReport, InitReport, LeastPrivilegeReport, NamedClaim,
     };
 
     assert_golden(
         "init_report.json",
         &to_value(&InitReport {
+            least_privilege: None,
+            schema: "morpholog",
+            status: "initialised",
+        }),
+    );
+    assert_golden(
+        "init_report_least_privilege.json",
+        &to_value(&InitReport {
+            least_privilege: Some(LeastPrivilegeReport::applied()),
             schema: "morpholog",
             status: "initialised",
         }),
@@ -965,6 +974,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("check_report.json", "check_report"),
         ("hash_report.json", "hash_report"),
         ("init_report.json", "init_report"),
+        ("init_report_least_privilege.json", "init_report"),
         ("named_claim.json", "named_claim"),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),

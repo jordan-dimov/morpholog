@@ -47,6 +47,8 @@ use std::fmt::Write as _;
 
 use morpholog_core::{PredicateArgKind, PredicateDecl, ValidatedProgram};
 
+use crate::sql_quote::{quote_ident, quote_literal};
+
 /// The rendered script plus how many views of each kind it emits
 /// (excluding the catalogue), so the CLI can report the split without
 /// re-deriving it.
@@ -288,20 +290,6 @@ fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) 
     // column or view is valid DDL. Consumers quote it in turn (`SELECT
     // "limit" FROM ...`) - the one place the unquoted-read convenience
     // does not reach, in exchange for not banning common field names.
-}
-
-/// Double-quote a SQL identifier, doubling any embedded quote. Every
-/// identifier in the generated script is quoted, even safe ones, so the
-/// renderer never depends on PostgreSQL's case-folding.
-pub(crate) fn quote_ident(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
-}
-
-/// Single-quote a SQL string literal, doubling any embedded apostrophe.
-/// Every literal in the script - programme name, predicate name, hash,
-/// comment body - goes through here.
-fn quote_literal(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
 }
 
 /// Make a value safe to interpolate into a `--` line comment. A `--`
