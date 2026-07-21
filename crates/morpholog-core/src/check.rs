@@ -962,7 +962,11 @@ impl CheckCtx<'_> {
                     _ => InferredKind::UnknownOrAny,
                 }
             }
-            ValueExpr::Sum { value, body } => {
+            ValueExpr::Sum {
+                value,
+                body,
+                seed: _,
+            } => {
                 // Body-first inference on a cloned scope so body-
                 // bound names (the iteration binding, plus any
                 // others the body introduces) do not leak into the

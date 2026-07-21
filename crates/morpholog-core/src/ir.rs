@@ -174,6 +174,20 @@ opaque_id! {
     ord Unit
 }
 
+/// The typed zero an empty [`ValueExpr::Sum`] evaluates to. A sum's
+/// runtime kind is driven by its values, but the empty sum has none, so
+/// the kind comes from the summed variable's declaration instead -
+/// resolved once, at lowering, never during evaluation. Decimal is the
+/// default and the fallback wherever no declaration decides (a count
+/// sum's literal target, a pre-bound variable).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SumSeed {
+    #[default]
+    Decimal,
+    Duration,
+    Quantity(Unit),
+}
+
 /// A named, versioned rule that must hold over admitted state. Invariants
 /// are evaluated against the candidate state produced by a
 /// [`Transformation`]; if any active invariant fails, the transformation is
@@ -340,9 +354,16 @@ pub enum ValueExpr {
     /// usually a variable bound by the body (`sum(amount | ...)`); a
     /// decimal-literal `value` turns the sum into a count of matches
     /// (`sum(1 | ...)`).
+    ///
+    /// `seed` is the zero an empty sum evaluates to, resolved statically
+    /// by [`crate::lower_sum_seeds`] from the summed variable's declared
+    /// kind - so an empty sum over a `Decimal[t]` position is `0 t`, not
+    /// a bare decimal that no quantity comparison could accept. Un-lowered
+    /// hand-built IR keeps the decimal default.
     Sum {
         value: Term,
         body: Box<Prop>,
+        seed: SumSeed,
     },
     /// Reads exactly one matching claim and yields its value-position
     /// binding; wildcards in `args` mark the value position(s). Zero

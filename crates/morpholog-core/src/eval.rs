@@ -1015,15 +1015,16 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 ))),
             }
         }
-        ValueExpr::Sum { value, body } => {
+        ValueExpr::Sum { value, body, seed } => {
             // Type-driven accumulation: a sum of decimals is a decimal,
             // a sum of durations is a duration (counted laytime is the
             // forcing case), a sum of same-unit quantities is a quantity
-            // of that unit, and the empty sum defaults to decimal zero -
-            // the only choice that keeps every pre-existing decimal
-            // aggregate working (unitful aggregates seed a zero-amount
-            // element, the same pattern as durations). Mixing kinds, or
-            // units within the quantity kind, is an error.
+            // of that unit. The empty sum is the lowered `seed` - the
+            // typed zero of the summed variable's declared kind, so an
+            // empty cargo book is `0 t` and an empty time book `PT0S`,
+            // with no zero-valued seed claim needed to open either.
+            // Mixing kinds, or units within the quantity kind, is an
+            // error.
             enum SumTotal {
                 Empty,
                 Decimal(Decimal),
@@ -1072,7 +1073,14 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 };
             }
             Ok(match total {
-                SumTotal::Empty => EvalValue::Decimal(Decimal::ZERO),
+                SumTotal::Empty => match seed {
+                    crate::ir::SumSeed::Decimal => EvalValue::Decimal(Decimal::ZERO),
+                    crate::ir::SumSeed::Duration => EvalValue::Duration(jiff::SignedDuration::ZERO),
+                    crate::ir::SumSeed::Quantity(unit) => EvalValue::Quantity {
+                        amount: Decimal::ZERO,
+                        unit: unit.clone(),
+                    },
+                },
                 SumTotal::Decimal(t) => EvalValue::Decimal(t),
                 SumTotal::Duration(t) => EvalValue::Duration(t),
                 SumTotal::Quantity(amount, unit) => EvalValue::Quantity { amount, unit },

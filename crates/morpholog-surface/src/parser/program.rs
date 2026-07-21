@@ -193,6 +193,11 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
     // audit, guarantees, explain) then sees them with no caller
     // changes. The formatter omits them; reparsing regenerates them.
     morpholog_core::lower_disciplines(&mut program);
+    // Each sum's empty-case seed resolves from the summed variable's
+    // declared kind, after call resolution so a variable bound inside a
+    // definition call is followed to its claim position. An empty cargo
+    // book is `0 t` with no seed claim needed to open it.
+    morpholog_core::lower_sum_seeds(&mut program);
     Ok((program, map))
 }
 

@@ -1126,7 +1126,11 @@ impl<'a> ParamCollector<'a> {
                 self.walk_value(left, l_exp);
                 self.walk_value(right, r_exp);
             }
-            ValueExpr::Sum { value, body } => {
+            ValueExpr::Sum {
+                value,
+                body,
+                seed: _,
+            } => {
                 // The summed term is decimal, duration, or quantity;
                 // its kind is observed from its claim position inside
                 // the body, so the aggregate itself pins nothing.

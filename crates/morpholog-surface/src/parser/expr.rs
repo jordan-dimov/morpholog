@@ -14,7 +14,9 @@
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
-use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Unit, Value, ValueExpr};
+use morpholog_core::{
+    ArithOp, CompareOp, OrderedDomain, Prop, SumSeed, Term, Unit, Value, ValueExpr,
+};
 
 /// Build a `Prop::Compare` from a factored operator and domain. The
 /// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
@@ -679,6 +681,7 @@ where
                 ValueExpr::Sum {
                     value: target,
                     body: Box::new(body),
+                    seed: SumSeed::default(),
                 }
             });
 

@@ -896,7 +896,12 @@ fn nested_forall() {
 #[test]
 fn parses_sum() {
     let got = parse_value_expr("sum(amount | SettlementPaid(claim, amount))").unwrap();
-    let ValueExpr::Sum { value, body } = got else {
+    let ValueExpr::Sum {
+        value,
+        body,
+        seed: _,
+    } = got
+    else {
         panic!("expected Sum");
     };
     assert_eq!(value, Term::Var("amount".into()));

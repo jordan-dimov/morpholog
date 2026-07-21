@@ -31,7 +31,7 @@
 use crate::{
     ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, Discipline, Intent, IntentDecl,
     Invariant, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop,
-    Stmt, Subject, Term, Transformation, Value, ValueExpr, Var,
+    Stmt, Subject, SumSeed, Term, Transformation, Value, ValueExpr, Var,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -280,6 +280,7 @@ pub fn sum(value: Term, body: Prop) -> ValueExpr {
     ValueExpr::Sum {
         value,
         body: Box::new(body),
+        seed: SumSeed::default(),
     }
 }
 
