@@ -68,8 +68,39 @@ pub struct HashReport {
 /// `init`: day-zero provisioning outcome.
 #[derive(Serialize)]
 pub struct InitReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub least_privilege: Option<LeastPrivilegeReport>,
     pub schema: &'static str,
     pub status: &'static str,
+}
+
+/// The `--least-privilege` floor, as applied: the two group roles, and
+/// the membership grants only the operator can decide (which login
+/// roles the runtime and its read-only consumers actually use).
+#[derive(Serialize)]
+pub struct LeastPrivilegeReport {
+    pub next_steps: Vec<String>,
+    pub reader_role: &'static str,
+    pub writer_role: &'static str,
+}
+
+impl LeastPrivilegeReport {
+    pub fn applied() -> Self {
+        let writer = morpholog_postgres::WRITER_ROLE;
+        let reader = morpholog_postgres::READER_ROLE;
+        Self {
+            next_steps: vec![
+                format!("GRANT {writer} TO <the runtime's login role>;"),
+                format!("GRANT {reader} TO <each reporting or projection login role>;"),
+                format!(
+                    "GRANT pg_read_all_stats TO <each role that tails the audit>; \
+                     -- the resume watermark reads pg_stat_activity"
+                ),
+            ],
+            reader_role: reader,
+            writer_role: writer,
+        }
+    }
 }
 
 /// One claim decoded to the named form: field-keyed bare values under

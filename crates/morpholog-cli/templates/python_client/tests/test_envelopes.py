@@ -111,6 +111,12 @@ class Reports(unittest.TestCase):
         self.assertTrue(hashed.hash.startswith("sha256:"))
         init = envelopes.InitReport.from_json(golden("init_report.json"))
         self.assertEqual(init.schema, "morpholog")
+        self.assertIsNone(init.least_privilege)
+        locked = envelopes.InitReport.from_json(
+            golden("init_report_least_privilege.json")
+        )
+        self.assertEqual(locked.least_privilege.writer_role, "morpholog_writer")
+        self.assertTrue(locked.least_privilege.next_steps)
         named = envelopes.NamedClaim.from_json(golden("named_claim.json"))
         # Named-read values stay wire-true; the generated read models
         # parse them by declared kind.
