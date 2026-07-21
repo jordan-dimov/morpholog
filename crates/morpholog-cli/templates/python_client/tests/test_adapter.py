@@ -41,6 +41,11 @@ if mode == "record_argv_empty":
     with open(os.environ["STUB_ARGV_FILE"], "w") as f:
         f.write("\\n".join(sys.argv[1:]))
     sys.exit(0)
+if mode == "record_argv_stdout":
+    with open(os.environ["STUB_ARGV_FILE"], "w") as f:
+        f.write("\\n".join(sys.argv[1:]))
+    print(os.environ["STUB_STDOUT"])
+    sys.exit(0)
 if mode == "hang":
     import time
     time.sleep(30)
@@ -179,6 +184,50 @@ class AdapterDiscrimination(unittest.TestCase):
             argv = argv_after(lambda: self.client.audit())
             self.assertNotIn("--after", argv)
             self.assertNotIn("--named", argv)
+
+    def test_verify_flags_land_on_argv_exactly_when_supplied(self):
+        # The verdict-affecting verify flags: each appears exactly when
+        # asked for, so the whole pinned verdict surface (signatures,
+        # sealed views) is reachable through the blessed method.
+        self._mode("record_argv_stdout")
+        golden_dir = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
+        os.environ["STUB_STDOUT"] = (golden_dir / "verify_report_consistent.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
+
+            argv = argv_after(
+                lambda: self.client.verify(
+                    anchor_file="head.json",
+                    require_signatures=True,
+                    views_schema="morpholog_views",
+                )
+            )
+            self.assertEqual(argv[argv.index("--anchor-file") + 1], "head.json")
+            self.assertIn("--require-signatures", argv)
+            self.assertEqual(argv[argv.index("--views-schema") + 1], "morpholog_views")
+
+            argv = argv_after(lambda: self.client.verify())
+            self.assertNotIn("--anchor-file", argv)
+            self.assertNotIn("--require-signatures", argv)
+            self.assertNotIn("--views-schema", argv)
+
+            os.environ["STUB_STDOUT"] = (
+                golden_dir / "tree_verification_chain_broken.json"
+            ).read_text()
+            argv = argv_after(
+                lambda: self.client.evidence_verify("pack.json", require_signatures=True)
+            )
+            self.assertIn("--require-signatures", argv)
+
+            argv = argv_after(lambda: self.client.evidence_verify("pack.json"))
+            self.assertNotIn("--require-signatures", argv)
 
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")
