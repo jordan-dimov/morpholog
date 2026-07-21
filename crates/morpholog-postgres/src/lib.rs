@@ -24,9 +24,11 @@ mod merkle;
 mod outbox;
 mod pack;
 mod propose;
+mod provision;
 mod rejections;
 mod score;
 mod signing;
+mod sql_quote;
 mod txn;
 mod verify;
 
@@ -65,6 +67,9 @@ pub use propose::{
     compute_idempotency_key, propose_against_pg, propose_against_pg_with_rejection_state,
     propose_against_pg_with_trace,
 };
+pub use provision::{
+    InitOutcome, READER_ROLE, SCHEMA_SQL, WRITER_ROLE, initialise_schema, provision_least_privilege,
+};
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use score::{
     SplitBoundary, score_candidate, score_candidate_against_pack, score_candidate_against_packs,
@@ -75,6 +80,5 @@ pub use signing::{
     tree_head_signing_bytes, verify_tree_head,
 };
 pub use verify::{
-    InitOutcome, SCHEMA_SQL, VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay,
-    initialise_schema, verify_replay, verify_views,
+    VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay, verify_replay, verify_views,
 };

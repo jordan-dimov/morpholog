@@ -13,45 +13,6 @@ use serde::Serialize;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
-/// The canonical Morpholog schema, compiled into this crate. The same
-/// file a repo checkout applies with `psql -f`; embedding it means a
-/// binary-only deployment provisions exactly the schema this build
-/// expects - nothing to vendor, nothing to drift.
-pub const SCHEMA_SQL: &str = include_str!("../../morpholog-core/sql/schema.sql");
-/// Outcome of [`initialise_schema`]: provisioned now, or found already
-/// provisioned (the caller decides whether that is fine or an error).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitOutcome {
-    Initialised,
-    AlreadyInitialised,
-}
-/// Provision the `morpholog` schema in an existing database from the
-/// embedded [`SCHEMA_SQL`]. Day-zero only: if the schema already
-/// exists this returns [`InitOutcome::AlreadyInitialised`] without
-/// touching anything - it never drops and never migrates. Schema
-/// *evolution* is the deferred migrations story, not this function.
-///
-/// Provisioning is atomic: the existence check and the whole schema
-/// script run in one transaction (the script is plain DDL, which
-/// PostgreSQL rolls back like any other statement), so a mid-script
-/// failure leaves nothing behind - in particular, no partial schema
-/// the existence guard would later misread as already-initialised.
-pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
-    let mut tx = pool.begin().await.map_err(classify)?;
-    let exists = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(classify)?;
-    if exists.is_some() {
-        return Ok(InitOutcome::AlreadyInitialised);
-    }
-    sqlx::raw_sql(SCHEMA_SQL)
-        .execute(&mut *tx)
-        .await
-        .map_err(classify)?;
-    tx.commit().await.map_err(classify)?;
-    Ok(InitOutcome::Initialised)
-}
 /// The outcome of replaying the audit log against the claims table.
 ///
 /// The two tables are independent records of the same history: the
@@ -147,8 +108,8 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
     // rule the generator quotes it.
     let sealed_sql = format!(
         "SELECT view_name, definition_sha256 FROM {}.{}",
-        crate::sql_views::quote_ident(schema),
-        crate::sql_views::quote_ident(crate::sql_views::VIEW_DEFS_TABLE),
+        crate::sql_quote::quote_ident(schema),
+        crate::sql_quote::quote_ident(crate::sql_views::VIEW_DEFS_TABLE),
     );
     let sealed: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(&sealed_sql)
         .fetch_all(pool)
@@ -163,8 +124,8 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
     if catalog_live.is_some() {
         let catalog_sql = format!(
             "SELECT DISTINCT view_name FROM {}.{}",
-            crate::sql_views::quote_ident(schema),
-            crate::sql_views::quote_ident(crate::sql_views::CATALOG_VIEW),
+            crate::sql_quote::quote_ident(schema),
+            crate::sql_quote::quote_ident(crate::sql_views::CATALOG_VIEW),
         );
         intended = match sqlx::query_scalar::<_, String>(&catalog_sql)
             .fetch_all(pool)
