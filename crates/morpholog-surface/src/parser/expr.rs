@@ -391,9 +391,16 @@ where
                 if rest.is_empty() {
                     first
                 } else {
+                    // Splice direct And children so a chained comparison
+                    // or a parenthesised conjunction composes into the
+                    // same flat vec its spelled-out form parses to.
                     let mut all = Vec::with_capacity(rest.len() + 1);
-                    all.push(first);
-                    all.extend(rest);
+                    for prop in std::iter::once(first).chain(rest) {
+                        match prop {
+                            Prop::And(inner) => all.extend(inner),
+                            other => all.push(other),
+                        }
+                    }
                     Prop::And(all)
                 }
             });

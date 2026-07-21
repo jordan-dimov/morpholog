@@ -1433,3 +1433,24 @@ prop_err!(mixed_direction_chain_is_refused, "a <= x >= b");
 prop_err!(equality_does_not_chain, "a = b = c");
 prop_err!(equality_inside_a_chain_is_refused, "a <= x = b");
 prop_err!(membership_does_not_chain, "a in xs in ys");
+
+#[test]
+fn chain_composes_flat_inside_a_wider_and() {
+    // A chain used as one conjunct of a wider `and` splices into the
+    // same flat And the spelled-out form parses to - no nesting.
+    let chained = parse_expression("0 <= rate <= 1 and A(x)").unwrap();
+    let expanded = parse_expression("0 <= rate and rate <= 1 and A(x)").unwrap();
+    assert_eq!(chained, expanded);
+    let Prop::And(ops) = chained else {
+        panic!("expected And, got {chained:?}");
+    };
+    assert_eq!(ops.len(), 3);
+}
+
+#[test]
+fn parenthesised_conjunction_flattens_into_a_wider_and() {
+    assert_eq!(
+        parse_expression("(B(x) and C(x)) and A(x)").unwrap(),
+        parse_expression("B(x) and C(x) and A(x)").unwrap(),
+    );
+}
