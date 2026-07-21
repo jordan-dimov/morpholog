@@ -96,16 +96,19 @@ pub async fn provision_least_privilege(pool: &PgPool) -> Result<(), PgError> {
     Ok(())
 }
 
-/// Name the remedy when the connection role cannot provision: role and
-/// grant DDL needs CREATEROLE (or ownership of the granted objects),
-/// and a bare permission error would leave the operator guessing.
+/// Name the remedy when the connection role cannot provision, because a
+/// bare permission error would leave the operator guessing. Two distinct
+/// privileges are in play: CREATE ROLE needs CREATEROLE, and the
+/// REVOKE/GRANT statements need ownership of the governed tables - in
+/// practice the role that ran `morpholog init`. A superuser has both.
 fn provision_error(e: sqlx::Error) -> PgError {
     if let sqlx::Error::Database(db) = &e
         && db.code().as_deref() == Some("42501")
     {
         return PgError::InvalidState(format!(
-            "least-privilege provisioning was refused: {}; connect as a role \
-             with CREATEROLE that owns the morpholog schema (or a superuser) \
+            "least-privilege provisioning was refused: {}; connect as a \
+             superuser, or as a role that has CREATEROLE and owns the \
+             morpholog tables (normally the role that ran `morpholog init`), \
              and re-run",
             db.message()
         ));
