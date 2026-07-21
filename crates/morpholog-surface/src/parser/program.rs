@@ -263,7 +263,21 @@ where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
     let ident = select! { Token::Ident(s) => s };
-    let kind = select! { Token::Kind(k) => k };
+    // A declared kind, or an identifier where one was expected - the
+    // latter names the whole vocabulary rather than leaving the author
+    // guessing what a kind even is (`String` is the classic reach).
+    let kind = select! { Token::Kind(k) => k }.or(ident.validate(|word, e, emitter| {
+        let span: SimpleSpan = e.span();
+        emitter.emit(Rich::custom(
+            span,
+            format!(
+                "`{word}` is not a kind; declared kinds are `Subject`, `Decimal`, \
+                 `Decimal[UNIT]`, `Date`, `Timestamp`, `Duration`, `Bool`, and \
+                 `Collection` (labels and identifiers ride `Subject`)"
+            ),
+        ));
+        PredicateArgKind::Subject
+    }));
 
     // arg ::= Ident ":" Kind ("[" Ident "]")?
     // The unit brackets attach only to `Decimal` - `Decimal[USD]` is a

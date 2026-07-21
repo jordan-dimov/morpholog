@@ -22,7 +22,7 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
     let status = match initialise_schema(&pool)
         .await
-        .context("initialise_schema failed")?
+        .context("schema provisioning failed")?
     {
         InitOutcome::Initialised => "initialised",
         InitOutcome::AlreadyInitialised if args.skip_if_exists => "already-initialised",
