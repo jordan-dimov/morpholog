@@ -77,7 +77,7 @@ intent DrawdownRequested(facility: Subject, draw_id: Subject, amount: Decimal)
 -- would divide by. A drawdown moves money out, never in - modelling
 -- repayments would be a separate action this example leaves out.
 invariant advance_rate_within_unit_interval:
-    Facility(facility, rate) implies (0 <= rate and rate <= 1)
+    Facility(facility, rate) implies 0 <= rate <= 1
 
 invariant collateral_value_is_positive:
     EligibleCollateral(facility, _, v) implies 0 < v

@@ -1369,3 +1369,88 @@ fn on_or_before_inside_and_chain() {
     assert!(is_date_le(&ops[0]));
     assert!(is_date_le(&ops[1]));
 }
+
+// ---------------------------------------------------------------
+// Chained comparisons: `a <= x <= b` lowers to the same And of
+// pairwise comparisons as the spelled-out `and` form - no new IR.
+// ---------------------------------------------------------------
+
+#[test]
+fn chained_comparison_lowers_to_the_spelled_out_and() {
+    assert_eq!(
+        parse_expression("0 <= rate <= 1").unwrap(),
+        parse_expression("0 <= rate and rate <= 1").unwrap(),
+    );
+}
+
+#[test]
+fn chained_date_comparison_lowers_to_the_spelled_out_and() {
+    assert_eq!(
+        parse_expression("from on_or_before date on_or_before to").unwrap(),
+        parse_expression("from on_or_before date and date on_or_before to").unwrap(),
+    );
+}
+
+#[test]
+fn chain_of_three_links_flattens_into_one_and() {
+    let got = parse_expression("a <= b < c <= d").unwrap();
+    let Prop::And(ops) = got else {
+        panic!("expected And, got {got:?}");
+    };
+    assert_eq!(ops.len(), 3);
+}
+
+#[test]
+fn downward_chain_formats_as_the_expanded_and() {
+    // The formatter's canonical output is the expanded form; the
+    // chained spelling is accepted on the way in, never re-sugared
+    // on the way out.
+    let chained = parse_expression("0 <= rate <= 1").unwrap();
+    let expanded = parse_expression("0 <= rate and rate <= 1").unwrap();
+    assert_eq!(format_prop_inline(&chained), format_prop_inline(&expanded));
+}
+
+prop_ok!(
+    upward_chain_accepted,
+    "cap >= drawn >= 0",
+    Prop::And(vec![
+        cmp(
+            CompareOp::Ge,
+            OrderedDomain::Decimal,
+            var_value("cap"),
+            var_value("drawn"),
+        ),
+        cmp(
+            CompareOp::Ge,
+            OrderedDomain::Decimal,
+            var_value("drawn"),
+            dec_value("0"),
+        ),
+    ])
+);
+
+prop_err!(mixed_direction_chain_is_refused, "a <= x >= b");
+prop_err!(equality_does_not_chain, "a = b = c");
+prop_err!(equality_inside_a_chain_is_refused, "a <= x = b");
+prop_err!(membership_does_not_chain, "a in xs in ys");
+
+#[test]
+fn chain_composes_flat_inside_a_wider_and() {
+    // A chain used as one conjunct of a wider `and` splices into the
+    // same flat And the spelled-out form parses to - no nesting.
+    let chained = parse_expression("0 <= rate <= 1 and A(x)").unwrap();
+    let expanded = parse_expression("0 <= rate and rate <= 1 and A(x)").unwrap();
+    assert_eq!(chained, expanded);
+    let Prop::And(ops) = chained else {
+        panic!("expected And, got {chained:?}");
+    };
+    assert_eq!(ops.len(), 3);
+}
+
+#[test]
+fn parenthesised_conjunction_flattens_into_a_wider_and() {
+    assert_eq!(
+        parse_expression("(B(x) and C(x)) and A(x)").unwrap(),
+        parse_expression("B(x) and C(x) and A(x)").unwrap(),
+    );
+}

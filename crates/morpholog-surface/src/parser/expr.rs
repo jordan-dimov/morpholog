@@ -246,8 +246,8 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        // comparison ::= arith (cmp_op arith)?  (non-assoc), or a
-        // prop-only atom (claim / pre / parenthesised prop).
+        // comparison ::= arith (cmp_op arith)+, or a prop-only atom
+        // (claim / pre / parenthesised prop).
         //
         // Surface forms and their IR lowering:
         //   - `=` -> Prop::Eq(ValueExpr, ValueExpr)
@@ -270,6 +270,12 @@ where
         // membership comparator; the structural `in` of `forall x in
         // source:` is consumed by the forall production before reaching
         // this level.
+        //
+        // A range reads as spoken: `0 <= rate <= 1` chains, lowering
+        // to the same `Prop::And` of pairwise comparisons the spelled
+        // out `and` form produces - no new IR. Only the ordered
+        // comparators chain, and every link must point the same way;
+        // a mixed-direction chain is refused rather than guessed at.
         let value_comparison = arith
             .clone()
             .then(
@@ -300,27 +306,59 @@ where
                     contextual_cmp("longer_than", CompareOp::Gt, OrderedDomain::Duration),
                     just(Token::KwIn).to(CmpOp::In),
                 ))
-                .then(arith.clone()),
+                .then(arith.clone())
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>(),
             )
-            .validate(|(lhs, (op, rhs)), e, emitter| match op {
-                CmpOp::Eq => Prop::Eq(Box::new(lhs), Box::new(rhs)),
-                CmpOp::Compare(op, domain) => compare(op, domain, lhs, rhs),
-                CmpOp::Neq => Prop::Neq(Box::new(lhs), Box::new(rhs)),
-                CmpOp::In => {
-                    let span: SimpleSpan = e.span();
-                    let lhs_term = value_as_term(&lhs);
-                    let rhs_term = value_as_term(&rhs);
-                    match (lhs_term, rhs_term) {
-                        (Some(l), Some(r)) => Prop::In(l, r),
-                        _ => {
-                            emitter.emit(Rich::custom(
-                                span,
-                                "`in` (membership) requires both sides to be terms (variable, wildcard, literal, or `actor`); arithmetic and other expressions are not allowed because the IR's In operates on terms only",
-                            ));
-                            Prop::Eq(Box::new(lhs), Box::new(rhs))
-                        }
+            .validate(|(lhs, links), e, emitter| {
+                let span: SimpleSpan = e.span();
+                let links = match <[(CmpOp, ValueExpr); 1]>::try_from(links) {
+                    Err(links) => links,
+                    Ok([(op, rhs)]) => {
+                        return match op {
+                        CmpOp::Eq => Prop::Eq(Box::new(lhs), Box::new(rhs)),
+                        CmpOp::Compare(op, domain) => compare(op, domain, lhs, rhs),
+                        CmpOp::Neq => Prop::Neq(Box::new(lhs), Box::new(rhs)),
+                            CmpOp::In => {
+                                let lhs_term = value_as_term(&lhs);
+                                let rhs_term = value_as_term(&rhs);
+                                match (lhs_term, rhs_term) {
+                                    (Some(l), Some(r)) => Prop::In(l, r),
+                                    _ => {
+                                        emitter.emit(Rich::custom(
+                                            span,
+                                            "`in` (membership) requires both sides to be terms (variable, wildcard, literal, or `actor`); arithmetic and other expressions are not allowed because the IR's In operates on terms only",
+                                        ));
+                                        Prop::Eq(Box::new(lhs), Box::new(rhs))
+                                    }
+                                }
+                            }
+                        };
                     }
+                };
+                let mut props = Vec::with_capacity(links.len());
+                let mut downward: Option<bool> = None;
+                let mut left = lhs;
+                for (op, rhs) in links {
+                    let CmpOp::Compare(op, domain) = op else {
+                        emitter.emit(Rich::custom(
+                            span,
+                            "only the ordered comparators chain (`<=`, `<`, `>=`, `>` and the date, time, and duration forms); `=`, `!=`, and `in` relate exactly two things - split this with `and`",
+                        ));
+                        return Prop::And(props);
+                    };
+                    let down = matches!(op, CompareOp::Le | CompareOp::Lt);
+                    if *downward.get_or_insert(down) != down {
+                        emitter.emit(Rich::custom(
+                            span,
+                            "a chained comparison must point one way (`a <= x <= b`, or `b >= x >= a`); a mixed-direction chain is not a range - split it with `and`",
+                        ));
+                    }
+                    props.push(compare(op, domain, left, rhs.clone()));
+                    left = rhs;
                 }
+                Prop::And(props)
             });
 
         // The comparison level: a value comparison, or a prop-only atom
@@ -353,9 +391,16 @@ where
                 if rest.is_empty() {
                     first
                 } else {
+                    // Splice direct And children so a chained comparison
+                    // or a parenthesised conjunction composes into the
+                    // same flat vec its spelled-out form parses to.
                     let mut all = Vec::with_capacity(rest.len() + 1);
-                    all.push(first);
-                    all.extend(rest);
+                    for prop in std::iter::once(first).chain(rest) {
+                        match prop {
+                            Prop::And(inner) => all.extend(inner),
+                            other => all.push(other),
+                        }
+                    }
                     Prop::And(all)
                 }
             });
