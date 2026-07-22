@@ -378,6 +378,54 @@ mod tests {
         h.finalize().into()
     }
 
+    /// A fully-populated audit row with every field fixed, so the leaf
+    /// bytes are deterministic. Used to pin the canonical encoding.
+    fn fixed_row() -> AuditRow {
+        use morpholog_core::{EvalValue, Subject};
+        AuditRow {
+            transition_id: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001),
+            transformation_name: "post_entry".into(),
+            arguments: vec![
+                EvalValue::Subject(Subject::from("e1")),
+                EvalValue::Decimal("125.50".parse().unwrap()),
+            ],
+            actor: Subject::from("alex"),
+            invariant_epoch: 1,
+            invariants_checked: vec![crate::AuditedInvariantCheck {
+                name: "books_balance".into(),
+                version: 1,
+            }],
+            asserted_claims: vec![morpholog_core::ClaimInstance {
+                predicate: "Entry".into(),
+                args: vec![
+                    EvalValue::Subject(Subject::from("e1")),
+                    EvalValue::Decimal("125.50".parse().unwrap()),
+                ],
+            }],
+            retracted_claims: vec![],
+            emitted_intents: vec![morpholog_core::IntentInstance {
+                name: "EntryPosted".into(),
+                args: vec![EvalValue::Subject(Subject::from("e1"))],
+            }],
+            committed_at: "2026-01-02T03:04:05.123456Z".parse().unwrap(),
+        }
+    }
+
+    /// The frozen leaf hash of [`fixed_row`] under the original leaf
+    /// encoding. Computed once and pinned: any change to the canonical
+    /// bytes - field order, length prefixes, codec, version byte -
+    /// changes this hash, and such a change must arrive as a NEW leaf
+    /// version, never as an edit to the encoding historical roots were
+    /// computed under.
+    #[test]
+    fn frozen_v1_leaf_hash_pins_the_canonical_encoding() {
+        let hash = audit_leaf_hash(&fixed_row()).unwrap();
+        assert_eq!(
+            render_hash(&hash),
+            "sha256:d9b263c7ced1cdbebae9371350204a30da05879720cf414e1cae0bf23c174be9"
+        );
+    }
+
     /// The empty tree is `SHA-256("")` - the fixed RFC 6962 constant.
     #[test]
     fn empty_tree_is_sha256_of_empty() {
