@@ -15,7 +15,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{Definition, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, ValueExpr, Var};
+use crate::ir::{
+    Definition, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, Value, ValueExpr, Var,
+};
 
 /// Resolve every `Sum` node's empty-case seed from the summed
 /// variable's declared kind. See the module doc for why this is a
@@ -104,9 +106,18 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
         }
         ValueExpr::Sum { value, body, seed } => {
             lower_in_prop(body, ctx);
-            if let Term::Var(v) = value
-                && let Some(resolved) = var_seed(v, body, ctx, 0)
-            {
+            let resolved = match value {
+                // A variable's kind comes from the claim position that
+                // binds it; a literal target carries its kind itself
+                // (`sum(1 t | ...)` counts in tonnes, empty or not).
+                Term::Var(v) => var_seed(v, body, ctx, 0),
+                Term::Literal(Value::Quantity { unit, .. }) => {
+                    Some(SumSeed::Quantity(unit.clone()))
+                }
+                Term::Literal(Value::Duration(_)) => Some(SumSeed::Duration),
+                _ => None,
+            };
+            if let Some(resolved) = resolved {
                 *seed = resolved;
             }
         }

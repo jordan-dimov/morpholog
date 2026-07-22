@@ -1140,6 +1140,8 @@ invariant duration_seed:
     Interval(x, _) implies sum(len | Interval(_, len)) no_longer_than duration(PT48H)
 invariant count_stays_decimal:
     Parcel(x, _) implies sum(1 | Parcel(_, _)) <= 10
+invariant literal_target_carries_its_unit:
+    Parcel(x, _) implies sum(1 t | Parcel(_, _)) <= 100 t
 ";
     let program = morpholog_surface::parse_program(src).unwrap();
     let seed_of = |name: &str| {
@@ -1164,4 +1166,10 @@ invariant count_stays_decimal:
     assert_eq!(seed_of("quantity_seed"), SumSeed::Quantity("t".into()));
     assert_eq!(seed_of("duration_seed"), SumSeed::Duration);
     assert_eq!(seed_of("count_stays_decimal"), SumSeed::Decimal);
+    // A literal target carries its kind itself - no claim position
+    // needed, and the empty count stays in tonnes.
+    assert_eq!(
+        seed_of("literal_target_carries_its_unit"),
+        SumSeed::Quantity("t".into())
+    );
 }
