@@ -46,7 +46,14 @@ CREATE TABLE audit (
     asserted_claims      jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects
     retracted_claims     jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects
     emitted_intents      jsonb        NOT NULL,           -- summary; rows in outbox
-    committed_at         timestamptz  NOT NULL DEFAULT now()
+    committed_at         timestamptz  NOT NULL DEFAULT now(),
+    -- How the actor identity was established, e.g.
+    -- {"mode":"gateway","authenticated_by":"<login role>"} - the
+    -- attestation lineage the runtime records for every commit. NULL
+    -- on rows written before attestation existed; those rows keep the
+    -- original Merkle leaf encoding, so the column is never backfilled.
+    attestation          jsonb        CHECK (attestation IS NULL
+                                             OR jsonb_typeof(attestation) = 'object')
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,

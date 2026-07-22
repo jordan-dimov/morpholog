@@ -114,6 +114,7 @@ mod tests {
             retracted_claims: retracted,
             emitted_intents: vec![],
             committed_at: chrono::Utc::now(),
+            attestation: None,
         }
     }
 

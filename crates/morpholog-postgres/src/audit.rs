@@ -1,3 +1,4 @@
+use crate::attestation::AuditAttestation;
 use crate::error::{PgError, classify};
 use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -24,6 +25,11 @@ pub struct AuditRow {
     pub retracted_claims: Vec<ClaimInstance>,
     pub emitted_intents: Vec<IntentInstance>,
     pub committed_at: DateTime<Utc>,
+    /// How the actor identity was established. Absent on rows written
+    /// before attestation existed; those rows keep the original Merkle
+    /// leaf encoding, so the field's presence selects the leaf version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<AuditAttestation>,
 }
 /// Page size for every keyset read over the replay order - the audit
 /// tail, coverage's two passes, and the chunked replays. One chunk in
@@ -43,6 +49,7 @@ pub(crate) struct AuditRowRaw {
     retracted_claims: serde_json::Value,
     emitted_intents: serde_json::Value,
     committed_at: DateTime<Utc>,
+    attestation: Option<serde_json::Value>,
 }
 // The audit columns, in the order `AuditRowRaw`'s fields and the listing
 // queries' SELECTs share. Inlined as a literal in each `query_as!`
@@ -50,7 +57,8 @@ pub(crate) struct AuditRowRaw {
 // one place that records the canonical order:
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
-//   asserted_claims, retracted_claims, emitted_intents, committed_at
+//   asserted_claims, retracted_claims, emitted_intents, committed_at,
+//   attestation
 pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     Ok(AuditRow {
         transition_id: row.transition_id,
@@ -73,6 +81,12 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
         retracted_claims: serde_json::from_value(row.retracted_claims)?,
         emitted_intents: serde_json::from_value(row.emitted_intents)?,
         committed_at: row.committed_at,
+        // Strict, like the actor: an unrecognised attestation shape is
+        // an error at this boundary, never a value that hashes on.
+        attestation: row
+            .attestation
+            .map(serde_json::from_value::<AuditAttestation>)
+            .transpose()?,
     })
 }
 /// Return every committed audit row from `morpholog.audit`, ordered by
@@ -92,7 +106,8 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
         AuditRowRaw,
         "SELECT transition_id, transformation_name, arguments, actor,
                 invariant_epoch, invariants_checked,
-                asserted_claims, retracted_claims, emitted_intents, committed_at
+                asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation
          FROM morpholog.audit
          ORDER BY committed_at, transition_id"
     )
@@ -123,7 +138,8 @@ pub async fn list_audit_rows_page(
                 AuditRowRaw,
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
-                        asserted_claims, retracted_claims, emitted_intents, committed_at
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation
                  FROM morpholog.audit
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
@@ -137,7 +153,8 @@ pub async fn list_audit_rows_page(
                 AuditRowRaw,
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
-                        asserted_claims, retracted_claims, emitted_intents, committed_at
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                  ORDER BY committed_at, transition_id
@@ -154,7 +171,8 @@ pub async fn list_audit_rows_page(
                 AuditRowRaw,
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
-                        asserted_claims, retracted_claims, emitted_intents, committed_at
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation
                  FROM morpholog.audit
                  WHERE committed_at < $2
                  ORDER BY committed_at, transition_id
@@ -170,7 +188,8 @@ pub async fn list_audit_rows_page(
                 AuditRowRaw,
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
-                        asserted_claims, retracted_claims, emitted_intents, committed_at
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                    AND committed_at < $4

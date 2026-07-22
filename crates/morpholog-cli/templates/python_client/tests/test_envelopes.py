@@ -141,6 +141,15 @@ class AuditTail(unittest.TestCase):
         self.assertEqual(claim.args[1], Decimal("100.50"))
         self.assertEqual(row.emitted_intents[0].name, "AccountOpened")
         self.assertEqual(row.committed_at.year, 2026)
+        # A row from before attestation existed carries none.
+        self.assertIsNone(row.attestation)
+
+    def test_an_attested_audit_row_carries_its_lineage(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row_attested.json"))
+        self.assertEqual(row.attestation.mode, "gateway")
+        self.assertEqual(row.attestation.authenticated_by, "morpholog_writer")
+        # Everything else is the same row.
+        self.assertEqual(row.actor, "alex")
 
     def test_the_named_audit_row_round_trips_the_golden(self):
         row = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))

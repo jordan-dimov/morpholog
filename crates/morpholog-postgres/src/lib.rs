@@ -14,6 +14,7 @@ pub use sql_views::{RenderedViews, ViewRefusal, render_views};
 pub use sqlx::PgPool;
 
 mod as_of;
+mod attestation;
 mod audit;
 mod checkpoints;
 mod claims;
@@ -37,6 +38,7 @@ pub use as_of::{
     list_claims_at, list_claims_at_for_predicates, reconstruct_state_at,
     resolve_transition_at_or_before,
 };
+pub use attestation::{ActorAttestation, AuditAttestation, Proposal};
 pub use audit::{
     AuditRow, AuditTail, audit_cursor_for, audit_resume_watermark, begin_audit_tail,
     list_audit_rows, list_audit_rows_page,

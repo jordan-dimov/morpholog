@@ -288,10 +288,13 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
     // The explain-on-reject path goes through with_rejection_state -
     // one call, one row, no double recording.
     let transition = test_transition(post_approved, vec![subj("t2"), dec(2)]);
-    let result =
-        propose_against_pg_with_rejection_state(&pool, &common::compiled(p.clone()), &transition)
-            .await
-            .expect("rejection is lawful");
+    let result = propose_against_pg_with_rejection_state(
+        &pool,
+        &common::compiled(p.clone()),
+        &common::attested(&transition),
+    )
+    .await
+    .expect("rejection is lawful");
     assert!(matches!(result.outcome, PgProposalOutcome::Rejected { .. }));
     assert!(
         result.rejection_state.is_some(),

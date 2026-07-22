@@ -12,8 +12,8 @@
 
 use morpholog_core::{CompiledProgram, EvalValue, Program, Subject, Transformation, Transition};
 use morpholog_postgres::{
-    PgError, PgPool, PgProposalOutcome, PgTracedOutcome, propose_against_pg,
-    propose_against_pg_with_trace,
+    ActorAttestation, PgError, PgPool, PgProposalOutcome, PgTracedOutcome, Proposal,
+    propose_against_pg, propose_against_pg_with_trace,
 };
 use uuid::Uuid;
 
@@ -107,6 +107,18 @@ pub fn compiled(program: Program) -> CompiledProgram {
     CompiledProgram::new(program).expect("test programme is valid")
 }
 
+/// Wrap a kernel transition in a gateway-attested proposal - the shape
+/// the durable commit paths accept.
+pub fn attested(transition: &Transition) -> Proposal {
+    Proposal {
+        transformation_name: transition.transformation_name.clone(),
+        args: transition.args.clone(),
+        attestation: ActorAttestation::Gateway {
+            actor: transition.actor.clone(),
+        },
+    }
+}
+
 /// Convenience for tests: build the `Transition` with `test_actor()` and
 /// propose through the `CompiledProgram` facade. `transformation` names
 /// the transition; the programme's rule slices come from `compiled`.
@@ -117,7 +129,7 @@ pub async fn propose_pg_with_test_actor(
     args: Vec<EvalValue>,
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg(pool, compiled, &transition).await
+    propose_against_pg(pool, compiled, &attested(&transition)).await
 }
 
 /// Admit an `AuditSigningKey(key_id, purpose, public_key)` claim through a
@@ -164,7 +176,7 @@ pub async fn propose_pg_with_trace_using_test_actor(
     args: Vec<EvalValue>,
 ) -> Result<PgTracedOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg_with_trace(pool, compiled, &transition).await
+    propose_against_pg_with_trace(pool, compiled, &attested(&transition)).await
 }
 
 /// Variant that lets the caller supply an explicit actor. Used by
@@ -182,5 +194,5 @@ pub async fn propose_pg_as(
         args,
         actor: actor.into(),
     };
-    propose_against_pg(pool, compiled, &transition).await
+    propose_against_pg(pool, compiled, &attested(&transition)).await
 }

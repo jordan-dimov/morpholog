@@ -1,9 +1,10 @@
+use crate::attestation::{AuditAttestation, Proposal};
 use crate::error::{PgError, classify};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
     InvariantName, Outcome, PredicateName, RejectionReason, State, Subject, TraceEntry,
-    TracedProposal, Transformation, Transition, propose, propose_with_trace,
+    TracedProposal, Transformation, TransformationName, Transition, propose, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,35 +53,36 @@ pub enum PgProposalOutcome {
 /// External side effects do not run inside this transaction. Outbox rows
 /// are enqueued for post-commit delivery by workers running outside.
 ///
-/// The [`Transition`] bundles the transformation name (verified against
-/// `transformation.name`), the arguments, and the actor under whose
-/// authority the transition is proposed. On `Committed`, the actor is
-/// persisted to the `morpholog.audit.actor` column.
+/// The [`Proposal`] bundles the transformation name (verified against
+/// `transformation.name`), the arguments, and the [`ActorAttestation`](crate::ActorAttestation)
+/// establishing the actor under whose authority the change is proposed.
+/// On `Committed`, the actor is persisted to the `morpholog.audit.actor`
+/// column and the attestation lineage to `morpholog.audit.attestation`.
 pub async fn propose_against_pg(
     pool: &PgPool,
     compiled: &CompiledProgram,
-    transition: &Transition,
+    proposal: &Proposal,
 ) -> Result<PgProposalOutcome, PgError> {
-    let (transformation, invariants, definitions) = resolve(compiled, transition)?;
-    propose_against_pg_inner(pool, transformation, transition, invariants, definitions).await
+    let (transformation, invariants, definitions) =
+        resolve(compiled, &proposal.transformation_name)?;
+    let transition = proposal.transition();
+    propose_against_pg_inner(pool, transformation, &transition, invariants, definitions).await
 }
 
 /// Resolve the pieces the kernel needs from a compiled programme and the
-/// transition naming its transformation: the transformation itself (by
+/// name of the proposed transformation: the transformation itself (by
 /// name, O(1)) plus the programme's invariants and definitions. An
 /// unknown name is the one new error path the facade introduces; because
-/// the lookup is by the transition's own name, the kernel's
+/// the lookup is by the proposal's own name, the kernel's
 /// `transformation.name == transition.transformation_name` check is then
 /// a tautology.
 pub(crate) fn resolve<'a>(
     compiled: &'a CompiledProgram,
-    transition: &Transition,
+    name: &TransformationName,
 ) -> Result<(&'a Transformation, &'a [Invariant], &'a [Definition]), PgError> {
     let transformation = compiled
-        .transformation(&transition.transformation_name)
-        .ok_or_else(|| PgError::UnknownTransformation {
-            name: transition.transformation_name.clone(),
-        })?;
+        .transformation(name)
+        .ok_or_else(|| PgError::UnknownTransformation { name: name.clone() })?;
     Ok((
         transformation,
         &compiled.program().invariants,
@@ -139,13 +141,15 @@ pub struct RejectionStateOutcome {
 pub async fn propose_against_pg_with_rejection_state(
     pool: &PgPool,
     compiled: &CompiledProgram,
-    transition: &Transition,
+    proposal: &Proposal,
 ) -> Result<RejectionStateOutcome, PgError> {
-    let (transformation, invariants, definitions) = resolve(compiled, transition)?;
+    let (transformation, invariants, definitions) =
+        resolve(compiled, &proposal.transformation_name)?;
+    let transition = proposal.transition();
     propose_against_pg_with_rejection_state_inner(
         pool,
         transformation,
-        transition,
+        &transition,
         invariants,
         definitions,
     )
@@ -221,10 +225,12 @@ pub enum PgTracedOutcome {
 pub async fn propose_against_pg_with_trace(
     pool: &PgPool,
     compiled: &CompiledProgram,
-    transition: &Transition,
+    proposal: &Proposal,
 ) -> Result<PgTracedOutcome, PgError> {
-    let (transformation, invariants, definitions) = resolve(compiled, transition)?;
-    propose_against_pg_with_trace_inner(pool, transformation, transition, invariants, definitions)
+    let (transformation, invariants, definitions) =
+        resolve(compiled, &proposal.transformation_name)?;
+    let transition = proposal.transition();
+    propose_against_pg_with_trace_inner(pool, transformation, &transition, invariants, definitions)
         .await
 }
 
@@ -527,6 +533,17 @@ pub(crate) async fn write_accepted(
             version: inv.version,
         })
         .collect();
+    // The attestation lineage: which PostgreSQL-authenticated login
+    // role asserted the actor. Resolved here, inside the committing
+    // transaction, from the connection itself - `session_user` is the
+    // role PostgreSQL authenticated at login and is immune to SET ROLE,
+    // so a caller cannot supply or spoof it through this adapter.
+    // session_user is never NULL for an authenticated connection.
+    let authenticated_by = sqlx::query_scalar!(r#"SELECT session_user AS "session_user!""#)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(classify)?;
+    let attestation = AuditAttestation::Gateway { authenticated_by };
     // Serialise the actor via the tagged `EvalValue::Subject` so the
     // `actor` column keeps its v0 shape (`#[serde(with = "actor_repr")]`
     // does not apply when the field is serialised directly, only through
@@ -535,8 +552,8 @@ pub(crate) async fn write_accepted(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            asserted_claims, retracted_claims, emitted_intents, attestation
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         transition_id,
         transformation.name.as_str(),
         serde_json::to_value(&transition.args)?,
@@ -546,6 +563,7 @@ pub(crate) async fn write_accepted(
         serde_json::to_value(asserted_claims)?,
         serde_json::to_value(retracted_claims)?,
         serde_json::to_value(emitted_intents)?,
+        serde_json::to_value(&attestation)?,
     )
     .execute(&mut **tx)
     .await

@@ -277,8 +277,19 @@ fn audit_rows_serialize_as_pinned() {
             args: vec![EvalValue::Subject(Subject::from("acct_1"))],
         }],
         committed_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+        attestation: None,
     };
     assert_golden("audit_row.json", &to_value(&row));
+
+    // The attested variant: same row, plus the gateway attestation
+    // lineage the adapter records on every commit it writes today.
+    let attested = AuditRow {
+        attestation: Some(morpholog_postgres::AuditAttestation::Gateway {
+            authenticated_by: "morpholog_writer".to_string(),
+        }),
+        ..row.clone()
+    };
+    assert_golden("audit_row_attested.json", &to_value(&attested));
 
     // The --named form replaces the two claim arrays with
     // field-keyed bare objects (the named_claim shape) and leaves
@@ -545,6 +556,7 @@ fn sample_audit_row() -> AuditRow {
         retracted_claims: vec![],
         emitted_intents: vec![],
         committed_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+        attestation: None,
     }
 }
 
@@ -970,6 +982,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("score_report_split.json", "score_report"),
         ("batch_score.json", "batch_score"),
         ("audit_row.json", "audit_row"),
+        ("audit_row_attested.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("hash_report.json", "hash_report"),
