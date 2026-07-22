@@ -415,7 +415,11 @@ fn value_primary(e: &ValueExpr) -> String {
 pub fn format_value_inline(e: &ValueExpr) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
-        ValueExpr::Sum { value, body } => {
+        ValueExpr::Sum {
+            value,
+            body,
+            seed: _,
+        } => {
             format!("sum({} | {})", format_term(value), format_prop_inline(body))
         }
         ValueExpr::ValueOf {

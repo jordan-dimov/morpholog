@@ -44,6 +44,7 @@ mod propose;
 pub mod schema;
 mod score;
 mod state;
+mod sums;
 mod validate;
 
 pub use analysis::{
@@ -73,7 +74,7 @@ pub use ir::{
     ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DerivedClaim, DerivedValue,
     Discipline, Intent, IntentDecl, IntentName, Invariant, InvariantName, InvariantOrigin,
     OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Subject,
-    Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
+    SumSeed, Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
 };
 pub use lint::{Lint, lints};
 pub use propose::{
@@ -87,6 +88,7 @@ pub use score::{
     SplitBoundaryReport, SplitScore, invariants_using_pre,
 };
 pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
+pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 
 #[cfg(test)]
@@ -362,6 +364,7 @@ mod tests {
         let value_with = |p: &str| ValueExpr::Sum {
             value: Term::Var("v".into()),
             body: Box::new(claim(p)),
+            seed: SumSeed::default(),
         };
 
         let prop = Prop::And(vec![
@@ -456,6 +459,7 @@ mod tests {
                 left: Box::new(ValueExpr::Sum {
                     value: Term::Var("v".into()),
                     body: Box::new(claim("P_sum_body")),
+                    seed: SumSeed::default(),
                 }),
                 right: Box::new(value_of(
                     "P_valueof_self",

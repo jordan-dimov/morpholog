@@ -1124,3 +1124,52 @@ transformation t(v):
         "diagnostic should name the bad literal: {msg}"
     );
 }
+
+#[test]
+fn sum_seeds_lower_from_declared_kinds_through_defined_calls() {
+    use morpholog_core::{Prop, SumSeed, ValueExpr};
+    let src = "\
+program seeds
+predicate Parcel(p: Subject, qty: Decimal[t])
+predicate Interval(i: Subject, len: Duration)
+define parcel_qty(p, q):
+    Parcel(p, q)
+invariant quantity_seed:
+    Parcel(x, _) implies sum(q | parcel_qty(_, q)) <= 100 t
+invariant duration_seed:
+    Interval(x, _) implies sum(len | Interval(_, len)) no_longer_than duration(PT48H)
+invariant count_stays_decimal:
+    Parcel(x, _) implies sum(1 | Parcel(_, _)) <= 10
+invariant literal_target_carries_its_unit:
+    Parcel(x, _) implies sum(1 t | Parcel(_, _)) <= 100 t
+";
+    let program = morpholog_surface::parse_program(src).unwrap();
+    let seed_of = |name: &str| {
+        let inv = program
+            .invariants
+            .iter()
+            .find(|i| i.name.as_str() == name)
+            .unwrap();
+        let Prop::Implies { right, .. } = &inv.body else {
+            panic!("implication expected");
+        };
+        let Prop::Compare { left, .. } = right.as_ref() else {
+            panic!("comparison expected");
+        };
+        let ValueExpr::Sum { seed, .. } = left.as_ref() else {
+            panic!("sum expected");
+        };
+        seed.clone()
+    };
+    // The quantity seed resolves THROUGH the defined call: `q` is bound
+    // by `parcel_qty`'s body, not by any claim the invariant names.
+    assert_eq!(seed_of("quantity_seed"), SumSeed::Quantity("t".into()));
+    assert_eq!(seed_of("duration_seed"), SumSeed::Duration);
+    assert_eq!(seed_of("count_stays_decimal"), SumSeed::Decimal);
+    // A literal target carries its kind itself - no claim position
+    // needed, and the empty count stays in tonnes.
+    assert_eq!(
+        seed_of("literal_target_carries_its_unit"),
+        SumSeed::Quantity("t".into())
+    );
+}

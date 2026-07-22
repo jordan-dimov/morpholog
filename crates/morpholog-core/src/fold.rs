@@ -118,7 +118,11 @@ fn any_term_value_scoped<'p>(
                     .as_ref()
                     .is_some_and(|d| any_term_value_scoped(d, f, scope))
         }
-        ValueExpr::Sum { value, body } => f(value, scope) || any_term_prop_scoped(body, f, scope),
+        ValueExpr::Sum {
+            value,
+            body,
+            seed: _,
+        } => f(value, scope) || any_term_prop_scoped(body, f, scope),
         ValueExpr::Arith { left, right, .. } => {
             any_term_value_scoped(left, f, scope) || any_term_value_scoped(right, f, scope)
         }

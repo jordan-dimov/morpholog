@@ -28,8 +28,8 @@
 use morpholog_core::ir_builder::*;
 use morpholog_core::{
     ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, DerivedValue, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, Term,
-    Transformation, ValidationError, Value, ValueExpr, Var,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, SumSeed,
+    Term, Transformation, ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
@@ -115,6 +115,7 @@ fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
             (arb_term(), arb_prop_leaf()).prop_map(|(value, body)| ValueExpr::Sum {
                 value,
                 body: Box::new(body),
+                seed: SumSeed::default(),
             }),
             (arb_pred_name(), arb_args(), inner).prop_map(|(predicate, args, default)| {
                 ValueExpr::ValueOf {

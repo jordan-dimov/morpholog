@@ -23,7 +23,7 @@ fn ex() -> &'static Example {
 
 /// Fixture: voyage v1, 48 hours of allowed laytime, NOR tendered at
 /// 14:00Z on 2026-10-24, clock commenced (so counting starts at
-/// 20:00Z after the six-hour turn time, with the zero-length seed).
+/// 20:00Z after the six-hour turn time).
 fn commenced_voyage() -> State {
     let state = ex().must_accept(
         &lay::fix_voyage(),
@@ -35,11 +35,7 @@ fn commenced_voyage() -> State {
         vec![subj("nor1"), subj("v1"), ts("2026-10-24T14:00:00Z")],
         state,
     );
-    ex().must_accept(
-        &lay::commence_laytime(),
-        vec![subj("v1"), subj("seed1")],
-        state,
-    )
+    ex().must_accept(&lay::commence_laytime(), vec![subj("v1")], state)
 }
 
 fn excess_for(state: &State) -> EvalValue {
@@ -175,11 +171,7 @@ fn an_interval_ending_before_it_begins_is_refused() {
 #[test]
 fn the_laytime_commenced_unique_by_voyage_per_voyage() {
     let state = commenced_voyage();
-    ex().must_reject(
-        &lay::commence_laytime(),
-        vec![subj("v1"), subj("seed2")],
-        &state,
-    );
+    ex().must_reject(&lay::commence_laytime(), vec![subj("v1")], &state);
 }
 
 #[test]
@@ -194,10 +186,10 @@ fn a_notice_needs_a_fixture_behind_it() {
 #[test]
 fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
     // Fixture only: the clock has not started, so the derived view has
-    // no row for the voyage - and crucially does not error. (Without
-    // the LaytimeCommenced conjunct in the domain, this read would hit
-    // the empty-duration-sum landmine the seed pattern exists to
-    // defuse. The review of this PR caught exactly that.)
+    // no row for the voyage - and does not error. The LaytimeCommenced
+    // conjunct keeps "how much demurrage?" unanswerable rather than
+    // zero before the clock exists; an empty count after commencement
+    // is a typed zero-length excess, not an error.
     let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
@@ -225,11 +217,7 @@ fn two_voyages_enumerate_deterministically() {
         vec![subj("nor2"), subj("v2"), ts("2026-11-01T08:00:00Z")],
         state,
     );
-    let state = ex().must_accept(
-        &lay::commence_laytime(),
-        vec![subj("v2"), subj("seed2")],
-        state,
-    );
+    let state = ex().must_accept(&lay::commence_laytime(), vec![subj("v2")], state);
     let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
     assert_eq!(rows.len(), 2, "two commenced voyages, two rows");
     let again = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
@@ -255,7 +243,7 @@ fn cargo_book_caps_at_the_declared_capacity() {
     );
     let state = ex().must_accept(
         &lay::declare_capacity(),
-        vec![subj("v1"), subj("seed_parcel"), qty("45000", "t")],
+        vec![subj("v1"), qty("45000", "t")],
         state,
     );
     let state = ex().must_accept(
@@ -296,7 +284,7 @@ fn voyage_on_demurrage() -> State {
     );
     let state = ex().must_accept(
         &lay::agree_demurrage_rate(),
-        vec![subj("v1"), subj("seed_settlement"), qty("25000", "USD")],
+        vec![subj("v1"), qty("25000", "USD")],
         state,
     );
     ex().must_accept(
@@ -373,5 +361,23 @@ fn settlement_before_the_rate_is_agreed_is_refused() {
         &lay::settle_demurrage(),
         vec![subj("s1"), subj("v1"), qty("1000", "USD")],
         &state,
+    );
+}
+
+#[test]
+fn an_empty_cargo_book_counts_as_zero_tonnes() {
+    // Declaring capacity opens no parcel: the cargo book is genuinely
+    // empty, and `cargo_within_capacity` still evaluates - the empty
+    // sum is `0 t` by the summed variable's declared kind, not a bare
+    // decimal no tonne comparison could accept.
+    let state = ex().must_accept(
+        &lay::fix_voyage(),
+        vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
+        State::default(),
+    );
+    ex().must_accept(
+        &lay::declare_capacity(),
+        vec![subj("v1"), qty("45000", "t")],
+        state,
     );
 }

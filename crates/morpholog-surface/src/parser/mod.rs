@@ -96,15 +96,22 @@ fn lex_error_diagnostics(errs: Vec<Rich<'_, char>>) -> Vec<Diagnostic> {
 }
 
 /// Map parser failures to diagnostics - the "parse error:" twin of
-/// [`lex_error_diagnostics`].
+/// [`lex_error_diagnostics`]. A stray `Indent` gets the layout rule
+/// spelled out: "found 'indent'" names the mechanism, not the fix, and
+/// the fix (same column, or parens) is not guessable from the message.
 fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
     errs.into_iter()
         .map(|e| {
             let span = e.span();
-            Diagnostic::error(
-                format!("parse error: {}", e.reason()),
-                span.start()..span.end(),
-            )
+            let mut message = format!("parse error: {}", e.reason());
+            if matches!(e.found(), Some(Token::Indent)) {
+                message.push_str(
+                    "; continuation lines of one expression stay at the same column - \
+                     indent no deeper, or wrap the expression in parentheses, which \
+                     make layout stop mattering until they close",
+                );
+            }
+            Diagnostic::error(message, span.start()..span.end())
         })
         .collect()
 }

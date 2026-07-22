@@ -129,9 +129,8 @@ invariant counted_time_follows_commencement:
 
 -- The cargo never exceeds what the vessel can carry. Tonnes against
 -- tonnes: the comparison is only possible because both sides carry
--- the same unit, and the sum opens at the zero-tonne seed admitted
--- with the capacity (a sum over nothing is a bare number, and a bare
--- number does not compare with tonnes - so the book is never empty).
+-- the same unit - an empty cargo book counts as zero tonnes, so the
+-- rule holds from the moment the capacity is declared.
 invariant cargo_within_capacity:
     VesselCapacity(v, cap) implies sum(qty | CargoParcel(_, v, qty)) <= cap
 
@@ -149,9 +148,7 @@ invariant settlements_within_due:
 -- A settlement can only ever exist under an agreed rate. The gate on
 -- `settle_demurrage` checks the same thing at action time; this
 -- invariant makes it a permanent property of the world - the same
--- gate-plus-invariant pairing as the counting rules above. It holds
--- even for the zero-dollar seed, because the rate and the seed are
--- admitted together.
+-- gate-plus-invariant pairing as the counting rules above.
 invariant settlement_requires_rate:
     DemurrageSettled(_, v, _) implies DemurrageRate(v, _)
 
@@ -175,15 +172,12 @@ transformation tender_nor(nor, voyage, tendered_at):
 
 -- Start the clock. The charterparty grants six hours of turn time
 -- after the notice, so commencement is *computed*: the tendering
--- instant shifted by an exact duration. Note the zero-length seed
--- interval admitted alongside: it opens the count at zero, so the
--- running total below is never a sum over nothing.
-transformation commence_laytime(voyage, seed):
+-- instant shifted by an exact duration.
+transformation commence_laytime(voyage):
     bind NorTendered(_, voyage, tendered_at)
     require not LaytimeCommenced(voyage, _)
     let commenced_at = tendered_at + duration(PT6H)
     admit LaytimeCommenced(voyage, commenced_at)
-    admit CountingInterval(seed, voyage, commenced_at, commenced_at, duration(PT0S))
     emit LaytimeClockStarted(voyage)
 
 -- Record a stretch of time that counted against the allowance - the
@@ -208,14 +202,11 @@ transformation complete_cargo_ops(voyage, completed_at):
     admit CargoOpsCompleted(voyage, completed_at)
     emit CargoOpsDone(voyage)
 
--- Declare what the vessel can carry. The zero-tonne seed parcel
--- admitted alongside opens the cargo book, exactly as the zero-length
--- interval opens the time book at commencement.
-transformation declare_capacity(voyage, seed_parcel, capacity):
+-- Declare what the vessel can carry.
+transformation declare_capacity(voyage, capacity):
     require VoyageFixture(voyage, _, _, _)
     require not VesselCapacity(voyage, _)
     admit VesselCapacity(voyage, capacity)
-    admit CargoParcel(seed_parcel, voyage, 0 t)
 
 -- Book a parcel of cargo. The gate asks only that the capacity has
 -- been declared; the invariant above decides whether this parcel
@@ -226,13 +217,11 @@ transformation load_parcel(parcel, voyage, qty):
 
 -- Agree the demurrage rate - part of the deal, in dollars per day of
 -- delay. "Per day" is not a unit the system knows; it is the formula
--- in the invariant and the derived figure below. The zero-dollar seed
--- settlement opens the money book, same pattern as the cargo.
-transformation agree_demurrage_rate(voyage, seed_settlement, daily):
+-- in the invariant and the derived figure below.
+transformation agree_demurrage_rate(voyage, daily):
     require VoyageFixture(voyage, _, _, _)
     require not DemurrageRate(voyage, _)
     admit DemurrageRate(voyage, daily)
-    admit DemurrageSettled(seed_settlement, voyage, 0 USD)
 
 -- Settle part (or all) of the demurrage. Only after the cargo work is
 -- done - until then the counted time is still moving - and only under
@@ -256,10 +245,9 @@ transformation settle_demurrage(settlement, voyage, amount):
 -- already settled on the old figure stands on its own record.
 --
 -- The domain requires the clock to have started: before commencement
--- there is nothing to count and no seed interval, so the question
--- "how much demurrage?" has no row yet rather than a wrong answer.
--- (Commencement admits the zero-length seed atomically, so once a
--- voyage appears here its duration sum is never empty.)
+-- there is nothing to count, so the question "how much demurrage?"
+-- has no row yet rather than a wrong answer. An empty count is a
+-- zero-length excess, not an error.
 derived TimeOnDemurrage(voyage, allowed):
     over VoyageFixture(voyage, _, _, allowed) and LaytimeCommenced(voyage, _)
     value excess = max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S))

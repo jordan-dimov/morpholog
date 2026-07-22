@@ -78,7 +78,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     if args.trace {
         let traced = propose_against_pg_with_trace(&pool, &compiled, &transition)
             .await
-            .context("propose_against_pg_with_trace failed")?;
+            .context("the proposal could not be decided")?;
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
                 print_json(&serde_json::json!({
@@ -112,7 +112,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             rejection_state,
         } = propose_against_pg_with_rejection_state(&pool, &compiled, &transition)
             .await
-            .context("propose_against_pg_with_rejection_state failed")?;
+            .context("the proposal could not be decided")?;
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
@@ -129,7 +129,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     } else {
         let outcome = propose_against_pg(&pool, &compiled, &transition)
             .await
-            .context("propose_against_pg failed")?;
+            .context("the proposal could not be decided")?;
         print_json(&outcome)?;
         if let PgProposalOutcome::Rejected { reason } = &outcome {
             print_rule_location(reason, &parsed);
@@ -193,11 +193,11 @@ fn classify_pg_error(err: morpholog_postgres::PgError) -> BatchRowError {
     use morpholog_postgres::PgError;
     match &err {
         PgError::SerializationFailure | PgError::Kernel(_) | PgError::DuplicateIntent => {
-            BatchRowError::Row(anyhow::Error::new(err).context("propose_against_pg failed"))
+            BatchRowError::Row(anyhow::Error::new(err).context("the proposal could not be decided"))
         }
-        _ => {
-            BatchRowError::Operational(anyhow::Error::new(err).context("propose_against_pg failed"))
-        }
+        _ => BatchRowError::Operational(
+            anyhow::Error::new(err).context("the proposal could not be decided"),
+        ),
     }
 }
 
