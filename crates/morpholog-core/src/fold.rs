@@ -129,3 +129,83 @@ fn any_term_value_scoped<'p>(
         ValueExpr::Abs(inner) => any_term_value_scoped(inner, f, scope),
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::ir::{SumSeed, Value};
+
+    fn claim(pred: &str) -> Prop {
+        Prop::Claim {
+            predicate: pred.into(),
+            args: vec![],
+        }
+    }
+
+    fn var_term(name: &str) -> Term {
+        Term::Var(Var::from(name))
+    }
+
+    fn is_x(t: &Term, _scope: &[&Var]) -> bool {
+        matches!(t, Term::Var(v) if v.as_str() == "x")
+    }
+
+    /// Each disjunctive descent must find a match sitting ONLY in its
+    /// first branch - the position a short-circuit `||` mutated to
+    /// `&&` silently stops seeing.
+    #[test]
+    fn a_match_in_the_first_branch_alone_is_found() {
+        // Forall: pre only in the SOURCE, body clean.
+        let forall = Prop::Forall {
+            binding: Var::from("b"),
+            source: Box::new(Prop::Pre(Box::new(claim("P")))),
+            body: Box::new(claim("Q")),
+        };
+        assert!(mentions_pre(&forall));
+
+        // Value-sort arithmetic: pre only in the LEFT operand.
+        let arith_prop = Prop::Eq(
+            Box::new(ValueExpr::Arith {
+                op: crate::ArithOp::Add,
+                left: Box::new(ValueExpr::Sum {
+                    value: Term::Literal(Value::Decimal("1".into())),
+                    body: Box::new(Prop::Pre(Box::new(claim("P")))),
+                    seed: SumSeed::Decimal,
+                }),
+                right: Box::new(ValueExpr::Term(Term::Wildcard)),
+            }),
+            Box::new(ValueExpr::Term(Term::Wildcard)),
+        );
+        assert!(mentions_pre(&arith_prop));
+
+        // In: the sought term only on the LEFT side.
+        let membership = Prop::In(var_term("x"), var_term("ys"));
+        assert!(any_term_in_prop(&membership, &is_x));
+
+        // ValueOf: the term only in the ARGS, with a default present
+        // that does not carry it.
+        let lookup = ValueExpr::ValueOf {
+            predicate: "P".into(),
+            args: vec![var_term("x"), Term::Wildcard],
+            default: Some(Box::new(ValueExpr::Term(var_term("other")))),
+        };
+        assert!(any_term_in_value(&lookup, &is_x));
+
+        // Sum: the term is the TARGET only, body clean.
+        let sum = ValueExpr::Sum {
+            value: var_term("x"),
+            body: Box::new(claim("P")),
+            seed: SumSeed::Decimal,
+        };
+        assert!(any_term_in_value(&sum, &is_x));
+
+        // Term-sort arithmetic: the term only in the LEFT operand.
+        let arith = ValueExpr::Arith {
+            op: crate::ArithOp::Add,
+            left: Box::new(ValueExpr::Term(var_term("x"))),
+            right: Box::new(ValueExpr::Term(var_term("other"))),
+        };
+        assert!(any_term_in_value(&arith, &is_x));
+    }
+}

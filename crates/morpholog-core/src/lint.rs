@@ -397,3 +397,116 @@ fn positive_value_claims(expr: &ValueExpr, positive: bool, out: &mut BTreeSet<Pr
         ValueExpr::Sum { .. } => {}
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::definitions::DefinitionIndex;
+    use crate::ir::Term;
+    use std::collections::BTreeSet;
+
+    fn claim(pred: &str) -> Prop {
+        Prop::Claim {
+            predicate: pred.into(),
+            args: vec![Term::Wildcard],
+        }
+    }
+
+    fn implies(l: Prop, r: Prop) -> Prop {
+        Prop::Implies {
+            left: Box::new(l),
+            right: Box::new(r),
+        }
+    }
+
+    fn implications_in(prop: &Prop) -> usize {
+        let mut out = Vec::new();
+        collect_implications(
+            prop,
+            true,
+            DefinitionIndex::new(&[]),
+            &mut BTreeSet::new(),
+            &mut Vec::new(),
+            &mut out,
+        );
+        out.len()
+    }
+
+    /// Polarity is part of an implication's meaning: one nested in an
+    /// antecedent (or under `not`) is not a rule of its own. Only the
+    /// outer, positively-placed implication is collected.
+    #[test]
+    fn implications_are_collected_at_positive_polarity_only() {
+        let nested_in_antecedent = implies(implies(claim("A"), claim("B")), claim("C"));
+        assert_eq!(implications_in(&nested_in_antecedent), 1);
+
+        let negated = Prop::Not(Box::new(implies(claim("A"), claim("B"))));
+        assert_eq!(implications_in(&negated), 0);
+
+        // In a consequent, polarity is preserved: both count.
+        let nested_in_consequent = implies(claim("A"), implies(claim("B"), claim("C")));
+        assert_eq!(implications_in(&nested_in_consequent), 2);
+    }
+
+    fn positives_in(prop: &Prop) -> BTreeSet<crate::PredicateName> {
+        let mut out = BTreeSet::new();
+        positive_claims(
+            prop,
+            true,
+            DefinitionIndex::new(&[]),
+            &mut BTreeSet::new(),
+            &mut out,
+        );
+        out
+    }
+
+    /// `not` flips claim polarity, and flips it back when doubled.
+    #[test]
+    fn negation_flips_claim_polarity_both_ways() {
+        assert!(positives_in(&Prop::Not(Box::new(claim("A")))).is_empty());
+        let doubled = Prop::Not(Box::new(Prop::Not(Box::new(claim("A")))));
+        assert!(positives_in(&doubled).contains(&"A".into()));
+    }
+
+    /// A defaultless `value` lookup demands its claim exist, so the
+    /// predicate counts as positively required - but only at positive
+    /// polarity, and not once a default absorbs the zero-match case.
+    #[test]
+    fn value_lookups_count_only_defaultless_and_positive() {
+        let lookup = |default: Option<Box<ValueExpr>>| {
+            Prop::Eq(
+                Box::new(ValueExpr::ValueOf {
+                    predicate: "Looked".into(),
+                    args: vec![Term::Wildcard],
+                    default,
+                }),
+                Box::new(ValueExpr::Term(Term::Wildcard)),
+            )
+        };
+        assert!(positives_in(&lookup(None)).contains(&"Looked".into()));
+        let defaulted = lookup(Some(Box::new(ValueExpr::Term(Term::Wildcard))));
+        assert!(positives_in(&defaulted).is_empty());
+        assert!(positives_in(&Prop::Not(Box::new(lookup(None)))).is_empty());
+    }
+
+    /// The hint text is what `check` prints to stderr: it names the
+    /// invariant and, for the unsupplied case, every blocker.
+    #[test]
+    fn lint_display_names_the_rule_and_its_cause() {
+        let gate = Lint::GateVsInvariant {
+            invariant: "books_balance".to_string(),
+            append_only: "Entry".to_string(),
+            pointer: "CurrentTotal".to_string(),
+        };
+        let rendered = format!("{gate}");
+        assert!(rendered.contains("books_balance") && rendered.contains("Entry"));
+
+        let unsupplied = Lint::UnsuppliedAntecedent {
+            invariant: "haunting_is_real".to_string(),
+            missing: vec!["Ghost".to_string()],
+        };
+        let rendered = format!("{unsupplied}");
+        assert!(rendered.contains("haunting_is_real") && rendered.contains("Ghost"));
+    }
+}

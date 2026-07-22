@@ -543,3 +543,162 @@ fn bio_state_with_decision() -> State {
     }
     state
 }
+
+#[test]
+fn the_generated_unique_invariant_is_pinned_exactly() {
+    // The lowered invariant's whole IR, against an independently
+    // hand-built expectation - the one check the generator cannot
+    // satisfy by being self-consistently wrong (shape drift like an
+    // And-wrapped single agreement, or a silently missing invariant,
+    // reddens here and nowhere else).
+    use morpholog_core::{InvariantOrigin, Prop, Term, ValueExpr, Var};
+    let program = parsed(
+        r#"
+program pin
+
+predicate Account(account_id: Subject, balance: Decimal)
+    unique by (account_id)
+
+transformation open(account_id, balance):
+    admit Account(account_id, balance)
+"#,
+    );
+    let generated = program
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "account_unique_by_account_id")
+        .expect("the clause lowers to its invariant");
+    let shared = || Term::Var(Var::from("account_id"));
+    let expected_body = Prop::Implies {
+        left: Box::new(Prop::And(vec![
+            Prop::Claim {
+                predicate: "Account".into(),
+                args: vec![shared(), Term::Var(Var::from("balance_a"))],
+            },
+            Prop::Claim {
+                predicate: "Account".into(),
+                args: vec![shared(), Term::Var(Var::from("balance_b"))],
+            },
+        ])),
+        right: Box::new(Prop::Eq(
+            Box::new(ValueExpr::Term(Term::Var(Var::from("balance_a")))),
+            Box::new(ValueExpr::Term(Term::Var(Var::from("balance_b")))),
+        )),
+    };
+    assert_eq!(generated.body, expected_body);
+    assert_eq!(generated.version, 1);
+    assert_eq!(generated.origin, InvariantOrigin::Discipline);
+}
+
+#[test]
+fn a_vacuous_clause_lowers_no_invariant_at_all() {
+    // Validation refuses the all-keys clause separately; this pins the
+    // LOWERING side - the vacuous clause must not quietly manufacture
+    // an invariant the refusal then hides.
+    let program = parse_program(
+        r#"
+program vacuous_lowering
+
+predicate Item(id: Subject, label: Subject)
+    unique by (id, label)
+"#,
+    )
+    .expect("parses; validation refuses separately");
+    assert!(
+        program.invariants.is_empty(),
+        "an all-keys clause generated an invariant: {:?}",
+        program
+            .invariants
+            .iter()
+            .map(|i| &i.name)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn lineage_provenance_travels_to_the_coverage_report() {
+    // The no-fork invariant generated from `superseded via` carries
+    // its `from:` provenance into every legibility surface; coverage's
+    // report is the pinnable one.
+    let program = parsed(
+        r#"
+program lineage_provenance
+
+predicate Current(owner: Subject, figure_id: Subject)
+    current pointer by (owner)
+    superseded via Supersedes
+predicate Supersedes(successor: Subject, prior: Subject)
+
+transformation point(owner, figure_id):
+    admit Current(owner, figure_id)
+
+transformation restate(owner, successor, prior):
+    bind Current(owner, prior)
+    retract Current(owner, prior)
+    admit Current(owner, successor)
+    admit Supersedes(successor, prior)
+"#,
+    );
+    let report = morpholog_core::CoverageTracker::new(&program).into_report();
+    let lineage_entry = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "supersedes_unique_by_prior")
+        .expect("the no-fork invariant is tracked");
+    let from = lineage_entry.from.as_deref().expect("carries provenance");
+    assert!(
+        from.contains("Supersedes"),
+        "provenance names the lineage predicate: {from}"
+    );
+}
+
+#[test]
+fn an_unlowered_lineage_is_caught_and_an_unfit_one_is_not_expected() {
+    // Hand-built IR that skips lowering must fail validation for the
+    // superseded-via clause's missing no-fork invariant - and only
+    // when the lineage predicate actually has the two-argument shape
+    // the convention requires.
+    use morpholog_core::ir_builder::{predicate, program};
+    use morpholog_core::{Discipline, ValidationError};
+    let two_arg = {
+        let mut p = program("unlowered")
+            .predicates(vec![
+                {
+                    let mut d = predicate("Figure")
+                        .subject("figure_id")
+                        .decimal("amount")
+                        .build();
+                    d.disciplines = vec![
+                        Discipline::UniqueBy {
+                            fields: vec!["figure_id".to_string()],
+                        },
+                        Discipline::CurrentPointerBy {
+                            fields: vec!["figure_id".to_string()],
+                        },
+                    ];
+                    d
+                },
+                {
+                    let mut d = predicate("Supersedes")
+                        .subject("successor")
+                        .subject("prior")
+                        .build();
+                    d.disciplines = vec![Discipline::SupersededVia {
+                        lineage: "Supersedes".into(),
+                    }];
+                    d
+                },
+            ])
+            .build();
+        p.invariants.clear();
+        p
+    };
+    let errors = two_arg.validate().expect_err("unlowered must fail");
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, ValidationError::DisciplineNotLowered { invariant, .. }
+                if invariant.contains("supersedes_unique_by_prior"))
+        ),
+        "the missing no-fork invariant is named: {errors:?}"
+    );
+}

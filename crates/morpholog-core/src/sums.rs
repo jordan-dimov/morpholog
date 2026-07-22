@@ -191,3 +191,123 @@ fn var_seed(var: &Var, body: &Prop, ctx: &SeedContext<'_>, depth: usize) -> Opti
         Prop::In(_, _) | Prop::Eq(_, _) | Prop::Neq(_, _) | Prop::Compare { .. } => None,
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::ir_builder::{defined, invariant, predicate, program, sum};
+    use crate::{CompareOp, OrderedDomain, Term, Value, Var};
+
+    /// A programme whose one invariant sums through `layers` chained
+    /// definition calls down to a quantity-kinded claim position.
+    fn chained(layers: usize) -> Program {
+        let mut definitions: Vec<Definition> = Vec::new();
+        for i in 0..layers {
+            let body = if i + 1 == layers {
+                Prop::Claim {
+                    predicate: "P".into(),
+                    args: vec![Term::Var(Var::from("x"))],
+                }
+            } else {
+                defined(&format!("d{}", i + 1), vec![Term::Var(Var::from("x"))])
+            };
+            definitions.push(Definition {
+                name: format!("d{i}").into(),
+                parameters: vec![Var::from("x")],
+                body,
+            });
+        }
+        let body = Prop::Compare {
+            op: CompareOp::Le,
+            domain: OrderedDomain::Decimal,
+            left: Box::new(sum(
+                Term::Var(Var::from("v")),
+                defined("d0", vec![Term::Var(Var::from("v"))]),
+            )),
+            right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                "100".to_string(),
+            )))),
+        };
+        let mut p = program("depth")
+            .predicates(vec![predicate("P").quantity("qty", "t").build()])
+            .invariants(vec![invariant("capped", body)])
+            .build();
+        p.definitions = definitions;
+        p
+    }
+
+    fn seed_of(p: &Program) -> SumSeed {
+        let Prop::Compare { left, .. } = &p.invariants[0].body else {
+            panic!("comparison expected");
+        };
+        let ValueExpr::Sum { seed, .. } = left.as_ref() else {
+            panic!("sum expected");
+        };
+        seed.clone()
+    }
+
+    /// A duration literal as the sum target carries its kind itself,
+    /// like the quantity literal beside it - and a sum sitting in a
+    /// transformation STATEMENT (a `let`, not an invariant) is lowered
+    /// by the statement walker, not only the invariant walker.
+    #[test]
+    fn literal_targets_and_statement_sums_lower() {
+        use crate::ir_builder::{let_, params, transformation};
+        let body = Prop::Claim {
+            predicate: "P".into(),
+            args: vec![Term::Wildcard],
+        };
+        let dur_sum = sum(
+            Term::Literal(Value::Duration("PT1H".to_string())),
+            body.clone(),
+        );
+        let qty_sum = sum(
+            Term::Var(Var::from("q")),
+            Prop::Claim {
+                predicate: "P".into(),
+                args: vec![Term::Var(Var::from("q"))],
+            },
+        );
+        let mut p = program("stmt_sums")
+            .predicates(vec![predicate("P").quantity("qty", "t").build()])
+            .transformations(vec![transformation(
+                "tally",
+                params(&[]),
+                vec![let_("d", dur_sum), let_("q_total", qty_sum)],
+            )])
+            .build();
+        lower_sum_seeds(&mut p);
+        let seeds: Vec<SumSeed> = p.transformations[0]
+            .body
+            .iter()
+            .map(|stmt| match stmt {
+                Stmt::Let {
+                    value: ValueExpr::Sum { seed, .. },
+                    ..
+                } => seed.clone(),
+                other => panic!("let-sum expected, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            seeds,
+            vec![SumSeed::Duration, SumSeed::Quantity("t".into())]
+        );
+    }
+
+    /// The definition-descent cap, boundary-exact: a chain at the cap
+    /// still resolves the summed variable's kind; one hop past it
+    /// falls back to the decimal default. The cap only insures the
+    /// pass against unvalidated cyclic IR - validated programmes never
+    /// reach it - so its one observable behaviour is pinned here.
+    #[test]
+    fn the_defined_descent_cap_is_boundary_exact() {
+        let mut at_cap = chained(MAX_DEFINED_DEPTH);
+        lower_sum_seeds(&mut at_cap);
+        assert_eq!(seed_of(&at_cap), SumSeed::Quantity("t".into()));
+
+        let mut past_cap = chained(MAX_DEFINED_DEPTH + 1);
+        lower_sum_seeds(&mut past_cap);
+        assert_eq!(seed_of(&past_cap), SumSeed::Decimal);
+    }
+}
