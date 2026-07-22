@@ -302,6 +302,15 @@
         }
       ]
     },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "authenticated_by"],
+      "properties": {
+        "mode": { "const": "gateway" },
+        "authenticated_by": { "type": "string" }
+      }
+    },
     "audit_row": {
       "type": "object",
       "additionalProperties": false,
@@ -350,7 +359,8 @@
           "type": "array",
           "items": { "$ref": "#/$defs/intent_instance" }
         },
-        "committed_at": { "type": "string", "format": "date-time" }
+        "committed_at": { "type": "string", "format": "date-time" },
+        "attestation": { "$ref": "#/$defs/attestation" }
       }
     },
     "audit_row_named": {
@@ -401,7 +411,8 @@
           "type": "array",
           "items": { "$ref": "#/$defs/intent_instance" }
         },
-        "committed_at": { "type": "string", "format": "date-time" }
+        "committed_at": { "type": "string", "format": "date-time" },
+        "attestation": { "$ref": "#/$defs/attestation" }
       }
     },
     "outbox_row": {

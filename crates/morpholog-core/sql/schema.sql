@@ -46,7 +46,23 @@ CREATE TABLE audit (
     asserted_claims      jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects
     retracted_claims     jsonb        NOT NULL,           -- JSONB array of {predicate, args} objects
     emitted_intents      jsonb        NOT NULL,           -- summary; rows in outbox
-    committed_at         timestamptz  NOT NULL DEFAULT now()
+    committed_at         timestamptz  NOT NULL DEFAULT now(),
+    -- How the actor identity was established, e.g.
+    -- {"mode":"gateway","authenticated_by":"<login role>"} - the
+    -- attestation lineage the runtime records for every commit. A
+    -- fresh database refuses unattested rows outright; a database
+    -- upgraded from before attestation keeps its historical rows NULL
+    -- (their original Merkle leaf encoding depends on it - never
+    -- backfill) while the migration's NOT VALID constraint refuses
+    -- any NEW unattested row, so attestation is a one-way boundary,
+    -- not a per-row option.
+    attestation          jsonb        CHECK (jsonb_typeof(attestation) = 'object'),
+    -- Named like the migration's constraint so fresh and upgraded
+    -- databases enforce the boundary identically (and describe the
+    -- column identically to the compile-time query checks); on an
+    -- upgraded database the constraint is NOT VALID, exempting only
+    -- the pre-attestation rows.
+    CONSTRAINT audit_attestation_required CHECK (attestation IS NOT NULL)
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,

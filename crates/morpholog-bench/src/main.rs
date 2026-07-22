@@ -47,7 +47,7 @@ use morpholog_core::{
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    PgError, PgPool, PgProposalOutcome, list_claims_for_predicates, list_derived_at,
+    PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates, list_derived_at,
     propose_against_pg, reconstruct_state_at,
 };
 use rust_decimal::Decimal;
@@ -338,7 +338,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     };
     let compiled = CompiledProgram::new(double_entry_ledger::program())
         .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
-    let outcome = propose_against_pg(&pool, &compiled, &transition)
+    let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
         .await
         .context("propose_against_pg")?;
     println!("  propose_one:    {:>8} ms", t.elapsed().as_millis());
@@ -749,7 +749,7 @@ async fn one_op(
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, compiled, transition).await {
+        match propose_against_pg(pool, compiled, &Proposal::gateway(transition)).await {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());
@@ -848,7 +848,7 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            committed_at
+            committed_at, attestation
         )
         SELECT
             gen_random_uuid(),
@@ -860,7 +860,8 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             CASE WHEN is_retract THEN '[]'::jsonb ELSE payload END,
             CASE WHEN is_retract THEN payload ELSE '[]'::jsonb END,
             '[]'::jsonb,
-            now() + (i * interval '1 microsecond')
+            now() + (i * interval '1 microsecond'),
+            '{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}'::jsonb
         FROM (
             SELECT
                 i,

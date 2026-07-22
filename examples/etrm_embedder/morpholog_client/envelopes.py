@@ -419,6 +419,35 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation"}
+
+
+@dataclass(frozen=True)
+class Attestation:
+    """How the actor identity on an audit row was established. Gateway
+    mode records which PostgreSQL-authenticated role asserted the
+    actor; it proves who asserted, never that the named actor
+    authorised anything. Rows written before attestation existed
+    carry none."""
+
+    mode: str
+    authenticated_by: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "Attestation":
+        data = _strict("attestation", payload, {"mode", "authenticated_by"})
+        if data["mode"] != "gateway":
+            raise EnvelopeError(
+                f"attestation: unknown mode {data['mode']!r} - the binary's "
+                "contract has drifted past this generated client; regenerate it"
+            )
+        return cls(mode=data["mode"], authenticated_by=data["authenticated_by"])
+
+
+def _attestation_of(data: dict) -> "Attestation | None":
+    raw = data.get("attestation")
+    return None if raw is None else Attestation.from_json(raw)
+
 
 @dataclass(frozen=True)
 class AuditRow:
@@ -438,10 +467,11 @@ class AuditRow:
     retracted_claims: list
     emitted_intents: list
     committed_at: datetime
+    attestation: "Attestation | None" = None
 
     @classmethod
     def from_json(cls, payload: object) -> "AuditRow":
-        data = _strict("audit row", payload, _AUDIT_ROW_KEYS)
+        data = _strict("audit row", payload, _AUDIT_ROW_KEYS, optional=_AUDIT_ROW_OPTIONAL_KEYS)
         return cls(
             transition_id=data["transition_id"],
             transformation_name=data["transformation_name"],
@@ -455,6 +485,7 @@ class AuditRow:
             retracted_claims=[ClaimInstance.from_json(c) for c in data["retracted_claims"]],
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
+            attestation=_attestation_of(data),
         )
 
 
@@ -475,10 +506,11 @@ class AuditRowNamed:
     retracted_claims: list
     emitted_intents: list
     committed_at: datetime
+    attestation: "Attestation | None" = None
 
     @classmethod
     def from_json(cls, payload: object) -> "AuditRowNamed":
-        data = _strict("named audit row", payload, _AUDIT_ROW_KEYS)
+        data = _strict("named audit row", payload, _AUDIT_ROW_KEYS, optional=_AUDIT_ROW_OPTIONAL_KEYS)
         return cls(
             transition_id=data["transition_id"],
             transformation_name=data["transformation_name"],
@@ -492,6 +524,7 @@ class AuditRowNamed:
             retracted_claims=[NamedClaim.from_json(c) for c in data["retracted_claims"]],
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
+            attestation=_attestation_of(data),
         )
 
 

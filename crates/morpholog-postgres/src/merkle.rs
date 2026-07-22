@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::audit::AuditRow;
+use morpholog_core::EvalValue;
 
 /// Domain-separation prefixes from RFC 6962 section 2.1: a leaf hash is
 /// `SHA-256(0x00 || data)`, an interior node is
@@ -32,10 +33,15 @@ use crate::audit::AuditRow;
 const LEAF_PREFIX: u8 = 0x00;
 const NODE_PREFIX: u8 = 0x01;
 
-/// Version byte for the canonical leaf encoding. A future codec change
+/// Version bytes for the canonical leaf encoding. A codec change
 /// becomes a new leaf version rather than a silent change to historical
-/// roots.
+/// roots. The version a row hashes under is derived from the row's own
+/// content - attestation absent selects the original encoding, present
+/// selects the attested one - so a verifier needs no side channel, and
+/// moving a field across the boundary in either direction changes the
+/// leaf and breaks the root.
 const LEAF_FORMAT_V1: u8 = 1;
+const LEAF_FORMAT_V2: u8 = 2;
 
 /// A 32-byte SHA-256 digest.
 pub(crate) type Hash = [u8; 32];
@@ -128,21 +134,50 @@ fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
 /// determinism `compute_idempotency_key` relies on).
 fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
     let mut buf = Vec::new();
-    buf.push(LEAF_FORMAT_V1);
-    push_field(&mut buf, row.transition_id.as_bytes());
-    push_field(&mut buf, row.transformation_name.as_str().as_bytes());
-    push_field(
-        &mut buf,
-        &committed_at_micros(row.committed_at).to_le_bytes(),
-    );
-    push_field(&mut buf, &serde_json::to_vec(&row.actor)?);
-    push_field(&mut buf, &row.invariant_epoch.to_le_bytes());
-    push_field(&mut buf, &serde_json::to_vec(&row.invariants_checked)?);
-    push_field(&mut buf, &serde_json::to_vec(&row.arguments)?);
-    push_field(&mut buf, &serde_json::to_vec(&row.asserted_claims)?);
-    push_field(&mut buf, &serde_json::to_vec(&row.retracted_claims)?);
-    push_field(&mut buf, &serde_json::to_vec(&row.emitted_intents)?);
+    match &row.attestation {
+        // The original encoding, frozen forever: rows written before
+        // attestation existed hash exactly as they always did, so every
+        // historical root still verifies. Its one quirk stays with it -
+        // the actor serialises as the transparent bare string here,
+        // although the column and the envelope carry the tagged form.
+        None => {
+            buf.push(LEAF_FORMAT_V1);
+            push_transition_fields(&mut buf, row, &serde_json::to_vec(&row.actor)?)?;
+        }
+        // The attested encoding: same field order, the actor in the
+        // same tagged form the column and the envelope use, and the
+        // attestation object covered whole - its internal shape can
+        // grow (new modes, new fields) without another leaf version,
+        // because the leaf commits to its exact bytes either way.
+        Some(attestation) => {
+            buf.push(LEAF_FORMAT_V2);
+            let actor = EvalValue::Subject(row.actor.clone());
+            push_transition_fields(&mut buf, row, &serde_json::to_vec(&actor)?)?;
+            push_field(&mut buf, &serde_json::to_vec(attestation)?);
+        }
+    }
     Ok(buf)
+}
+
+/// The fields both leaf versions share, in their fixed order; the actor
+/// bytes are supplied by the caller because the two versions encode the
+/// actor differently.
+fn push_transition_fields(
+    buf: &mut Vec<u8>,
+    row: &AuditRow,
+    actor_bytes: &[u8],
+) -> Result<(), serde_json::Error> {
+    push_field(buf, row.transition_id.as_bytes());
+    push_field(buf, row.transformation_name.as_str().as_bytes());
+    push_field(buf, &committed_at_micros(row.committed_at).to_le_bytes());
+    push_field(buf, actor_bytes);
+    push_field(buf, &row.invariant_epoch.to_le_bytes());
+    push_field(buf, &serde_json::to_vec(&row.invariants_checked)?);
+    push_field(buf, &serde_json::to_vec(&row.arguments)?);
+    push_field(buf, &serde_json::to_vec(&row.asserted_claims)?);
+    push_field(buf, &serde_json::to_vec(&row.retracted_claims)?);
+    push_field(buf, &serde_json::to_vec(&row.emitted_intents)?);
+    Ok(())
 }
 
 fn committed_at_micros(ts: DateTime<Utc>) -> i64 {
@@ -376,6 +411,88 @@ mod tests {
             h.update(p);
         }
         h.finalize().into()
+    }
+
+    /// A fully-populated audit row with every field fixed, so the leaf
+    /// bytes are deterministic. Used to pin the canonical encoding.
+    fn fixed_row() -> AuditRow {
+        use morpholog_core::{EvalValue, Subject};
+        AuditRow {
+            transition_id: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001),
+            transformation_name: "post_entry".into(),
+            arguments: vec![
+                EvalValue::Subject(Subject::from("e1")),
+                EvalValue::Decimal("125.50".parse().unwrap()),
+            ],
+            actor: Subject::from("alex"),
+            invariant_epoch: 1,
+            invariants_checked: vec![crate::AuditedInvariantCheck {
+                name: "books_balance".into(),
+                version: 1,
+            }],
+            asserted_claims: vec![morpholog_core::ClaimInstance {
+                predicate: "Entry".into(),
+                args: vec![
+                    EvalValue::Subject(Subject::from("e1")),
+                    EvalValue::Decimal("125.50".parse().unwrap()),
+                ],
+            }],
+            retracted_claims: vec![],
+            emitted_intents: vec![morpholog_core::IntentInstance {
+                name: "EntryPosted".into(),
+                args: vec![EvalValue::Subject(Subject::from("e1"))],
+            }],
+            committed_at: "2026-01-02T03:04:05.123456Z".parse().unwrap(),
+            attestation: None,
+        }
+    }
+
+    /// The frozen leaf hash of [`fixed_row`] under the original leaf
+    /// encoding. Computed once and pinned: any change to the canonical
+    /// bytes - field order, length prefixes, codec, version byte -
+    /// changes this hash, and such a change must arrive as a NEW leaf
+    /// version, never as an edit to the encoding historical roots were
+    /// computed under.
+    #[test]
+    fn frozen_v1_leaf_hash_pins_the_canonical_encoding() {
+        let hash = audit_leaf_hash(&fixed_row()).unwrap();
+        assert_eq!(
+            render_hash(&hash),
+            "sha256:d9b263c7ced1cdbebae9371350204a30da05879720cf414e1cae0bf23c174be9"
+        );
+    }
+
+    /// [`fixed_row`] with a gateway attestation - the attested twin,
+    /// hashing under the attested leaf encoding.
+    fn attested_fixed_row() -> AuditRow {
+        AuditRow {
+            attestation: Some(crate::AuditAttestation::Gateway {
+                authenticated_by: "morpholog_writer".to_string(),
+            }),
+            ..fixed_row()
+        }
+    }
+
+    /// The frozen leaf hash of the attested twin. Pins the attested
+    /// encoding byte-exactly: version byte, tagged actor, and the
+    /// attestation bytes covered whole.
+    #[test]
+    fn frozen_v2_leaf_hash_pins_the_attested_encoding() {
+        let hash = audit_leaf_hash(&attested_fixed_row()).unwrap();
+        assert_eq!(
+            render_hash(&hash),
+            "sha256:95b17b38bd6318b725b2a901ff5fbbd1e4bf0d4269357a01a9b0d5aa5a55d6f4"
+        );
+    }
+
+    /// Stripping or grafting an attestation flips the row to the other
+    /// encoding, so either tamper direction breaks the leaf - the
+    /// fails-closed property the content-derived version rests on.
+    #[test]
+    fn attestation_presence_selects_the_encoding() {
+        let bare = audit_leaf_hash(&fixed_row()).unwrap();
+        let attested = audit_leaf_hash(&attested_fixed_row()).unwrap();
+        assert_ne!(bare, attested);
     }
 
     /// The empty tree is `SHA-256("")` - the fixed RFC 6962 constant.

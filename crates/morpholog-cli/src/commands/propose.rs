@@ -11,7 +11,7 @@
 use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::{
-    PgProposalOutcome, PgTracedOutcome, propose_against_pg,
+    PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 
@@ -76,9 +76,10 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     };
 
     if args.trace {
-        let traced = propose_against_pg_with_trace(&pool, &compiled, &transition)
-            .await
-            .context("the proposal could not be decided")?;
+        let traced =
+            propose_against_pg_with_trace(&pool, &compiled, &Proposal::gateway(&transition))
+                .await
+                .context("the proposal could not be decided")?;
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
                 print_json(&serde_json::json!({
@@ -110,9 +111,13 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-        } = propose_against_pg_with_rejection_state(&pool, &compiled, &transition)
-            .await
-            .context("the proposal could not be decided")?;
+        } = propose_against_pg_with_rejection_state(
+            &pool,
+            &compiled,
+            &Proposal::gateway(&transition),
+        )
+        .await
+        .context("the proposal could not be decided")?;
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
@@ -127,7 +132,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             _ => print_json(&outcome)?,
         }
     } else {
-        let outcome = propose_against_pg(&pool, &compiled, &transition)
+        let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
             .await
             .context("the proposal could not be decided")?;
         print_json(&outcome)?;
@@ -321,9 +326,13 @@ async fn batch_row_outcome(
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-        } = propose_against_pg_with_rejection_state(pool, compiled, &transition)
-            .await
-            .map_err(classify_pg_error)?;
+        } = propose_against_pg_with_rejection_state(
+            pool,
+            compiled,
+            &Proposal::gateway(&transition),
+        )
+        .await
+        .map_err(classify_pg_error)?;
         if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
             let explanation = explain(compiled.program(), &transition, &state);
             return Ok(serde_json::json!({
@@ -336,7 +345,7 @@ async fn batch_row_outcome(
             .context("serialising the receipt")
             .map_err(BatchRowError::Operational)
     } else {
-        let outcome = propose_against_pg(pool, compiled, &transition)
+        let outcome = propose_against_pg(pool, compiled, &Proposal::gateway(&transition))
             .await
             .map_err(classify_pg_error)?;
         serde_json::to_value(&outcome)

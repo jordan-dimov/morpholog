@@ -10,8 +10,11 @@ use uuid::Uuid;
 /// Used by the outbox compensation path: when a delivery fails
 /// non-retryably and a [`CompensationSpec`] is configured, the
 /// compensating transformation is proposed by the runtime, not by
-/// the actor of the original commit. The sentinel keeps the audit
-/// row's `actor` column meaningfully populated.
+/// the actor of the original commit. The sentinel names the runtime
+/// as the actor; the audit row's attestation records which
+/// PostgreSQL-authenticated role the proposing worker connected as,
+/// so runtime-initiated commits carry real lineage, not just the
+/// sentinel.
 pub fn system_actor() -> Subject {
     Subject::from("morpholog-system")
 }

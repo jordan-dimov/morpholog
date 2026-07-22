@@ -1669,7 +1669,7 @@ async fn audit_row_records_actor() {
     let outcome = propose_against_pg(
         &pool,
         &common::compiled(double_entry_ledger::program()),
-        &transition,
+        &common::attested(&transition),
     )
     .await
     .expect("propose_against_pg should not error");
