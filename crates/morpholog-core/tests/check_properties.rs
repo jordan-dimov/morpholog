@@ -27,9 +27,9 @@
 
 use morpholog_core::ir_builder::*;
 use morpholog_core::{
-    ArgDecl, ArithOp, Claim, CompareOp, DerivedClaim, DerivedValue, IntentDecl, Invariant,
-    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt, SumSeed,
-    Term, Transformation, ValidationError, Value, ValueExpr, Var,
+    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, DerivedValue, IntentDecl,
+    Invariant, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt,
+    SumSeed, Term, Transformation, ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
@@ -144,6 +144,13 @@ fn arb_prop() -> impl Strategy<Value = Prop> {
         (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Prop::Claim { predicate, args }),
         (arb_value_expr(), arb_value_expr()).prop_map(|(a, b)| Prop::Neq(Box::new(a), Box::new(b))),
         (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, b)),
+        // Calls into the fixed definition table `arb_program` carries;
+        // arity is deliberately unconstrained (validate must refuse a
+        // mismatch, never panic on one).
+        arb_args().prop_map(|args| Prop::Defined {
+            name: "fuzz_defined".into(),
+            args,
+        }),
     ];
     // depth 4, ~32 total nodes, up to 4 children per collection node.
     leaf.prop_recursive(4, 32, 4, |inner| {
@@ -156,6 +163,7 @@ fn arb_prop() -> impl Strategy<Value = Prop> {
                 left: Box::new(l),
                 right: Box::new(r),
             }),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| Prop::Xor(Box::new(l), Box::new(r))),
             (arb_value_expr(), arb_value_expr())
                 .prop_map(|(l, r)| Prop::Eq(Box::new(l), Box::new(r))),
             (arb_value_expr(), arb_value_expr()).prop_map(|(l, r)| Prop::Compare {
@@ -279,6 +287,21 @@ fn arb_derived_claim() -> impl Strategy<Value = DerivedClaim> {
         })
 }
 
+/// The one definition every generated `Prop::Defined` call names, so
+/// resolution succeeds and the walkers descend a real body; whether a
+/// particular call's ARITY matches is left to the generator's whim -
+/// validate must refuse a mismatch, never panic on one.
+fn fuzz_definition() -> Definition {
+    Definition {
+        name: "fuzz_defined".into(),
+        parameters: vec![Var::from("fx"), Var::from("fy")],
+        body: Prop::Claim {
+            predicate: "FuzzInner".into(),
+            args: vec![Term::Var(Var::from("fx")), Term::Var(Var::from("fy"))],
+        },
+    }
+}
+
 fn arb_program() -> impl Strategy<Value = Program> {
     (
         prop::collection::vec(arb_pred_decl(), 0..4),
@@ -289,13 +312,15 @@ fn arb_program() -> impl Strategy<Value = Program> {
     )
         .prop_map(
             |(predicates, intents, invariants, transformations, derived_claims)| {
-                program("fuzz")
+                let mut p = program("fuzz")
                     .predicates(predicates)
                     .intents(intents)
                     .invariants(invariants)
                     .transformations(transformations)
                     .derived_claims(derived_claims)
-                    .build()
+                    .build();
+                p.definitions.push(fuzz_definition());
+                p
             },
         )
 }
