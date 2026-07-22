@@ -44,18 +44,24 @@ transformation load(p, qty):
     admit Parcel(p, qty)
 ";
 
-/// `pre(...)` wrapping a defined call: the pre-detector and the
-/// footprint walkers must both see through the wrapper AND the call.
+/// `pre(...)` wrapping a defined call, once in a consequent and once
+/// in an antecedent: the pre-detector and the footprint walkers must
+/// see through the wrapper AND the call - and the two positions cue
+/// coverage differently on purpose.
 const PRE_AROUND_DEFINED: &str = "\
 program pre_around_defined
 predicate Sealed(box: Subject)
 predicate Opened(box: Subject)
+predicate Logged(box: Subject)
 define was_sealed(b):
     Sealed(b)
 invariant opening_needs_a_prior_seal:
     Opened(b) implies pre(was_sealed(b))
+invariant a_prior_seal_is_logged:
+    pre(was_sealed(b)) implies Logged(b)
 transformation seal(box):
     admit Sealed(box)
+    admit Logged(box)
 transformation open(box):
     require Sealed(box)
     retract Sealed(box)
@@ -146,6 +152,21 @@ transformation ship_all(items):
         admit Shipped(item)
 ";
 
+/// An invariant whose antecedent is a defined call over a predicate no
+/// transformation admits: the unsupplied-antecedent lint fires only if
+/// the lint walker descends into the definition body.
+const UNSUPPLIED_THROUGH_DEFINED: &str = "\
+program unsupplied_through_defined
+predicate Ghost(g: Subject)
+predicate Real(r: Subject)
+define haunted(g):
+    Ghost(g)
+invariant haunting_is_real:
+    haunted(g) implies Real(g)
+transformation materialise(r):
+    admit Real(r)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -155,20 +176,23 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("qty_chain_in_and", QTY_CHAIN_IN_AND),
         ("valueof_sum_default", VALUEOF_SUM_DEFAULT),
         ("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE),
+        ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
     ]
 }
 
 fn parsed(name: &str, source: &str) -> Program {
-    parse_program(source).unwrap_or_else(|e| panic!("corpus `{name}` must parse: {e:?}"))
+    let program =
+        parse_program(source).unwrap_or_else(|e| panic!("corpus `{name}` must parse: {e:?}"));
+    program
+        .validate()
+        .unwrap_or_else(|e| panic!("corpus `{name}` must validate: {e:?}"));
+    program
 }
 
 #[test]
 fn every_fragment_survives_every_walker_deterministically() {
     for (name, source) in corpus() {
         let program = parsed(name, source);
-        program
-            .validate()
-            .unwrap_or_else(|e| panic!("corpus `{name}` must validate: {e:?}"));
 
         // Format round-trip: the formatter's walk and the parser's
         // lowering passes agree on the whole tree, nesting included.
@@ -281,4 +305,115 @@ fn the_chained_comparison_desugars_identically_in_both_contexts() {
     // The defined body is `Reading(...) and <chain>` - one claim plus
     // the chain's two links, spliced flat.
     assert_eq!(in_defined.len(), 3);
+}
+
+#[test]
+fn the_pre_detector_sees_through_the_wrapping() {
+    // needs_pre_state cues coverage to carry the previous state on
+    // every replay step, and it is ANTECEDENT-only by design: replay
+    // evaluates antecedents to decide firing and never evaluates
+    // consequents, so `pre` in a consequent must not cue it while
+    // `pre(defined_call(...))` in an antecedent must - through both
+    // the wrapper and the call. The whole-body scan behind the
+    // scorer's pre-gate sees both. The xor fragment is the negative
+    // control: no pre anywhere, no cue.
+    let program = parsed("pre_around_defined", PRE_AROUND_DEFINED);
+    assert!(CoverageTracker::new(&program).needs_pre_state());
+    assert_eq!(
+        morpholog_core::invariants_using_pre(&program),
+        vec![
+            "opening_needs_a_prior_seal".to_string(),
+            "a_prior_seal_is_logged".to_string(),
+        ]
+    );
+    let no_pre = parsed("xor_in_implies", XOR_IN_IMPLIES);
+    assert!(!CoverageTracker::new(&no_pre).needs_pre_state());
+}
+
+#[test]
+fn the_statement_read_footprint_descends_the_loop_and_the_call() {
+    // The predicate consulted by `require is_approved(item)` inside the
+    // `for` body is read through both a statement nesting AND a defined
+    // call - scoped loading that misses it evaluates against claims
+    // that were never loaded.
+    let program = parsed("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE);
+    let ship_all = program
+        .transformations
+        .iter()
+        .find(|t| t.name.as_str() == "ship_all")
+        .unwrap();
+    let mut read = std::collections::BTreeSet::new();
+    for stmt in &ship_all.body {
+        morpholog_core::predicates_read_by_stmt(stmt, &program.definitions, &mut read);
+    }
+    assert!(
+        read.contains(&PredicateName::from("Approved")),
+        "the read footprint stops short of the nested require: {read:?}"
+    );
+}
+
+#[test]
+fn parameter_kinds_resolve_exactly_through_the_chain() {
+    // Not merely Ok: the flow into a quantity-kinded claim position
+    // must surface the unit. An inference that answered Subject for
+    // everything would still "resolve".
+    use morpholog_core::ParamKind;
+    let program = parsed("qty_chain_in_and", QTY_CHAIN_IN_AND);
+    let validated = program.validated().expect("validated in parsed()");
+    let kinds = transformation_param_kinds(&validated, &"commission".into()).unwrap();
+    let rendered: Vec<(String, ParamKind)> =
+        kinds.into_iter().map(|(v, k)| (v.to_string(), k)).collect();
+    assert_eq!(
+        rendered,
+        vec![
+            (
+                "t".to_string(),
+                ParamKind::Concrete(morpholog_core::PredicateArgKind::Subject)
+            ),
+            (
+                "cap".to_string(),
+                ParamKind::Concrete(morpholog_core::PredicateArgKind::Quantity("L".into()))
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_implication_shape_is_recognised_through_the_xor_consequent() {
+    // With nothing observed, an implication-shaped invariant reports
+    // never-fired; only a walker that failed to see the implication
+    // through its xor consequent would classify it always-on.
+    use morpholog_core::CoverageVerdict;
+    let program = parsed("xor_in_implies", XOR_IN_IMPLIES);
+    let report = CoverageTracker::new(&program).into_report();
+    let inv = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "a_decided_case_went_exactly_one_way")
+        .unwrap();
+    assert!(
+        matches!(inv.verdict, CoverageVerdict::NeverFired),
+        "implication through xor mis-classified: {:?}",
+        inv.verdict
+    );
+}
+
+#[test]
+fn the_unsupplied_antecedent_lint_descends_the_definition() {
+    // The antecedent's dependence on the never-admitted predicate is
+    // visible only inside the definition body: an empty lint report
+    // here means the lint walker stopped at the call.
+    use morpholog_core::Lint;
+    let program = parsed("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED);
+    let compiled = CompiledProgram::new(program).unwrap();
+    let findings = lints(&compiled);
+    assert!(
+        findings.iter().any(|l| matches!(
+            l,
+            Lint::UnsuppliedAntecedent { invariant, missing }
+                if invariant == "haunting_is_real"
+                    && missing.contains(&"Ghost".to_string())
+        )),
+        "the lint never descended into the definition: {findings:?}"
+    );
 }

@@ -375,6 +375,13 @@ fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
                 binding: "x".into(),
                 body: Box::new(e),
             },
+            6 => Prop::Xor(
+                Box::new(e),
+                Box::new(Prop::Claim {
+                    predicate: "A".into(),
+                    args: vec![],
+                }),
+            ),
             _ => Prop::Forall {
                 binding: "x".into(),
                 source: Box::new(Prop::Claim {
@@ -432,7 +439,7 @@ fn deeply_nested_propositions_are_rejected_not_overflowed() {
     // not a blown stack. The depth guard runs first and short-circuits,
     // so a pure deep-nest yields NestingTooDeep and nothing downstream.
     const DEPTH: usize = 1024;
-    for node in 0..7 {
+    for node in 0..8 {
         let body = nest_prop(
             node,
             DEPTH,
