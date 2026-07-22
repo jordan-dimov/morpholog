@@ -11,7 +11,7 @@
 use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::{
-    ActorAttestation, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
+    PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 
@@ -20,19 +20,6 @@ use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
     ParsedSource, compile_or_exit, connect, lookup_transformation, parse_or_exit, print_json,
 };
-
-/// Wrap the kernel transition in a gateway-attested proposal: the
-/// durable commit paths accept only attested proposals, and the CLI is
-/// a gateway - it asserts the actor named on the command line.
-fn attested(transition: &Transition) -> Proposal {
-    Proposal {
-        transformation_name: transition.transformation_name.clone(),
-        args: transition.args.clone(),
-        attestation: ActorAttestation::Gateway {
-            actor: transition.actor.clone(),
-        },
-    }
-}
 
 pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
@@ -89,9 +76,10 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     };
 
     if args.trace {
-        let traced = propose_against_pg_with_trace(&pool, &compiled, &attested(&transition))
-            .await
-            .context("the proposal could not be decided")?;
+        let traced =
+            propose_against_pg_with_trace(&pool, &compiled, &Proposal::gateway(&transition))
+                .await
+                .context("the proposal could not be decided")?;
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
                 print_json(&serde_json::json!({
@@ -123,9 +111,13 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-        } = propose_against_pg_with_rejection_state(&pool, &compiled, &attested(&transition))
-            .await
-            .context("the proposal could not be decided")?;
+        } = propose_against_pg_with_rejection_state(
+            &pool,
+            &compiled,
+            &Proposal::gateway(&transition),
+        )
+        .await
+        .context("the proposal could not be decided")?;
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
@@ -140,7 +132,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             _ => print_json(&outcome)?,
         }
     } else {
-        let outcome = propose_against_pg(&pool, &compiled, &attested(&transition))
+        let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
             .await
             .context("the proposal could not be decided")?;
         print_json(&outcome)?;
@@ -334,9 +326,13 @@ async fn batch_row_outcome(
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-        } = propose_against_pg_with_rejection_state(pool, compiled, &attested(&transition))
-            .await
-            .map_err(classify_pg_error)?;
+        } = propose_against_pg_with_rejection_state(
+            pool,
+            compiled,
+            &Proposal::gateway(&transition),
+        )
+        .await
+        .map_err(classify_pg_error)?;
         if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
             let explanation = explain(compiled.program(), &transition, &state);
             return Ok(serde_json::json!({
@@ -349,7 +345,7 @@ async fn batch_row_outcome(
             .context("serialising the receipt")
             .map_err(BatchRowError::Operational)
     } else {
-        let outcome = propose_against_pg(pool, compiled, &attested(&transition))
+        let outcome = propose_against_pg(pool, compiled, &Proposal::gateway(&transition))
             .await
             .map_err(classify_pg_error)?;
         serde_json::to_value(&outcome)

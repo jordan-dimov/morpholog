@@ -47,25 +47,13 @@ use morpholog_core::{
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    ActorAttestation, PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates,
-    list_derived_at, propose_against_pg, reconstruct_state_at,
+    PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates, list_derived_at,
+    propose_against_pg, reconstruct_state_at,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-
-/// Wrap a kernel transition in a gateway-attested proposal - the shape
-/// the durable commit paths accept.
-fn attested(transition: &Transition) -> Proposal {
-    Proposal {
-        transformation_name: transition.transformation_name.clone(),
-        args: transition.args.clone(),
-        attestation: ActorAttestation::Gateway {
-            actor: transition.actor.clone(),
-        },
-    }
-}
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Morpholog scale-pressure benchmark", long_about = None)]
@@ -350,7 +338,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     };
     let compiled = CompiledProgram::new(double_entry_ledger::program())
         .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
-    let outcome = propose_against_pg(&pool, &compiled, &attested(&transition))
+    let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
         .await
         .context("propose_against_pg")?;
     println!("  propose_one:    {:>8} ms", t.elapsed().as_millis());
@@ -761,7 +749,7 @@ async fn one_op(
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, compiled, &attested(transition)).await {
+        match propose_against_pg(pool, compiled, &Proposal::gateway(transition)).await {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());

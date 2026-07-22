@@ -31,6 +31,19 @@ pub struct Proposal {
 }
 
 impl Proposal {
+    /// A gateway-attested proposal from a kernel transition: the
+    /// caller asserts the transition's actor, and the runtime records
+    /// which authenticated role did the asserting.
+    pub fn gateway(transition: &Transition) -> Self {
+        Self {
+            transformation_name: transition.transformation_name.clone(),
+            args: transition.args.clone(),
+            attestation: ActorAttestation::Gateway {
+                actor: transition.actor.clone(),
+            },
+        }
+    }
+
     /// The actor the attestation establishes.
     pub fn actor(&self) -> &Subject {
         match &self.attestation {

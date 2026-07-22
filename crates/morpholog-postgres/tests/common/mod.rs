@@ -12,8 +12,8 @@
 
 use morpholog_core::{CompiledProgram, EvalValue, Program, Subject, Transformation, Transition};
 use morpholog_postgres::{
-    ActorAttestation, PgError, PgPool, PgProposalOutcome, PgTracedOutcome, Proposal,
-    propose_against_pg, propose_against_pg_with_trace,
+    PgError, PgPool, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
+    propose_against_pg_with_trace,
 };
 use uuid::Uuid;
 
@@ -110,13 +110,7 @@ pub fn compiled(program: Program) -> CompiledProgram {
 /// Wrap a kernel transition in a gateway-attested proposal - the shape
 /// the durable commit paths accept.
 pub fn attested(transition: &Transition) -> Proposal {
-    Proposal {
-        transformation_name: transition.transformation_name.clone(),
-        args: transition.args.clone(),
-        attestation: ActorAttestation::Gateway {
-            actor: transition.actor.clone(),
-        },
-    }
+    Proposal::gateway(transition)
 }
 
 /// Convenience for tests: build the `Transition` with `test_actor()` and
