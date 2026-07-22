@@ -1,8 +1,9 @@
 //! Attestation lineage as the runtime records and evidences it: every
 //! commit carries which PostgreSQL-authenticated role asserted the
-//! actor, the lineage joins the Merkle leaf, and a history mixing
-//! attested rows with rows from before attestation existed verifies
-//! whole - live and offline.
+//! actor, the lineage joins the Merkle leaf, a history whose legacy
+//! prefix predates attestation verifies whole - live and offline -
+//! and the database floor refuses any new unattested row, so
+//! attestation is a one-way boundary, not a per-row option.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -54,23 +55,66 @@ async fn a_commit_records_the_sessions_authenticated_role() {
 }
 
 #[tokio::test]
-async fn a_history_mixing_leaf_encodings_verifies_whole() {
+async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let program = compiled(double_entry_ledger::program());
 
-    // One attested commit, then one row shaped like history from
-    // before attestation existed (direct SQL, no attestation column),
-    // then another attested commit. The checkpoint covers all three.
+    // Replay the real chronology of an upgraded deployment: rows from
+    // before attestation existed (written under a schema with no
+    // attestation column), then the activation boundary - the
+    // migration's NOT VALID constraint - then attested commits.
+    sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_attestation_required")
+        .execute(&pool)
+        .await
+        .unwrap();
+    legacy_insert(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE morpholog.audit
+         ADD CONSTRAINT audit_attestation_required
+         CHECK (attestation IS NOT NULL) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     propose_pg_with_test_actor(
         &pool,
         &program,
         &double_entry_ledger::post_simple_entry(),
-        ledger_args("e_first"),
+        ledger_args("e_attested"),
     )
     .await
     .map(expect_committed)
     .unwrap();
+
+    // The whole history - legacy prefix plus attested suffix -
+    // verifies, live and offline.
+    create_checkpoint(&pool, None).await.unwrap();
+    let verification = verify_audit_tree(&pool, None).await.unwrap();
+    assert!(
+        matches!(verification, TreeVerification::Intact { .. }),
+        "upgraded history must verify: {verification:?}"
+    );
+    let pack = morpholog_postgres::export_pack(&pool, None).await.unwrap();
+    assert!(matches!(
+        verify_pack(&pack, None).unwrap(),
+        TreeVerification::Intact { .. }
+    ));
+
+    // The boundary is one-way: after activation, an insert shaped like
+    // the pre-attestation writer is refused by the database itself -
+    // a stale binary cannot quietly extend the legacy prefix.
+    let refused = legacy_insert(&pool).await;
+    let err = refused.expect_err("an unattested insert must be refused after activation");
+    assert!(
+        err.to_string().contains("audit_attestation_required"),
+        "the refusal names the activation constraint: {err}"
+    );
+}
+
+/// An audit insert shaped like the writer from before attestation
+/// existed: no attestation column at all.
+async fn legacy_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
@@ -80,33 +124,9 @@ async fn a_history_mixing_leaf_encodings_verifies_whole() {
                    1, '[]', '[]', '[]', '[]')",
     )
     .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
+    .execute(pool)
     .await
-    .unwrap();
-    propose_pg_with_test_actor(
-        &pool,
-        &program,
-        &double_entry_ledger::post_simple_entry(),
-        ledger_args("e_second"),
-    )
-    .await
-    .map(expect_committed)
-    .unwrap();
-
-    create_checkpoint(&pool, None).await.unwrap();
-    let verification = verify_audit_tree(&pool, None).await.unwrap();
-    assert!(
-        matches!(verification, TreeVerification::Intact { .. }),
-        "mixed-encoding history must verify: {verification:?}"
-    );
-
-    // The same rows travel whole into an evidence pack, so an offline
-    // verifier recomputes each row's leaf under the row's own encoding.
-    let pack = morpholog_postgres::export_pack(&pool, None).await.unwrap();
-    assert!(matches!(
-        verify_pack(&pack, None).unwrap(),
-        TreeVerification::Intact { .. }
-    ));
+    .map(|_| ())
 }
 
 #[tokio::test]
@@ -125,8 +145,14 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     .unwrap();
     create_checkpoint(&pool, None).await.unwrap();
 
-    // Rewriting the lineage - or stripping it to fall back to the
-    // other encoding - both change the leaf and break the root.
+    // An attacker with full DDL control can drop the database floor;
+    // the tree is the layer that still catches them. Rewriting the
+    // lineage - or stripping it to fall back to the other encoding -
+    // both change the leaf and break the root.
+    sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_attestation_required")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query(
         "UPDATE morpholog.audit
          SET attestation = '{\"mode\":\"gateway\",\"authenticated_by\":\"intruder\"}'",

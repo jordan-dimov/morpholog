@@ -848,7 +848,7 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            committed_at
+            committed_at, attestation
         )
         SELECT
             gen_random_uuid(),
@@ -860,7 +860,8 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             CASE WHEN is_retract THEN '[]'::jsonb ELSE payload END,
             CASE WHEN is_retract THEN payload ELSE '[]'::jsonb END,
             '[]'::jsonb,
-            now() + (i * interval '1 microsecond')
+            now() + (i * interval '1 microsecond'),
+            '{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}'::jsonb
         FROM (
             SELECT
                 i,

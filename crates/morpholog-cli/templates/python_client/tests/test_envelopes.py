@@ -151,6 +151,14 @@ class AuditTail(unittest.TestCase):
         # Everything else is the same row.
         self.assertEqual(row.actor, "alex")
 
+    def test_an_unknown_attestation_mode_raises(self):
+        # The discriminator is part of the contract: a mode this client
+        # does not know is drift, not data.
+        payload = golden("audit_row_attested.json")
+        payload["attestation"]["mode"] = "signature"
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.AuditRow.from_json(payload)
+
     def test_the_named_audit_row_round_trips_the_golden(self):
         row = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
         claim = row.asserted_claims[0]

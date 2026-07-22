@@ -436,6 +436,11 @@ class Attestation:
     @classmethod
     def from_json(cls, payload: object) -> "Attestation":
         data = _strict("attestation", payload, {"mode", "authenticated_by"})
+        if data["mode"] != "gateway":
+            raise EnvelopeError(
+                f"attestation: unknown mode {data['mode']!r} - the binary's "
+                "contract has drifted past this generated client; regenerate it"
+            )
         return cls(mode=data["mode"], authenticated_by=data["authenticated_by"])
 
 

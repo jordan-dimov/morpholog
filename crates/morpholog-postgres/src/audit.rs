@@ -49,6 +49,11 @@ pub(crate) struct AuditRowRaw {
     retracted_claims: serde_json::Value,
     emitted_intents: serde_json::Value,
     committed_at: DateTime<Utc>,
+    // Nullable by column attribute even though the named constraint
+    // refuses new NULLs: a database upgraded from before attestation
+    // lawfully holds NULL on its historical rows, and fresh and
+    // upgraded databases must describe the column identically for the
+    // compile-time query checks.
     attestation: Option<serde_json::Value>,
 }
 // The audit columns, in the order `AuditRowRaw`'s fields and the listing
