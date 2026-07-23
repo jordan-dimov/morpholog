@@ -625,3 +625,137 @@ fn invalid_program_surfaces_at_the_validated_gate() {
         "validation should report at least one error for an undeclared predicate",
     );
 }
+
+use morpholog_core::{ArithOp, Term, Value, ValueExpr};
+
+fn qty_lit(amount: &str, unit: &str) -> ValueExpr {
+    ValueExpr::Term(Term::Literal(Value::Quantity {
+        amount: amount.to_string(),
+        unit: unit.into(),
+    }))
+}
+
+fn var_value(name: &str) -> ValueExpr {
+    ValueExpr::Term(Term::Var(Var::from(name)))
+}
+
+fn kinds_of(prog: &morpholog_core::Program, t: &str) -> Vec<(Var, ParamKind)> {
+    transformation_param_kinds(
+        &prog.validated().expect("test programme validates"),
+        &TransformationName::from(t),
+    )
+    .unwrap()
+}
+
+/// A comparison against a quantity LITERAL types the other operand:
+/// the decimal-domain comparison admits same-unit quantities, and the
+/// literal's unit is the only place the unit can come from.
+#[test]
+fn a_quantity_literal_comparand_types_the_parameter() {
+    let prog = program("qty_compare")
+        .predicates(vec![predicate("Cap").quantity("cap", "t").build()])
+        .transformations(vec![transformation(
+            "load",
+            params(&["amount"]),
+            vec![require(le(var_value("amount"), qty_lit("100", "t")))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "load"),
+        vec![(
+            Var::from("amount"),
+            ParamKind::Concrete(PredicateArgKind::Quantity("t".into())),
+        )],
+    );
+}
+
+/// One-side-known arithmetic refinement, right side known: a parameter
+/// multiplied by a quantity literal is the bare-decimal scaling factor
+/// - and never conjures the unit onto itself.
+#[test]
+fn scaling_a_known_quantity_types_the_scalar_as_decimal() {
+    let arith = ValueExpr::Arith {
+        op: ArithOp::Mul,
+        left: Box::new(var_value("factor")),
+        right: Box::new(qty_lit("1", "t")),
+    };
+    let prog = program("scaling")
+        .predicates(vec![predicate("Cap").quantity("cap", "t").build()])
+        .transformations(vec![transformation(
+            "scale",
+            params(&["factor"]),
+            vec![require(le(arith, qty_lit("100", "t")))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "scale"),
+        vec![(
+            Var::from("factor"),
+            ParamKind::Concrete(PredicateArgKind::Decimal),
+        )],
+    );
+}
+
+/// With neither side known, the decimal-only operators (`*`, `/`, `%`)
+/// force both operands decimal - the additive operators must not,
+/// because they also carry the time and unit rules.
+#[test]
+fn decimal_only_operators_force_both_unknown_operands() {
+    let product = ValueExpr::Arith {
+        op: ArithOp::Mul,
+        left: Box::new(var_value("x")),
+        right: Box::new(var_value("y")),
+    };
+    let prog = program("product")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![transformation(
+            "check_product",
+            params(&["x", "y"]),
+            vec![require(le(
+                product,
+                ValueExpr::Term(Term::Literal(Value::Decimal("100".to_string()))),
+            ))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "check_product"),
+        vec![
+            (
+                Var::from("x"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+            (
+                Var::from("y"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+        ],
+    );
+}
+
+/// A parameter that reaches the outside world only through an emitted
+/// intent still takes its kind from the intent's declaration.
+#[test]
+fn intent_arguments_type_their_parameters() {
+    let prog = program("intents")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .intents(vec![morpholog_core::IntentDecl {
+            name: "AmountReported".into(),
+            args: vec![morpholog_core::ArgDecl {
+                name: "amount".to_string(),
+                kind: PredicateArgKind::Decimal,
+            }],
+        }])
+        .transformations(vec![transformation(
+            "report",
+            params(&["amount"]),
+            vec![emit("AmountReported", vec![var("amount")])],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "report"),
+        vec![(
+            Var::from("amount"),
+            ParamKind::Concrete(PredicateArgKind::Decimal),
+        )],
+    );
+}

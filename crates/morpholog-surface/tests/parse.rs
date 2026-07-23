@@ -1173,3 +1173,74 @@ invariant literal_target_carries_its_unit:
         SumSeed::Quantity("t".into())
     );
 }
+
+#[test]
+fn sum_seeds_come_from_the_summed_variable_not_the_first_kinded_position() {
+    use morpholog_core::{Prop, SumSeed, ValueExpr};
+    // Every position of Mixed carries a different kind, and the
+    // duration sits first: a seed resolver that matched by kind alone
+    // (any variable at a duration/quantity position) would answer
+    // Duration for all four sums. Each seed must come from the
+    // position that binds the SUMMED variable.
+    let src = "\
+program seeds_by_variable
+predicate Mixed(dur: Duration, weight: Decimal[t], amount: Decimal, cash: Decimal[USD])
+invariant dur_seed:
+    Mixed(_, _, _, _) implies sum(d | Mixed(d, w, a, c)) no_longer_than duration(PT48H)
+invariant weight_seed:
+    Mixed(_, _, _, _) implies sum(w | Mixed(d, w, a, c)) <= 100 t
+invariant amount_seed:
+    Mixed(_, _, _, _) implies sum(a | Mixed(d, w, a, c)) <= 100
+invariant cash_seed:
+    Mixed(_, _, _, _) implies sum(c | Mixed(d, w, a, c)) <= 100 USD
+";
+    let program = morpholog_surface::parse_program(src).unwrap();
+    let seed_of = |name: &str| {
+        let inv = program
+            .invariants
+            .iter()
+            .find(|i| i.name.as_str() == name)
+            .unwrap();
+        let Prop::Implies { right, .. } = &inv.body else {
+            panic!("implication expected");
+        };
+        let Prop::Compare { left, .. } = right.as_ref() else {
+            panic!("comparison expected");
+        };
+        let ValueExpr::Sum { seed, .. } = left.as_ref() else {
+            panic!("sum expected");
+        };
+        seed.clone()
+    };
+    assert_eq!(seed_of("dur_seed"), SumSeed::Duration);
+    assert_eq!(seed_of("weight_seed"), SumSeed::Quantity("t".into()));
+    assert_eq!(seed_of("amount_seed"), SumSeed::Decimal);
+    assert_eq!(seed_of("cash_seed"), SumSeed::Quantity("USD".into()));
+}
+
+#[test]
+fn the_first_position_binding_the_variable_decides_the_seed() {
+    use morpholog_core::{Prop, SumSeed, ValueExpr};
+    // The same variable at two positions of different kinds: the
+    // documented rule is first-found-decides, so the decimal position
+    // wins over the quantity position behind it. (Lowering semantics
+    // only - the kernel's kind checks judge such a programme
+    // separately.)
+    let src = "\
+program first_position_decides
+predicate Twice(a: Decimal, b: Decimal[t])
+invariant twice_capped:
+    Twice(_, _) implies sum(x | Twice(x, x)) <= 100
+";
+    let program = morpholog_surface::parse_program(src).unwrap();
+    let Prop::Implies { right, .. } = &program.invariants[0].body else {
+        panic!("implication expected");
+    };
+    let Prop::Compare { left, .. } = right.as_ref() else {
+        panic!("comparison expected");
+    };
+    let ValueExpr::Sum { seed, .. } = left.as_ref() else {
+        panic!("sum expected");
+    };
+    assert_eq!(*seed, SumSeed::Decimal);
+}

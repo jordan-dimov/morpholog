@@ -190,6 +190,15 @@ fn from_hex<const N: usize>(s: &str, what: &'static str) -> Result<[u8; N], Sign
 mod tests {
     use super::*;
 
+    /// Each malformation alone is refused: a wrong length with clean
+    /// hex digits, and a clean length with a non-hex byte.
+    #[test]
+    fn hex_length_and_digit_checks_each_bite_alone() {
+        assert!(parse_public_key(&format!("ed25519-pub:{}", "ab".repeat(31))).is_err());
+        let non_hex = format!("ed25519-pub:{}zz", "ab".repeat(31));
+        assert!(parse_public_key(&non_hex).is_err());
+    }
+
     fn sample_head() -> TreeHead<'static> {
         TreeHead {
             tree_size: 42,

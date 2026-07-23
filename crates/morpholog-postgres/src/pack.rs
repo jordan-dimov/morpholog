@@ -1202,6 +1202,228 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_checkpoint_size_is_malformed() {
+        // Hostile JSON the runtime could never produce: rejected
+        // before anything indexes with it.
+        let cp = checkpoint(-1);
+        let pack = EvidencePack {
+            manifest: manifest_for(&cp),
+            checkpoints: vec![cp],
+            rows: vec![],
+        };
+        malformed("negative", &pack);
+    }
+
+    #[test]
+    fn each_manifest_field_alone_is_enough_to_disagree() {
+        // The disagreement check is a disjunction: any ONE lying field
+        // must fail the pack, not only all of them together.
+        for field in ["tree_size", "root_hash", "checkpoint_hash"] {
+            let cp = checkpoint(1);
+            let mut manifest = manifest_for(&cp);
+            match field {
+                "tree_size" => manifest.tree_size = 999,
+                "root_hash" => manifest.root_hash = format!("sha256:{}", "f".repeat(64)),
+                _ => manifest.checkpoint_hash = "cp-forged".to_string(),
+            }
+            let pack = EvidencePack {
+                manifest,
+                checkpoints: vec![checkpoint(1)],
+                rows: vec![row(
+                    "2026-06-24T00:00:00Z",
+                    "00000000-0000-0000-0000-0000000000a1",
+                )],
+            };
+            malformed("manifest disagrees", &pack);
+        }
+    }
+
+    #[test]
+    fn an_unauthorized_signed_anchor_is_judged_even_on_an_unsigned_chain() {
+        // The authority question is asked when the chain OR the anchor
+        // carries signatures: an unsigned pack presented against a
+        // signed anchor must still have that anchor's key judged - and
+        // with no key claims in the rows, judged unauthorized.
+        let rows = rows_tagged(2, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let cp = real_checkpoint(&leaves, 2, None);
+        let key = crate::signing::generate_signing_key();
+        let head = crate::signing::TreeHead {
+            tree_size: cp.tree_size,
+            root_hash: &cp.root_hash,
+            prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+            checkpoint_hash: &cp.checkpoint_hash,
+        };
+        let signature = crate::signing::sign_tree_head(
+            &key,
+            crate::checkpoints::AUDIT_CHECKPOINT_PURPOSE,
+            "k-unauthorized",
+            &head,
+        );
+        let mut anchor = cp.clone();
+        anchor.signatures = vec![crate::checkpoints::TreeHeadSignature {
+            key_id: "k-unauthorized".to_string(),
+            purpose: crate::checkpoints::AUDIT_CHECKPOINT_PURPOSE.to_string(),
+            public_key: crate::signing::render_public_key(&key.verifying_key()),
+            signature: crate::signing::render_signature(&signature),
+        }];
+        let pack = EvidencePack {
+            manifest: manifest_for(&cp),
+            checkpoints: vec![cp],
+            rows,
+        };
+        let verdict = verify_pack(&pack, Some(&anchor)).unwrap();
+        assert!(
+            matches!(verdict, TreeVerification::UnauthorizedKey { .. }),
+            "the signed anchor's authority must be judged: {verdict:?}"
+        );
+    }
+
+    #[test]
+    fn a_negative_window_endpoint_is_malformed_on_either_side() {
+        for side in ["from", "to"] {
+            let (mut pack, _) = valid_window(3, 7);
+            if side == "from" {
+                pack.from_checkpoint.tree_size = -1;
+            } else {
+                pack.to_checkpoint.tree_size = -1;
+            }
+            match verify_window(&pack, None) {
+                Err(PackError::Malformed { detail }) => {
+                    assert!(detail.contains("negative"), "{side}: {detail}")
+                }
+                other => panic!("{side}: expected Malformed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn each_window_manifest_field_alone_is_enough_to_disagree() {
+        for field in 0..6 {
+            let (mut pack, _) = valid_window(3, 7);
+            match field {
+                0 => pack.manifest.from_tree_size = 999,
+                1 => pack.manifest.to_tree_size = 999,
+                2 => pack.manifest.from_checkpoint_hash = "forged".to_string(),
+                3 => pack.manifest.to_checkpoint_hash = "forged".to_string(),
+                4 => pack.manifest.from_root_hash = "forged".to_string(),
+                _ => pack.manifest.to_root_hash = "forged".to_string(),
+            }
+            match verify_window(&pack, None) {
+                Err(PackError::Malformed { detail }) => {
+                    assert!(
+                        detail.contains("manifest disagrees"),
+                        "field {field}: {detail}"
+                    )
+                }
+                other => panic!("field {field}: expected Malformed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_unauthorized_signature_on_the_chain_itself_is_judged() {
+        // No anchor at all: signatures stored on the pack's own
+        // checkpoints must trigger the authority question too.
+        let rows = rows_tagged(2, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let mut cp = real_checkpoint(&leaves, 2, None);
+        let key = crate::signing::generate_signing_key();
+        let head = crate::signing::TreeHead {
+            tree_size: cp.tree_size,
+            root_hash: &cp.root_hash,
+            prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+            checkpoint_hash: &cp.checkpoint_hash,
+        };
+        let signature = crate::signing::sign_tree_head(
+            &key,
+            crate::checkpoints::AUDIT_CHECKPOINT_PURPOSE,
+            "k-chain",
+            &head,
+        );
+        cp.signatures = vec![crate::checkpoints::TreeHeadSignature {
+            key_id: "k-chain".to_string(),
+            purpose: crate::checkpoints::AUDIT_CHECKPOINT_PURPOSE.to_string(),
+            public_key: crate::signing::render_public_key(&key.verifying_key()),
+            signature: crate::signing::render_signature(&signature),
+        }];
+        let pack = EvidencePack {
+            manifest: manifest_for(&cp),
+            checkpoints: vec![cp],
+            rows,
+        };
+        let verdict = verify_pack(&pack, None).unwrap();
+        assert!(
+            matches!(verdict, TreeVerification::UnauthorizedKey { .. }),
+            "chain signatures must be judged without an anchor: {verdict:?}"
+        );
+    }
+
+    #[test]
+    fn zero_is_the_genesis_boundary_not_a_negative_size() {
+        // The negative-size rejections must not creep up to zero: a v1
+        // chain starting at genesis verifies outright, and a zero
+        // endpoint on the window and selective kinds is never refused
+        // AS negative (whatever else their envelopes demand of it).
+        let rows = rows_tagged(2, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let genesis = real_checkpoint(&[], 0, None);
+        let covering = real_checkpoint(&leaves, 2, Some(&genesis));
+        let pack = EvidencePack {
+            manifest: manifest_for(&covering),
+            checkpoints: vec![genesis.clone(), covering],
+            rows,
+        };
+        assert!(
+            matches!(
+                verify_pack(&pack, None).unwrap(),
+                TreeVerification::Intact { .. }
+            ),
+            "a chain starting at genesis verifies"
+        );
+
+        let (mut window, _) = valid_window(3, 7);
+        window.from_checkpoint.tree_size = 0;
+        if let Err(PackError::Malformed { detail }) = verify_window(&window, None) {
+            assert!(
+                !detail.contains("negative"),
+                "zero is not negative: {detail}"
+            );
+        }
+
+        let (mut selective, _) = valid_selective(4, &[1]);
+        selective.checkpoint.tree_size = 0;
+        if let Err(PackError::Malformed { detail }) = verify_selective(&selective, None) {
+            assert!(
+                !detail.contains("negative"),
+                "zero is not negative: {detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_negative_selective_checkpoint_size_is_malformed() {
+        let (mut pack, _) = valid_selective(4, &[1]);
+        pack.checkpoint.tree_size = -1;
+        match verify_selective(&pack, None) {
+            Err(PackError::Malformed { detail }) => assert!(detail.contains("negative")),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_window_start_names_its_tree_size_exactly() {
+        assert_eq!(WindowStart::TreeSize(5).tree_size(), 5);
+        assert_eq!(WindowStart::Anchor(checkpoint(7)).tree_size(), 7);
+    }
+
+    #[test]
+    fn the_selective_assembly_error_says_what_went_wrong() {
+        let rendered = format!("{}", AssembleSelectiveError::UnknownTransition(Uuid::nil()));
+        assert!(!rendered.is_empty() && rendered.contains("00000000"));
+    }
+
+    #[test]
     fn manifest_disagreement_is_malformed() {
         let cp = checkpoint(1);
         let mut manifest = manifest_for(&cp);
