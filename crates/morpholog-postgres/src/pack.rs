@@ -1322,6 +1322,84 @@ mod tests {
     }
 
     #[test]
+    fn an_unauthorized_signature_on_the_chain_itself_is_judged() {
+        // No anchor at all: signatures stored on the pack's own
+        // checkpoints must trigger the authority question too.
+        let rows = rows_tagged(2, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let mut cp = real_checkpoint(&leaves, 2, None);
+        let key = crate::signing::generate_signing_key();
+        let head = crate::signing::TreeHead {
+            tree_size: cp.tree_size,
+            root_hash: &cp.root_hash,
+            prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+            checkpoint_hash: &cp.checkpoint_hash,
+        };
+        let signature = crate::signing::sign_tree_head(
+            &key,
+            crate::checkpoints::AUDIT_CHECKPOINT_PURPOSE,
+            "k-chain",
+            &head,
+        );
+        cp.signatures = vec![crate::checkpoints::TreeHeadSignature {
+            key_id: "k-chain".to_string(),
+            purpose: crate::checkpoints::AUDIT_CHECKPOINT_PURPOSE.to_string(),
+            public_key: crate::signing::render_public_key(&key.verifying_key()),
+            signature: crate::signing::render_signature(&signature),
+        }];
+        let pack = EvidencePack {
+            manifest: manifest_for(&cp),
+            checkpoints: vec![cp],
+            rows,
+        };
+        let verdict = verify_pack(&pack, None).unwrap();
+        assert!(
+            matches!(verdict, TreeVerification::UnauthorizedKey { .. }),
+            "chain signatures must be judged without an anchor: {verdict:?}"
+        );
+    }
+
+    #[test]
+    fn a_zero_size_genesis_checkpoint_is_lawful_everywhere() {
+        // Zero is the genesis boundary, not a malformation: the
+        // negative-size rejections must not creep up to it.
+        let rows = rows_tagged(2, 'a');
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let genesis = real_checkpoint(&[], 0, None);
+        let covering = real_checkpoint(&leaves, 2, Some(&genesis));
+        let pack = EvidencePack {
+            manifest: manifest_for(&covering),
+            checkpoints: vec![genesis.clone(), covering],
+            rows,
+        };
+        assert!(
+            matches!(
+                verify_pack(&pack, None).unwrap(),
+                TreeVerification::Intact { .. }
+            ),
+            "a chain starting at genesis verifies"
+        );
+
+        let (mut window, _) = valid_window(3, 7);
+        window.from_checkpoint.tree_size = 0;
+        if let Err(PackError::Malformed { detail }) = verify_window(&window, None) {
+            assert!(
+                !detail.contains("negative"),
+                "zero is not negative: {detail}"
+            );
+        }
+
+        let (mut selective, _) = valid_selective(4, &[1]);
+        selective.checkpoint.tree_size = 0;
+        if let Err(PackError::Malformed { detail }) = verify_selective(&selective, None) {
+            assert!(
+                !detail.contains("negative"),
+                "zero is not negative: {detail}"
+            );
+        }
+    }
+
+    #[test]
     fn a_negative_selective_checkpoint_size_is_malformed() {
         let (mut pack, _) = valid_selective(4, &[1]);
         pack.checkpoint.tree_size = -1;
