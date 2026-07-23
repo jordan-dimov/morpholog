@@ -626,7 +626,7 @@ fn invalid_program_surfaces_at_the_validated_gate() {
     );
 }
 
-use morpholog_core::{ArithOp, Prop, Term, Value, ValueExpr};
+use morpholog_core::{ArithOp, Term, Value, ValueExpr};
 
 fn qty_lit(amount: &str, unit: &str) -> ValueExpr {
     ValueExpr::Term(Term::Literal(Value::Quantity {
