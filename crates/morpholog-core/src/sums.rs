@@ -142,7 +142,7 @@ fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
 }
 
 /// A definition can call a definition; genuine cycles are refused at
-/// validation, so this bound only insures the pass against unvalidated
+/// validation, so this bound only guards the pass against unvalidated
 /// hand-built IR.
 const MAX_DEFINED_DEPTH: usize = 16;
 
@@ -297,7 +297,7 @@ mod tests {
 
     /// The definition-descent cap, boundary-exact: a chain at the cap
     /// still resolves the summed variable's kind; one hop past it
-    /// falls back to the decimal default. The cap only insures the
+    /// falls back to the decimal default. The cap only guards the
     /// pass against unvalidated cyclic IR - validated programmes never
     /// reach it - so its one observable behaviour is pinned here.
     #[test]

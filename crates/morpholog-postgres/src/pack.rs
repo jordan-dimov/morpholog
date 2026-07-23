@@ -1360,9 +1360,11 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_size_genesis_checkpoint_is_lawful_everywhere() {
-        // Zero is the genesis boundary, not a malformation: the
-        // negative-size rejections must not creep up to it.
+    fn zero_is_the_genesis_boundary_not_a_negative_size() {
+        // The negative-size rejections must not creep up to zero: a v1
+        // chain starting at genesis verifies outright, and a zero
+        // endpoint on the window and selective kinds is never refused
+        // AS negative (whatever else their envelopes demand of it).
         let rows = rows_tagged(2, 'a');
         let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
         let genesis = real_checkpoint(&[], 0, None);
