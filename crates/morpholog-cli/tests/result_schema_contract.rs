@@ -475,7 +475,10 @@ fn report_envelopes_serialize_as_pinned() {
 fn claim_arrays_serialize_as_pinned() {
     use morpholog_cli::envelopes::NamedClaim;
 
-    assert_golden("claim_instances.json", &to_value(&vec![kitchen_sink_claim()]));
+    assert_golden(
+        "claim_instances.json",
+        &to_value(&vec![kitchen_sink_claim()]),
+    );
     assert_golden(
         "named_claims.json",
         &to_value(&vec![NamedClaim {

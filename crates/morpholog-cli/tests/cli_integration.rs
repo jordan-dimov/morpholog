@@ -1413,7 +1413,10 @@ async fn refresh_derived_emits_the_typed_report() {
     // one `inspect derived` read below.
     assert_eq!(report["derived_predicate_count"], 1, "{report}");
     assert!(
-        report["model_hash"].as_str().unwrap().starts_with("sha256:"),
+        report["model_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"),
         "{report}"
     );
     assert!(
@@ -1442,7 +1445,10 @@ async fn refresh_derived_report_without_transitions_omits_snapshot_pair() {
     let ledger = ledger_morph();
 
     let (status, stdout, stderr) = run_cli(&["refresh", "derived", &ledger]);
-    assert!(status.success(), "refresh on an empty ledger succeeds; {stderr}");
+    assert!(
+        status.success(),
+        "refresh on an empty ledger succeeds; {stderr}"
+    );
     let report: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(report["derived_claim_count"], 0, "{report}");
     assert!(
