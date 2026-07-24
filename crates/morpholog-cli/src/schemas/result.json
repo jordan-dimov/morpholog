@@ -124,6 +124,14 @@
         }
       }
     },
+    "claim_instance_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/claim_instance" }
+    },
+    "named_claim_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/named_claim" }
+    },
     "committed": {
       "type": "object",
       "additionalProperties": false,
@@ -672,6 +680,30 @@
             "writer_role": { "const": "morpholog_writer" }
           }
         }
+      }
+    },
+    "refresh_derived_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "derived_claim_count",
+        "derived_predicate_count",
+        "model_hash",
+        "refresh_id",
+        "source_claim_count"
+      ],
+      "dependentRequired": {
+        "source_snapshot_committed_at": ["source_snapshot_transition_id"],
+        "source_snapshot_transition_id": ["source_snapshot_committed_at"]
+      },
+      "properties": {
+        "derived_claim_count": { "type": "integer", "minimum": 0 },
+        "derived_predicate_count": { "type": "integer", "minimum": 0 },
+        "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "refresh_id": { "type": "string", "format": "uuid" },
+        "source_claim_count": { "type": "integer", "minimum": 0 },
+        "source_snapshot_committed_at": { "type": "string", "format": "date-time" },
+        "source_snapshot_transition_id": { "type": "string", "format": "uuid" }
       }
     },
     "tree_head_signature": {

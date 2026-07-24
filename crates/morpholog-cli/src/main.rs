@@ -660,8 +660,10 @@ pub(crate) enum Inspect {
     /// Compute a read-side view (a derived claim) from the admitted state.
     ///
     /// Enumerates the named derived claim against current state, or
-    /// against a past state via `--as-of`. Read-only: no claims are
-    /// written, no audit row is produced.
+    /// against a past state via `--as-of`. `--named` decodes each
+    /// row's arguments by declared field name under the same
+    /// programme's authority. Read-only: no claims are written, no
+    /// audit row is produced.
     Derived(InspectDerivedArgs),
     /// Stream the history of committed changes, one JSON line each.
     ///
@@ -840,6 +842,13 @@ pub(crate) struct InspectDerivedArgs {
     /// returns `NoTransitionAtOrBefore`.
     #[arg(long)]
     pub(crate) as_of: Option<AsOf>,
+
+    /// Decode each row's arguments by declared field name - the same
+    /// named shape as `inspect claims --named`, under the authority of
+    /// the programme already named by FILE (so the flag takes no
+    /// argument here).
+    #[arg(long)]
+    pub(crate) named: bool,
 }
 
 /// Arguments for `inspect outbox`: the connection-string flag plus the

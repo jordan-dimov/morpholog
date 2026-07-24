@@ -1,0 +1,9 @@
+[
+  {
+    "args": {
+      "quantity": "100.5",
+      "trade": "trade_1"
+    },
+    "predicate": "TradeCaptured"
+  }
+]

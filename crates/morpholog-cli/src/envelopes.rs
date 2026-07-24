@@ -103,6 +103,45 @@ impl LeastPrivilegeReport {
     }
 }
 
+/// `refresh derived`: the published read-model generation, typed. The
+/// snapshot pair is the latest audit transition visible in the
+/// refresh's read snapshot - a coarse freshness marker, never a
+/// lossless audit-resume cursor (a writer in flight at snapshot time
+/// is excluded and folded in by the next refresh; lossless resume is
+/// `inspect audit`). Absent together on an empty ledger. Timings stay
+/// on stderr: operational colour, not contract.
+#[derive(Serialize)]
+pub struct RefreshDerivedReport {
+    pub derived_claim_count: usize,
+    pub derived_predicate_count: usize,
+    pub model_hash: String,
+    pub refresh_id: uuid::Uuid,
+    pub source_claim_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_snapshot_committed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_snapshot_transition_id: Option<uuid::Uuid>,
+}
+
+impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {
+    fn from(s: &morpholog_postgres::RefreshSummary) -> Self {
+        // The snapshot coordinates come from one audit row; zip keeps
+        // them present-or-absent together on the wire as well.
+        let snapshot = s
+            .source_snapshot_transition_id
+            .zip(s.source_snapshot_committed_at);
+        Self {
+            derived_claim_count: s.derived_claim_count,
+            derived_predicate_count: s.derived_predicate_count,
+            model_hash: s.model_hash.clone(),
+            refresh_id: s.refresh_id,
+            source_claim_count: s.source_claim_count,
+            source_snapshot_committed_at: snapshot.map(|(_, at)| at),
+            source_snapshot_transition_id: snapshot.map(|(tid, _)| tid),
+        }
+    }
+}
+
 /// One claim decoded to the named form: field-keyed bare values under
 /// the declared predicate vocabulary (the read-side mirror of
 /// `--args-named`).

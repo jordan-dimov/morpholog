@@ -469,6 +469,83 @@ fn report_envelopes_serialize_as_pinned() {
     );
 }
 
+// The two array shapes `inspect claims` and `inspect derived` print:
+// the whole stdout is the pinned value, not just each row.
+#[test]
+fn claim_arrays_serialize_as_pinned() {
+    use morpholog_cli::envelopes::NamedClaim;
+
+    assert_golden("claim_instances.json", &to_value(&vec![kitchen_sink_claim()]));
+    assert_golden(
+        "named_claims.json",
+        &to_value(&vec![NamedClaim {
+            args: [
+                ("trade".to_string(), serde_json::json!("trade_1")),
+                ("quantity".to_string(), serde_json::json!("100.5")),
+            ]
+            .into_iter()
+            .collect(),
+            predicate: "TradeCaptured".into(),
+        }]),
+    );
+}
+
+// `refresh derived`: the snapshot pair is present or absent together
+// (it comes from one audit row), and the schema + validator hold the
+// pair constraint, not just this serialization.
+#[test]
+fn refresh_derived_reports_serialize_as_pinned() {
+    use morpholog_cli::envelopes::RefreshDerivedReport;
+
+    let committed_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_golden(
+        "refresh_derived_report.json",
+        &to_value(&RefreshDerivedReport {
+            derived_claim_count: 4,
+            derived_predicate_count: 1,
+            model_hash: format!("sha256:{}", "0".repeat(64)),
+            refresh_id: sample_uuid(),
+            source_claim_count: 12,
+            source_snapshot_committed_at: Some(committed_at),
+            source_snapshot_transition_id: Some(sample_uuid()),
+        }),
+    );
+    assert_golden(
+        "refresh_derived_report_no_transitions.json",
+        &to_value(&RefreshDerivedReport {
+            derived_claim_count: 0,
+            derived_predicate_count: 1,
+            model_hash: format!("sha256:{}", "0".repeat(64)),
+            refresh_id: sample_uuid(),
+            source_claim_count: 0,
+            source_snapshot_committed_at: None,
+            source_snapshot_transition_id: None,
+        }),
+    );
+}
+
+// A one-sided snapshot pair is unrepresentable on the wire, and the
+// schema layer agrees: dependentRequired refuses it, and the validator
+// actually enforces dependentRequired.
+#[test]
+fn refresh_derived_report_rejects_one_sided_snapshot() {
+    let schema = result_schema();
+    let defs = schema.get("$defs").unwrap();
+    let entry = defs.get("refresh_derived_report").unwrap();
+    let one_sided = serde_json::json!({
+        "derived_claim_count": 1,
+        "derived_predicate_count": 1,
+        "model_hash": format!("sha256:{}", "0".repeat(64)),
+        "refresh_id": "01900000-0000-7000-8000-000000000001",
+        "source_claim_count": 1,
+        "source_snapshot_transition_id": "01900000-0000-7000-8000-000000000002"
+    });
+    let err = validate(&one_sided, entry, defs, "one_sided").unwrap_err();
+    assert!(err.contains("dependentRequired"), "unexpected error: {err}");
+}
+
 // The evaluate score reports, byte-pinned as the CLI prints them
 // (direct struct serialization, no Value normalization): the discovery
 // harness consumes this stdout by subprocess, so the pin covers the
@@ -929,6 +1006,24 @@ fn validate(
                 }
             }
         }
+        if let Some(deps) = schema.get("dependentRequired").and_then(|d| d.as_object()) {
+            for (trigger, needed) in deps {
+                if object.contains_key(trigger.as_str()) {
+                    for key in needed
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|k| k.as_str())
+                    {
+                        if !object.contains_key(key) {
+                            return Err(format!(
+                                "{path}: `{trigger}` present without `{key}` (dependentRequired)"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         for (key, item) in object {
             let property_schema = properties.and_then(|p| p.get(key));
             match property_schema {
@@ -989,6 +1084,13 @@ fn every_golden_validates_against_its_defs_entry() {
         ("init_report.json", "init_report"),
         ("init_report_least_privilege.json", "init_report"),
         ("named_claim.json", "named_claim"),
+        ("claim_instances.json", "claim_instance_array"),
+        ("named_claims.json", "named_claim_array"),
+        ("refresh_derived_report.json", "refresh_derived_report"),
+        (
+            "refresh_derived_report_no_transitions.json",
+            "refresh_derived_report",
+        ),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),
         ("verify_report_with_views.json", "verify_report"),
