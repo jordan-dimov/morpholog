@@ -154,6 +154,65 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--as-of", argv)
             self.assertNotIn("--named", argv)
 
+    def test_derived_reads_thread_as_of_and_named_exactly_when_supplied(self):
+        # Same four-case matrix as the claims reads: --as-of and
+        # --named each land on argv exactly when asked for, after the
+        # positional file + derived-claim name.
+        self._mode("record_argv")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
+
+            argv = argv_after(
+                lambda: self.client.derived_named(
+                    "TermsTimeline", as_of="2026-06-07T12:00:00Z"
+                )
+            )
+            self.assertEqual(argv[:4], ["inspect", "derived", "model.morph", "TermsTimeline"])
+            self.assertIn("--named", argv)
+            self.assertEqual(argv[argv.index("--as-of") + 1], "2026-06-07T12:00:00Z")
+
+            argv = argv_after(lambda: self.client.derived_named("TermsTimeline"))
+            self.assertIn("--named", argv)
+            self.assertNotIn("--as-of", argv)
+
+            argv = argv_after(
+                lambda: self.client.derived("TermsTimeline", as_of="2026-06-07T12:00:00Z")
+            )
+            self.assertNotIn("--named", argv)
+            self.assertIn("--as-of", argv)
+
+            argv = argv_after(lambda: self.client.derived("TermsTimeline"))
+            self.assertEqual(argv[:4], ["inspect", "derived", "model.morph", "TermsTimeline"])
+            self.assertNotIn("--named", argv)
+            self.assertNotIn("--as-of", argv)
+
+    def test_refresh_derived_parses_the_typed_report(self):
+        self._mode("record_argv_stdout")
+        golden_dir = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
+        os.environ["STUB_STDOUT"] = (golden_dir / "refresh_derived_report.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            report = self.client.refresh_derived()
+            with open(record.name) as handle:
+                argv = handle.read().splitlines()
+
+        self.assertEqual(argv[:3], ["refresh", "derived", "model.morph"])
+        self.assertEqual(report.derived_claim_count, 4)
+        self.assertEqual(
+            report.source_snapshot_transition_id,
+            "01900000-0000-7000-8000-000000000001",
+        )
+        self.assertIsNotNone(report.source_snapshot_committed_at)
+
     def test_audit_flags_land_on_argv_exactly_when_supplied(self):
         # The four-case matrix for the audit tail: --after and --named
         # each appear exactly when asked for.

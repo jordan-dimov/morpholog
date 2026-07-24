@@ -265,6 +265,33 @@ class Morpholog:
         )
         return [envelopes.NamedClaim.from_json(c) for c in payload]
 
+    def derived(self, name: str, *, as_of: str | None = None) -> list:
+        """Compute a read-side view (a derived claim) directly from the
+        admitted claims - the authoritative, always-live read; it never
+        consults the ``refresh_derived`` cache. Rows are tagged
+        ``ClaimInstance``s, the same shape ``claims`` returns.
+
+        `as_of` computes the view over the state as it was at a past
+        moment - a transition id, or an RFC 3339 timestamp resolved to
+        the last transition committed at or before it. Diffing the same
+        view at two coordinates is the correction blast-radius read.
+        """
+        argv = ["inspect", "derived", self.file, name]
+        if as_of is not None:
+            argv.extend(["--as-of", as_of])
+        payload = self._json(*argv, "--database-url", self.database_url)
+        return [envelopes.ClaimInstance.from_json(c) for c in payload]
+
+    def derived_named(self, name: str, *, as_of: str | None = None) -> list:
+        """``derived`` with each row's arguments decoded by declared
+        field name (the generated read models parse them by declared
+        kind). Same authority and skew contract as ``claims_named``."""
+        argv = ["inspect", "derived", self.file, name, "--named"]
+        if as_of is not None:
+            argv.extend(["--as-of", as_of])
+        payload = self._json(*argv, "--database-url", self.database_url)
+        return [envelopes.NamedClaim.from_json(c) for c in payload]
+
     def audit(self, after: str | None = None) -> list:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
@@ -317,6 +344,20 @@ class Morpholog:
             self._json(
                 "inspect", "coverage", self.file,
                 "--json",
+                "--database-url", self.database_url,
+            )
+        )
+
+    def refresh_derived(self) -> envelopes.RefreshDerivedReport:
+        """Recompute every derived claim with the kernel and publish a
+        new generation of the ``morpholog_read`` cache that the
+        generated derived SQL views read. Operational, out of band:
+        run it after an import or on a schedule. It feeds only the SQL
+        views - the ``derived`` reads above compute live and never
+        need it."""
+        return envelopes.RefreshDerivedReport.from_json(
+            self._json(
+                "refresh", "derived", self.file,
                 "--database-url", self.database_url,
             )
         )

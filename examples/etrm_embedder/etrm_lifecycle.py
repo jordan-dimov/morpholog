@@ -169,13 +169,14 @@ def main() -> None:
         if f.trade == trade and f.official_price_id == pointer.official_price_id
     )
     print(f"    in-force official price for {trade}: {figure.price} under {figure.official_price_id}")
-    deliver(morph, morph.submit(
+    settled = morph.submit(
         models.SettleTradeRequest(
             trade=trade, settled_qty=Decimal("60"), settlement_id="s1",
             official_price_id=pointer.official_price_id, effective_on=date(2026, 6, 30),
         ),
         desk,
-    ))
+    )
+    deliver(morph, settled)
 
     print("7. an over-cap second settlement (60 + 60 > 100) is refused")
     over = morph.submit(
@@ -223,6 +224,57 @@ def main() -> None:
                     f"    blotter: {claim.args['settlement_id']} settled "
                     f"{claim.args['settled_qty']} (transition {row.transition_id})"
                 )
+
+    # A late-arriving correction: the terms are amended with a
+    # backdated effective date AFTER a settlement was made against the
+    # original version. Nothing is overwritten - the amendment is its
+    # own governed commit, and the settlement stands.
+    print("10. a backdated terms amendment lands after settlement")
+    deliver(morph, morph.submit(
+        models.AmendTradeTermsRequest(
+            trade=trade, prior_version_id="v1", new_version_id="v2",
+            quantity=Decimal("120"), delivery_period="2026Q3",
+            effective_from=date(2026, 6, 1),
+        ),
+        desk,
+    ))
+
+    # The blast-radius read: which rows of a derived view did that
+    # correction change? Two same-shape reads of the SAME view - one
+    # as-of the coordinate just before the amendment, one live -
+    # diffed by key. The derived reads compute live from the admitted
+    # claims; the refresh feeds only the generated SQL views' cache,
+    # and is shown here as the operational step a worker would
+    # schedule after a correction lands.
+    print("11. blast radius: which TermsTimeline rows did the amendment change?")
+    report = morph.refresh_derived()
+    print(
+        f"    refreshed the SQL-view cache: {report.derived_claim_count} row(s) "
+        f"across {report.derived_predicate_count} derived predicate(s)"
+    )
+
+    def timeline(rows):
+        keyed = {}
+        for c in rows:
+            row = models.TermsTimelineClaim.from_named(c.args)
+            keyed[(row.trade, row.version_id)] = row
+        return keyed
+
+    before = timeline(morph.derived_named("TermsTimeline", as_of=settled.transition_id))
+    after = timeline(morph.derived_named("TermsTimeline"))
+    added = after.keys() - before.keys()
+    if added != {(trade, "v2")}:
+        raise MorphologError(f"the amendment should add exactly ('{trade}', 'v2'): {added}")
+    if (trade, "v1") not in after:
+        raise MorphologError("the original terms version must survive the amendment")
+    for key in sorted(added):
+        row = after[key]
+        print(
+            f"    worklist: terms {row.version_id} (qty {row.quantity}, "
+            f"effective {row.effective_from}) postdates the settlement made under v1"
+        )
+    if not all(isinstance(c, envelopes.ClaimInstance) for c in morph.derived("TermsTimeline")):
+        raise MorphologError("the bare derived read returns tagged ClaimInstance rows")
 
     print(f"\n--- interface friction this lifecycle still hits ---\n  {READ_SURFACE_FRICTION}")
 

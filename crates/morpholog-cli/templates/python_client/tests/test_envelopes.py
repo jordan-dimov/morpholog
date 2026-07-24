@@ -218,6 +218,44 @@ class Coverage(unittest.TestCase):
         self.assertTrue(drifted.not_in_programme)
 
 
+class RefreshDerived(unittest.TestCase):
+    def test_the_report_round_trips_the_golden(self):
+        report = envelopes.RefreshDerivedReport.from_json(
+            golden("refresh_derived_report.json")
+        )
+        self.assertEqual(report.derived_claim_count, 4)
+        self.assertEqual(report.derived_predicate_count, 1)
+        self.assertEqual(report.source_claim_count, 12)
+        self.assertTrue(report.model_hash.startswith("sha256:"))
+        self.assertEqual(
+            report.source_snapshot_transition_id,
+            "01900000-0000-7000-8000-000000000001",
+        )
+        self.assertIsNotNone(report.source_snapshot_committed_at)
+        self.assertIsNotNone(report.source_snapshot_committed_at.tzinfo)
+
+    def test_no_transitions_omits_the_snapshot_pair_together(self):
+        report = envelopes.RefreshDerivedReport.from_json(
+            golden("refresh_derived_report_no_transitions.json")
+        )
+        self.assertIsNone(report.source_snapshot_transition_id)
+        self.assertIsNone(report.source_snapshot_committed_at)
+
+    def test_a_one_sided_snapshot_pair_raises(self):
+        payload = golden("refresh_derived_report.json")
+        del payload["source_snapshot_committed_at"]
+        with self.assertRaises(envelopes.EnvelopeError) as caught:
+            envelopes.RefreshDerivedReport.from_json(payload)
+        self.assertIn("together", str(caught.exception))
+
+    def test_an_unknown_report_key_raises(self):
+        payload = golden("refresh_derived_report.json")
+        payload["surprise"] = 1
+        with self.assertRaises(envelopes.EnvelopeError) as caught:
+            envelopes.RefreshDerivedReport.from_json(payload)
+        self.assertIn("regenerate", str(caught.exception))
+
+
 class DriftTripwire(unittest.TestCase):
     def test_an_unknown_envelope_key_raises(self):
         payload = golden("rejected.json")

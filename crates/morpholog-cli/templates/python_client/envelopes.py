@@ -735,6 +735,55 @@ class InitReport:
         )
 
 
+@dataclass(frozen=True)
+class RefreshDerivedReport:
+    """The published read-model generation (`refresh derived`). The
+    snapshot pair is the latest audit transition visible in the
+    refresh's read snapshot - a coarse freshness marker, never a
+    lossless audit-resume cursor (a writer in flight at snapshot time
+    is excluded and folded in by the next refresh; lossless resume is
+    the audit tail). The pair is present or absent together."""
+
+    derived_claim_count: int
+    derived_predicate_count: int
+    model_hash: str
+    refresh_id: str
+    source_claim_count: int
+    source_snapshot_committed_at: datetime | None = None
+    source_snapshot_transition_id: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> "RefreshDerivedReport":
+        data = _strict(
+            "refresh derived report",
+            payload,
+            {
+                "derived_claim_count",
+                "derived_predicate_count",
+                "model_hash",
+                "refresh_id",
+                "source_claim_count",
+            },
+            {"source_snapshot_committed_at", "source_snapshot_transition_id"},
+        )
+        tid = data.get("source_snapshot_transition_id")
+        at = data.get("source_snapshot_committed_at")
+        if (tid is None) != (at is None):
+            raise EnvelopeError(
+                "refresh derived report: the snapshot pair must be present "
+                f"or absent together, got {payload!r}"
+            )
+        return cls(
+            derived_claim_count=data["derived_claim_count"],
+            derived_predicate_count=data["derived_predicate_count"],
+            model_hash=data["model_hash"],
+            refresh_id=data["refresh_id"],
+            source_claim_count=data["source_claim_count"],
+            source_snapshot_committed_at=_optional_timestamp(at),
+            source_snapshot_transition_id=tid,
+        )
+
+
 # ------------------------------------------------------------
 # Tamper-evidence: verify / checkpoint / evidence pack.
 # ------------------------------------------------------------
