@@ -41,8 +41,8 @@ use serde_json::json;
 /// flushes stdout before reporting `Delivered` (so bytes have
 /// left this process's buffer), but downstream behavior past that
 /// is whatever the pipeline does. Suitable for demos and smoke
-/// tests; a real downstream (HTTP receiver, Kafka producer, etc.)
-/// will eventually arrive as its own concrete `Deliverer` impl.
+/// tests; a real downstream enters as its own concrete
+/// [`Deliverer`] impl.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StdoutDeliverer;
 

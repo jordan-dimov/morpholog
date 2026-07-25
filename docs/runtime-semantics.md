@@ -257,7 +257,7 @@ bind_one Policy(policy_id, aggregate_limit)                 -- bound policy_id n
 
 The structural guarantee that each `bind_one` is single-valued comes from a programme-level invariant - e.g. `at_most_one_X_per_id` (the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use). Without that invariant, a duplicate admission would surface as `bind_one matched 2 candidates` (kernel error) rather than a lawful rejection.
 
-The legacy `require + let + value_of` chain remains expressible (`ValueExpr::ValueOf` is not deleted), and is the right tool when a value-producing position needs a lookup that does not fit a statement-level binding extension - inside arithmetic, inside `Sum`, or inside a derived-claim value expression.
+The `require + let + value_of` chain remains expressible (`ValueExpr::ValueOf` is not deleted), and is the right tool when a value-producing position needs a lookup that does not fit a statement-level binding extension - inside arithmetic, inside `Sum`, or inside a derived-claim value expression.
 
 Inside a `require` body, multiple sub-expressions composed with `And` *do* propagate bindings forward within that single require: the matcher's binding extensions are threaded through the conjuncts. So a require like
 
@@ -415,7 +415,7 @@ invariant move_count_strictly_increases:
 
 Invariants that contain `Pre` are *transition invariants*; the distinction is descriptive (derivable by walking the body) rather than an IR kind. Both run through the same evaluator.
 
-`pre(...)` is only legal in evaluation contexts that have a pre-state in scope - invariant evaluation during a proposal does, since the kernel passes both pre and candidate states to the invariant check. It surfaces `EvalError::PreStateUnavailable` inside a transformation `require` (pre-state is already the only state), inside a derived-claim body, inside the inner subtree of nested `pre`, and in any `find_matches` call whose `EvalContext` was constructed with `pre_state: None`. The error is phrased about evaluation context rather than AST position so future contexts that carry both states (transformation postconditions, trace assertions) can share the primitive without IR change.
+`pre(...)` is only legal in evaluation contexts that have a pre-state in scope - invariant evaluation during a proposal does, since the kernel passes both pre and candidate states to the invariant check. It surfaces `EvalError::PreStateUnavailable` inside a transformation `require` (pre-state is already the only state), inside a derived-claim body, inside the inner subtree of nested `pre`, and in any `find_matches` call whose `EvalContext` was constructed with `pre_state: None`. The error is phrased about evaluation context rather than AST position, so any context that carries both states can share the primitive without IR change.
 
 Genesis falls out of `implies` vacuity: when a predicate has never been admitted, `pre(P(...))` matches nothing and any rule predicated on it is vacuously true. Initialisation against an empty database satisfies `move_count_strictly_increases` for free; once `MoveCount(0)` is admitted the rule kicks in. Authors who need a different genesis story write the cases as disjuncts.
 

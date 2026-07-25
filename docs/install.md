@@ -66,6 +66,21 @@ cd morpholog
 (or download and unpack the "Source code" archive attached to the same
 release - it is the identical coordinate).
 
+**Tracking unreleased work instead?** Every merge to main recreates
+the rolling `main-latest` prerelease (stable URL:
+`releases/download/main-latest/morpholog-main-x86_64-unknown-linux-musl.tar.gz`).
+Its binary reports the last tagged workspace version regardless of
+later commits, so the recipe above does NOT apply - take the commit
+SHA from the `main-latest` release notes and clone at it instead:
+
+```bash
+git clone https://github.com/jordan-dimov/morpholog.git
+cd morpholog && git checkout <sha from the main-latest release notes>
+```
+
+Pin a `v*` tag for anything durable; `main-latest` is recreated on
+every merge.
+
 ## 4. First contact
 
 ```bash

@@ -8,7 +8,9 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _support import add_client_to_path
+
+add_client_to_path()
 
 from python_client import values
 

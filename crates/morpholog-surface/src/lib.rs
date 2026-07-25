@@ -5,12 +5,9 @@
 //! transformations, derived claims) and every statement verb. The
 //! round-trip property test over the worked examples pins it.
 //!
-//! The crate name is deliberately broader than "parser". The
-//! surface concept covers the parser and the source-mapping layer
-//! today; in time it will also cover any formatter that emits
-//! canonical `.morph` text and (eventually) LSP-shaped tooling.
-//! Keeping these under one crate name avoids a crate split each
-//! time a new piece of source-aware tooling lands.
+//! The crate name is deliberately broader than "parser": it hosts
+//! the parser and the source-mapping layer, and is wide enough for
+//! any later source-aware tooling without a crate split.
 //!
 //! Entry points: [`parse_program`] returns the full
 //! [`morpholog_core::Program`]; [`parse_program_with_sources`] also

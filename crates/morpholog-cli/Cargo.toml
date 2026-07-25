@@ -16,7 +16,6 @@ morpholog-postgres = { path = "../morpholog-postgres" }
 morpholog-surface = { path = "../morpholog-surface" }
 clap = { workspace = true }
 anyhow = { workspace = true }
-sha2 = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -27,7 +26,6 @@ rust_decimal = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
-serde_json = { workspace = true }
 tempfile = "3"
 
 [lints]

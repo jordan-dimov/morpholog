@@ -148,6 +148,53 @@ impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {
     }
 }
 
+/// The `propose --trace` envelope: `{result, trace}`, exactly as the
+/// contract pins it. Generic so the CLI serialises the adapter's
+/// outcome and trace by reference without re-stating their types.
+#[derive(Serialize)]
+pub struct Traced<R, T> {
+    pub result: R,
+    pub trace: T,
+}
+
+/// The errored `result` inside a traced envelope: a transformation
+/// that raised a kernel error mid-execution. The constructor owns the
+/// `status` discriminator - a caller cannot misspell the tag.
+#[derive(Serialize)]
+pub struct TracedError {
+    error: String,
+    status: &'static str,
+}
+
+impl TracedError {
+    pub fn new(error: String) -> Self {
+        Self {
+            error,
+            status: "errored",
+        }
+    }
+}
+
+/// A rejection carrying the same-snapshot explanation
+/// (`propose --explain-on-reject`), single and batch paths alike. The
+/// constructor owns the `status` discriminator.
+#[derive(Serialize)]
+pub struct RejectedWithExplanation<'a, E> {
+    explanation: E,
+    reason: &'a str,
+    status: &'static str,
+}
+
+impl<'a, E> RejectedWithExplanation<'a, E> {
+    pub fn new(reason: &'a str, explanation: E) -> Self {
+        Self {
+            explanation,
+            reason,
+            status: "rejected",
+        }
+    }
+}
+
 /// One claim decoded to the named form: field-keyed bare values under
 /// the declared predicate vocabulary (the read-side mirror of
 /// `--args-named`).

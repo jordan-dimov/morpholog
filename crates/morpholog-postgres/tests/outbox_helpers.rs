@@ -1,5 +1,5 @@
-//! Integration tests for the outbox delivery-state helpers added in
-//! PR 1 of the outbox arc (per `docs/outbox-sketch.md`'s sequencing).
+//! Integration tests for the outbox delivery-state helpers
+//! (doctrine in `docs/outbox-sketch.md`).
 //!
 //! Covered in this file: `mark_outbox_delivered`,
 //! `mark_outbox_transient_attempt`, `mark_outbox_failed`,

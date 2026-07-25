@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT intent_id, transition_id, intent_type, arguments,\n                    idempotency_key, status, attempt_count, enqueued_at,\n                    last_attempt_at, delivered_at, failed_at, failure_reason,\n                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at\n             FROM morpholog.outbox\n             WHERE intent_type = $1\n             ORDER BY enqueued_at, intent_id",
+  "query": "SELECT intent_id, transition_id, intent_type, arguments,\n                idempotency_key, status, attempt_count, enqueued_at,\n                last_attempt_at, delivered_at, failed_at, failure_reason,\n                next_attempt_at, compensation_transition_id, locked_by, lock_expires_at\n         FROM morpholog.outbox\n         WHERE ($1::text IS NULL OR status = $1)\n           AND ($2::text IS NULL OR intent_type = $2)\n         ORDER BY enqueued_at, intent_id",
   "describe": {
     "columns": [
       {
@@ -86,6 +86,7 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text"
       ]
     },
@@ -108,5 +109,5 @@
       true
     ]
   },
-  "hash": "b7c10ac24a5422cc661ca7aaa4c3be0fbcc4b60efe5bb3ad5024ac1811372adb"
+  "hash": "4dcf2ba40fd485b5b3b346052856a88ab2f8f4e38b922d0adb820f96eb560a53"
 }

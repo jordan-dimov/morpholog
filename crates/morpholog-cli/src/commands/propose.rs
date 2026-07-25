@@ -20,6 +20,7 @@ use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
     ParsedSource, compile_or_exit, connect, lookup_transformation, parse_or_exit, print_json,
 };
+use morpholog_cli::envelopes;
 
 pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
@@ -82,23 +83,19 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 .context("the proposal could not be decided")?;
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
-                print_json(&serde_json::json!({
-                    "result": &outcome,
-                    "trace": &trace,
-                }))?;
+                print_json(&envelopes::Traced {
+                    result: &outcome,
+                    trace: &trace,
+                })?;
                 if let PgProposalOutcome::Rejected { reason } = &outcome {
-                    print_rule_location(reason, &parsed);
-                    std::process::exit(1);
+                    exit_rejected(reason, &parsed);
                 }
             }
             PgTracedOutcome::KernelErrored { error, trace } => {
-                print_json(&serde_json::json!({
-                    "result": {
-                        "status": "errored",
-                        "error": format!("{error}"),
-                    },
-                    "trace": &trace,
-                }))?;
+                print_json(&envelopes::Traced {
+                    result: envelopes::TracedError::new(format!("{error}")),
+                    trace: &trace,
+                })?;
                 std::process::exit(1);
             }
         }
@@ -121,13 +118,11 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
-                print_json(&serde_json::json!({
-                    "status": "rejected",
-                    "reason": reason,
-                    "explanation": explanation,
-                }))?;
-                print_rule_location(reason, &parsed);
-                std::process::exit(1);
+                print_json(&envelopes::RejectedWithExplanation::new(
+                    reason,
+                    explanation,
+                ))?;
+                exit_rejected(reason, &parsed);
             }
             _ => print_json(&outcome)?,
         }
@@ -137,11 +132,17 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             .context("the proposal could not be decided")?;
         print_json(&outcome)?;
         if let PgProposalOutcome::Rejected { reason } = &outcome {
-            print_rule_location(reason, &parsed);
-            std::process::exit(1);
+            exit_rejected(reason, &parsed);
         }
     }
     Ok(())
+}
+
+/// A decided rejection on a single-proposal path: locate the rule on
+/// stderr, then exit 1 (the envelope is already on stdout).
+fn exit_rejected(reason: &str, parsed: &ParsedSource) -> ! {
+    print_rule_location(reason, parsed);
+    std::process::exit(1);
 }
 
 /// On a single-run rejection, point stderr at the rule: take the
@@ -335,11 +336,12 @@ async fn batch_row_outcome(
         .map_err(classify_pg_error)?;
         if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
             let explanation = explain(compiled.program(), &transition, &state);
-            return Ok(serde_json::json!({
-                "status": "rejected",
-                "reason": reason,
-                "explanation": explanation,
-            }));
+            return serde_json::to_value(envelopes::RejectedWithExplanation::new(
+                reason,
+                explanation,
+            ))
+            .context("serialising the receipt")
+            .map_err(BatchRowError::Operational);
         }
         serde_json::to_value(&outcome)
             .context("serialising the receipt")

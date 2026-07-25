@@ -228,14 +228,27 @@ pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
     }
 }
 
-fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = raw.as_str().ok_or_else(|| {
+/// The string prelude every scalar decoder shares: refuse a non-string
+/// with one parallel message shape - the kind, what arrived, what was
+/// expected, and the schema pointer.
+fn require_str<'v>(
+    param: &str,
+    raw: &'v Value,
+    kind: &str,
+    expected: &str,
+    schema_hint: &str,
+) -> anyhow::Result<&'v str> {
+    raw.as_str().ok_or_else(|| {
         anyhow!(
-            "parameter `{param}` is Subject but received {}; expected a string. \
+            "parameter `{param}` is {kind} but received {}; expected {expected}. \
              {schema_hint}",
             describe_value(raw),
         )
-    })?;
+    })
+}
+
+fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+    let s = require_str(param, raw, "Subject", "a string", schema_hint)?;
     // `Subject` is Morpholog's only primitive noun: it carries
     // both minted entity identifiers and domain symbols (commodity
     // codes, period names, direction enums, account codes). The IR
@@ -248,13 +261,13 @@ fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
 }
 
 fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = raw.as_str().ok_or_else(|| {
-        anyhow!(
-            "parameter `{param}` is Decimal but received {}; expected a decimal string \
-             (e.g. \"100.50\"). {schema_hint}",
-            describe_value(raw),
-        )
-    })?;
+    let s = require_str(
+        param,
+        raw,
+        "Decimal",
+        "a decimal string (e.g. \"100.50\")",
+        schema_hint,
+    )?;
     // The schema commits to `^-?(0|[1-9]\d*)(\.\d+)?$`; the codec
     // must match or the embedder validates against a stricter
     // contract than the CLI actually enforces. `Decimal::from_str`
@@ -311,13 +324,13 @@ fn is_schema_decimal(s: &str) -> bool {
 }
 
 fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = raw.as_str().ok_or_else(|| {
-        anyhow!(
-            "parameter `{param}` is Date but received {}; expected an ISO-8601 civil date \
-             string (e.g. \"2026-05-29\"). {schema_hint}",
-            describe_value(raw),
-        )
-    })?;
+    let s = require_str(
+        param,
+        raw,
+        "Date",
+        "an ISO-8601 civil date string (e.g. \"2026-05-29\")",
+        schema_hint,
+    )?;
     let d = s.parse::<Date>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Date but `{s}` failed to parse: {e}. \
@@ -328,13 +341,13 @@ fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<Ev
 }
 
 fn decode_timestamp(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = raw.as_str().ok_or_else(|| {
-        anyhow!(
-            "parameter `{param}` is Timestamp but received {}; expected an RFC 3339 \
-             instant string (e.g. \"2026-10-24T14:00:00Z\"). {schema_hint}",
-            describe_value(raw),
-        )
-    })?;
+    let s = require_str(
+        param,
+        raw,
+        "Timestamp",
+        "an RFC 3339 instant string (e.g. \"2026-10-24T14:00:00Z\")",
+        schema_hint,
+    )?;
     let t = s.parse::<jiff::Timestamp>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Timestamp but `{s}` failed to parse: {e}. \
@@ -345,13 +358,13 @@ fn decode_timestamp(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Resu
 }
 
 fn decode_duration(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = raw.as_str().ok_or_else(|| {
-        anyhow!(
-            "parameter `{param}` is Duration but received {}; expected an ISO-8601 \
-             duration string in exact time units (e.g. \"PT6H\"). {schema_hint}",
-            describe_value(raw),
-        )
-    })?;
+    let s = require_str(
+        param,
+        raw,
+        "Duration",
+        "an ISO-8601 duration string in exact time units (e.g. \"PT6H\")",
+        schema_hint,
+    )?;
     let d = s.parse::<jiff::SignedDuration>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Duration but `{s}` failed to parse: {e}. \

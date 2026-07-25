@@ -379,21 +379,15 @@ pub(crate) fn collect_implications<'a>(
             collect_implications(left, !positive, definitions, seen, calls, out);
             collect_implications(right, positive, definitions, seen, calls, out);
         }
-        Prop::Defined { name, args } => {
-            // `seen` is a recursion-STACK guard, not a visited set:
-            // polarity is part of the meaning here, so the same
-            // definition called again at a different polarity must be
-            // expanded again. Insert before descending, remove after -
-            // cycles still terminate (re-entry while on the stack).
-            if seen.insert(name.clone()) {
-                if let Some(def) = definitions.get(name) {
-                    calls.push((name, args));
-                    collect_implications(&def.body, positive, definitions, seen, calls, out);
-                    calls.pop();
-                }
-                seen.remove(name);
-            }
-        }
+        // Polarity is part of the meaning here, so the same definition
+        // called again at a different polarity must be expanded again -
+        // exactly the stack-guard semantics `DefinitionIndex::enter`
+        // provides.
+        Prop::Defined { name, args } => definitions.enter(name, seen, |body, seen| {
+            calls.push((name, args));
+            collect_implications(body, positive, definitions, seen, calls, out);
+            calls.pop();
+        }),
         Prop::Claim { .. } | Prop::In(_, _) => {}
         Prop::And(props) | Prop::Or(props) => {
             for p in props {
@@ -437,16 +431,9 @@ pub(crate) fn positive_claims(
                 out.insert(predicate.clone());
             }
         }
-        Prop::Defined { name, .. } => {
-            // Recursion-stack guard, not a visited set - same polarity
-            // reasoning as collect_implications above.
-            if seen.insert(name.clone()) {
-                if let Some(def) = definitions.get(name) {
-                    positive_claims(&def.body, positive, definitions, seen, out);
-                }
-                seen.remove(name);
-            }
-        }
+        Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
+            positive_claims(body, positive, definitions, seen, out);
+        }),
         Prop::Not(inner) => positive_claims(inner, !positive, definitions, seen, out),
         Prop::Implies { left, right } => {
             positive_claims(left, !positive, definitions, seen, out);

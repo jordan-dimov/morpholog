@@ -128,21 +128,7 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
         .fetch_one(&mut *writer)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents,
-            attestation
-         ) VALUES ($1, 'post', '[]'::jsonb,
-                   '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
-                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb)",
-    )
-    .bind(Uuid::now_v7())
-    .execute(&mut *writer)
-    .await
-    .unwrap();
+    common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
 
     // The horizon, computed while A is in flight, clamps at or below
     // A's start.
@@ -194,14 +180,6 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
 // authenticated connection the dev/CI setup cannot make); the live
 // managed deployment is that path's acceptance test.
 // ============================================================
-
-async fn session_user(pool: &PgPool) -> String {
-    let (name,): (String,) = sqlx::query_as("SELECT session_user::text")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    name
-}
 
 async fn session_is_superuser(pool: &PgPool) -> bool {
     let (rolsuper,): (bool,) =
@@ -270,7 +248,7 @@ async fn an_empty_assertion_is_vacuous_and_refused() {
 async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passes() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let me = session_user(&pool).await;
+    let me = common::session_user(&pool).await;
     // Three writer paths the census must catch: a direct grant, an
     // inherited membership, and a SET-ROLE-only membership (INHERIT
     // FALSE, SET TRUE). The NOLOGIN group itself holds no sessions and
@@ -388,28 +366,14 @@ async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_r
     reset_db(&pool).await;
     let p = fixture();
     let t1 = post(&pool, &p, "e1").await;
-    let me = session_user(&pool).await;
+    let me = common::session_user(&pool).await;
 
     let mut writer = pool.begin().await.unwrap();
     let (writer_start,): (DateTime<Utc>,) = sqlx::query_as("SELECT transaction_timestamp()")
         .fetch_one(&mut *writer)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents,
-            attestation
-         ) VALUES ($1, 'post', '[]'::jsonb,
-                   '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
-                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb)",
-    )
-    .bind(Uuid::now_v7())
-    .execute(&mut *writer)
-    .await
-    .unwrap();
+    common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
 
     let horizon = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
         .await

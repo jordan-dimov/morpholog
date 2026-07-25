@@ -88,12 +88,11 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
             "--retry-after-seconds is only meaningful with --outcome transient"
         ));
     }
-    // `--reason` is only meaningful with `--outcome failed`. Earlier
-    // drafts accepted it for `transient` and silently dropped it
-    // (the underlying `mark_outbox_transient_attempt` does not
-    // persist per-attempt narrative). Silent discard is not a
-    // governance-tool shape - reject it. A future enhancement
-    // could add transient-reason persistence; until then,
+    // `--reason` is only meaningful with `--outcome failed`: the
+    // underlying `mark_outbox_transient_attempt` persists no
+    // per-attempt narrative, and silently discarding a supplied
+    // reason is not a governance-tool shape - reject it. Until
+    // transient-reason persistence exists,
     // `--reason` belongs to `failed` only.
     if !matches!(args.outcome, OutboxCompleteOutcome::Failed) && args.reason.is_some() {
         return Err(anyhow!("--reason is only meaningful with --outcome failed"));

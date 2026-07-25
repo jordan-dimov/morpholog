@@ -8,61 +8,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_examples::double_entry_ledger;
-use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, EvidencePack, PackError, PgPool, TreeVerification,
-    create_checkpoint, export_pack, verify_pack,
-};
+use morpholog_postgres::{Checkpoint, PackError, TreeVerification, export_pack, verify_pack};
 
 mod common;
-use common::{dec, reset_db, subj, test_pool};
-
-async fn commit_entry(pool: &PgPool, id: &str) {
-    let compiled = common::compiled(double_entry_ledger::program());
-    let t = double_entry_ledger::post_simple_entry();
-    let outcome = common::propose_pg_with_test_actor(
-        pool,
-        &compiled,
-        &t,
-        vec![
-            subj(id),
-            subj("d_2026_05_17"),
-            subj("p1"),
-            subj(&format!("cash_{id}")),
-            subj(&format!("rev_{id}")),
-            dec(100),
-        ],
-    )
-    .await
-    .unwrap();
-    common::expect_committed(outcome);
-}
-
-async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
-    match create_checkpoint(pool, None, None).await.unwrap() {
-        CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint, got {other:?}")
-        }
-    }
-}
-
-/// Re-serialise a pack to JSON, apply an edit, and parse it back - the
-/// attacker-with-the-file path.
-fn edit_json(pack: &EvidencePack, edit: impl FnOnce(&mut serde_json::Value)) -> EvidencePack {
-    let mut v = serde_json::to_value(pack).unwrap();
-    edit(&mut v);
-    serde_json::from_value(v).unwrap()
-}
+use common::{reset_db, test_pool};
 
 #[tokio::test]
 async fn export_then_verify_offline_is_intact_and_matches_the_anchor() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..3 {
-        commit_entry(&pool, &format!("e{i}")).await;
+        common::commit_entry(&pool, &format!("e{i}")).await;
     }
-    let anchor = make_checkpoint(&pool).await;
+    let anchor = common::make_checkpoint(&pool).await;
 
     let pack = export_pack(&pool, None).await.unwrap();
     assert_eq!(pack.manifest.tree_size, 3);
@@ -92,12 +50,12 @@ async fn editing_a_packed_row_is_tampered() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..3 {
-        commit_entry(&pool, &format!("t{i}")).await;
+        common::commit_entry(&pool, &format!("t{i}")).await;
     }
-    make_checkpoint(&pool).await;
+    common::make_checkpoint(&pool).await;
     let pack = export_pack(&pool, None).await.unwrap();
 
-    let tampered = edit_json(&pack, |v| {
+    let tampered = common::edit_json(&pack, |v| {
         v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     });
     assert!(matches!(
@@ -111,9 +69,9 @@ async fn a_removed_or_extra_row_is_malformed() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..3 {
-        commit_entry(&pool, &format!("m{i}")).await;
+        common::commit_entry(&pool, &format!("m{i}")).await;
     }
-    make_checkpoint(&pool).await;
+    common::make_checkpoint(&pool).await;
     let pack = export_pack(&pool, None).await.unwrap();
 
     let mut short = pack.clone();
@@ -135,11 +93,11 @@ async fn a_removed_or_extra_row_is_malformed() {
 async fn editing_an_earlier_checkpoint_breaks_the_chain() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "c0").await;
-    commit_entry(&pool, "c1").await;
-    make_checkpoint(&pool).await; // tree_size 2
-    commit_entry(&pool, "c2").await;
-    make_checkpoint(&pool).await; // tree_size 3, covering
+    common::commit_entry(&pool, "c0").await;
+    common::commit_entry(&pool, "c1").await;
+    common::make_checkpoint(&pool).await; // tree_size 2
+    common::commit_entry(&pool, "c2").await;
+    common::make_checkpoint(&pool).await; // tree_size 3, covering
     let pack = export_pack(&pool, None).await.unwrap();
     assert_eq!(pack.checkpoints.len(), 2);
 
@@ -159,11 +117,11 @@ async fn editing_an_earlier_checkpoint_breaks_the_chain() {
 async fn an_older_anchor_in_the_chain_is_intact_an_outside_anchor_mismatches() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "a0").await;
-    commit_entry(&pool, "a1").await;
-    let first = make_checkpoint(&pool).await; // tree_size 2
-    commit_entry(&pool, "a2").await;
-    make_checkpoint(&pool).await; // tree_size 3, covering
+    common::commit_entry(&pool, "a0").await;
+    common::commit_entry(&pool, "a1").await;
+    let first = common::make_checkpoint(&pool).await; // tree_size 2
+    common::commit_entry(&pool, "a2").await;
+    common::make_checkpoint(&pool).await; // tree_size 3, covering
     let pack = export_pack(&pool, None).await.unwrap();
 
     // An older checkpoint, present in the pack's chain, still matches.
@@ -191,7 +149,7 @@ async fn an_older_anchor_in_the_chain_is_intact_an_outside_anchor_mismatches() {
 async fn export_refuses_without_a_covering_checkpoint() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "n0").await;
+    common::commit_entry(&pool, "n0").await;
 
     // No checkpoint at all.
     assert!(matches!(
@@ -200,7 +158,7 @@ async fn export_refuses_without_a_covering_checkpoint() {
     ));
 
     // A checkpoint exists, but not at the requested exact size.
-    make_checkpoint(&pool).await; // tree_size 1
+    common::make_checkpoint(&pool).await; // tree_size 1
     assert!(matches!(
         export_pack(&pool, Some(99)).await,
         Err(morpholog_postgres::PgError::NoCheckpoint)
@@ -212,9 +170,9 @@ async fn export_refuses_when_a_covered_row_is_missing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..3 {
-        commit_entry(&pool, &format!("g{i}")).await;
+        common::commit_entry(&pool, &format!("g{i}")).await;
     }
-    make_checkpoint(&pool).await; // commits to 3 rows
+    common::make_checkpoint(&pool).await; // commits to 3 rows
 
     // Delete a covered audit row directly - the checkpoint still claims 3.
     // The exporter must fail rather than mint a known-incomplete pack.

@@ -125,16 +125,16 @@ jobs:
           SQLX_OFFLINE: "false"
         run: cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
 
-      # Sync, pure crates - no DB, parallel.
-      - name: test (core, parallel)
+      # Sync, pure crates - no DB.
+      - name: test (core)
         run: cargo test -p morpholog-core --all-targets --locked
 
-      - name: test (examples, parallel)
+      - name: test (examples)
         run: cargo test -p morpholog-examples --all-targets --locked
 
       # Parser arc: lexer, layout, parser, formatter round-trip.
       # No DB; the round-trip property test lives here.
-      - name: test (surface, parallel)
+      - name: test (surface)
         run: cargo test -p morpholog-surface -p morpholog-test-support --all-targets --locked
 
       # PG-backed integration tests share one schema; each test

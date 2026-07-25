@@ -9,26 +9,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::io::Write;
+mod common;
+use common::bin;
+
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_morpholog")
-}
-
-fn write_fixture(name: &str, content: &str) -> tempfile::TempPath {
-    let mut f = tempfile::Builder::new()
-        .prefix(name)
-        .suffix(".morph")
-        .tempfile()
-        .expect("create tempfile");
-    f.write_all(content.as_bytes()).expect("write fixture");
-    f.into_temp_path()
-}
 
 #[test]
 fn check_ir_happy_path_emits_json_and_exits_zero() {
-    let path = write_fixture(
+    let path = common::write_fixture(
         "happy",
         "program demo\npredicate Foo(a: Subject)\npredicate Bar(b: Decimal)\n",
     );
@@ -56,7 +44,7 @@ fn check_ir_projects_invariants_transformations_and_derived_claims() {
     // projection; the bulk of the parse command is the three rendered
     // projections (invariant bodies, transformation bodies, derived
     // claims), which need a programme that actually has them.
-    let path = write_fixture(
+    let path = common::write_fixture(
         "rich",
         "program rich\n\
          predicate Balance(acct: Subject, amount: Decimal)\n\
@@ -117,7 +105,7 @@ fn check_ir_projects_invariants_transformations_and_derived_claims() {
 
 #[test]
 fn check_ir_parse_error_emits_diagnostic_on_stderr_and_exits_nonzero() {
-    let path = write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");
+    let path = common::write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");
     let out = Command::new(bin())
         .args(["check", path.to_str().unwrap(), "--ir"])
         .output()

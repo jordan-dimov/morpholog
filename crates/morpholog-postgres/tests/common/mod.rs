@@ -41,22 +41,8 @@ pub async fn test_pool() -> PgPool {
 /// the test cannot see). Bounded, then proceeds - a wait this long means
 /// something is genuinely stuck and the test should fail visibly.
 pub async fn reset_db(pool: &PgPool) {
-    for _ in 0..200 {
-        let open: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity
-             WHERE datname = current_database()
-               AND pid != pg_backend_pid()
-               AND xact_start IS NOT NULL",
-        )
-        .fetch_one(pool)
-        .await
-        .expect("failed to count open transactions");
-        if open == 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE")
+    drain_open_transactions(pool).await;
+    sqlx::query(morpholog_postgres::testing::RESET_SQL)
         .execute(pool)
         .await
         .expect("failed to truncate test DB");
@@ -66,11 +52,11 @@ pub async fn reset_db(pool: &PgPool) {
 /// tests that exercise the derived read cache or SQL views; do not make
 /// this the default reset - everything else uses [`reset_db`].
 pub async fn reset_db_and_read_cache(pool: &PgPool) {
-    sqlx::raw_sql(
-        "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE; \
-         TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
+    sqlx::raw_sql(&format!(
+        "{}; TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE;",
-    )
+        morpholog_postgres::testing::RESET_SQL
+    ))
     .execute(pool)
     .await
     .expect("reset");
@@ -189,4 +175,114 @@ pub async fn propose_pg_as(
         actor: actor.into(),
     };
     propose_against_pg(pool, compiled, &attested(&transition)).await
+}
+
+/// Commit one balanced double-entry-ledger posting and return its
+/// transition id - the fixture opener the tamper-evidence and
+/// evaluate suites share.
+pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
+    let compiled = compiled(morpholog_examples::double_entry_ledger::program());
+    let t = morpholog_examples::double_entry_ledger::post_simple_entry();
+    let outcome = propose_pg_with_test_actor(
+        pool,
+        &compiled,
+        &t,
+        vec![
+            morpholog_test_support::subj(id),
+            morpholog_test_support::subj("d_2026_05_17"),
+            morpholog_test_support::subj("p1"),
+            morpholog_test_support::subj(&format!("cash_{id}")),
+            morpholog_test_support::subj(&format!("rev_{id}")),
+            morpholog_test_support::dec(100),
+        ],
+    )
+    .await
+    .unwrap();
+    expect_committed(outcome)
+}
+
+/// Wait (bounded) for other sessions' open transactions to end: a
+/// straggler from a prior test's pool lowers the audit watermark, so
+/// a checkpoint or tail taken now can otherwise cover none of this
+/// test's own rows - withhold-never-lose working as designed, against
+/// a transaction the test cannot see.
+pub async fn drain_open_transactions(pool: &PgPool) {
+    for _ in 0..200 {
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database()
+               AND pid != pg_backend_pid()
+               AND xact_start IS NOT NULL",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("failed to count open transactions");
+        if open == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Unwrap a created checkpoint; a no-new-rows outcome is a fixture
+/// bug, not a scenario. One drain-and-retry absorbs the mid-test
+/// straggler (see [`drain_open_transactions`]) that otherwise makes
+/// this the suite's known flake.
+pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
+    for attempt in 0..2 {
+        match morpholog_postgres::create_checkpoint(pool, None, None)
+            .await
+            .unwrap()
+        {
+            morpholog_postgres::CheckpointOutcome::Created(c) => return c,
+            other @ morpholog_postgres::CheckpointOutcome::NoNewRows(_) => {
+                if attempt == 1 {
+                    panic!("expected a created checkpoint, got {other:?}")
+                }
+                drain_open_transactions(pool).await;
+            }
+        }
+    }
+    unreachable!("the loop returns or panics")
+}
+
+/// Round-trip a serialisable value through a JSON edit - the tamper
+/// harness every pack suite uses.
+pub fn edit_json<T: serde::Serialize + serde::de::DeserializeOwned>(
+    value: &T,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> T {
+    let mut v = serde_json::to_value(value).unwrap();
+    edit(&mut v);
+    serde_json::from_value(v).unwrap()
+}
+
+/// The connecting role's name.
+pub async fn session_user(pool: &PgPool) -> String {
+    let (name,): (String,) = sqlx::query_as("SELECT session_user::text")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    name
+}
+
+/// Hand-write one attested audit row inside an open transaction - the
+/// in-flight writer the watermark race tests need. committed_at takes
+/// the schema default: the writer's transaction start.
+pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transition_id: Uuid) {
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation
+         ) VALUES ($1, 'post', '[]'::jsonb,
+                   '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
+                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb)",
+    )
+    .bind(transition_id)
+    .execute(conn)
+    .await
+    .unwrap();
 }

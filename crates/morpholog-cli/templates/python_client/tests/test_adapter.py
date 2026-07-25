@@ -10,7 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _support import GOLDEN_DIR, add_client_to_path, recording_argv
+
+add_client_to_path()
 
 from python_client import envelopes
 from python_client.adapter import Morpholog, MorphologError
@@ -122,14 +124,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # reads, and is absent otherwise - all four cases, since the
         # issue asked for both surfaces.
         self._mode("record_argv")
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            def argv_after(call):
-                call()
-                with open(record.name) as handle:
-                    return handle.read().splitlines()
+        with recording_argv() as argv_after:
 
             argv = argv_after(
                 lambda: self.client.claims_named(
@@ -159,14 +154,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # land on argv exactly when asked for, after the positional
         # file + derived-claim name.
         self._mode("record_argv")
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            def argv_after(call):
-                call()
-                with open(record.name) as handle:
-                    return handle.read().splitlines()
+        with recording_argv() as argv_after:
 
             argv = argv_after(
                 lambda: self.client.derived_named(
@@ -194,16 +182,16 @@ class AdapterDiscrimination(unittest.TestCase):
 
     def test_refresh_derived_parses_the_typed_report(self):
         self._mode("record_argv_stdout")
-        golden_dir = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
-        os.environ["STUB_STDOUT"] = (golden_dir / "refresh_derived_report.json").read_text()
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "refresh_derived_report.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+        with recording_argv() as argv_after:
+            report = None
 
-            report = self.client.refresh_derived()
-            with open(record.name) as handle:
-                argv = handle.read().splitlines()
+            def call():
+                nonlocal report
+                report = self.client.refresh_derived()
+
+            argv = argv_after(call)
 
         self.assertEqual(argv[:3], ["refresh", "derived", "model.morph"])
         self.assertEqual(report.derived_claim_count, 4)
@@ -217,14 +205,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # The four-case matrix for the audit tail: --after and --named
         # each appear exactly when asked for.
         self._mode("record_argv_empty")
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            def argv_after(call):
-                call()
-                with open(record.name) as handle:
-                    return handle.read().splitlines()
+        with recording_argv() as argv_after:
 
             tid = "01900000-0000-7000-8000-000000000001"
             argv = argv_after(lambda: self.client.audit_named(after=tid))
@@ -248,14 +229,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # The managed-Postgres assertion: one --writer-role pair per
         # role, on every watermark consumer, and absent when not asked.
         self._mode("record_argv_empty")
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            def argv_after(call):
-                call()
-                with open(record.name) as handle:
-                    return handle.read().splitlines()
+        with recording_argv() as argv_after:
 
             argv = argv_after(lambda: self.client.audit(writer_roles=["app_rw", "batch_rw"]))
             pairs = [
@@ -273,21 +247,13 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--writer-role", argv)
 
         self._mode("record_argv_stdout")
-        golden_dir = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
-        os.environ["STUB_STDOUT"] = (golden_dir / "checkpoint_created.json").read_text()
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_created.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            self.client.checkpoint(writer_roles=["app_rw"])
-            with open(record.name) as handle:
-                argv = handle.read().splitlines()
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.checkpoint(writer_roles=["app_rw"]))
             self.assertEqual(argv[argv.index("--writer-role") + 1], "app_rw")
 
-            self.client.checkpoint()
-            with open(record.name) as handle:
-                argv = handle.read().splitlines()
+            argv = argv_after(lambda: self.client.checkpoint())
             self.assertNotIn("--writer-role", argv)
 
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
@@ -295,17 +261,9 @@ class AdapterDiscrimination(unittest.TestCase):
         # asked for, so the whole pinned verdict surface (signatures,
         # sealed views) is reachable through the blessed method.
         self._mode("record_argv_stdout")
-        golden_dir = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
-        os.environ["STUB_STDOUT"] = (golden_dir / "verify_report_consistent.json").read_text()
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "verify_report_consistent.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            def argv_after(call):
-                call()
-                with open(record.name) as handle:
-                    return handle.read().splitlines()
+        with recording_argv() as argv_after:
 
             argv = argv_after(
                 lambda: self.client.verify(
@@ -338,7 +296,7 @@ class AdapterDiscrimination(unittest.TestCase):
                     "selective_verification_signature_required.json",
                 ),
             ]:
-                os.environ["STUB_STDOUT"] = (golden_dir / verdict_golden).read_text()
+                os.environ["STUB_STDOUT"] = (GOLDEN_DIR / verdict_golden).read_text()
                 argv = argv_after(
                     lambda m=method: m("pack.json", require_signatures=True)
                 )
@@ -475,14 +433,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # it through only when asked, so each rejected row carries the
         # same-snapshot why.
         self._mode("record_argv_empty")
-        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
-            os.environ["STUB_ARGV_FILE"] = record.name
-            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
-
-            def argv_after(call):
-                call()
-                with open(record.name) as handle:
-                    return handle.read().splitlines()
+        with recording_argv() as argv_after:
 
             rows = [{"transformation": "t", "actor": "a", "args_named": {}}]
             argv = argv_after(

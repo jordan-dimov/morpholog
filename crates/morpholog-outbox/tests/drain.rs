@@ -1,7 +1,7 @@
 //! Integration tests for `process_available_outbox_rows`.
 //!
-//! The drain is the inner action the polling worker (PR 3 commit 2)
-//! invokes on each tick. These tests pin its contract independently
+//! The drain is the inner action the polling worker invokes on
+//! each tick. These tests pin its contract independently
 //! of any scheduling concern:
 //! - empty outbox returns an empty Vec;
 //! - multi-row outbox is drained in one pass;

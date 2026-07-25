@@ -1,6 +1,6 @@
 //! Integration tests for the outbox lease helpers
-//! (`claim_pending_outbox_row`, `release_outbox_claim`) added in
-//! PR 1 of the outbox arc (per `docs/outbox-sketch.md`'s sequencing).
+//! (`claim_pending_outbox_row`, `release_outbox_claim`; doctrine in
+//! `docs/outbox-sketch.md`).
 //!
 //! The state-mutating helpers (`mark_outbox_delivered`,
 //! `mark_outbox_transient_attempt`, `mark_outbox_failed`,

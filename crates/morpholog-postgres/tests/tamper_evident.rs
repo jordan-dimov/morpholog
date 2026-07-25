@@ -7,47 +7,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, CheckpointSigner, PgPool, TreeVerification, create_checkpoint,
+    Checkpoint, CheckpointOutcome, CheckpointSigner, TreeVerification, create_checkpoint,
     generate_signing_key, render_public_key, verify_audit_tree,
 };
 
 const PURPOSE: &str = "audit_checkpoint_v1";
 
 mod common;
-use common::{dec, reset_db, subj, test_pool};
-
-/// Commit one balanced ledger entry so the audit log grows by a row.
-async fn commit_entry(pool: &PgPool, id: &str) {
-    let compiled = common::compiled(double_entry_ledger::program());
-    let t = double_entry_ledger::post_simple_entry();
-    let outcome = common::propose_pg_with_test_actor(
-        pool,
-        &compiled,
-        &t,
-        vec![
-            subj(id),
-            subj("d_2026_05_17"),
-            subj("p1"),
-            subj(&format!("cash_{id}")),
-            subj(&format!("rev_{id}")),
-            dec(100),
-        ],
-    )
-    .await
-    .unwrap();
-    common::expect_committed(outcome);
-}
-
-async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
-    match create_checkpoint(pool, None, None).await.unwrap() {
-        CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint, got {other:?}")
-        }
-    }
-}
+use common::{reset_db, test_pool};
 
 #[tokio::test]
 async fn checkpoint_verifies_then_catches_an_audit_edit() {
@@ -55,9 +23,9 @@ async fn checkpoint_verifies_then_catches_an_audit_edit() {
     reset_db(&pool).await;
 
     for i in 0..3 {
-        commit_entry(&pool, &format!("e{i}")).await;
+        common::commit_entry(&pool, &format!("e{i}")).await;
     }
-    let anchor = make_checkpoint(&pool).await;
+    let anchor = common::make_checkpoint(&pool).await;
     assert_eq!(anchor.tree_size, 3);
     assert!(anchor.root_hash.starts_with("sha256:"));
     assert!(
@@ -97,15 +65,15 @@ async fn checkpoint_chain_extends_and_old_prefix_stays_stable() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    commit_entry(&pool, "a").await;
-    commit_entry(&pool, "b").await;
-    let first = make_checkpoint(&pool).await;
+    common::commit_entry(&pool, "a").await;
+    common::commit_entry(&pool, "b").await;
+    let first = common::make_checkpoint(&pool).await;
     assert_eq!(first.tree_size, 2);
 
     // Appending rows then checkpointing again: the new checkpoint chains
     // off the first, and the first still verifies (its prefix is stable).
-    commit_entry(&pool, "c").await;
-    let second = make_checkpoint(&pool).await;
+    common::commit_entry(&pool, "c").await;
+    let second = common::make_checkpoint(&pool).await;
     assert_eq!(second.tree_size, 3);
     assert_eq!(
         second.prev_checkpoint_hash.as_deref(),
@@ -132,8 +100,8 @@ async fn checkpoint_chain_extends_and_old_prefix_stays_stable() {
 async fn editing_a_checkpoint_row_breaks_the_chain() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "x").await;
-    make_checkpoint(&pool).await;
+    common::commit_entry(&pool, "x").await;
+    common::make_checkpoint(&pool).await;
 
     // Rewrite the stored root without fixing checkpoint_hash: the
     // checkpoint's contents no longer hash to its recorded identity.
@@ -156,10 +124,10 @@ async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..3 {
-        commit_entry(&pool, &format!("h{i}")).await;
+        common::commit_entry(&pool, &format!("h{i}")).await;
     }
     // The operator saved this externally before the tampering.
-    let anchor = make_checkpoint(&pool).await;
+    let anchor = common::make_checkpoint(&pool).await;
 
     // Attacker edits the log AND rebuilds the checkpoint chain to match -
     // the same tree_size, a new self-consistent root.
@@ -171,7 +139,7 @@ async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
         .execute(&pool)
         .await
         .unwrap();
-    let forged = make_checkpoint(&pool).await;
+    let forged = common::make_checkpoint(&pool).await;
     assert_eq!(forged.tree_size, anchor.tree_size);
     assert_ne!(
         forged.root_hash, anchor.root_hash,
@@ -205,7 +173,7 @@ async fn a_signed_checkpoint_verifies_and_a_corrupted_signature_is_caught() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..2 {
-        commit_entry(&pool, &format!("s{i}")).await;
+        common::commit_entry(&pool, &format!("s{i}")).await;
     }
 
     let key = generate_signing_key();
@@ -259,7 +227,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..2 {
-        commit_entry(&pool, &format!("u{i}")).await;
+        common::commit_entry(&pool, &format!("u{i}")).await;
     }
     // Authorise the key before the head exists, so it is in force as of the
     // checkpoint's prefix.
@@ -274,7 +242,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
 
     // An unsigned head, then a sign run with no new rows: the signature is
     // attached to the existing head, not dropped (the operational trap).
-    let unsigned = make_checkpoint(&pool).await;
+    let unsigned = common::make_checkpoint(&pool).await;
     assert!(unsigned.signatures.is_empty());
 
     let signer = CheckpointSigner {
@@ -309,7 +277,7 @@ async fn an_anchor_differing_only_in_signatures_is_not_a_mismatch() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..2 {
-        commit_entry(&pool, &format!("a{i}")).await;
+        common::commit_entry(&pool, &format!("a{i}")).await;
     }
     let key = generate_signing_key();
     common::authorize_signing_key(

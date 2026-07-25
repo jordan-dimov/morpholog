@@ -22,7 +22,7 @@ use crate::validate::ValidatedProgram;
 /// whole `morpholog.claims` table.
 ///
 /// The match below is **exhaustive over `Prop` variants on purpose**
-/// (no `_` arm). If a future PR adds a new `Prop` variant, the
+/// (no `_` arm). If a new `Prop` variant is added, the
 /// compiler will refuse this function until the new variant is
 /// handled. That compile-time check is what keeps the analysis
 /// honest: a missed variant here would silently produce
@@ -33,7 +33,7 @@ use crate::validate::ValidatedProgram;
 /// `In` takes only `Term`s (variables, wildcards, or literals), none of
 /// which can reference a predicate; it contributes nothing. Comparator
 /// operands are value expressions, walked by
-/// [`predicates_referenced_by_value`].
+/// `predicates_referenced_by_value`.
 pub fn predicates_referenced_by_prop(
     prop: &Prop,
     definitions: &[Definition],
@@ -111,7 +111,7 @@ fn prop_refs(
 /// Exhaustive over `ValueExpr` for the same honesty reason as the
 /// proposition walker. `Term` takes only a `Term` and contributes
 /// nothing.
-pub fn predicates_referenced_by_value(
+pub(crate) fn predicates_referenced_by_value(
     expr: &ValueExpr,
     definitions: &[Definition],
     out: &mut BTreeSet<PredicateName>,
@@ -175,61 +175,9 @@ pub fn predicates_referenced_by_derived(
     out
 }
 
-/// Return every predicate name a statement references in its tree.
-/// Symmetric with [`predicates_referenced_by_prop`] but operates at
-/// the statement level. This walker is the **broad** set; it includes
-/// predicates the statement *reads from pre-state* (Require, BindOne,
-/// Let-value, For-collection, Retract pattern) and predicates the
-/// statement *writes* (Assert).
-///
-/// For scoped pre-state loading on the PG adapter's write path, use
-/// [`predicates_read_by_stmt`] instead: it excludes Assert's output
-/// predicate (which doesn't need pre-loading) but keeps Retract
-/// (which pattern-matches against pre-state to find what to retract).
-///
-/// This broad walker stays available for callers that want every
-/// predicate the statement *mentions* in either direction - dependency
-/// tracing, docs generation, future tooling.
-///
-/// The match below is exhaustive over `Stmt` variants on purpose; a
-/// future `Stmt` variant would break compilation here until handled.
-///
-/// `Stmt::Emit` contributes nothing - intents are not part of the
-/// admitted-claim vocabulary.
-///
-/// `Stmt::LetNewSubject` contributes nothing - it mints a fresh
-/// subject identifier without consulting state.
-pub fn predicates_referenced_by_stmt(
-    stmt: &Stmt,
-    definitions: &[Definition],
-    out: &mut BTreeSet<PredicateName>,
-) {
-    match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, definitions, out),
-        Stmt::Let { value, .. } => predicates_referenced_by_value(value, definitions, out),
-        Stmt::LetNewSubject { .. } => {}
-        Stmt::Assert(c) => {
-            out.insert(c.predicate.clone());
-        }
-        Stmt::Retract { predicate, .. } => {
-            out.insert(predicate.clone());
-        }
-        Stmt::For {
-            collection, body, ..
-        } => {
-            predicates_referenced_by_value(collection, definitions, out);
-            for inner in body {
-                predicates_referenced_by_stmt(inner, definitions, out);
-            }
-        }
-        Stmt::Emit(_) => {}
-    }
-}
-
 /// Return every predicate name a statement **reads from pre-state**.
-/// Distinguished from [`predicates_referenced_by_stmt`] by excluding
-/// `Stmt::Assert`'s output predicate, which is *written* to the
-/// staged outcome and never read from pre-state.
+/// `Stmt::Assert`'s output predicate is excluded: it is *written* to
+/// the staged outcome and never read from pre-state.
 ///
 /// This is the analysis the PG adapter's `propose_against_pg` and
 /// `propose_against_pg_with_trace` use to scope `load_state`: only
@@ -249,9 +197,8 @@ pub fn predicates_referenced_by_stmt(
 /// - `Emit` / `LetNewSubject` - contribute nothing.
 /// - `For` body - recurses (the body's own reads count).
 ///
-/// Exhaustive match for the same reason as
-/// `predicates_referenced_by_stmt`: a future `Stmt` variant must
-/// declare its read behaviour explicitly.
+/// Exhaustive match: a future `Stmt` variant must declare its read
+/// behaviour explicitly.
 pub fn predicates_read_by_stmt(
     stmt: &Stmt,
     definitions: &[Definition],
@@ -412,19 +359,10 @@ fn undeclared_blockers_inner(
                 Some(BTreeSet::from([predicate.clone()]))
             }
         }
-        Prop::Defined { name, .. } => {
-            // Recursion-stack guard; a call blocks iff its body does.
-            if seen.insert(name.clone()) {
-                let blockers = match definitions.get(name) {
-                    Some(def) => undeclared_blockers_inner(&def.body, declared, definitions, seen),
-                    None => None,
-                };
-                seen.remove(name);
-                blockers
-            } else {
-                None
-            }
-        }
+        // A call blocks iff its body does.
+        Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
+            undeclared_blockers_inner(body, declared, definitions, seen)
+        }),
         // A conjunction is blocked if any conjunct is; only the blocked
         // conjuncts are the cause.
         Prop::And(props) => {
@@ -612,14 +550,9 @@ fn gather_selection_evidence<'a>(
             }
         }
         Prop::Pre(body) => gather_selection_evidence(body, definitions, seen, ev, out),
-        Prop::Defined { name, .. } => {
-            if seen.insert(name.clone()) {
-                if let Some(def) = definitions.get(name) {
-                    gather_selection_evidence(&def.body, definitions, seen, ev, out);
-                }
-                seen.remove(name);
-            }
-        }
+        Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
+            gather_selection_evidence(body, definitions, seen, ev, out);
+        }),
         Prop::Not(inner) => {
             if let Prop::Exists { binding, body } = inner.as_ref() {
                 let mut inner_ev = SelectionEvidence::default();
@@ -679,14 +612,9 @@ fn collect_strict_temporal<'a>(
                 }
             }
             Prop::Pre(body) => walk(body, definitions, seen, out),
-            Prop::Defined { name, .. } => {
-                if seen.insert(name.clone()) {
-                    if let Some(def) = definitions.get(name) {
-                        walk(&def.body, definitions, seen, out);
-                    }
-                    seen.remove(name);
-                }
-            }
+            Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
+                walk(body, definitions, seen, out);
+            }),
             Prop::Claim { .. }
             | Prop::Not(_)
             | Prop::Or(_)
@@ -734,16 +662,7 @@ pub(crate) fn guaranteed_dated_witnesses(
                 .collect(),
             Prop::Forall { body, .. } => top(body, definitions, seen),
             Prop::Defined { name, .. } => {
-                if seen.insert(name.clone()) {
-                    let found = match definitions.get(name) {
-                        Some(def) => top(&def.body, definitions, seen),
-                        None => BTreeSet::new(),
-                    };
-                    seen.remove(name);
-                    found
-                } else {
-                    BTreeSet::new()
-                }
+                definitions.enter(name, seen, |body, seen| top(body, definitions, seen))
             }
             Prop::Claim { .. }
             | Prop::Or(_)
@@ -796,16 +715,7 @@ pub(crate) fn guaranteed_dated_witnesses(
                     .collect()
             }
             Prop::Defined { name, .. } => {
-                if seen.insert(name.clone()) {
-                    let found = match definitions.get(name) {
-                        Some(def) => algebra(&def.body, definitions, seen),
-                        None => BTreeSet::new(),
-                    };
-                    seen.remove(name);
-                    found
-                } else {
-                    BTreeSet::new()
-                }
+                definitions.enter(name, seen, |body, seen| algebra(body, definitions, seen))
             }
             Prop::Claim { .. }
             | Prop::Not(_)

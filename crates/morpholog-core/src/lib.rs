@@ -49,8 +49,7 @@ mod validate;
 
 pub use analysis::{
     AnalysisError, ParamKind, predicates_read_by_stmt, predicates_referenced_by_derived,
-    predicates_referenced_by_prop, predicates_referenced_by_stmt, predicates_referenced_by_value,
-    transformation_param_kinds, transformations_asserting,
+    predicates_referenced_by_prop, transformation_param_kinds, transformations_asserting,
 };
 pub use compiled::CompiledProgram;
 pub use controls::{
@@ -100,9 +99,8 @@ mod tests {
     use super::*;
     use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
 
-    // The eight comparator variants were collapsed into one
-    // `Prop::Compare { op, domain }`. These boxed-operand builders keep the
-    // test call sites as terse as the old tuple variants were. Operands
+    // Boxed-operand builders keep comparator-heavy test call
+    // sites terse. Operands
     // are value expressions; the comparison itself is a proposition.
     fn le_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
         Prop::Compare {
@@ -471,7 +469,7 @@ mod tests {
         };
 
         let mut got = BTreeSet::new();
-        predicates_referenced_by_value(&expr, &[], &mut got);
+        analysis::predicates_referenced_by_value(&expr, &[], &mut got);
 
         let expected: BTreeSet<PredicateName> =
             ["P_sum_body", "P_valueof_self", "P_valueof_default"]
@@ -518,15 +516,6 @@ mod tests {
         assert_eq!(
             got, expected,
             "read-set must include every pre-state read and exclude Stmt::Assert's output"
-        );
-        // Sanity: the broad walker DOES include P_assert.
-        let mut broad = BTreeSet::new();
-        for stmt in &body {
-            predicates_referenced_by_stmt(stmt, &[], &mut broad);
-        }
-        assert!(
-            broad.contains(&PredicateName::from("P_assert")),
-            "broad walker must include Assert; got: {broad:?}"
         );
     }
 

@@ -164,34 +164,14 @@ invariant decisions_need_live_mandate:
 // append-only - continuous compliance is its intent.)
 #[test]
 fn every_worked_example_is_lint_clean() {
-    for (name, program) in tests_common_all_programs() {
+    for program in morpholog_examples::all_programs() {
         let found = lints(&compiled(&program));
-        assert!(found.is_empty(), "{name} should be lint-clean: {found:?}");
+        assert!(
+            found.is_empty(),
+            "{} should be lint-clean: {found:?}",
+            program.name
+        );
     }
-}
-
-/// Parse every example .morph the same way the cross-example property
-/// tests do, without depending on their private helper.
-fn tests_common_all_programs() -> Vec<(String, morpholog_core::Program)> {
-    let examples_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(examples_dir).expect("examples dir") {
-        let dir = entry.expect("dir entry").path();
-        if !dir.is_dir() {
-            continue;
-        }
-        for file in std::fs::read_dir(&dir).expect("example dir") {
-            let path = file.expect("file entry").path();
-            if path.extension().is_some_and(|e| e == "morph") {
-                let source = std::fs::read_to_string(&path).expect("readable .morph");
-                let program = parse_program(&source)
-                    .unwrap_or_else(|e| panic!("{} should parse: {e:?}", path.display()));
-                out.push((path.display().to_string(), program));
-            }
-        }
-    }
-    assert!(!out.is_empty(), "found no example programmes");
-    out
 }
 
 // The implication itself can hide behind a named condition too: the

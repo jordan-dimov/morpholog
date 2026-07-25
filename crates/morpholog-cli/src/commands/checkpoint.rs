@@ -31,8 +31,7 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     };
 
     let pool = connect(&args.db.database_url).await?;
-    let writers = (!args.writer_role.is_empty()).then_some(args.writer_role.as_slice());
-    let outcome = create_checkpoint(&pool, signer.as_ref(), writers)
+    let outcome = create_checkpoint(&pool, signer.as_ref(), args.writers.as_writers())
         .await
         .context("create_checkpoint failed")?;
     print_json(&outcome)?;
