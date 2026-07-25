@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Callable, TypeVar
 
 from . import values
 
@@ -40,14 +41,19 @@ def _strict(name: str, payload: object, required: set, optional: set = frozenset
     return payload
 
 
-def _by_status(payload: object, label: str, mapping: dict) -> object:
+_T = TypeVar("_T")
+
+
+def _by_status(payload: object, label: str, mapping: "dict[str, Callable[[object], _T]]") -> _T:
     """Dispatch a status-discriminated union to its model. An unknown
-    or missing discriminator is drift, refused with the union named."""
+    or missing discriminator is drift, refused with the union named.
+    Generic so each parser keeps its advertised return type under a
+    static checker."""
     status = payload.get("status") if isinstance(payload, dict) else None
-    cls = mapping.get(status)
-    if cls is None:
+    parse = mapping.get(status) if isinstance(status, str) else None
+    if parse is None:
         raise EnvelopeError(f"not {label}: {payload!r}")
-    return cls.from_json(payload)
+    return parse(payload)
 
 
 def _optional_timestamp(text: object) -> datetime | None:
@@ -159,10 +165,10 @@ def parse_run_outcome(payload: object) -> "Committed | Rejected":
         payload,
         "a propose outcome",
         {
-            "committed": Committed,
-            "rejected": Rejected,
+            "committed": Committed.from_json,
+            "rejected": Rejected.from_json,
         },
-    )
+        )
 
 
 @dataclass(frozen=True)
@@ -836,10 +842,10 @@ def parse_verify_outcome(payload: object) -> "ReplayConsistent | ReplayDivergent
         payload,
         "a replay verdict",
         {
-            "consistent": ReplayConsistent,
-            "divergent": ReplayDivergent,
+            "consistent": ReplayConsistent.from_json,
+            "divergent": ReplayDivergent.from_json,
         },
-    )
+        )
 
 
 @dataclass(frozen=True)
@@ -997,16 +1003,16 @@ def parse_tree_verification(payload: object) -> TreeVerification:
         payload,
         "a tree verdict",
         {
-            "intact": TreeIntact,
-            "tampered": TreeTampered,
-            "chain_broken": TreeChainBroken,
-            "anchor_mismatch": TreeAnchorMismatch,
-            "malformed_pack": TreeMalformedPack,
-            "signature_invalid": TreeSignatureInvalid,
-            "unauthorized_key": TreeUnauthorizedKey,
-            "signature_required": TreeSignatureRequired,
+            "intact": TreeIntact.from_json,
+            "tampered": TreeTampered.from_json,
+            "chain_broken": TreeChainBroken.from_json,
+            "anchor_mismatch": TreeAnchorMismatch.from_json,
+            "malformed_pack": TreeMalformedPack.from_json,
+            "signature_invalid": TreeSignatureInvalid.from_json,
+            "unauthorized_key": TreeUnauthorizedKey.from_json,
+            "signature_required": TreeSignatureRequired.from_json,
         },
-    )
+        )
 
 
 @dataclass(frozen=True)
@@ -1056,11 +1062,11 @@ def parse_views_verification(payload: object) -> ViewsVerification:
         payload,
         "a views verdict",
         {
-            "intact": ViewsIntact,
-            "tampered": ViewsTampered,
-            "not_sealed": ViewsNotSealed,
+            "intact": ViewsIntact.from_json,
+            "tampered": ViewsTampered.from_json,
+            "not_sealed": ViewsNotSealed.from_json,
         },
-    )
+        )
 
 
 @dataclass(frozen=True)
@@ -1190,10 +1196,10 @@ def parse_checkpoint_outcome(payload: object) -> "CheckpointCreated | Checkpoint
         payload,
         "a checkpoint outcome",
         {
-            "created": CheckpointCreated,
-            "no_new_rows": CheckpointNoNewRows,
+            "created": CheckpointCreated.from_json,
+            "no_new_rows": CheckpointNoNewRows.from_json,
         },
-    )
+        )
 
 
 @dataclass(frozen=True)
@@ -1474,15 +1480,15 @@ def parse_window_verification(payload: object) -> WindowVerification:
         payload,
         "a window verdict",
         {
-            "intact": WindowIntact,
-            "inconsistent_extension": WindowInconsistentExtension,
-            "row_not_included": WindowRowNotIncluded,
-            "anchor_mismatch": WindowAnchorMismatch,
-            "signature_invalid": WindowSignatureInvalid,
-            "signature_required": WindowSignatureRequired,
-            "malformed": WindowMalformed,
+            "intact": WindowIntact.from_json,
+            "inconsistent_extension": WindowInconsistentExtension.from_json,
+            "row_not_included": WindowRowNotIncluded.from_json,
+            "anchor_mismatch": WindowAnchorMismatch.from_json,
+            "signature_invalid": WindowSignatureInvalid.from_json,
+            "signature_required": WindowSignatureRequired.from_json,
+            "malformed": WindowMalformed.from_json,
         },
-    )
+        )
 
 
 @dataclass(frozen=True)
@@ -1656,11 +1662,11 @@ def parse_selective_verification(payload: object) -> SelectiveVerification:
         payload,
         "a selective verdict",
         {
-            "intact": SelectiveIntact,
-            "row_not_included": SelectiveRowNotIncluded,
-            "anchor_mismatch": SelectiveAnchorMismatch,
-            "signature_invalid": SelectiveSignatureInvalid,
-            "signature_required": SelectiveSignatureRequired,
-            "malformed": SelectiveMalformed,
+            "intact": SelectiveIntact.from_json,
+            "row_not_included": SelectiveRowNotIncluded.from_json,
+            "anchor_mismatch": SelectiveAnchorMismatch.from_json,
+            "signature_invalid": SelectiveSignatureInvalid.from_json,
+            "signature_required": SelectiveSignatureRequired.from_json,
+            "malformed": SelectiveMalformed.from_json,
         },
-    )
+        )

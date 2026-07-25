@@ -41,21 +41,7 @@ pub async fn test_pool() -> PgPool {
 /// the test cannot see). Bounded, then proceeds - a wait this long means
 /// something is genuinely stuck and the test should fail visibly.
 pub async fn reset_db(pool: &PgPool) {
-    for _ in 0..200 {
-        let open: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity
-             WHERE datname = current_database()
-               AND pid != pg_backend_pid()
-               AND xact_start IS NOT NULL",
-        )
-        .fetch_one(pool)
-        .await
-        .expect("failed to count open transactions");
-        if open == 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    drain_open_transactions(pool).await;
     sqlx::query(morpholog_postgres::testing::RESET_SQL)
         .execute(pool)
         .await
@@ -215,18 +201,49 @@ pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
     expect_committed(outcome)
 }
 
-/// Unwrap a created checkpoint; a no-new-rows outcome is a fixture
-/// bug, not a scenario.
-pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
-    match morpholog_postgres::create_checkpoint(pool, None, None)
+/// Wait (bounded) for other sessions' open transactions to end: a
+/// straggler from a prior test's pool lowers the audit watermark, so
+/// a checkpoint or tail taken now can otherwise cover none of this
+/// test's own rows - withhold-never-lose working as designed, against
+/// a transaction the test cannot see.
+pub async fn drain_open_transactions(pool: &PgPool) {
+    for _ in 0..200 {
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database()
+               AND pid != pg_backend_pid()
+               AND xact_start IS NOT NULL",
+        )
+        .fetch_one(pool)
         .await
-        .unwrap()
-    {
-        morpholog_postgres::CheckpointOutcome::Created(c) => c,
-        other @ morpholog_postgres::CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint, got {other:?}")
+        .expect("failed to count open transactions");
+        if open == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Unwrap a created checkpoint; a no-new-rows outcome is a fixture
+/// bug, not a scenario. One drain-and-retry absorbs the mid-test
+/// straggler (see [`drain_open_transactions`]) that otherwise makes
+/// this the suite's known flake.
+pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
+    for attempt in 0..2 {
+        match morpholog_postgres::create_checkpoint(pool, None, None)
+            .await
+            .unwrap()
+        {
+            morpholog_postgres::CheckpointOutcome::Created(c) => return c,
+            other @ morpholog_postgres::CheckpointOutcome::NoNewRows(_) => {
+                if attempt == 1 {
+                    panic!("expected a created checkpoint, got {other:?}")
+                }
+                drain_open_transactions(pool).await;
+            }
         }
     }
+    unreachable!("the loop returns or panics")
 }
 
 /// Round-trip a serialisable value through a JSON edit - the tamper

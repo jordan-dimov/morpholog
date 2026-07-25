@@ -17,13 +17,26 @@ pub fn repo_root() -> PathBuf {
         .expect("repo root resolves")
 }
 
-/// Write `content` to a fresh temp `.morph` and return its path (kept
-/// alive by leaking the TempDir - test-lifetime is process-lifetime).
-pub fn write_fixture(name: &str, content: &str) -> PathBuf {
-    let dir = Box::leak(Box::new(tempfile::tempdir().expect("tempdir")));
+/// A temp `.morph` fixture that owns its directory: the file lives
+/// exactly as long as the binding, nothing leaks.
+pub struct Fixture {
+    pub path: PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Fixture {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+/// Write `content` to a fresh temp `.morph`.
+pub fn write_fixture(name: &str, content: &str) -> Fixture {
+    let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(format!("{name}.morph"));
     std::fs::write(&path, content).expect("write fixture");
-    path
+    Fixture { path, _dir: dir }
 }
 
 /// The connecting role's name, via a throwaway pool.

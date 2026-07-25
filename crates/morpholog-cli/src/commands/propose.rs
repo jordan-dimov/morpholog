@@ -93,10 +93,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             }
             PgTracedOutcome::KernelErrored { error, trace } => {
                 print_json(&envelopes::Traced {
-                    result: envelopes::TracedError {
-                        error: format!("{error}"),
-                        status: "errored",
-                    },
+                    result: envelopes::TracedError::new(format!("{error}")),
                     trace: &trace,
                 })?;
                 std::process::exit(1);
@@ -121,11 +118,10 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         match (&outcome, rejection_state) {
             (PgProposalOutcome::Rejected { reason }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
-                print_json(&envelopes::RejectedWithExplanation {
-                    explanation,
+                print_json(&envelopes::RejectedWithExplanation::new(
                     reason,
-                    status: "rejected",
-                })?;
+                    explanation,
+                ))?;
                 exit_rejected(reason, &parsed);
             }
             _ => print_json(&outcome)?,
@@ -340,11 +336,10 @@ async fn batch_row_outcome(
         .map_err(classify_pg_error)?;
         if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
             let explanation = explain(compiled.program(), &transition, &state);
-            return serde_json::to_value(envelopes::RejectedWithExplanation {
-                explanation,
+            return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,
-                status: "rejected",
-            })
+                explanation,
+            ))
             .context("serialising the receipt")
             .map_err(BatchRowError::Operational);
         }

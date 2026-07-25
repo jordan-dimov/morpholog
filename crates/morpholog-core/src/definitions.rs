@@ -6,6 +6,12 @@
 //! call resolves it here, so there is exactly one notion of "what does
 //! this call expand to" - the evaluator, the failure walk, the static
 //! checks, and the analysis walkers cannot drift apart on it.
+//!
+//! One deliberate exception: the sum-seed walker (`sums.rs`) resolves
+//! calls itself - it needs the definition's parameters (to map call
+//! arguments) and uses a depth budget with a decimal-seed fallback
+//! rather than the stack guard, semantics the shared `enter` does not
+//! carry.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -147,7 +153,11 @@ impl<'a> DefinitionIndex<'a> {
     /// name is already on the stack (a cycle) or undeclared;
     /// otherwise pushes, runs, pops. A stack guard, not a visited
     /// set - a polarity-sensitive walker must re-expand a definition
-    /// reached again once it is off the stack.
+    /// reached again once it is off the stack. `Default` for both
+    /// refusals is the shared policy on purpose: validation already
+    /// guarantees every call resolves, so the undeclared arm is
+    /// unreachable on a compiled programme, and every walker treats
+    /// a cycle as contributing nothing.
     pub(crate) fn enter<T: Default>(
         &self,
         name: &DefinitionName,

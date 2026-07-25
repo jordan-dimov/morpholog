@@ -321,11 +321,10 @@ fn composite_envelopes_serialize_as_pinned() {
     let explanation = explain(&p, &transition("open_account"), &flagged_state());
     assert_golden(
         "rejected_with_explanation.json",
-        &to_value(&morpholog_cli::envelopes::RejectedWithExplanation {
+        &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(
+            "invariant `no_flagged_accounts` violated",
             explanation,
-            reason: "invariant `no_flagged_accounts` violated",
-            status: "rejected",
-        }),
+        )),
     );
     assert_golden(
         "traced_committed.json",
@@ -337,10 +336,7 @@ fn composite_envelopes_serialize_as_pinned() {
     assert_golden(
         "traced_errored.json",
         &to_value(&morpholog_cli::envelopes::Traced {
-            result: morpholog_cli::envelopes::TracedError {
-                error: "bind matched 2 claims".to_string(),
-                status: "errored",
-            },
+            result: morpholog_cli::envelopes::TracedError::new("bind matched 2 claims".to_string()),
             trace: [0u8; 0],
         }),
     );

@@ -294,10 +294,20 @@ fn check_all_worked_examples_are_well_formed() {
     // discovered by walking examples/, so a new example is covered the
     // day it lands (a hardcoded list here once silently stopped at 12).
     let mut checked = 0usize;
+    let mut example_dirs = 0usize;
     for entry in std::fs::read_dir(repo_root().join("examples")).expect("examples dir") {
         let dir = entry.expect("dir entry").path();
         if !dir.is_dir() {
             continue;
+        }
+        // Only the numbered gallery dirs are examples with a .morph;
+        // the worked embedder's dir carries a Python package instead.
+        if dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(|c: char| c.is_ascii_digit()))
+        {
+            example_dirs += 1;
         }
         for file in std::fs::read_dir(&dir).expect("example dir") {
             let path = file.expect("file entry").path();
@@ -317,7 +327,10 @@ fn check_all_worked_examples_are_well_formed() {
             }
         }
     }
-    assert!(checked >= 12, "the walk found only {checked} examples");
+    assert!(
+        checked >= example_dirs && example_dirs > 0,
+        "every example dir carries a checked .morph ({checked} checked, {example_dirs} dirs)"
+    );
 }
 
 const LINT_TRIP: &str = r#"

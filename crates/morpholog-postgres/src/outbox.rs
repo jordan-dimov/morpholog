@@ -67,7 +67,25 @@ pub enum OutboxUpdate {
 ///
 /// For other statuses or intent-type filtering, use [`list_outbox_rows`].
 pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
-    list_outbox_rows(pool, Some("pending"), None).await
+    // Deliberately its own query, not a delegation to the nullable
+    // filter: the literal predicate is what lets the planner prove the
+    // partial `outbox_pending (enqueued_at) WHERE status = 'pending'`
+    // index applies. Dedup semantic policy, not SQL shapes that cross
+    // an indexing boundary.
+    let rows = sqlx::query_as!(
+        OutboxRowRaw,
+        "SELECT intent_id, transition_id, intent_type, arguments,
+                idempotency_key, status, attempt_count, enqueued_at,
+                last_attempt_at, delivered_at, failed_at, failure_reason,
+                next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
+         FROM morpholog.outbox
+         WHERE status = 'pending'
+         ORDER BY enqueued_at, intent_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+    rows.into_iter().map(decode_outbox_row).collect()
 }
 /// Return outbox rows filtered by status and/or intent type. Both
 /// filters are optional: `None` drops that predicate entirely (any
@@ -81,9 +99,10 @@ pub async fn list_outbox_rows(
     status_filter: Option<&str>,
     intent_type_filter: Option<&str>,
 ) -> Result<Vec<OutboxRow>, PgError> {
-    // One statement for every filter shape: a NULL parameter drops its
-    // predicate. An inspection surface over an unindexed scan either
-    // way, so the IS NULL guards cost nothing that matters.
+    // One statement for every INSPECTION filter shape: a NULL
+    // parameter drops its predicate. This surface scans; the
+    // pending-specific read above keeps its literal predicate for the
+    // partial index.
     let rows = sqlx::query_as!(
         OutboxRowRaw,
         r#"SELECT intent_id, transition_id, intent_type, arguments,
