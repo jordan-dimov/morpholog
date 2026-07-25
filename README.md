@@ -1,47 +1,28 @@
 # Morpholog
 
-Morpholog is a language and runtime for the records a business must be able to defend - the ones where legitimacy has to be provable, not just stored.
+Morpholog is a language and runtime for the records a business must be able to defend: the books, the approvals, the trades, the filings. You write the rules those records must obey. From then on, no change that breaks a rule can be committed - by anyone, or anything - and every change that does commit carries proof of why it was allowed.
 
-Most software assumes its records are legitimate. Morpholog enforces it. You write the rules your records must obey as **invariants**. The only way state changes is a **transformation**, and it commits only if every invariant still holds. Invalid business state is not caught later or flagged for review - it is impossible to commit, and there is no way around the gate: no bypass flag, no skip-validation switch. An exception is itself a typed, audited claim, never a back door. And every committed change leaves an audit trail that proves why it was allowed.
+That flips the usual burden. When someone asks *"how do you know this number is right?"*, the answer is no longer an investigation. It is: **the system could not have admitted it otherwise** - and here is the audit trail that proves it.
 
-Underneath, Morpholog treats records as **admitted claims**, not freestanding facts: statements admitted under specific authority, at a specific moment. The same figure can carry different *standing* for different decisions - whether it may be relied on, and for what - granted and revoked by different authorities. A correction supersedes; it never erases: the original stays in the books, the corrected figure becomes current. **A decision made under valid standing remains a valid record even when that standing is later revoked** - its legitimacy was settled when it was made. And the audit log carries enough provenance to reconstruct any past moment, with no bitemporal columns and no shadow tables.
-
-That reconstruction is exact, not best-effort: the evaluator reads only admitted claims - never the clock, the network, or any outside function - so the past recomputes to precisely what was decided then. An exchange rate, a time zone - anything the outside world determines - enters as a dated claim, not a runtime lookup, which is what keeps the past from shifting under you.
-
-None of these ideas is new. Rules as admission law, authority you can grant and revoke, history that supersedes instead of erasing, audit that proves instead of asserts - each has decades of theory behind it. What did not exist is all of them as **one small runtime on plain PostgreSQL**, enforcing legitimacy at the moment of commit. That synthesis is Morpholog.
-
-The point is to make *"how do you know?"* answerable by *"because the system could not have admitted it otherwise."*
-
-That gate is the whole bet, and it gets more valuable, not less, as more of what decides the next step is software you did not write and cannot audit line by line. Whatever decides what to do next - a person, an optimiser, an AI model, an autonomous agent - only ever *proposes* a change; the runtime admits it or refuses. The thing making the decision does not have to be trusted, because legitimacy is enforced outside it, never asked of it. And when the runtime refuses, it says why: a structured, reproducible account of the gate or rule that failed and the evidence that is missing, built from your own predicate names, never free text. That closes a **propose, refuse, repair** loop: a solver or a model proposes, reads the refusal, repairs its candidate, and proposes again - and whatever finally commits did so by satisfying the same rules a human change would have to. **You can put untrusted intelligence to work on the records that matter, safely - because the rules, not the proposer, decide what becomes real.**
-
-## The questions you can answer
+## The questions this makes answerable
 
 - *Why does this report differ from the one we filed last quarter?*
 - *Who admitted this entry, and under what authority?*
 - *If that authority was rescinded yesterday, was yesterday's decision still valid?*
-- *What did the books say on the last day of Q1, under the close rules in force then?*
-- *Did this trade conform to our exposure limits when it was booked? Not now - then?*
+- *What did the books say on the last day of Q1, under the rules in force then?*
+- *Did this trade conform to our exposure limits when it was booked - not now, then?*
 - *On what basis did the AI system identify this person, who verified it, and were they authorised that day?*
 
-The worked examples below answer concrete instances of these against a real PostgreSQL database, through a small CLI.
-
-## What you get for writing your rules this way
-
-- **The same record can carry different standing for different decisions** - granted and revoked by different authorities, without modifying the underlying record. The shape regulated lending and statutory reporting need.
-- **Correction without overwriting.** Originals stay admitted; a new transformation asserts the correction and records the lineage. An auditor three quarters later sees the original, the corrected figure, and the moment one became the other.
-- **A complete audit of every change** - the transformation, the actor, the arguments, the asserted and retracted records, the emitted notifications, and the rules that governed admission.
-- **Atomic commit or full rollback.** A change either lands every part of itself - records, audit row, outbound notifications - or none of them. PostgreSQL's `SERIALIZABLE` isolation does the work.
-- **Reports computed by the same rules they're governed by.** A trial balance, an exposure summary - declared alongside the rules, computed by the same kernel. A report cannot show a record an invariant would have refused.
-- **Notifications that respect the commit boundary.** Outbound side effects stage at commit and deliver afterward through a worker - never inside the transaction, never if the commit rolled back.
-- **Exact numbers, exact time, honest units.** Arbitrary-precision decimals with no floating-point drift; instants and durations that shift, difference, and sum exactly; amounts that know their unit (`Decimal[USD]`, `Decimal[t]`), so money never meets tonnes by accident.
+Each is a concrete question the worked examples below answer against a real PostgreSQL database, through a small CLI.
 
 ## How it works
 
-Two first-class constructs. Everything else is built from these.
+There are two constructs, and everything else is built from them:
 
-An **invariant** says what must always be true of admitted records. A **transformation** is the only path that gets to change them. It proposes additions, removals, and outbound notifications; the runtime checks every active invariant against the proposed result; if anything fails, nothing happens.
+- An **invariant** is a rule that must always hold across the records.
+- A **transformation** is the only way records change. It proposes additions, removals, and outbound notifications; the runtime checks every invariant against the proposed result; if any rule would break, nothing happens.
 
-A fragment of the double-entry ledger, in `.morph` source:
+A fragment of a double-entry ledger:
 
 ```morph
 program double_entry_ledger
@@ -61,13 +42,34 @@ transformation post_simple_entry(entry_id, posting_date, period, debit_account, 
     emit JournalEntryPosted(entry_id)
 ```
 
-The invariant says debits and credits must balance for every posted entry. The transformation is the only way a journal entry can enter the books, and only when the period is open and the result balances. If the math is off by a penny, the commit is rejected atomically and the database looks exactly as it did before the attempt.
+Read it as plain statements: every entry's debits must equal its credits. Posting is the only way an entry gets into the books, and only while the period is open. An entry that is off by a penny is refused - atomically, with the rule named - and the database looks exactly as it did before the attempt.
 
-## Behaviour you can't drift from
+There is no way around the check. No bypass flag, no skip-validation switch, no admin path. If the business genuinely needs an exception, the exception is itself a rule-governed, audited record - never a back door.
 
-Behaviour-driven development asks you to write the behaviour first - *given* this state, *when* someone does that, *then* this must hold - and to keep the system honest against it. The catch is that the scenarios and the code are separate artifacts, so they drift.
+One word to know before reading further: Morpholog's own term for a record is a **claim** - a statement admitted under someone's authority at a specific moment, not a neutral fact. That framing is why corrections supersede rather than overwrite, and it is the word the examples and docs use.
 
-In Morpholog the behaviour *is* the system. An invariant and a transformation's gates are the *given / when / then*, enforced on every change, whoever or whatever proposed it. **Morpholog delivers what BDD promises - an executable behavioural specification that cannot drift from the system - without the ceremony.** `morpholog explain` turns a rejected proposal into the failing-scenario report; `morpholog inspect guarantees` lists what the rules make impossible before anything runs.
+## What every commit gives you
+
+- **A full audit record** - the transformation, who proposed it, the arguments, what was added and removed, and the rules that were checked.
+- **Correction without overwriting.** A correction admits the new figure and records what it supersedes; the original stays in the books. An auditor sees the original, the correction, and the moment one became the other.
+- **Exact time travel.** Ask for any report as of any past moment and get precisely what the system knew then. Rules never read the clock or the network - anything the outside world determines, like a rate or a calendar, enters as a dated record - so the past cannot shift under you. No bitemporal columns, no shadow tables.
+- **Standing, separate from the record.** Whether a figure may be *relied on* - and for what - is itself a record, granted and revoked by named authorities. A decision made while its basis was valid remains a valid record after that basis is revoked: its legitimacy was settled when it was made.
+- **Exact arithmetic.** Decimals with no floating-point drift; instants and durations that compute exactly; amounts that know their unit, so dollars never meet tonnes by accident.
+- **Side effects that respect the commit.** Outbound notifications stage with the commit and deliver after it, through a worker - never from inside the transaction, never if the commit rolled back.
+
+## How this differs from what you already have
+
+- **A database with constraints.** A `CHECK` constraint validates one row and fails with a constraint name. Morpholog checks every business rule against the whole proposed next state - including rules that span many records - refuses with an explanation in your own vocabulary, and keeps the full history of what was admitted, by whom, and why.
+- **A policy engine** (OPA, Cedar). A policy engine answers "may this happen?" but owns no records: no commit, no audit trail, no history to replay. Morpholog's rules gate the actual state change and leave the proof behind.
+- **An immutable or bitemporal database** (Datomic, XTDB). These remember everything but enforce nothing: nothing stops an invalid record entering the history, and a refusal is not a concept. Morpholog keeps the history *and* makes invalid records uncommittable.
+- **A BDD test suite** (Cucumber). Given/when/then scenarios live beside the code and drift from it. In Morpholog the behavioural spec *is* the enforcement: the given/when/then runs on every real change, whoever proposed it, and cannot drift.
+- **A workflow engine.** Workflows order the steps; they do not make an invalid outcome impossible. Morpholog does not care what order things happened in - only that no rule is broken by the result.
+
+None of the underlying ideas is new - each has decades of theory behind it. What did not exist is all of them in one small runtime on plain PostgreSQL, enforcing at the one line that matters: the moment something becomes a record. [`docs/prior-art.md`](docs/prior-art.md) has the longer comparison.
+
+## Anything can propose; only the rules admit
+
+More and more of what writes to business records is software you did not write and cannot audit line by line - optimisers, ML models, autonomous agents. Morpholog is built for exactly that. Nothing writes directly: a person, a script, or a model only ever *proposes* a change, and the runtime admits or refuses it. A refusal is not an error code - it is a structured, reproducible account of which rule failed and what evidence is missing, built from your own rule names, never free text. A machine can read the refusal, repair its proposal, and try again: **propose, refuse, repair**. Whatever finally commits satisfied the same rules a human change would have to. You do not have to trust the proposer, because the rules - not the proposer - decide what becomes real.
 
 ## A sixty-second tour
 
@@ -79,9 +81,6 @@ export DATABASE_URL=postgres:///my_books
 morpholog init
 ```
 
-`init` provisions Morpholog's schema from a copy embedded in the binary - a
-deployment carries exactly the schema its build expects, nothing to vendor.
-
 Post a journal entry - debit $100 to cash, credit $100 to revenue:
 
 ```bash
@@ -91,18 +90,14 @@ morpholog propose examples/03_double_entry_ledger/ledger.morph post_simple_entry
                  "debit_account":"account_cash","credit_account":"account_revenue","amount":"100"}'
 ```
 
-The receipt carries the transition id, the actor, the asserted claims, and the emitted intents. `--actor` records under whose authority the transition was proposed; the audit row carries it for the next three years.
-
-Now the trial balance, then the trial balance *as it stood right after the first transition*:
+The receipt carries the transition id, the actor, the admitted records, and the emitted notifications. Now the trial balance - and the trial balance *as it stood right after that first transition*:
 
 ```bash
 morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow
 morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow --as-of <transition_id>
 ```
 
-The report is exactly what an auditor would have seen at that moment - recomputed from the audit log, no bitemporal columns anywhere in your schema. (`--as-of` also accepts an RFC 3339 timestamp.)
-
-And an unbalanced entry is refused atomically, with the rule named - and its exact line in your source pointed at on stderr:
+The second answer is exactly what an auditor would have seen at that moment, recomputed from the audit log. And an unbalanced entry is refused with the rule named - and its exact line in your source pointed at:
 
 ```json
 { "status": "rejected", "reason": "invariant `balanced_posted_entry` violated" }
@@ -110,24 +105,24 @@ And an unbalanced entry is refused atomically, with the rule named - and its exa
 
 ## Worked examples
 
-Each runs both in memory (against the kernel) and durably (against PostgreSQL). All parse end-to-end as `.morph` source. Nothing is mocked.
+Each parses from `.morph` source and runs end to end against PostgreSQL. Nothing is mocked. Every per-example README has the business story.
 
-- [**Bilateral settlement netting**](examples/01_settlement_netting/) - invariants check the *candidate state*, not the pre-state: inputs that are individually valid but forbidden together are rejected before any commit.
-- [**Verified revenue**](examples/02_verified_revenue/) - the flagship. A figure is verified, relied on, then corrected: the original stays in the books, standings on it are retracted automatically, and **decisions made under it remain valid records of what was decided that day**. Defending a contested number over time, in one example.
-- [**Double-entry ledger with trial balance**](examples/03_double_entry_ledger/) - the accounting equation as an invariant, period close as a gate, restatement that preserves the original, and the trial balance as a governed read-side projection with as-of replay.
-- [**Approval controls**](examples/04_approval_controls/) - unconditional and quantitative authority; revocation prevents future approvals while preserving every historical one.
-- [**Insurance claim settlement**](examples/05_insurance_claim_settlement/) - cumulative settlements against a policy aggregate limit, evaluated exactly at admission.
-- [**Clinical trial enrolment**](examples/06_clinical_trial_enrolment/) - randomisation requires protocol, consent, delegation and eligibility all valid *on the randomisation date*. **Validity is admission-time, not eternal**: a later amendment does not invalidate an earlier enrolment.
-- [**Chess transition invariants**](examples/07_chess_transition_invariants/) - the one non-business example: rules that relate the state before a change to the state after (move count strictly increases). The same `pre(...)` mechanism enforces a conservation law in the insurance example.
-- [**KYC sanctions and PEP screening**](examples/08_kyc_sanctions_screening/) - onboarding gated by current, clean screenings; an unresolved match blocks until adjudicated; every step emits a **declared intent**, so a misspelled compliance event is a validation error, not a silent drop.
-- [**Carbon-credit provenance**](examples/09_carbon_credit_provenance/) - the explanation engine's flagship: **no green claim without admissible provenance** - verified measurement, accredited verifier, double-counting forbidden in both directions, single custody, terminal retirement.
-- [**Trade lifecycle**](examples/10_trade_lifecycle/) - a commodity trade from capture to settlement, with the **phase modelled as accumulated claims, not a status field**: a price correction is a restatement that leaves prior settlements standing. The first external-embedder target.
-- [**Borrowing base**](examples/11_borrowing_base/) - asset-backed lending: drawn amounts can never exceed the advance rate times eligible collateral, cross-multiplied so the decision is exact.
-- [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes, and the example that forced Morpholog's time values and units: exact instants, computed deadlines, interval counting, cargo in tonnes, delay priced in dollars - and time on demurrage as a **derived excess, deliberately not a violation**, because running over the allowance is the normal priced outcome.
-- [**Biometric identification oversight (EU AI Act Article 12)**](examples/13_biometric_identification_oversight/) - a statute as the forcing catalyst: the AI system's output enters as a claim with **no standing**; standing comes only from verification under live, revocable human authority; a decision without **two distinct verifications cannot commit**. It forced no new language - earlier patterns meeting a statute - which is the headline. Its README maps each statute clause to the rule enforcing it, regenerable as `morpholog inspect controls`.
-- [**Margin call run**](examples/14_margin_call_run/) - a daily margin sweep where a risk engine submits the **whole batch of called accounts as one decision**, admitted only if the batch is *complete*: a **missing** call - an under-collateralised account left out of the run - is refused, not merely a wrong one. The gallery's first **set-valued proposal** (a collection argument), teaching totality, not just exclusion: the proposed state must contain everything the rule requires, the shape every "an external engine proposes a whole official snapshot" job shares.
+- [**Settlement netting**](examples/01_settlement_netting/) - inputs that are valid alone but forbidden together are refused before commit.
+- [**Verified revenue**](examples/02_verified_revenue/) - the flagship: a figure is verified, relied on, then corrected - and every decision made along the way stays defensible.
+- [**Double-entry ledger**](examples/03_double_entry_ledger/) - the accounting equation as a rule; period close; restatement; the trial balance with as-of replay.
+- [**Approval controls**](examples/04_approval_controls/) - authority granted, used, and revoked; revocation stops future approvals and preserves every past one.
+- [**Insurance claim settlement**](examples/05_insurance_claim_settlement/) - cumulative payouts capped against the policy, exactly, at admission.
+- [**Clinical trial enrolment**](examples/06_clinical_trial_enrolment/) - protocol, consent, and eligibility must be valid *on the randomisation date*; a later amendment does not undo an earlier enrolment.
+- [**Chess**](examples/07_chess_transition_invariants/) - the toy: rules that relate the state before a change to the state after.
+- [**KYC sanctions screening**](examples/08_kyc_sanctions_screening/) - onboarding blocked on stale screenings or an unadjudicated match.
+- [**Carbon-credit provenance**](examples/09_carbon_credit_provenance/) - no green claim without admissible provenance; double counting forbidden in both directions.
+- [**Trade lifecycle**](examples/10_trade_lifecycle/) - capture to settlement, with lifecycle phase as accumulated records, not a status field; a price correction leaves prior settlements standing.
+- [**Borrowing base**](examples/11_borrowing_base/) - drawn amounts can never exceed the advance rate times eligible collateral.
+- [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes: exact instants, computed deadlines, cargo in tonnes, delay priced in dollars.
+- [**Biometric identification oversight**](examples/13_biometric_identification_oversight/) - an EU AI Act statute enforced as admission rules: the AI's output has no standing until verified by two distinct, currently-authorised people.
+- [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one.
 
-Morpholog is not the whole stack. UIs, dashboards, dataloaders, ML pipelines stay in normal tools. What Morpholog owns is the line where *"may this be admitted as a valid record?"* needs a definite answer - the small fraction of any real business system that, when it fails, makes the news.
+Morpholog is not the whole stack. UIs, dashboards, pipelines, and analytics stay in your normal tools. Morpholog owns the one line where *"may this become a record?"* needs a definite, provable answer - the small fraction of any system that, when it fails, makes the news.
 
 ## Try it yourself
 
@@ -138,48 +133,40 @@ cargo install --path crates/morpholog-cli
 morpholog check examples/01_settlement_netting/netting.morph
 ```
 
-`check` parses and validates - one command answers "is this program well-formed?", and any finding arrives with a caret pointing at the exact line. `propose` and `inspect` take a `.morph` file path and run against PostgreSQL once `DATABASE_URL` is set; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for local-database setup.
+`check` parses and validates, with every finding caret-located in the source. `propose` and `inspect` run against PostgreSQL once `DATABASE_URL` is set; [`CONTRIBUTING.md`](CONTRIBUTING.md) has the local-database setup.
 
-New to Morpholog? [The developer introduction](docs/developer-intro.md) is the gentle, hands-on place to start - written for a developer who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the as-of replay that keeps both answers true.
+New to Morpholog? [The developer introduction](docs/developer-intro.md) is the hands-on place to start - written for a developer who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the as-of replay that keeps both answers true.
 
 ## Status
 
-Active development. Kernel, PostgreSQL adapter, CLI, polling outbox worker, and the worked examples are all working and tested; built in Rust on PostgreSQL 18+, `#[forbid(unsafe_code)]` throughout. A governed commit is ~9ms end to end at worked-example scale, and writes scale linearly from there (~1.6s per commit with 100,000 in-scope claims); as-of replay is also linear. The `.morph` parser arc is complete, with every diagnostic - parse, validation, lint - caret-located in source.
+Active development, built in Rust on PostgreSQL 18+, no unsafe code anywhere. The kernel, PostgreSQL adapter, CLI, outbox worker, and every worked example are working and tested end to end. A governed commit is ~9ms at worked-example scale; writes and as-of replay both scale linearly from there (~1.6s per commit with 100,000 in-scope records).
 
-The legibility tooling has begun: before anything runs you can read a model's rules back - what they make impossible (`inspect guarantees`), what must hold before each action versus what can never hold (`inspect controls`), and which rules have ever actually done work (`inspect coverage`) - and turn any rejection into a missing-evidence checklist (`explain`).
+Beyond the core: you can read a model's rules back before anything runs - what they make impossible (`inspect guarantees`), what each action requires (`inspect controls`), which rules have ever actually done work (`inspect coverage`) - and turn any rejection into a missing-evidence checklist (`explain`). The audit log is a tamper-evident Merkle tree: `verify` proves it intact rather than asserting it, and `evidence export` produces a pack a third party verifies offline against a 32-byte anchor held outside the database - catching even a coordinated edit of the records and the log together. The integration surface is a pinned contract ([`docs/embedder-integration.md`](docs/embedder-integration.md)) with a **typed Python client generated by the binary itself**; an external open-source energy-trading system already drives a governed trade lifecycle through it.
 
-The audit log is a tamper-evident Merkle history tree, so you can prove it intact rather than assert it. `verify` reconciles the log against the claims table; `checkpoint` publishes a tree head to anchor outside the database; and `evidence export` produces a pack a third party verifies offline against that anchor - catching even a coordinated edit of both tables. Checkpoints can be signed, so the anchor is attributable as well as tamper-evident; and a *windowed* pack proves a single reporting period is a faithful, append-only continuation of the prior one - the shape a periodic regulatory submission needs.
-
-The integration surface is a pinned contract ([`docs/embedder-integration.md`](docs/embedder-integration.md)): JSON-Schema contracts for every transformation and intent, named-argument codecs in both directions, batch import, schema provisioning from the binary, a canonical hash that identifies the rules in force, machine-readable diagnostics and outcome envelopes - and a **typed Python client generated by the binary itself** (`morpholog generate python-client`), so an embedder speaks exactly the contract its binary speaks. An external open-source energy-trading system already drives a governed trade lifecycle through it end to end.
-
-What is *not* in the box yet: a worker supervisor with circuit breakers and an HTTP-aware deliverer; higher-order authority; and *governed* materialised derived claims - the operational read cache and its SQL views have landed, but the form whose invalidation is itself modelled as claims has not. Each lands when a worked example forces the shape - the discipline that has kept the kernel small.
+Not in the box yet: a worker supervisor and HTTP deliverer for the outbox, higher-order authority, governed materialised views. Each lands when a worked example forces its shape - the discipline that has kept the runtime small.
 
 ## Common questions
 
-**Doesn't a separate system of record create a dual-write problem?** It removes the classic transactional one. Morpholog holds the governed records; downstream stores are derived copies, kept current by consuming the intents each commit emits (at-least-once, with idempotency keys). One write, explicit propagation, no two-phase commit. And the schema is plain PostgreSQL: it can share a database with your application's tables, behind its own schema and role.
+**Doesn't a separate system of record create a dual-write problem?** It removes the classic one. Morpholog holds the governed records; downstream stores are derived copies, kept current by consuming the notifications each commit emits (at-least-once, with idempotency keys). One write, explicit propagation, no two-phase commit. The schema is plain PostgreSQL and can share a database with your application's tables, behind its own schema and role.
 
-**Can't someone bypass the rules with raw SQL?** With superuser access, yes - as with any database-backed system of record (a DBA can drop a `CHECK` constraint too). The mitigations are ordinary privilege separation - only the runtime's role writes the `morpholog` schema - plus one the model adds: the claims table and the audit log are two records of one history, and `morpholog verify` detects edits that leave them disagreeing. A *coordinated* edit of both - rewriting the audit log to stay self-consistent - is caught by the tamper-evident history tree: a checkpoint held outside the database is an anchor the rewritten log cannot match.
+**Can't someone bypass the rules with raw SQL?** With superuser access, yes - as with any database-backed system (a DBA can drop a `CHECK` constraint too). The mitigations: ordinary privilege separation, so only the runtime's role writes the governed schema; and tamper evidence, because the records and the audit log are two accounts of one history and `verify` catches edits that leave them disagreeing - or that rewrite both, if you have published a checkpoint anchor outside the database. The anchor is 32 bytes: email it to your auditor, hand it to a counterparty, stamp it with a timestamping service. The honest limit: an anchor protects history only up to the last one you distributed, and distributing it is operational discipline the runtime cannot enforce.
 
-That anchor is **32 bytes**, so "outside the database" is cheap and plural, not a second system to build: email it to your auditor, hand it to the counterparty on each settlement (they keep their own copy - they want to detect *your* tampering), or stamp it with a timestamping service; a public ledger is only for the threat model where the regulator itself colludes. It is the model Certificate Transparency uses for the web's PKI - small signed heads, independent watchers - not a distributed-systems project. The honest limit: an anchor protects history only up to the last one you published, and the runtime produces it but cannot make you distribute it - getting those bytes to an independent holder is operational discipline, not something Morpholog can enforce.
+**Isn't a generic claims table a performance trap?** The table is storage, not the query engine. Rules are never evaluated as SQL self-joins: the runtime loads only the records a transformation touches and evaluates in memory, and the measured shape is linear (the Status numbers above). Heavy querying and reporting live in the typed SQL views Morpholog generates per predicate, or downstream - the system-of-record-plus-derived-reads split any audit substrate needs.
 
-**Isn't a generic claims table an EAV performance trap?** The claims table is storage, not the query engine. Rules are never evaluated as SQL self-joins: the runtime loads only the claims whose predicates a transformation touches, and the kernel evaluates in memory. The measured shape is linear (the Status numbers above), and the intended workload is the admission line of governed records, not general OLTP - that boundary is the design. And opaque subjects do not mean untyped business data. A `Subject` is an opaque string identifier or domain symbol - runtime-minted subjects are UUIDv7 by convention, externally supplied ones need not be. Claim arguments keep their Morpholog value kinds in the tagged store, and the relational views Morpholog generates per predicate expose those values as typed SQL columns for indexing and reporting. Heavy or spatial query lives in those views or a downstream store, never the raw claims table - the system-of-record-plus-derived-reads split any audit substrate needs.
+**What about GDPR's right to erasure, if nothing is deleted?** Keep personal data in an ordinary, erasable store keyed by an opaque subject id, and keep personal details out of the governed records themselves - a modelling discipline the opaque-identifier design encourages but cannot make automatic. Cryptographic redaction within history is a recognised future direction.
 
-**What about GDPR's right to erasure, if nothing is ever deleted?** Opaque subjects reduce the problem rather than solve it. The pattern: keep personal data in an ordinary, erasable store keyed by subject id, so erasure deletes the mapping - and keep personal details out of claim contents, which is a modelling discipline, not a free lunch. Redaction within history itself (per-subject crypto-shredding) is a recognised future direction.
+**How does a record's shape evolve once history exists?** By supersession, the same way records do: declare the new shape, carry forward with a governed transformation, and history stands as recorded. First-class migration tooling is future work.
 
-**Why not OPA, Datomic, or Datalog?** Neighbouring problems. OPA decides policy but owns no state, no commit, no audit, no replay. Datomic and XTDB keep immutable history, but rules are not admission law and refusals are not explained. Datalog derives; it does not gate transactions. Morpholog is the combination - admission law, atomic commit, audit-as-store, replay, explanation - in one small kernel on plain PostgreSQL. [`docs/prior-art.md`](docs/prior-art.md) has the longer comparison.
-
-**How does a predicate evolve once history exists?** By supersession, the same way records do: declare the new shape, carry forward with a governed transformation, and history stands as recorded. First-class migration tooling is future work.
-
-**Do I have to shell out to a CLI on every request?** The CLI is the non-Rust integration surface (~9ms per call, measured), and you don't write the integration by hand: `morpholog generate python-client` emits a complete, typed, dependency-free Python client from your own programme - request models, envelope parsing, the whole pinned contract - stamped with the hash of the rules it was built against. Rust embeds the library in-process. A long-running server mode and more languages follow when an embedder forces them, wrapping the same contract unchanged.
+**Do I have to shell out to a CLI on every request?** The CLI is the non-Rust integration surface (~9ms per call, measured), and you don't hand-write the integration: `morpholog generate python-client` emits a complete, typed, dependency-free Python client from your own model, stamped with the hash of the rules it was built against. Rust embeds the library in-process. A long-running server mode and more languages follow when a real integration forces them.
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, the affordances on the design horizon, and non-goals.
-- [`docs/roadmap.md`](docs/roadmap.md) - what's imminent, deferred, and out of scope.
-- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - what the kernel means.
+- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, and what it refuses to become.
+- [`docs/roadmap.md`](docs/roadmap.md) - what's next, deferred, and out of scope.
+- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - what the kernel means, precisely.
 - [`docs/embedder-integration.md`](docs/embedder-integration.md) - the pinned contract for integrating from any language.
-- [`docs/design-history.md`](docs/design-history.md) - for each significant runtime/IR decision, which worked example forced it.
-- [`docs/prior-art.md`](docs/prior-art.md) - the decades of theory this synthesises, and what we deliberately rejected.
+- [`docs/design-history.md`](docs/design-history.md) - which worked example forced each design decision, and why.
+- [`docs/prior-art.md`](docs/prior-art.md) - the theory this synthesises, and what was deliberately rejected.
 
 ## License
 
