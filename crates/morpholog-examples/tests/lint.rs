@@ -927,3 +927,48 @@ invariant reading_priced_by_first_tariff:
     assert_eq!(invariant, "reading_priced_by_first_tariff");
     assert_eq!(predicates, ["Tariff"]);
 }
+
+// Direction is load-bearing in the window: a candidate bounded
+// on-or-AFTER the coordinate is a forward window, not "the version in
+// force at a coordinate".
+#[test]
+fn a_forward_window_does_not_fire() {
+    assert_eq!(
+        lints_of(
+            r#"
+program forward_window
+
+predicate Reading(meter: Subject, day: Date, kwh: Decimal)
+predicate Tariff(meter: Subject, rate: Decimal, effective_from: Date)
+
+transformation record_reading(m, d, k):
+    admit Reading(m, d, k)
+
+transformation set_tariff(m, r, ef):
+    admit Tariff(m, r, ef)
+
+invariant next_tariff_capped:
+    (Reading(m, d, _) and Tariff(m, rate, ef) and ef on_or_after d and not (exists later: Tariff(m, _, later) and later after ef)) implies rate <= 1000
+"#,
+        ),
+        vec![]
+    );
+}
+
+// A future-only witness guarantees a version AFTER the coordinate and
+// closes no on-or-before hole - protection in appearance only, so it
+// must not suppress.
+#[test]
+fn a_future_only_companion_does_not_suppress() {
+    let source = format!(
+        "{TARIFF_SELECTION}
+invariant future_backstop:
+    Reading(m, d, _) implies (exists e: Tariff(m, _, e) and e after d)
+"
+    );
+    let found = lints_of(&source);
+    assert!(
+        governing_finding(&found).is_some(),
+        "a future-only witness is not a backstop: {found:?}"
+    );
+}

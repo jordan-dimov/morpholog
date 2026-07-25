@@ -536,11 +536,13 @@ fn claim_vars(args: &[Term]) -> BTreeSet<&Var> {
 /// antecedent are opaque, and the unbounded ("current version")
 /// selection does not fire - this lint is about a governing version at
 /// a coordinate. Missing an exotic spelling is preferred over accusing
-/// ordinary temporal logic. The strict tiebreak is deliberately
-/// direction-insensitive: excluding a strictly LATER version selects
-/// the latest-in-force, excluding a strictly EARLIER one selects the
-/// earliest - and an earliest-version selection over an empty set is
-/// vacuous in exactly the same way.
+/// ordinary temporal logic. Direction is load-bearing in the WINDOW
+/// (the bound must establish candidate <= coordinate; a forward
+/// window is not a governing selection) but deliberately NOT in the
+/// strict tiebreak: within a retrospective window, excluding a
+/// strictly LATER version selects the latest-in-force and excluding a
+/// strictly EARLIER one selects the earliest - and either selection
+/// over an empty window is vacuous in exactly the same way.
 pub(crate) fn governing_selections(
     prop: &Prop,
     definitions: DefinitionIndex<'_>,
@@ -572,7 +574,10 @@ fn selections_in_scope(
                 }
             });
             let Some(v) = candidate_var else { continue };
-            if ev.nonstrict.iter().any(|(a, b)| *a == v || *b == v) {
+            // The bound must establish candidate <= coordinate: a
+            // forward window (candidate on-or-AFTER a date) is not
+            // "the version in force at a coordinate" and stays clean.
+            if ev.nonstrict.iter().any(|(earlier, _)| *earlier == v) {
                 out.insert((*predicate).clone());
             }
         }
@@ -589,10 +594,16 @@ fn gather_selection_evidence<'a>(
     match prop {
         Prop::Claim { predicate, args } => ev.claims.push((predicate, claim_vars(args))),
         Prop::Compare { .. } => {
-            if let Some((op, l, r)) = temporal_var_pair(prop)
-                && matches!(op, CompareOp::Le | CompareOp::Ge)
-            {
-                ev.nonstrict.push((l, r));
+            // Normalised to (earlier_or_equal, later_or_equal): the
+            // direction is load-bearing - the candidate bound must
+            // establish candidate <= coordinate, whichever way it was
+            // spelled.
+            if let Some((op, l, r)) = temporal_var_pair(prop) {
+                match op {
+                    CompareOp::Le => ev.nonstrict.push((l, r)),
+                    CompareOp::Ge => ev.nonstrict.push((r, l)),
+                    CompareOp::Lt | CompareOp::Gt => {}
+                }
             }
         }
         Prop::And(props) => {
@@ -653,10 +664,13 @@ fn collect_strict_temporal<'a>(
     ) {
         match prop {
             Prop::Compare { .. } => {
-                if let Some((op, l, r)) = temporal_var_pair(prop)
-                    && matches!(op, CompareOp::Lt | CompareOp::Gt)
-                {
-                    out.push((l, r));
+                // Normalised to (earlier, later), whichever way spelled.
+                if let Some((op, l, r)) = temporal_var_pair(prop) {
+                    match op {
+                        CompareOp::Lt => out.push((l, r)),
+                        CompareOp::Gt => out.push((r, l)),
+                        CompareOp::Le | CompareOp::Ge => {}
+                    }
                 }
             }
             Prop::And(props) => {
@@ -764,19 +778,20 @@ pub(crate) fn guaranteed_dated_witnesses(
                 let mut ev = SelectionEvidence::default();
                 let mut scratch = BTreeSet::new();
                 gather_selection_evidence(body, definitions, seen, &mut ev, &mut scratch);
-                let temporal_vars: BTreeSet<&Var> = ev
+                let earlier_side: BTreeSet<&Var> = ev
                     .nonstrict
                     .iter()
                     .chain(collect_strict_temporal(body, definitions).iter())
-                    .flat_map(|(a, b)| [*a, *b])
+                    .map(|(earlier, _)| *earlier)
                     .collect();
-                // A claim is a dated witness only when a temporal
-                // comparison involves one of the claim's own variables
-                // - "some P effective by a coordinate", never merely
-                // "some P somewhere".
+                // A claim is a dated witness only when one of ITS OWN
+                // variables sits on the EARLIER side of a temporal
+                // relation - "some P effective by a coordinate". A
+                // future-only witness (P dated after the coordinate)
+                // closes no on-or-before hole and must not suppress.
                 ev.claims
                     .iter()
-                    .filter(|(_, vars)| vars.iter().any(|v| temporal_vars.contains(v)))
+                    .filter(|(_, vars)| vars.iter().any(|v| earlier_side.contains(v)))
                     .map(|(p, _)| (*p).clone())
                     .collect()
             }
