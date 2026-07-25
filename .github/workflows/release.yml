@@ -2,9 +2,13 @@
 # tag push, with the same build/smoke/package pipeline dry-run on any PR
 # that touches it - so the first real tag is never the first execution.
 #
-# Actions are pinned to commit SHAs (not tags): this workflow holds
-# `contents: write` and publishes an executable artifact, so its inputs
-# are immutable by policy even though ci.yml uses the friendlier tags.
+# Two jobs on purpose: the build job (which PRs can reach, and whose
+# steps a PR can edit) holds a read-only token; only the tag-gated
+# publish job gets `contents: write`, and it consumes the packaged
+# artifact rather than rebuilding. Actions are pinned to commit SHAs
+# (not tags): this workflow publishes an executable artifact, so its
+# inputs are immutable by policy even though ci.yml uses the friendlier
+# tags.
 name: release
 
 on:
@@ -18,17 +22,15 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-  TARGET: x86_64-unknown-linux-musl
-
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      TARGET: x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -93,14 +95,34 @@ jobs:
           sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
           sha256sum -c "$NAME.tar.gz.sha256"
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-package
+          path: |
+            morpholog-*.tar.gz
+            morpholog-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-package
+
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --notes "Prebuilt static linux x86_64 binary. Install guide: docs/install.md (verify the checksum; the worked examples ship in the source archive below, no Rust toolchain needed)." \
-            morpholog-"$GITHUB_REF_NAME"-"$TARGET".tar.gz \
-            morpholog-"$GITHUB_REF_NAME"-"$TARGET".tar.gz.sha256
+            morpholog-"$GITHUB_REF_NAME"-x86_64-unknown-linux-musl.tar.gz \
+            morpholog-"$GITHUB_REF_NAME"-x86_64-unknown-linux-musl.tar.gz.sha256

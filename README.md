@@ -128,7 +128,7 @@ Each parses from `.morph` source and runs end to end against PostgreSQL. Nothing
 
 ## Try it yourself
 
-No Rust toolchain needed: grab the prebuilt linux binary from the
+No Rust toolchain needed: grab the prebuilt linux x86_64 binary from the
 [releases page](https://github.com/jordan-dimov/morpholog/releases) -
 [`docs/install.md`](docs/install.md) is the fresh-machine walkthrough,
 PostgreSQL included. Or from source:

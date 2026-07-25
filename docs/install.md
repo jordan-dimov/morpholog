@@ -1,11 +1,16 @@
 # Installing Morpholog from a release
 
 Fresh Ubuntu machine to a running worked example, no Rust toolchain. The
-prebuilt binary is static linux x86_64 only:
+prebuilt binary is static linux x86_64 only - check before downloading
+anything (the line prints `ok` or a STOP; it deliberately does not
+`exit`, which would close an interactive shell):
 
 ```bash
-test "$(uname -m)" = x86_64 || echo "no prebuilt binary for this architecture - build from source (README)"
+[ "$(uname -m)" = x86_64 ] && echo ok || echo "STOP: no prebuilt binary for $(uname -m) - build from source instead (README)" >&2
 ```
+
+If it says STOP, none of the download steps below apply to this
+machine; the README's source build is the path.
 
 Morpholog runs against a system PostgreSQL, by design - no Docker in the
 blessed path (containerising the database is your own ops choice, not
