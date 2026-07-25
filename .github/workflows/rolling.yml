@@ -1,0 +1,16 @@
+# The rolling main-latest channel: every main push rebuilds and
+# republishes through the release pipeline (release.yml). A separate
+# workflow because a single on.push block with both branch and tag
+# filters empirically fired only for tags - the branch pushes never
+# triggered.
+name: rolling
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
