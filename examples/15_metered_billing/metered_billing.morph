@@ -9,8 +9,8 @@ program metered_billing
 -- hours here. A tariff prices each unit, quoted in pence per kWh the
 -- way GB energy tariffs are. And the bill settles in pounds, where a
 -- payable amount has exactly two decimal places. Between the meter
--- and the bill sits an awkward fact: rate times volume almost never
--- lands on a whole penny. 13.5 pence times 431.7 kWh is 58.2795
+-- and the bill sits an awkward piece of arithmetic: rate times
+-- volume almost never lands on a whole penny. 13.5 pence times 431.7 kWh is 58.2795
 -- pounds - and nobody can pay 58.2795 pounds. Someone must decide
 -- what the payable figure is, and with money involved, "roughly" is
 -- a dispute waiting to happen.

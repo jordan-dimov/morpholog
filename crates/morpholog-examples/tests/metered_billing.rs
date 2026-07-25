@@ -4,8 +4,8 @@
 //! The `round(x, quantum)` forcing example: the payable figure on
 //! every charge line IS the recomputed rate-times-volume rounded to
 //! the nearest penny, exact halves away from zero. These tests pin
-//! the teaching points - the 1p tamper refusal, the half-away-from-
-//! zero boundary, the VAT totality companion closing the vacuity
+//! the teaching points - the 1p tamper refusal, the away-from-zero
+//! half boundary, the VAT totality companion closing the vacuity
 //! hole, and the per-line-then-sum convention refusing the rival
 //! round-the-aggregate figure.
 
