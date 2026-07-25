@@ -345,7 +345,10 @@ pub async fn audit_cursor_for(
 /// non-superuser role that (a) can hold a session - login-capable, or
 /// currently connected, which catches a role made NOLOGIN after its
 /// session opened - and (b) can write `morpholog.audit` directly, by
-/// inherited membership, or by `SET ROLE` into a granted role. An
+/// inherited membership (`has_table_privilege` follows inheritance),
+/// or by `SET ROLE` into a granted role (`pg_has_role(..., 'SET')` -
+/// deliberately not `'MEMBER'`, which would also demand roles whose
+/// membership confers no usable path, `INHERIT FALSE, SET FALSE`). An
 /// asserted name that does not exist is
 /// [`PgError::WriterRoleUnknown`]; a census role missing from the
 /// assertion is [`PgError::WriterAssertionIncomplete`]; a hidden
@@ -434,7 +437,7 @@ async fn audit_resume_watermark_asserted(
                       OR EXISTS (
                         SELECT 1 FROM pg_roles w
                         WHERE has_table_privilege(w.oid, 'morpholog.audit', 'INSERT')
-                          AND pg_has_role(r.oid, w.oid, 'MEMBER')))
+                          AND pg_has_role(r.oid, w.oid, 'SET')))
            )
            SELECT
                (SELECT array_agg(a.name ORDER BY a.name)

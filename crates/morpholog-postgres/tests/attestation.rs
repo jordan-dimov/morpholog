@@ -161,16 +161,32 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     .await
     .unwrap();
     let rewritten = verify_audit_tree(&pool, None).await.unwrap();
-    assert!(
-        !matches!(rewritten, TreeVerification::Intact { .. }),
-        "rewritten lineage must not verify: {rewritten:?}"
-    );
 
     sqlx::query("UPDATE morpholog.audit SET attestation = NULL")
         .execute(&pool)
         .await
         .unwrap();
     let stripped = verify_audit_tree(&pool, None).await.unwrap();
+
+    // Restore the production floor BEFORE asserting, so a failing
+    // assertion cannot leave every later test binary running against a
+    // schema weaker than production (the tables are truncated between
+    // tests; constraints are not re-provisioned). NOT VALID is the
+    // restored upgraded-database state - the stripped rows above stay
+    // NULL.
+    sqlx::query(
+        "ALTER TABLE morpholog.audit
+         ADD CONSTRAINT audit_attestation_required
+         CHECK (attestation IS NOT NULL) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        !matches!(rewritten, TreeVerification::Intact { .. }),
+        "rewritten lineage must not verify: {rewritten:?}"
+    );
     assert!(
         !matches!(stripped, TreeVerification::Intact { .. }),
         "stripped lineage must not verify: {stripped:?}"

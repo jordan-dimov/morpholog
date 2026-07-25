@@ -280,6 +280,7 @@ async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passe
         "mtest209_group",
         "mtest209_inheritor",
         "mtest209_setter",
+        "mtest209_bystander",
     ];
     recreate_roles(
         &pool,
@@ -293,6 +294,8 @@ async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passe
             "GRANT mtest209_group TO mtest209_inheritor",
             "CREATE ROLE mtest209_setter LOGIN",
             "GRANT mtest209_group TO mtest209_setter WITH INHERIT FALSE, SET TRUE",
+            "CREATE ROLE mtest209_bystander LOGIN",
+            "GRANT mtest209_group TO mtest209_bystander WITH INHERIT FALSE, SET FALSE",
         ],
     )
     .await;
@@ -313,6 +316,11 @@ async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passe
     assert!(
         !missing.iter().any(|m| m == "mtest209_group"),
         "a NOLOGIN group with no session is not a session role: {missing:?}"
+    );
+    assert!(
+        !missing.iter().any(|m| m == "mtest209_bystander"),
+        "an INHERIT FALSE, SET FALSE membership confers no usable write \
+         path and must not be demanded: {missing:?}"
     );
 
     // Asserting exactly what the census demanded (plus ourselves)

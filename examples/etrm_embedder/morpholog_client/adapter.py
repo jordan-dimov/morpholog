@@ -305,7 +305,9 @@ class Morpholog:
         for managed PostgreSQL where the platform's hidden sessions
         make the default refuse. The binary verifies the assertion
         against the catalog; superuser writes are the residue the
-        assertion explicitly accepts."""
+        assertion explicitly accepts, and role grants, memberships,
+        and login attributes must stay unchanged until the command
+        establishes its read snapshot."""
         return [
             envelopes.AuditRow.from_json(row)
             for row in self._audit_lines(after, named=False, writer_roles=writer_roles)

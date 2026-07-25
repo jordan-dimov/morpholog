@@ -371,7 +371,9 @@ pub(crate) struct CheckpointArgs {
     /// hidden and `pg_read_all_stats` cannot be granted. The
     /// assertion is verified against the catalog (every non-superuser
     /// role that can write `morpholog.audit` must be asserted);
-    /// superuser writes are the residue the flag explicitly accepts.
+    /// superuser writes are the residue the flag explicitly accepts,
+    /// and role grants, memberships, and login attributes must stay
+    /// unchanged until the command establishes its read snapshot.
     #[arg(long = "writer-role", value_name = "ROLE")]
     pub(crate) writer_role: Vec<String>,
 }
@@ -777,7 +779,9 @@ pub(crate) struct InspectAuditArgs {
     /// hidden and `pg_read_all_stats` cannot be granted. The
     /// assertion is verified against the catalog (every non-superuser
     /// role that can write `morpholog.audit` must be asserted);
-    /// superuser writes are the residue the flag explicitly accepts.
+    /// superuser writes are the residue the flag explicitly accepts,
+    /// and role grants, memberships, and login attributes must stay
+    /// unchanged until the command establishes its read snapshot.
     #[arg(long = "writer-role", value_name = "ROLE")]
     pub(crate) writer_role: Vec<String>,
 }
