@@ -1,5 +1,6 @@
 [
   {
+    "predicate": "EveryKind",
     "args": [
       {
         "type": "subject",
@@ -41,7 +42,6 @@
           }
         ]
       }
-    ],
-    "predicate": "EveryKind"
+    ]
   }
 ]

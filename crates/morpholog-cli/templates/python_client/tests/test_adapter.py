@@ -155,9 +155,9 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--named", argv)
 
     def test_derived_reads_thread_as_of_and_named_exactly_when_supplied(self):
-        # Same four-case matrix as the claims reads: --as-of and
-        # --named each land on argv exactly when asked for, after the
-        # positional file + derived-claim name.
+        # Same matrix as the claims reads: --as-of and --named each
+        # land on argv exactly when asked for, after the positional
+        # file + derived-claim name.
         self._mode("record_argv")
         with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
             os.environ["STUB_ARGV_FILE"] = record.name

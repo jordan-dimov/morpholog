@@ -475,13 +475,13 @@ fn report_envelopes_serialize_as_pinned() {
 fn claim_arrays_serialize_as_pinned() {
     use morpholog_cli::envelopes::NamedClaim;
 
-    assert_golden(
-        "claim_instances.json",
-        &to_value(&vec![kitchen_sink_claim()]),
-    );
-    assert_golden(
+    // Direct serialization, not Value-normalized: the commands print
+    // these Vecs straight through print_json, so the golden must carry
+    // the structs' true wire order (`predicate` before `args`).
+    assert_golden_bytes("claim_instances.json", &vec![kitchen_sink_claim()]);
+    assert_golden_bytes(
         "named_claims.json",
-        &to_value(&vec![NamedClaim {
+        &vec![NamedClaim {
             args: [
                 ("trade".to_string(), serde_json::json!("trade_1")),
                 ("quantity".to_string(), serde_json::json!("100.5")),
@@ -489,7 +489,7 @@ fn claim_arrays_serialize_as_pinned() {
             .into_iter()
             .collect(),
             predicate: "TradeCaptured".into(),
-        }]),
+        }],
     );
 }
 

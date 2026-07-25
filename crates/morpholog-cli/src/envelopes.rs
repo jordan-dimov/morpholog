@@ -125,11 +125,17 @@ pub struct RefreshDerivedReport {
 
 impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {
     fn from(s: &morpholog_postgres::RefreshSummary) -> Self {
-        // The snapshot coordinates come from one audit row; zip keeps
-        // them present-or-absent together on the wire as well.
-        let snapshot = s
-            .source_snapshot_transition_id
-            .zip(s.source_snapshot_committed_at);
+        // The snapshot coordinates come from one audit row; a one-sided
+        // pair is a bug upstream, and refusing beats reporting it as a
+        // lawful empty ledger.
+        let snapshot = match (
+            s.source_snapshot_transition_id,
+            s.source_snapshot_committed_at,
+        ) {
+            (Some(tid), Some(at)) => Some((tid, at)),
+            (None, None) => None,
+            _ => unreachable!("refresh snapshot coordinates must be paired"),
+        };
         Self {
             derived_claim_count: s.derived_claim_count,
             derived_predicate_count: s.derived_predicate_count,
