@@ -53,14 +53,18 @@ morpholog --version
 ## 3. The examples
 
 The tarball carries only the binary; the worked examples live in the
-source tree (no toolchain needed, just the files):
+source tree (no toolchain needed, just the files). Fetch the tree AT
+THE RELEASE TAG, so the examples and generated client match the binary
+you installed rather than whatever `main` has moved on to:
 
 ```bash
-git clone --depth 1 https://github.com/jordan-dimov/morpholog.git
+VERSION="$(morpholog --version | awk '{print $2}')"
+git clone --branch "v$VERSION" --depth 1 https://github.com/jordan-dimov/morpholog.git
 cd morpholog
 ```
 
-(or download and unpack the "Source code" archive from the same release).
+(or download and unpack the "Source code" archive attached to the same
+release - it is the identical coordinate).
 
 ## 4. First contact
 
