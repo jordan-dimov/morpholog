@@ -230,10 +230,11 @@ pub struct AuditTail<'p> {
 /// previously seen transition (unknown ids are
 /// [`PgError::TransitionNotFound`], never a silent restart from
 /// zero).
-pub async fn begin_audit_tail(
-    pool: &PgPool,
+pub async fn begin_audit_tail<'p>(
+    pool: &'p PgPool,
     after: Option<Uuid>,
-) -> Result<AuditTail<'_>, PgError> {
+    writers: Option<&[String]>,
+) -> Result<AuditTail<'p>, PgError> {
     let cursor = match after {
         Some(tid) => {
             let mut conn = pool.acquire().await.map_err(classify)?;
@@ -243,7 +244,7 @@ pub async fn begin_audit_tail(
     };
     // Horizon strictly before the snapshot - the ordering the
     // lossless-resume proof rests on.
-    let horizon = audit_resume_watermark(pool).await?;
+    let horizon = audit_resume_watermark(pool, writers).await?;
     let tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     Ok(AuditTail {
         tx,
@@ -327,7 +328,53 @@ pub async fn audit_cursor_for(
 /// Liveness: the horizon trails the oldest open transaction in the
 /// database, whatever it is doing - a stuck session stalls the tail;
 /// it never loses rows.
-pub async fn audit_resume_watermark(pool: &PgPool) -> Result<DateTime<Utc>, PgError> {
+///
+/// # The writer assertion (`writers: Some(..)`)
+///
+/// On managed PostgreSQL the platform's own sessions are permanently
+/// hidden and `pg_read_all_stats` cannot be granted, so the
+/// all-sessions horizon is structurally unavailable even when the
+/// deployment satisfies the property it establishes. The assertion is
+/// the explicit, verified opt-in: the operator names the SESSION
+/// (login) roles that write audit, and the horizon is computed over
+/// those roles' sessions only.
+///
+/// Verified, not trusted: in the SAME statement that computes the
+/// horizon (one snapshot, so the census and the minimum cannot be
+/// split by a concurrent grant), the catalog census enumerates every
+/// non-superuser role that (a) can hold a session - login-capable, or
+/// currently connected, which catches a role made NOLOGIN after its
+/// session opened - and (b) can write `morpholog.audit` directly, by
+/// inherited membership (`has_table_privilege` follows inheritance),
+/// or by `SET ROLE` into a granted role (`pg_has_role(..., 'SET')` -
+/// deliberately not `'MEMBER'`, which would also demand roles whose
+/// membership confers no usable path, `INHERIT FALSE, SET FALSE`). An
+/// asserted name that does not exist is
+/// [`PgError::WriterRoleUnknown`]; a census role missing from the
+/// assertion is [`PgError::WriterAssertionIncomplete`]; a hidden
+/// session OF an asserted role is [`PgError::WriterSessionsHidden`]
+/// (the assertion cannot compensate there). Sessions are matched by
+/// role OID, not name, so a rename between census and filter cannot
+/// misclassify one.
+///
+/// What the assertion accepts, in the operator's own words:
+/// - SUPERUSER writes are outside the proof - superusers bypass ACLs,
+///   every managed host runs platform superusers, and they do not
+///   write embedder schemas. That residue is exactly what the flag
+///   acknowledges.
+/// - Role configuration (grants, memberships, login ability) must stay
+///   stable from this statement until the caller's read snapshot is
+///   established. The single statement closes the census-vs-horizon
+///   gap; a grant landing in the remaining statement-to-snapshot
+///   window, to a role with an already-open transaction, is the
+///   documented residue of the opt-in.
+pub async fn audit_resume_watermark(
+    pool: &PgPool,
+    writers: Option<&[String]>,
+) -> Result<DateTime<Utc>, PgError> {
+    if let Some(asserted) = writers {
+        return audit_resume_watermark_asserted(pool, asserted).await;
+    }
     // One statement, deliberately: the `now()` fallback must be
     // evaluated at the same instant as the minimum, because a writer
     // starting between two separate queries would carry a
@@ -351,6 +398,74 @@ pub async fn audit_resume_watermark(pool: &PgPool) -> Result<DateTime<Utc>, PgEr
     .map_err(classify)?;
     if row.hidden > 0 {
         return Err(PgError::StatVisibility { hidden: row.hidden });
+    }
+    Ok(row.horizon)
+}
+
+/// The assertion-mode horizon: census, filter, and minimum in one
+/// statement (one snapshot). See `audit_resume_watermark`'s doc for
+/// the semantics and the accepted residue.
+async fn audit_resume_watermark_asserted(
+    pool: &PgPool,
+    asserted: &[String],
+) -> Result<DateTime<Utc>, PgError> {
+    if asserted.is_empty() {
+        return Err(PgError::WriterAssertionEmpty);
+    }
+    let mut names: Vec<String> = asserted.to_vec();
+    names.sort();
+    names.dedup();
+    // `horizon!` / `hidden!`: aggregates over a one-row aggregate query
+    // can never be null (coalesce / count). `unknown` and `missing`
+    // stay nullable: array_agg over an empty set IS null, and empty
+    // means "nothing wrong".
+    let row = sqlx::query!(
+        r#"WITH asserted AS (
+               SELECT a.name, r.oid AS role_oid
+               FROM unnest($1::text[]) AS a(name)
+               LEFT JOIN pg_roles r ON r.rolname = a.name
+           ),
+           census AS (
+               SELECT r.rolname, r.oid
+               FROM pg_roles r
+               WHERE NOT r.rolsuper
+                 AND (r.rolcanlogin OR EXISTS (
+                        SELECT 1 FROM pg_stat_activity s
+                        WHERE s.usesysid = r.oid
+                          AND s.datname = current_database()))
+                 AND (has_table_privilege(r.oid, 'morpholog.audit', 'INSERT')
+                      OR EXISTS (
+                        SELECT 1 FROM pg_roles w
+                        WHERE has_table_privilege(w.oid, 'morpholog.audit', 'INSERT')
+                          AND pg_has_role(r.oid, w.oid, 'SET')))
+           )
+           SELECT
+               (SELECT array_agg(a.name ORDER BY a.name)
+                  FROM asserted a WHERE a.role_oid IS NULL) AS unknown,
+               (SELECT array_agg(c.rolname::text ORDER BY c.rolname)
+                  FROM census c
+                 WHERE c.oid NOT IN (SELECT a.role_oid FROM asserted a
+                                     WHERE a.role_oid IS NOT NULL)) AS missing,
+               coalesce(min(s.xact_start), now()) AS "horizon!",
+               count(*) FILTER (WHERE s.query = '<insufficient privilege>') AS "hidden!"
+           FROM pg_stat_activity s
+           WHERE s.datname = current_database()
+             AND s.pid <> pg_backend_pid()
+             AND s.usesysid IN (SELECT a.role_oid FROM asserted a
+                                WHERE a.role_oid IS NOT NULL)"#,
+        &names,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(classify)?;
+    if let Some(unknown) = row.unknown.filter(|u| !u.is_empty()) {
+        return Err(PgError::WriterRoleUnknown { roles: unknown });
+    }
+    if let Some(missing) = row.missing.filter(|m| !m.is_empty()) {
+        return Err(PgError::WriterAssertionIncomplete { missing });
+    }
+    if row.hidden > 0 {
+        return Err(PgError::WriterSessionsHidden { hidden: row.hidden });
     }
     Ok(row.horizon)
 }

@@ -35,7 +35,7 @@ async fn signed_checkpoint(pool: &PgPool, key_id: &str) -> Checkpoint {
         key_id: key_id.into(),
         key,
     };
-    match create_checkpoint(pool, Some(&signer)).await.unwrap() {
+    match create_checkpoint(pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint: {other:?}")
@@ -93,7 +93,7 @@ async fn signing_with_an_unauthorized_key_is_refused() {
         key_id: "k1".into(),
         key: generate_signing_key(),
     };
-    let err = create_checkpoint(&pool, Some(&interloper))
+    let err = create_checkpoint(&pool, Some(&interloper), None)
         .await
         .expect_err("signing with an unauthorised key must be refused, not produced");
     assert!(
@@ -145,7 +145,7 @@ async fn an_unsigned_checkpoint_asks_no_authority_question() {
     reset_db(&pool).await;
     authorize_signing_key(&pool, "k1", PURPOSE, "ed25519-pub:unused").await;
 
-    create_checkpoint(&pool, None).await.unwrap();
+    create_checkpoint(&pool, None, None).await.unwrap();
     assert!(matches!(
         verify_audit_tree(&pool, None).await.unwrap(),
         TreeVerification::Intact { .. }

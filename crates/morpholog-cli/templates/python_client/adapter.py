@@ -292,28 +292,43 @@ class Morpholog:
         payload = self._json(*argv, "--database-url", self.database_url)
         return [envelopes.NamedClaim.from_json(c) for c in payload]
 
-    def audit(self, after: str | None = None) -> list:
+    def audit(
+        self, after: str | None = None, *, writer_roles: list[str] | None = None
+    ) -> list:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
         a previously seen transition id - lossless: rows whose writers
         were still in flight are withheld until the next call, never
-        skipped. An empty tail is a lawful empty list."""
+        skipped. An empty tail is a lawful empty list.
+
+        ``writer_roles`` asserts the session roles that write audit,
+        for managed PostgreSQL where the platform's hidden sessions
+        make the default refuse. The binary verifies the assertion
+        against the catalog; superuser writes are the residue the
+        assertion explicitly accepts, and role grants, memberships,
+        and login attributes must stay unchanged until the command
+        establishes its read snapshot."""
         return [
             envelopes.AuditRow.from_json(row)
-            for row in self._audit_lines(after, named=False)
+            for row in self._audit_lines(after, named=False, writer_roles=writer_roles)
         ]
 
-    def audit_named(self, after: str | None = None) -> list:
+    def audit_named(
+        self, after: str | None = None, *, writer_roles: list[str] | None = None
+    ) -> list:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
-        payloads stay positional - a different vocabulary."""
+        payloads stay positional - a different vocabulary.
+        ``writer_roles`` as on ``audit``."""
         return [
             envelopes.AuditRowNamed.from_json(row)
-            for row in self._audit_lines(after, named=True)
+            for row in self._audit_lines(after, named=True, writer_roles=writer_roles)
         ]
 
-    def _audit_lines(self, after: str | None, named: bool) -> list:
+    def _audit_lines(
+        self, after: str | None, named: bool, writer_roles: list[str] | None = None
+    ) -> list:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.
@@ -322,6 +337,8 @@ class Morpholog:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
+        for role in writer_roles or []:
+            argv.extend(["--writer-role", role])
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
@@ -390,17 +407,25 @@ class Morpholog:
         return envelopes.VerifyReport.from_json(self._json(*args))
 
     def checkpoint(
-        self, signing_key: str | None = None, key_id: str | None = None
+        self,
+        signing_key: str | None = None,
+        key_id: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
     ) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
-        tree head, so the anchor is attributable."""
+        tree head, so the anchor is attributable. ``writer_roles`` as on
+        ``audit`` - the checkpoint's stable prefix rests on the same
+        resume horizon."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
+        for role in writer_roles or []:
+            args.extend(["--writer-role", role])
         return envelopes.parse_checkpoint_outcome(self._json(*args))
 
     def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:

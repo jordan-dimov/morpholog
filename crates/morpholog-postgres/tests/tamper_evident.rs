@@ -41,7 +41,7 @@ async fn commit_entry(pool: &PgPool, id: &str) {
 }
 
 async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
-    match create_checkpoint(pool, None).await.unwrap() {
+    match create_checkpoint(pool, None, None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")
@@ -120,7 +120,7 @@ async fn checkpoint_chain_extends_and_old_prefix_stays_stable() {
 
     // No new rows -> no-op returning the unchanged head (a usable anchor),
     // not a forked checkpoint.
-    let noop = create_checkpoint(&pool, None).await.unwrap();
+    let noop = create_checkpoint(&pool, None, None).await.unwrap();
     let CheckpointOutcome::NoNewRows(head) = noop else {
         panic!("expected NoNewRows, got {noop:?}");
     };
@@ -220,7 +220,7 @@ async fn a_signed_checkpoint_verifies_and_a_corrupted_signature_is_caught() {
         key_id: "k1".into(),
         key,
     };
-    let cp = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+    let cp = match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")
@@ -281,7 +281,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
         key_id: "k1".into(),
         key,
     };
-    let signed = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+    let signed = match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::NoNewRows(c) => c,
         other @ CheckpointOutcome::Created(_) => panic!("expected no new rows, got {other:?}"),
     };
@@ -297,7 +297,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
     ));
 
     // Re-signing the same head with the same key is idempotent.
-    let again = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+    let again = match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::NoNewRows(c) => c,
         other @ CheckpointOutcome::Created(_) => panic!("expected no new rows, got {other:?}"),
     };
@@ -323,7 +323,7 @@ async fn an_anchor_differing_only_in_signatures_is_not_a_mismatch() {
         key_id: "k1".into(),
         key,
     };
-    let signed = match create_checkpoint(&pool, Some(&signer)).await.unwrap() {
+    let signed = match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")

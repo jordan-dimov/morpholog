@@ -1199,6 +1199,66 @@ predicate Solo(only_id: Subject)
     );
 }
 
+/// The connecting role's name, for the writer-assertion tests.
+async fn cli_session_user() -> String {
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let (name,): (String,) = sqlx::query_as("SELECT session_user::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    name
+}
+
+// The managed-Postgres opt-in reaches both watermark consumers. The
+// local/CI test role is a superuser, so the catalog census is
+// trivially satisfiable here; the census's own teeth are tested in
+// morpholog-postgres, and the genuinely-hidden-session path only
+// exists on a managed host.
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_audit_writer_role_assertion_streams_the_tail() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    let me = cli_session_user().await;
+
+    let (status, stdout, stderr) = run_cli(&["inspect", "audit", "--writer-role", &me]);
+    assert!(status.success(), "asserted tail should stream; {stderr}");
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one committed transition, one line: {stdout}"
+    );
+    let row: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(row["transformation_name"], "post_simple_entry");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_audit_unknown_writer_role_is_refused_as_a_typo() {
+    reset_db().await;
+    let (status, _stdout, stderr) =
+        run_cli(&["inspect", "audit", "--writer-role", "no_such_role_cli_209"]);
+    assert!(!status.success(), "an unknown asserted role must refuse");
+    assert!(
+        stderr.contains("no_such_role_cli_209"),
+        "the refusal names the role: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn checkpoint_accepts_the_writer_assertion() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    let me = cli_session_user().await;
+
+    let (status, stdout, stderr) = run_cli(&["checkpoint", "--writer-role", &me]);
+    assert!(
+        status.success(),
+        "asserted checkpoint should commit; {stderr}"
+    );
+    let outcome: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(outcome["status"], "created", "{stdout}");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
     reset_db().await;

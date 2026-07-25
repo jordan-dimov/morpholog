@@ -136,7 +136,8 @@ async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
         None => None,
     };
     let pool = connect(&args.db.database_url).await?;
-    let mut tail = begin_audit_tail(&pool, args.after)
+    let writers = (!args.writer_role.is_empty()).then_some(args.writer_role.as_slice());
+    let mut tail = begin_audit_tail(&pool, args.after, writers)
         .await
         .context("opening the audit tail")?;
     loop {

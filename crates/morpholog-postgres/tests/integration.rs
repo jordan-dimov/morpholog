@@ -1719,8 +1719,9 @@ async fn audit_read_rejects_non_subject_actor() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(Uuid::now_v7())
     .bind("hand_written")
@@ -1731,6 +1732,7 @@ async fn audit_read_rejects_non_subject_actor() {
     .bind(serde_json::json!([]))
     .bind(serde_json::json!([]))
     .bind(serde_json::json!([]))
+    .bind(serde_json::json!({ "mode": "gateway", "authenticated_by": "test" }))
     .execute(&pool)
     .await
     .expect("hand-written audit row should insert");
