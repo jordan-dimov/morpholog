@@ -65,12 +65,13 @@ intent JournalEntryRestated(new_entry_id: Subject, prior_entry_id: Subject)
 -- The five-hundred-year-old rule itself: for every entry, its debits
 -- and its credits sum to the same amount. Read `implies` as "whenever
 -- the left is true, the right must be too". The `let` lines just name
--- the two sums - nothing is stored - so the rule ends on the sentence
--- every bookkeeping text opens with.
+-- the two sums - nothing is stored, and `entry` inside them means the
+-- entry the rule is looking at when the name is used - so the rule
+-- ends on the sentence every bookkeeping text opens with.
 invariant balanced_posted_entry:
     let debits = (sum(d | JournalLine(entry, _, d, _)))
     let credits = (sum(c | JournalLine(entry, _, _, c)))
-    JournalEntry(entry, _, _) implies (debits) = (credits)
+    JournalEntry(entry, _, _) implies debits = credits
 
 -- An entry with no lines is meaningless paperwork. Every entry must
 -- have at least one line.

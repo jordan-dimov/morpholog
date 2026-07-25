@@ -125,7 +125,10 @@ invariant headroom_consumed_by_payment:
 -- deductible, capped at the per-claim limit. The `let` names that first
 -- piece - max(0, ...) floors a below-deductible loss at zero, so the
 -- insurer never owes a negative amount - and the min(...) then caps the
--- covered loss at the per-claim limit. A policy with no coverage terms
+-- covered loss at the per-claim limit. A `let` is an abbreviation, not
+-- a step that runs first: `loss` and `deductible` get their meaning
+-- where `covered_loss` is used, after the claims below have matched
+-- them. A policy with no coverage terms
 -- set is unaffected - the rule is vacuous without a CoverageTerms claim
 -- - so this layer composes with, and sits inside, the aggregate cap
 -- above.
@@ -134,7 +137,7 @@ invariant settlement_within_eligible_payout:
     SettlementAuthorised(claim_id, _, amount, _)
     and ClaimReported(claim_id, policy_id, loss)
     and CoverageTerms(policy_id, deductible, per_claim_limit)
-    implies amount <= min(per_claim_limit, (covered_loss))
+    implies amount <= min(per_claim_limit, covered_loss)
 
 -- Coverage terms must make business sense: a deductible is non-negative
 -- (zero means no deductible), and a per-claim limit is strictly positive

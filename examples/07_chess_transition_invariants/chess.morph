@@ -95,13 +95,15 @@ invariant exactly_one_black_king:
 -- bishop with itself.)
 --
 -- The `let` lines name the colour formula before the rule uses it.
--- Nothing is stored: the rule means exactly what it would mean with
--- the formula written out at each use - the names are for the reader.
+-- Nothing is stored, and nothing runs early: the rule means exactly
+-- what it would mean with the formula written out at each use, so
+-- `f_a` and the rest mean the squares the two bishop claims match.
+-- The names are for the reader.
 invariant bishops_on_opposite_square_colors:
   let colour_a = ((f_a + r_a) % 2)
   let colour_b = ((f_b + r_b) % 2)
   (PieceAt(f_a, r_a, #bishop, c) and PieceAt(f_b, r_b, #bishop, c) and not (f_a = f_b and r_a = r_b))
-  implies ((colour_a) != (colour_b))
+  implies (colour_a != colour_b)
 
 -- The piece counter must agree with the board it summarises: the number
 -- stored in PieceCount must equal the actual number of pieces, counted
