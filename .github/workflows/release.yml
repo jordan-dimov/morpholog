@@ -1,0 +1,128 @@
+# Prebuilt-binary release channel: a static linux x86_64 `morpholog` on
+# tag push, with the same build/smoke/package pipeline dry-run on any PR
+# that touches it - so the first real tag is never the first execution.
+#
+# Two jobs on purpose: the build job (which PRs can reach, and whose
+# steps a PR can edit) holds a read-only token; only the tag-gated
+# publish job gets `contents: write`, and it consumes the packaged
+# artifact rather than rebuilding. Actions are pinned to commit SHAs
+# (not tags): this workflow publishes an executable artifact, so its
+# inputs are immutable by policy even though ci.yml uses the friendlier
+# tags.
+name: release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/morpholog-cli/**"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The ancestor-of-main guard below needs real history.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          # The workspace floor, pinned exactly: a release artifact is
+          # built by a named compiler, not whichever stable is current.
+          toolchain: "1.95.0"
+          targets: x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: release
+
+      - name: The tag names the workspace version and sits on main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "morpholog-cli") | .version')"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "tag v$TAG does not match crate version $VERSION" >&2
+            exit 1
+          fi
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "tagged commit is not on main" >&2
+            exit 1
+          fi
+
+      - name: musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build (static; sqlx verifies against the committed offline cache)
+        run: cargo build --release --locked --target "$TARGET" -p morpholog-cli
+
+      - name: The artifact is genuinely static and answers
+        run: |
+          BIN="target/$TARGET/release/morpholog"
+          strip "$BIN"
+          file "$BIN"
+          file "$BIN" | grep -Eq 'statically linked|static-pie' || {
+            echo "the binary is not statically linked" >&2
+            exit 1
+          }
+          "$BIN" --version
+          "$BIN" check examples/01_settlement_netting/netting.morph
+
+      - name: Package with checksum
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/*) LABEL="$GITHUB_REF_NAME" ;;
+            *)           LABEL="dryrun" ;;
+          esac
+          NAME="morpholog-$LABEL-$TARGET"
+          mkdir "$NAME"
+          cp "target/$TARGET/release/morpholog" LICENSE "$NAME/"
+          tar czf "$NAME.tar.gz" "$NAME"
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          sha256sum -c "$NAME.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-package
+          path: |
+            morpholog-*.tar.gz
+            morpholog-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-package
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Prebuilt static linux x86_64 binary. Install guide: docs/install.md (verify the checksum; the worked examples ship in the source archive below, no Rust toolchain needed)." \
+            morpholog-"$GITHUB_REF_NAME"-x86_64-unknown-linux-musl.tar.gz \
+            morpholog-"$GITHUB_REF_NAME"-x86_64-unknown-linux-musl.tar.gz.sha256

@@ -4,6 +4,10 @@ Notes for developers working on the codebase. For the project's framing and work
 
 ## Prerequisites
 
+Using Morpholog rather than developing it? The prebuilt-binary path is
+[`docs/install.md`](docs/install.md); everything below is for working on
+the source.
+
 - **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
 - **PostgreSQL 18+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
