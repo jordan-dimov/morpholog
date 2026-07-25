@@ -22,17 +22,24 @@ def golden(name: str):
 
 
 @contextlib.contextmanager
-def recording_argv(case):
+def recording_argv():
     """Point the stub's STUB_ARGV_FILE at a temp file and yield an
     `argv_after(call)` that runs `call` and returns the recorded argv
-    lines. `case` supplies addCleanup for the env var."""
+    lines. The prior environment is restored on exit, so nothing
+    leaks past the `with` block."""
     with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+        previous = os.environ.get("STUB_ARGV_FILE")
         os.environ["STUB_ARGV_FILE"] = record.name
-        case.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+        try:
 
-        def argv_after(call):
-            call()
-            with open(record.name) as handle:
-                return handle.read().splitlines()
+            def argv_after(call):
+                call()
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
 
-        yield argv_after
+            yield argv_after
+        finally:
+            if previous is None:
+                os.environ.pop("STUB_ARGV_FILE", None)
+            else:
+                os.environ["STUB_ARGV_FILE"] = previous

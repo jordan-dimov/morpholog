@@ -124,7 +124,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # reads, and is absent otherwise - all four cases, since the
         # issue asked for both surfaces.
         self._mode("record_argv")
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
 
             argv = argv_after(
                 lambda: self.client.claims_named(
@@ -154,7 +154,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # land on argv exactly when asked for, after the positional
         # file + derived-claim name.
         self._mode("record_argv")
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
 
             argv = argv_after(
                 lambda: self.client.derived_named(
@@ -184,7 +184,7 @@ class AdapterDiscrimination(unittest.TestCase):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "refresh_derived_report.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
             report = None
 
             def call():
@@ -205,7 +205,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # The four-case matrix for the audit tail: --after and --named
         # each appear exactly when asked for.
         self._mode("record_argv_empty")
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
 
             tid = "01900000-0000-7000-8000-000000000001"
             argv = argv_after(lambda: self.client.audit_named(after=tid))
@@ -229,7 +229,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # The managed-Postgres assertion: one --writer-role pair per
         # role, on every watermark consumer, and absent when not asked.
         self._mode("record_argv_empty")
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
 
             argv = argv_after(lambda: self.client.audit(writer_roles=["app_rw", "batch_rw"]))
             pairs = [
@@ -249,7 +249,7 @@ class AdapterDiscrimination(unittest.TestCase):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_created.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
             argv = argv_after(lambda: self.client.checkpoint(writer_roles=["app_rw"]))
             self.assertEqual(argv[argv.index("--writer-role") + 1], "app_rw")
 
@@ -263,7 +263,7 @@ class AdapterDiscrimination(unittest.TestCase):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "verify_report_consistent.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
 
             argv = argv_after(
                 lambda: self.client.verify(
@@ -433,7 +433,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # it through only when asked, so each rejected row carries the
         # same-snapshot why.
         self._mode("record_argv_empty")
-        with recording_argv(self) as argv_after:
+        with recording_argv() as argv_after:
 
             rows = [{"transformation": "t", "actor": "a", "args_named": {}}]
             argv = argv_after(
