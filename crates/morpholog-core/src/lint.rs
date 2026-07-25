@@ -10,6 +10,13 @@
 //! disciplines, the revocation-rewrites-history shape - an invariant
 //! conditioning permanent records on a retractable pointer's presence
 //! - is detectable at check time.
+//!
+//! The third occupant is the effective-time vacuity smell: an
+//! antecedent selecting "the governing version in force at a
+//! coordinate" passes vacuously when no version exists there, unless
+//! another invariant backstops totality. A shape smell, never a
+//! vacuity proof - that is the verification arc's static-vacuity
+//! tier.
 
 use std::collections::BTreeSet;
 
@@ -52,6 +59,23 @@ pub enum Lint {
         invariant: String,
         missing: Vec<String>,
     },
+
+    /// An authored invariant whose antecedent appears to select "the
+    /// governing version of `P` in force at a coordinate" - a dated
+    /// `P` claim bounded on-or-before a coordinate, with a negated
+    /// `exists` excluding a strictly later `P` - while no OTHER
+    /// authored invariant carries the recognised totality-backstop
+    /// shape for `P` (an implication guaranteeing an `exists` witness
+    /// of `P` with a temporal bound). When no version is in force at
+    /// a coordinate, such a selection passes vacuously - the rule
+    /// silently does not apply at the edges. `predicates` names the
+    /// UNBACKED selected predicates only. A shape smell, not a
+    /// vacuity proof: coordinate agreement between selection and
+    /// backstop is not verified.
+    GoverningSelectionWithoutTotality {
+        invariant: String,
+        predicates: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for Lint {
@@ -90,6 +114,31 @@ impl std::fmt::Display for Lint {
                      transformation"
                 )
             }
+            Lint::GoverningSelectionWithoutTotality {
+                invariant,
+                predicates,
+            } => {
+                let names = predicates
+                    .iter()
+                    .map(|p| format!("`{p}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "invariant `{invariant}` appears to select the governing \
+                     version of {names} in force at a coordinate (the \
+                     not-a-later-one pattern), but no other invariant has \
+                     the recognised totality shape for it. When no version \
+                     is in force at a coordinate, this rule may pass \
+                     vacuously - the edge the selection cannot see. Add a \
+                     totality backstop (an invariant guaranteeing every \
+                     governed coordinate an effective version, e.g. \
+                     `... implies (exists e: {names_first}(..., e) and e \
+                     on_or_before d)` - `at_or_before` for timestamps) \
+                     beside the ordinary action's `require` gate",
+                    names_first = predicates.first().map(String::as_str).unwrap_or("P"),
+                )
+            }
         }
     }
 }
@@ -116,8 +165,24 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     let declared = crate::analysis::declared_supplier_predicates(program);
     let do_gate = !append_only.is_empty() && !pointers.is_empty();
 
+    // Which invariants guarantee a dated witness for which predicates -
+    // the totality-backstop side of the governing-selection lint,
+    // computed once. Indexed so an invariant can never back itself: a
+    // companion is by definition a DIFFERENT rule.
+    let witnesses: Vec<BTreeSet<PredicateName>> = program
+        .invariants
+        .iter()
+        .map(|inv| {
+            if inv.origin == InvariantOrigin::Authored {
+                crate::analysis::guaranteed_dated_witnesses(&inv.body, definitions)
+            } else {
+                BTreeSet::new()
+            }
+        })
+        .collect();
+
     let mut out = Vec::new();
-    for inv in &program.invariants {
+    for (index, inv) in program.invariants.iter().enumerate() {
         let mut implications = Vec::new();
         collect_implications(
             &inv.body,
@@ -138,12 +203,62 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
             );
         }
         // A generated discipline invariant is machinery the author cannot
-        // see in source, so it gets no unsupplied-antecedent hint.
+        // see in source, so it gets no unsupplied-antecedent hint - and no
+        // governing-selection hint either.
         if inv.origin == InvariantOrigin::Authored {
             unsupplied_antecedent_findings(inv, &implications, &declared, definitions, &mut out);
+            governing_selection_findings(
+                inv,
+                index,
+                &implications,
+                &witnesses,
+                definitions,
+                &mut out,
+            );
         }
     }
     out
+}
+
+/// The effective-time vacuity smell: an antecedent that selects the
+/// governing version of a predicate at a coordinate, in a programme
+/// where no OTHER invariant carries the recognised totality-backstop
+/// shape for it. Names only the unbacked predicates.
+fn governing_selection_findings(
+    inv: &Invariant,
+    index: usize,
+    implications: &[CollectedImplication<'_>],
+    witnesses: &[BTreeSet<PredicateName>],
+    definitions: DefinitionIndex<'_>,
+    out: &mut Vec<Lint>,
+) {
+    let mut selected = BTreeSet::new();
+    for implication in implications {
+        selected.extend(crate::analysis::governing_selections(
+            implication.antecedent,
+            definitions,
+        ));
+    }
+    if selected.is_empty() {
+        return;
+    }
+    let unbacked: Vec<String> = selected
+        .iter()
+        .filter(|p| {
+            !witnesses
+                .iter()
+                .enumerate()
+                .any(|(j, w)| j != index && w.contains(*p))
+        })
+        .map(ToString::to_string)
+        .collect();
+    if unbacked.is_empty() {
+        return;
+    }
+    out.push(Lint::GoverningSelectionWithoutTotality {
+        invariant: inv.name.to_string(),
+        predicates: unbacked,
+    });
 }
 
 /// The revocation-rewrites-history shape: an antecedent positively
@@ -508,5 +623,19 @@ mod tests {
         };
         let rendered = format!("{unsupplied}");
         assert!(rendered.contains("haunting_is_real") && rendered.contains("Ghost"));
+
+        let governing = Lint::GoverningSelectionWithoutTotality {
+            invariant: "priced_by_governing_tariff".to_string(),
+            predicates: vec!["Tariff".to_string()],
+        };
+        let rendered = format!("{governing}");
+        assert!(
+            rendered.contains("priced_by_governing_tariff")
+                && rendered.contains("`Tariff`")
+                && rendered.contains("totality backstop")
+                && rendered.contains("may pass"),
+            "the hint names the rule, the predicate, and the mitigation, \
+             without overclaiming: {rendered}"
+        );
     }
 }

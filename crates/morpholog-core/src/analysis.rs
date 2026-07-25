@@ -11,8 +11,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::definitions::DefinitionIndex;
 use crate::ir::{
-    ArgDecl, ArithOp, Definition, DefinitionName, DerivedClaim, OrderedDomain, PredicateArgKind,
-    PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
+    ArgDecl, ArithOp, CompareOp, Definition, DefinitionName, DerivedClaim, OrderedDomain,
+    PredicateArgKind, PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
 };
 use crate::validate::ValidatedProgram;
 
@@ -462,6 +462,364 @@ fn undeclared_blockers_inner(
         | Prop::Compare { .. }
         | Prop::In(_, _) => None,
     }
+}
+
+// ============================================================
+// Governing-version selection and its totality backstop: the two
+// halves of the effective-time vacuity lint.
+// ============================================================
+
+/// Is this a temporal comparison between two plain variables? The
+/// building block of the not-a-later-one pattern; value arithmetic in
+/// a comparison operand disqualifies it here on purpose (the pattern
+/// compares dates, not computed values).
+fn temporal_var_pair(prop: &Prop) -> Option<(CompareOp, &Var, &Var)> {
+    let Prop::Compare {
+        op,
+        domain: OrderedDomain::Date | OrderedDomain::Timestamp,
+        left,
+        right,
+    } = prop
+    else {
+        return None;
+    };
+    match (left.as_ref(), right.as_ref()) {
+        (ValueExpr::Term(Term::Var(l)), ValueExpr::Term(Term::Var(r))) => Some((*op, l, r)),
+        _ => None,
+    }
+}
+
+/// Evidence gathered over one conjunctive scope: positive claims with
+/// their variable arguments, temporal variable-pair comparisons split
+/// strict/non-strict, and the negated-exists excluders (the claimed
+/// predicate, the variables its inner claim and binder carry, and the
+/// strict temporal comparisons inside it).
+/// One negated-exists excluder: the claimed predicate, the variables
+/// its inner claim and binder carry, and the strict temporal
+/// comparisons inside it.
+type Excluder<'a> = (
+    &'a PredicateName,
+    BTreeSet<&'a Var>,
+    Vec<(&'a Var, &'a Var)>,
+);
+
+#[derive(Default)]
+struct SelectionEvidence<'a> {
+    claims: Vec<(&'a PredicateName, BTreeSet<&'a Var>)>,
+    nonstrict: Vec<(&'a Var, &'a Var)>,
+    excluders: Vec<Excluder<'a>>,
+}
+
+fn claim_vars(args: &[Term]) -> BTreeSet<&Var> {
+    args.iter()
+        .filter_map(|t| match t {
+            Term::Var(v) => Some(v),
+            Term::Wildcard | Term::Literal(_) | Term::Actor => None,
+        })
+        .collect()
+}
+
+/// The bounded governing-version selections completed inside `prop`
+/// (an implication antecedent): predicates `P` where one conjunctive
+/// alternative holds a positive `P` claim carrying a date variable
+/// that is (a) bounded by a non-strict temporal comparison (the
+/// "on-or-before the coordinate" half) and (b) strictly ordered
+/// against a `P` claim inside a negated `exists` (the "no later
+/// version" half). Evidence never crosses `or` branches - each branch
+/// is its own scope - and `Defined` bodies are expanded with the
+/// recursion-stack guard (matching inside the body's own variable
+/// namespace; call-site substitution is not performed, so a name
+/// collision between call-site and body variables could in principle
+/// forge a cross-namespace link - accepted for a hint).
+///
+/// Deliberately incomplete: `implies`, `xor`, and `forall` inside the
+/// antecedent are opaque, and the unbounded ("current version")
+/// selection does not fire - this lint is about a governing version at
+/// a coordinate. Missing an exotic spelling is preferred over accusing
+/// ordinary temporal logic. Direction is load-bearing in the WINDOW
+/// (the bound must establish candidate <= coordinate; a forward
+/// window is not a governing selection) but deliberately NOT in the
+/// strict tiebreak: within a retrospective window, excluding a
+/// strictly LATER version selects the latest-in-force and excluding a
+/// strictly EARLIER one selects the earliest - and either selection
+/// over an empty window is vacuous in exactly the same way.
+pub(crate) fn governing_selections(
+    prop: &Prop,
+    definitions: DefinitionIndex<'_>,
+) -> BTreeSet<PredicateName> {
+    let mut out = BTreeSet::new();
+    selections_in_scope(prop, definitions, &mut out);
+    out
+}
+
+fn selections_in_scope(
+    prop: &Prop,
+    definitions: DefinitionIndex<'_>,
+    out: &mut BTreeSet<PredicateName>,
+) {
+    let mut ev = SelectionEvidence::default();
+    gather_selection_evidence(prop, definitions, &mut BTreeSet::new(), &mut ev, out);
+    for (predicate, pvars) in &ev.claims {
+        for (excluded, evars, strict) in &ev.excluders {
+            if excluded != predicate {
+                continue;
+            }
+            let candidate_var = strict.iter().find_map(|(a, b)| {
+                if evars.contains(a) && pvars.contains(b) {
+                    Some(*b)
+                } else if evars.contains(b) && pvars.contains(a) {
+                    Some(*a)
+                } else {
+                    None
+                }
+            });
+            let Some(v) = candidate_var else { continue };
+            // The bound must establish candidate <= coordinate: a
+            // forward window (candidate on-or-AFTER a date) is not
+            // "the version in force at a coordinate" and stays clean.
+            if ev.nonstrict.iter().any(|(earlier, _)| *earlier == v) {
+                out.insert((*predicate).clone());
+            }
+        }
+    }
+}
+
+fn gather_selection_evidence<'a>(
+    prop: &'a Prop,
+    definitions: DefinitionIndex<'a>,
+    seen: &mut BTreeSet<DefinitionName>,
+    ev: &mut SelectionEvidence<'a>,
+    out: &mut BTreeSet<PredicateName>,
+) {
+    match prop {
+        Prop::Claim { predicate, args } => ev.claims.push((predicate, claim_vars(args))),
+        Prop::Compare { .. } => {
+            // Normalised to (earlier_or_equal, later_or_equal): the
+            // direction is load-bearing - the candidate bound must
+            // establish candidate <= coordinate, whichever way it was
+            // spelled.
+            if let Some((op, l, r)) = temporal_var_pair(prop) {
+                match op {
+                    CompareOp::Le => ev.nonstrict.push((l, r)),
+                    CompareOp::Ge => ev.nonstrict.push((r, l)),
+                    CompareOp::Lt | CompareOp::Gt => {}
+                }
+            }
+        }
+        Prop::And(props) => {
+            for p in props {
+                gather_selection_evidence(p, definitions, seen, ev, out);
+            }
+        }
+        Prop::Pre(body) => gather_selection_evidence(body, definitions, seen, ev, out),
+        Prop::Defined { name, .. } => {
+            if seen.insert(name.clone()) {
+                if let Some(def) = definitions.get(name) {
+                    gather_selection_evidence(&def.body, definitions, seen, ev, out);
+                }
+                seen.remove(name);
+            }
+        }
+        Prop::Not(inner) => {
+            if let Prop::Exists { binding, body } = inner.as_ref() {
+                let mut inner_ev = SelectionEvidence::default();
+                gather_selection_evidence(body, definitions, seen, &mut inner_ev, out);
+                for (predicate, vars) in inner_ev.claims {
+                    let mut with_binder = vars;
+                    with_binder.insert(binding);
+                    let strict: Vec<(&Var, &Var)> = collect_strict_temporal(body, definitions);
+                    ev.excluders.push((predicate, with_binder, strict));
+                }
+            }
+        }
+        // Each `or` branch is its own scope; evidence must not combine
+        // across branches into a pattern no branch contains.
+        Prop::Or(props) => {
+            for p in props {
+                selections_in_scope(p, definitions, out);
+            }
+        }
+        // A positive `exists` is likewise a sub-scope of its own.
+        Prop::Exists { body, .. } => selections_in_scope(body, definitions, out),
+        Prop::Implies { .. }
+        | Prop::Xor(_, _)
+        | Prop::Forall { .. }
+        | Prop::Eq(_, _)
+        | Prop::Neq(_, _)
+        | Prop::In(_, _) => {}
+    }
+}
+
+/// The strict temporal variable-pair comparisons in `prop`'s
+/// conjunctive closure (descending `and`, `pre`, and `Defined`).
+fn collect_strict_temporal<'a>(
+    prop: &'a Prop,
+    definitions: DefinitionIndex<'a>,
+) -> Vec<(&'a Var, &'a Var)> {
+    fn walk<'a>(
+        prop: &'a Prop,
+        definitions: DefinitionIndex<'a>,
+        seen: &mut BTreeSet<DefinitionName>,
+        out: &mut Vec<(&'a Var, &'a Var)>,
+    ) {
+        match prop {
+            Prop::Compare { .. } => {
+                // Normalised to (earlier, later), whichever way spelled.
+                if let Some((op, l, r)) = temporal_var_pair(prop) {
+                    match op {
+                        CompareOp::Lt => out.push((l, r)),
+                        CompareOp::Gt => out.push((r, l)),
+                        CompareOp::Le | CompareOp::Ge => {}
+                    }
+                }
+            }
+            Prop::And(props) => {
+                for p in props {
+                    walk(p, definitions, seen, out);
+                }
+            }
+            Prop::Pre(body) => walk(body, definitions, seen, out),
+            Prop::Defined { name, .. } => {
+                if seen.insert(name.clone()) {
+                    if let Some(def) = definitions.get(name) {
+                        walk(&def.body, definitions, seen, out);
+                    }
+                    seen.remove(name);
+                }
+            }
+            Prop::Claim { .. }
+            | Prop::Not(_)
+            | Prop::Or(_)
+            | Prop::Exists { .. }
+            | Prop::Implies { .. }
+            | Prop::Xor(_, _)
+            | Prop::Forall { .. }
+            | Prop::Eq(_, _)
+            | Prop::Neq(_, _)
+            | Prop::In(_, _) => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(prop, definitions, &mut BTreeSet::new(), &mut out);
+    out
+}
+
+/// The predicates an invariant body GUARANTEES a dated witness for -
+/// the recognised totality-backstop shape. Top level: implication
+/// consequents (descending `and`, `forall` bodies, and `Defined`);
+/// within a consequent, a must-guarantee algebra: `and` unions,
+/// `or` intersects (only one branch need hold), and everything
+/// conditional or negative (`implies`, `not`, `pre`, `xor`,
+/// `forall`) contributes nothing. The witness itself is an `exists`
+/// whose body carries a positive claim of `P` and a temporal
+/// comparison involving one of that claim's variables (or the
+/// binder) - "some `P` effective by a coordinate", not merely "some
+/// `P` somewhere". Coordinate agreement with any particular
+/// selection is deliberately NOT verified - that is the verification
+/// arc's static-vacuity tier, not a lint.
+pub(crate) fn guaranteed_dated_witnesses(
+    invariant_body: &Prop,
+    definitions: DefinitionIndex<'_>,
+) -> BTreeSet<PredicateName> {
+    fn top(
+        prop: &Prop,
+        definitions: DefinitionIndex<'_>,
+        seen: &mut BTreeSet<DefinitionName>,
+    ) -> BTreeSet<PredicateName> {
+        match prop {
+            Prop::Implies { right, .. } => algebra(right, definitions, seen),
+            Prop::And(props) => props
+                .iter()
+                .flat_map(|p| top(p, definitions, seen))
+                .collect(),
+            Prop::Forall { body, .. } => top(body, definitions, seen),
+            Prop::Defined { name, .. } => {
+                if seen.insert(name.clone()) {
+                    let found = match definitions.get(name) {
+                        Some(def) => top(&def.body, definitions, seen),
+                        None => BTreeSet::new(),
+                    };
+                    seen.remove(name);
+                    found
+                } else {
+                    BTreeSet::new()
+                }
+            }
+            Prop::Claim { .. }
+            | Prop::Or(_)
+            | Prop::Exists { .. }
+            | Prop::Not(_)
+            | Prop::Pre(_)
+            | Prop::Xor(_, _)
+            | Prop::Eq(_, _)
+            | Prop::Neq(_, _)
+            | Prop::Compare { .. }
+            | Prop::In(_, _) => BTreeSet::new(),
+        }
+    }
+    fn algebra(
+        prop: &Prop,
+        definitions: DefinitionIndex<'_>,
+        seen: &mut BTreeSet<DefinitionName>,
+    ) -> BTreeSet<PredicateName> {
+        match prop {
+            Prop::And(props) => props
+                .iter()
+                .flat_map(|p| algebra(p, definitions, seen))
+                .collect(),
+            Prop::Or(props) => {
+                let mut branches = props.iter().map(|p| algebra(p, definitions, seen));
+                let Some(first) = branches.next() else {
+                    return BTreeSet::new();
+                };
+                branches.fold(first, |acc, b| acc.intersection(&b).cloned().collect())
+            }
+            Prop::Exists { binding: _, body } => {
+                let mut ev = SelectionEvidence::default();
+                let mut scratch = BTreeSet::new();
+                gather_selection_evidence(body, definitions, seen, &mut ev, &mut scratch);
+                let earlier_side: BTreeSet<&Var> = ev
+                    .nonstrict
+                    .iter()
+                    .chain(collect_strict_temporal(body, definitions).iter())
+                    .map(|(earlier, _)| *earlier)
+                    .collect();
+                // A claim is a dated witness only when one of ITS OWN
+                // variables sits on the EARLIER side of a temporal
+                // relation - "some P effective by a coordinate". A
+                // future-only witness (P dated after the coordinate)
+                // closes no on-or-before hole and must not suppress.
+                ev.claims
+                    .iter()
+                    .filter(|(_, vars)| vars.iter().any(|v| earlier_side.contains(v)))
+                    .map(|(p, _)| (*p).clone())
+                    .collect()
+            }
+            Prop::Defined { name, .. } => {
+                if seen.insert(name.clone()) {
+                    let found = match definitions.get(name) {
+                        Some(def) => algebra(&def.body, definitions, seen),
+                        None => BTreeSet::new(),
+                    };
+                    seen.remove(name);
+                    found
+                } else {
+                    BTreeSet::new()
+                }
+            }
+            Prop::Claim { .. }
+            | Prop::Not(_)
+            | Prop::Implies { .. }
+            | Prop::Pre(_)
+            | Prop::Xor(_, _)
+            | Prop::Forall { .. }
+            | Prop::Eq(_, _)
+            | Prop::Neq(_, _)
+            | Prop::Compare { .. }
+            | Prop::In(_, _) => BTreeSet::new(),
+        }
+    }
+    top(invariant_body, definitions, &mut BTreeSet::new())
 }
 
 // ============================================================
