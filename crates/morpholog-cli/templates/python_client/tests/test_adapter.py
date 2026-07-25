@@ -244,6 +244,52 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--after", argv)
             self.assertNotIn("--named", argv)
 
+    def test_writer_roles_repeat_on_the_audit_and_checkpoint_argv(self):
+        # The managed-Postgres assertion: one --writer-role pair per
+        # role, on every watermark consumer, and absent when not asked.
+        self._mode("record_argv_empty")
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            def argv_after(call):
+                call()
+                with open(record.name) as handle:
+                    return handle.read().splitlines()
+
+            argv = argv_after(lambda: self.client.audit(writer_roles=["app_rw", "batch_rw"]))
+            pairs = [
+                (argv[i], argv[i + 1])
+                for i in range(len(argv) - 1)
+                if argv[i] == "--writer-role"
+            ]
+            self.assertEqual(pairs, [("--writer-role", "app_rw"), ("--writer-role", "batch_rw")])
+
+            argv = argv_after(lambda: self.client.audit_named(writer_roles=["app_rw"]))
+            self.assertIn("--writer-role", argv)
+            self.assertIn("--named", argv)
+
+            argv = argv_after(lambda: self.client.audit())
+            self.assertNotIn("--writer-role", argv)
+
+        self._mode("record_argv_stdout")
+        golden_dir = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
+        os.environ["STUB_STDOUT"] = (golden_dir / "checkpoint_created.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:
+            os.environ["STUB_ARGV_FILE"] = record.name
+            self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+
+            self.client.checkpoint(writer_roles=["app_rw"])
+            with open(record.name) as handle:
+                argv = handle.read().splitlines()
+            self.assertEqual(argv[argv.index("--writer-role") + 1], "app_rw")
+
+            self.client.checkpoint()
+            with open(record.name) as handle:
+                argv = handle.read().splitlines()
+            self.assertNotIn("--writer-role", argv)
+
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
         # The verdict-affecting verify flags: each appears exactly when
         # asked for, so the whole pinned verdict surface (signatures,
