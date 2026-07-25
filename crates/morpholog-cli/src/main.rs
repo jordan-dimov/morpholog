@@ -364,6 +364,16 @@ pub(crate) struct CheckpointArgs {
     /// key>)` claim as of the checkpoint's prefix, or signing is refused.
     #[arg(long, requires = "signing_key")]
     pub(crate) key_id: Option<String>,
+
+    /// Assert the session roles that write audit (repeatable), so the
+    /// resume horizon is computed over their sessions only - for
+    /// managed PostgreSQL, where the platform's own sessions are
+    /// hidden and `pg_read_all_stats` cannot be granted. The
+    /// assertion is verified against the catalog (every non-superuser
+    /// role that can write `morpholog.audit` must be asserted);
+    /// superuser writes are the residue the flag explicitly accepts.
+    #[arg(long = "writer-role", value_name = "ROLE")]
+    pub(crate) writer_role: Vec<String>,
 }
 
 /// Arguments for `keygen`: where to write the new Ed25519 keypair.
@@ -760,6 +770,16 @@ pub(crate) struct InspectAuditArgs {
     /// sides.
     #[arg(long, value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
+
+    /// Assert the session roles that write audit (repeatable), so the
+    /// resume horizon is computed over their sessions only - for
+    /// managed PostgreSQL, where the platform's own sessions are
+    /// hidden and `pg_read_all_stats` cannot be granted. The
+    /// assertion is verified against the catalog (every non-superuser
+    /// role that can write `morpholog.audit` must be asserted);
+    /// superuser writes are the residue the flag explicitly accepts.
+    #[arg(long = "writer-role", value_name = "ROLE")]
+    pub(crate) writer_role: Vec<String>,
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
