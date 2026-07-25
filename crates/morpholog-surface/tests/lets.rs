@@ -173,16 +173,48 @@ fn let_colliding_with_a_quantifier_binder_is_refused() {
 }
 
 #[test]
-fn let_colliding_with_a_sum_target_is_refused_as_a_binder() {
-    // The sum target is bound by the sum body, so a let of the same
-    // name is a binder collision - refused before substitution could
-    // rewrite the target.
-    refusal_containing(
-        "define f(a, total):\n    \
-             let net = ((a) + 1)\n    \
-             total = (sum(net | Reading(m, net)))",
-        "collides with a quantifier binding",
+fn term_valued_let_flows_into_a_sum_target() {
+    // The sum target is CONSUMED against bindings the sum body
+    // supplies - it is not a binder, so a term-valued let substitutes
+    // into it like any other term slot.
+    assert_equivalent(
+        "define f(total):\n    \
+             let selected = (kwh)\n    \
+             total = (sum(selected | Reading(m, kwh)))",
+        "define f(total):\n    \
+             total = (sum(kwh | Reading(m, kwh)))",
     );
+}
+
+#[test]
+fn self_referential_let_is_refused() {
+    // Even the no-op spelling: `let a = (a)` would otherwise vanish
+    // as a term swap instead of being diagnosed.
+    refusal_containing(
+        "define f(a):\n    \
+             let raw = (raw)\n    \
+             Reading(m, raw)",
+        "let `raw` references itself",
+    );
+}
+
+#[test]
+fn forward_reference_is_refused() {
+    // A let may use earlier lets only. Refused whether or not the
+    // later let is also used by the body directly - without the order
+    // check, substitution order resolves the first spelling and calls
+    // the second dead, so legality would hinge on an unrelated use.
+    for body in ["committed = ((first) + (later))", "committed = (first)"] {
+        refusal_containing(
+            &format!(
+                "define f(x, committed):\n    \
+                     let first = ((later) + 1)\n    \
+                     let later = ((x) + 1)\n    \
+                     {body}"
+            ),
+            "let `first` references `later`, which is declared later",
+        );
+    }
 }
 
 #[test]
@@ -231,12 +263,16 @@ fn transitively_dead_let_chain_is_refused_whole() {
 // Computed lets in term-only positions: the structurally distinct
 // slots share one refusal rule, so they are pinned table-style. Each
 // body uses `let net = (a + 1)` (computed, not a plain term) in a slot
-// that takes terms only. The remaining term slot - the sum target -
-// cannot reach this refusal: a let named as a sum target is always the
-// binder collision pinned above.
+// that takes terms only.
 #[test]
 fn computed_let_is_refused_in_every_term_only_position() {
     let cases: &[(&str, &str)] = &[
+        (
+            "sum target",
+            "define f(a, total):\n    \
+                 let net = ((a) + 1)\n    \
+                 total = (sum(net | Reading(m, kwh)))",
+        ),
         (
             "claim argument",
             "define f(a):\n    \
@@ -279,6 +315,26 @@ fn computed_let_is_refused_in_every_term_only_position() {
 // ------------------------------------------------------------
 // Growth guards.
 // ------------------------------------------------------------
+
+#[test]
+fn a_long_term_valued_chain_expands_linearly() {
+    // Each link is one node, so neither the node budget nor the depth
+    // guard is in play - what this pins is the expansion ALGORITHM:
+    // each value resolves once against the already-expanded earlier
+    // lets, so a chain costs one substitution per link. The quadratic
+    // shape (rewriting every later value after every declaration)
+    // would grind on this input.
+    let mut body = String::from("    let a0 = (x)\n");
+    for i in 1..10_000 {
+        body.push_str(&format!("    let a{i} = (a{})\n", i - 1));
+    }
+    body.push_str("    committed = (a9999)");
+    let sugared = format!("define f(x, committed):\n{body}");
+    let p1 = parse_program(&header(&sugared)).expect("chain parses");
+    let p2 = parse_program(&header("define f(x, committed):\n    committed = (x)"))
+        .expect("desugared parses");
+    assert_eq!(p1, p2, "the chain must collapse to its root");
+}
 
 #[test]
 fn term_slot_refusal_wins_over_the_budget_projection() {

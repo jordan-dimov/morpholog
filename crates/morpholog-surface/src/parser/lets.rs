@@ -14,13 +14,14 @@
 //! Refusals are parser-side by necessity (nothing remains in the IR
 //! to blame) and deliberate: duplicate names, parameter collisions,
 //! quantifier-binder collisions (refused rather than shadowed),
-//! `actor` as a name, computed values in term-only positions, dead
+//! `actor` as a name, self- and forward-references (a let may use
+//! earlier lets only), computed values in term-only positions, dead
 //! bindings (transitively - a let used only by another dead let is
 //! dead), and expansion past a node budget (substitution multiplies
 //! nodes; a doubling chain grows exponentially while staying shallow,
 //! which the kernel's depth guard cannot see).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use morpholog_core::{Prop, Term, ValueExpr, Var};
 
@@ -103,6 +104,41 @@ pub(crate) fn apply(
         return (body, errors);
     }
 
+    // Order refusals: a value may reference EARLIER lets only. Without
+    // this, substitution order would accidentally resolve a forward
+    // reference whenever the later let also appears in the body, and
+    // report it dead otherwise - legality must not hinge on an
+    // unrelated use. Self-reference is the degenerate case.
+    let declaration_index: BTreeMap<&str, usize> = bindings
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.as_str(), i))
+        .collect();
+    for (i, b) in bindings.iter().enumerate() {
+        let mut used = BTreeSet::new();
+        vars_in_value(&b.value, &mut used);
+        for name in &used {
+            match declaration_index.get(name.as_str()) {
+                Some(&j) if j == i => errors.push((
+                    b.span.clone(),
+                    format!("let `{}` references itself", b.name),
+                )),
+                Some(&j) if j > i => errors.push((
+                    b.span.clone(),
+                    format!(
+                        "let `{}` references `{name}`, which is declared later - \
+                         a let may use earlier lets only",
+                        b.name
+                    ),
+                )),
+                _ => {}
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return (body, errors);
+    }
+
     // Liveness, backwards: a let is live when the body uses it, or a
     // LATER live let's value uses it. Anything else is dead and
     // refused - including a chain whose head is only used by its own
@@ -125,41 +161,57 @@ pub(crate) fn apply(
         return (body, errors);
     }
 
-    // Substitute in declaration order: each live binding into every
-    // LATER live binding's value, then into the body, under the node
-    // budget.
-    let mut values: Vec<ValueExpr> = bindings.iter().map(|b| b.value.clone()).collect();
-    for i in 0..bindings.len() {
-        if !live[i] {
-            continue;
-        }
-        let name = Var::from(bindings[i].name.as_str());
-        let value = values[i].clone();
-        let value_nodes = value_nodes(&value);
+    // Expansion, one visit per value: resolve each value once against
+    // the already-expanded earlier lets it actually references (the
+    // order check above guarantees earlier-only), then substitute the
+    // lets the body directly references. Expanded values are closed -
+    // they contain no let names - so a long chain costs one
+    // substitution per link, never a rewrite of every later value.
+    let mut expanded: Vec<Option<ValueExpr>> = vec![None; bindings.len()];
+    for (i, b) in bindings.iter().enumerate() {
+        let mut value = b.value.clone();
+        let mut used = BTreeSet::new();
+        vars_in_value(&b.value, &mut used);
         let mut refusals = Vec::new();
-        for (j, later) in values.iter_mut().enumerate().skip(i + 1) {
-            if live[j] {
+        for name in &used {
+            if let Some(&j) = declaration_index.get(name.as_str())
+                && let Some(prior) = expanded[j].as_ref()
+            {
                 budgeted_substitute_value(
-                    later,
-                    &name,
-                    &value,
-                    value_nodes,
-                    &bindings[i],
+                    &mut value,
+                    &Var::from(name.as_str()),
+                    prior,
+                    value_nodes(prior),
+                    b,
                     &mut refusals,
                 );
             }
         }
-        budgeted_substitute_prop(
-            &mut body,
-            &name,
-            &value,
-            value_nodes,
-            &bindings[i],
-            &mut refusals,
-        );
         if !refusals.is_empty() {
             errors.extend(refusals);
             return (body, errors);
+        }
+        expanded[i] = Some(value);
+    }
+    let mut body_names = BTreeSet::new();
+    vars_in_prop(&body, &mut body_names);
+    for name in &body_names {
+        if let Some(&i) = declaration_index.get(name.as_str())
+            && let Some(value) = expanded[i].as_ref()
+        {
+            let mut refusals = Vec::new();
+            budgeted_substitute_prop(
+                &mut body,
+                &Var::from(name.as_str()),
+                value,
+                value_nodes(value),
+                &bindings[i],
+                &mut refusals,
+            );
+            if !refusals.is_empty() {
+                errors.extend(refusals);
+                return (body, errors);
+            }
         }
     }
     (body, errors)
@@ -397,17 +449,10 @@ fn collect_binders_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
 
 fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
     match expr {
-        // The sum target is bound by the sum body - a binder.
-        ValueExpr::Sum {
-            value: target,
-            body,
-            ..
-        } => {
-            if let Term::Var(v) = target {
-                out.insert(v.to_string());
-            }
-            collect_binders_in_prop(body, out);
-        }
+        // The sum target is CONSUMED against the bindings the sum body
+        // supplies - it introduces nothing, so it is not a binder. A
+        // let flowing into it is an ordinary term-slot substitution.
+        ValueExpr::Sum { body, .. } => collect_binders_in_prop(body, out),
         ValueExpr::Arith { left, right, .. } => {
             collect_binders_in_value(left, out);
             collect_binders_in_value(right, out);

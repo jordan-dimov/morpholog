@@ -103,6 +103,23 @@ pub enum ValidationContext {
     },
 }
 
+/// The remedy sentence for an unbound variable is context-dependent:
+/// `require`/`bind`/`let` are transformation-body vocabulary, so the
+/// hint renders only where those statements exist. Invariant,
+/// definition, and derived-claim bodies bind through matching
+/// propositions and get no statement advice.
+fn unbound_variable_hint(context: &ValidationContext) -> &'static str {
+    match context {
+        ValidationContext::Transformation { .. } => {
+            "; a `require` match does not export its bindings to later statements - \
+             `bind` looks up a claim and exports its fields, `let` binds a computed value"
+        }
+        ValidationContext::Invariant { .. }
+        | ValidationContext::DerivedClaim { .. }
+        | ValidationContext::Definition { .. } => "",
+    }
+}
+
 /// A single failure surfaced by [`Program::validate`]. The validator
 /// collects every error rather than failing fast, so a programme
 /// migration that adds declarations sees the full work list rather
@@ -237,7 +254,8 @@ pub enum ValidationError {
     /// The kernel raises `EvalError::UnboundVariable` for this at
     /// evaluation time.
     #[error(
-        "variable `{variable}` is used in {context} but nothing binds it; a `require` match does not export its bindings to later statements - `bind` looks up a claim and exports its fields, `let` binds a computed value"
+        "variable `{variable}` is used in {context} but nothing binds it{}",
+        unbound_variable_hint(context)
     )]
     UnboundVariable {
         variable: String,
