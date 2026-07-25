@@ -82,6 +82,13 @@ pub enum EvalError {
     /// backstop for a quantum that arrives through a variable.
     #[error("round quantum must be positive, got {0}")]
     RoundQuantumNotPositive(String),
+    /// A `round(x, quantum)` whose exact answer cannot be represented:
+    /// the nearest multiple of the quantum lies outside the decimal
+    /// range (or the operands' scales exceed what exact remainder
+    /// arithmetic can hold). The kernel's contract is exactness or a
+    /// named refusal - never an approximation, never a panic.
+    #[error("round out of decimal range: no representable multiple of {quantum} near {value}")]
+    RoundOutOfRange { value: String, quantum: String },
     /// A `Prop::Defined` call named a definition the evaluation context
     /// does not carry. Unlike an unmatched predicate (which lawfully
     /// matches nothing), a call without its definition is a programme
@@ -1167,15 +1174,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     if q <= Decimal::ZERO {
                         return Err(EvalError::RoundQuantumNotPositive(q.to_string()));
                     }
-                    // Nearest multiple of the quantum, exact halves away
-                    // from zero: scale to quantum units, round to a whole
-                    // count, scale back. Exact for the terminating
-                    // quotients real quanta produce (0.01, 0.05, 0.25, 1).
-                    let count = (v / q).round_dp_with_strategy(
-                        0,
-                        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                    );
-                    Ok(EvalValue::Decimal((count * q).normalize()))
+                    round_decimal(v, q).map(EvalValue::Decimal)
                 }
                 (v, q) => Err(EvalError::TypeMismatch(format!(
                     "round is defined on decimals (value and quantum), not {} and {}",
@@ -1185,6 +1184,44 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             }
         }
     }
+}
+
+/// The multiple of `quantum` nearest to `v`, exact halves away from
+/// zero. Remainder-and-distance, never a quotient: the count of quanta
+/// in `v` can exceed the decimal range even when the rounded result is
+/// perfectly representable (`round(8, 1e-28)` is exactly 8, but 8e28
+/// overflows), so the quotient formulation panics on inputs whose
+/// answer exists. Every step is checked; the one honest failure -
+/// the nearest multiple itself is outside the decimal range - is a
+/// named error, never a panic.
+fn round_decimal(v: Decimal, q: Decimal) -> Result<Decimal, EvalError> {
+    let out_of_range = || EvalError::RoundOutOfRange {
+        value: v.to_string(),
+        quantum: q.to_string(),
+    };
+    let rem = v.checked_rem(q).ok_or_else(out_of_range)?;
+    if rem.is_zero() {
+        return Ok(v.normalize());
+    }
+    let toward_zero = v.checked_sub(rem).ok_or_else(out_of_range)?;
+    let away = if v.is_sign_negative() {
+        toward_zero.checked_sub(q)
+    } else {
+        toward_zero.checked_add(q)
+    };
+    let abs_rem = rem.abs();
+    // Away wins at twice-the-remainder >= quantum (the half case goes
+    // away from zero); a doubling that overflows is certainly larger.
+    let away_wins = match abs_rem.checked_add(abs_rem) {
+        Some(doubled) => doubled >= q,
+        None => true,
+    };
+    let result = if away_wins {
+        away.ok_or_else(out_of_range)?
+    } else {
+        toward_zero
+    };
+    Ok(result.normalize())
 }
 
 pub(crate) fn resolve_term(

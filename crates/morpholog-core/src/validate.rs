@@ -201,14 +201,6 @@ pub enum ValidationError {
         kind: PredicateArgKind,
         context: ValidationContext,
     },
-    /// A `round(...)` operand of a non-decimal kind. Decimal-only in v0:
-    /// money rounds as a bare decimal under the currency-in-field-names
-    /// convention; a quantity mode waits for an example that forces it.
-    #[error("round is defined on decimals (value and quantum), not {kind} in {context}")]
-    RoundKind {
-        kind: PredicateArgKind,
-        context: ValidationContext,
-    },
     /// A `round(...)` whose quantum is a literal zero or negative
     /// decimal. Refused at authoring time; a non-positive quantum
     /// arriving through a variable is the runtime backstop

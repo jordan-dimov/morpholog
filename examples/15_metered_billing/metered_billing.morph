@@ -89,6 +89,21 @@ invariant line_vat_is_the_rounded_recompute:
 invariant every_line_names_a_declared_rate:
     ChargeLine(_, _, _, _, _, vat_rate_id, _) implies VatRate(vat_rate_id, _)
 
+-- The inputs live in their lawful ranges: a VAT rate is a fraction
+-- of the net, and a metered volume or tariff rate is never negative
+-- here. Without these two rules the model would quietly accept a
+-- negative line - a credit note by accident, independently rounded.
+-- Credits are a real thing, but they are a DIFFERENT model (an
+-- amount copy-negated from the committed line it reverses, never
+-- re-rounded), and a boundary a programme only describes in prose is
+-- not a boundary. These rules close it.
+invariant vat_rate_is_a_fraction:
+    VatRate(_, rate) implies 0 <= rate <= 1
+
+invariant charge_inputs_are_non_negative:
+    ChargeLine(_, _, rate_p_per_kwh, volume_kwh, _, _, _)
+    implies (0 <= rate_p_per_kwh and 0 <= volume_kwh)
+
 -- A sealed total is the sum of its rounded lines - net plus VAT,
 -- line by line. This pins the OTHER half of the convention: round
 -- per line, THEN sum. The rival reading - sum the raw figures, round
@@ -129,7 +144,8 @@ transformation seal_invoice(invoice, total_gbp):
 
 -- What this example deliberately does not cover: credit notes and
 -- reversals (amounts copy-negate the committed line, never re-round
--- - a modelling rule this gallery pins elsewhere), corrections after
--- sealing (supersession, as in the verified-revenue example), and
--- period assignment for the volumes. One convention, made law, is
--- the point.
+-- - a modelling rule this gallery pins elsewhere; the non-negative
+-- rules above make the exclusion enforced, not just stated),
+-- corrections after sealing (supersession, as in the verified-
+-- revenue example), and period assignment for the volumes. One
+-- convention, made law, is the point.

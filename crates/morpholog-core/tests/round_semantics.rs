@@ -118,6 +118,106 @@ fn negative_quantum_is_refused_by_name() {
 }
 
 #[test]
+fn an_exact_multiple_beyond_the_count_range_still_rounds() {
+    // round(8, 1e-28) is exactly 8, but the COUNT of quanta (8e28)
+    // exceeds the decimal range - the quotient formulation panics on
+    // this input; the remainder formulation answers it.
+    holds(eq(
+        round(term(dec("8")), term(dec("0.0000000000000000000000000001"))),
+        term(dec("8")),
+    ));
+}
+
+#[test]
+fn a_result_outside_the_decimal_range_is_a_named_error_not_a_panic() {
+    // Decimal::MAX ends in ...335; the nearest multiple of 10 is the
+    // half case, which rounds away from zero to past MAX. The exact
+    // answer is unrepresentable, so the kernel refuses by name.
+    refuses(
+        eq(
+            round(term(dec("79228162514264337593543950335")), term(dec("10"))),
+            term(dec("0")),
+        ),
+        &["round out of decimal range"],
+    );
+}
+
+#[test]
+fn a_literal_zero_quantum_is_refused_at_validation() {
+    use morpholog_core::ir_builder::{claim, implies, invariant, predicate, program, var};
+    let p = program("q_zero")
+        .predicates(vec![predicate("P").decimal("a").build()])
+        .invariants(vec![invariant(
+            "r",
+            implies(
+                claim("P", vec![var("a")]),
+                eq(round(term(var("a")), term(dec("0"))), term(var("a"))),
+            ),
+        )])
+        .build();
+    let errs = p
+        .validate()
+        .expect_err("literal zero quantum must fail validation");
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("round quantum must be a positive decimal")),
+        "expected the authoring-time refusal, got: {errs:?}"
+    );
+}
+
+#[test]
+fn a_variable_quantum_passes_validation_and_is_refused_at_runtime() {
+    use morpholog_core::ir_builder::{invariant, params, program, transformation, var};
+    // Statically fine: the quantum arrives through a parameter.
+    let t = transformation(
+        "probe",
+        params(&["q"]),
+        vec![require(eq(
+            round(term(dec("1")), term(var("q"))),
+            term(dec("1")),
+        ))],
+    );
+    let p = program("q_var")
+        .invariants(vec![invariant("noop", eq(term(dec("1")), term(dec("1"))))])
+        .transformations(vec![t.clone()])
+        .build();
+    p.validate().expect("a variable quantum is statically fine");
+    // At runtime, a zero arriving through the variable is the backstop.
+    let err = propose_with_test_actor(
+        &t,
+        vec![morpholog_test_support::dec(0)],
+        &State::default(),
+        &[],
+        &[],
+    )
+    .expect_err("zero through a variable must be the runtime refusal");
+    assert!(
+        format!("{err}").contains("round quantum must be positive"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn an_any_declared_slot_refines_through_round() {
+    use morpholog_core::ir_builder::{claim, implies, invariant, predicate, program, var};
+    // Any is unconstrained and refines at a concrete use - round must
+    // follow the checker's doctrine, not reject the flow.
+    let p = program("any_flow")
+        .predicates(vec![predicate("Box").any("x").build()])
+        .invariants(vec![invariant(
+            "rounded_box",
+            implies(
+                claim("Box", vec![var("x")]),
+                eq(round(term(var("x")), term(dec("0.01"))), term(var("x"))),
+            ),
+        )])
+        .build();
+    p.validate()
+        .expect("an Any slot flowing into round must validate");
+}
+
+#[test]
 fn non_decimal_operand_is_a_type_error() {
     refuses(
         eq(

@@ -221,6 +221,41 @@ fn the_aggregate_convention_total_is_refused() {
 }
 
 #[test]
+fn a_negative_tariff_or_volume_is_refused_not_an_accidental_credit() {
+    // -13.5 p/kWh * 431.7 kWh recomputes and rounds consistently to
+    // -58.28, so the recompute rule alone would admit it - a credit
+    // note by accident. The range invariant is what closes the
+    // boundary the prose declares out of scope.
+    let outcome = add_line(
+        "line_neg",
+        "-13.5",
+        "431.7",
+        "-58.28",
+        "vat_reduced",
+        "-2.91",
+        &with_vat_rate(),
+    );
+    assert!(
+        rejected_by(&outcome, "charge_inputs_are_non_negative"),
+        "a negative tariff must be refused by the range rule: {outcome:?}"
+    );
+}
+
+#[test]
+fn a_vat_rate_outside_the_unit_interval_is_refused() {
+    let outcome = ex().propose_as(
+        &metered_billing::declare_vat_rate(),
+        vec![subj("vat_wild"), dec_str("1.2")],
+        test_actor(),
+        &State::default(),
+    );
+    assert!(
+        rejected_by(&outcome, "vat_rate_is_a_fraction"),
+        "a rate above 1 must be refused: {outcome:?}"
+    );
+}
+
+#[test]
 fn a_sealed_invoice_takes_no_further_lines() {
     let mut claims = two_tiny_lines().claims().to_vec();
     claims.push(claim_instance(

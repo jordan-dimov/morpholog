@@ -29,6 +29,7 @@ repeated its product expression across every branch.
 | `line_net_is_the_rounded_recompute` | Any net that is not `round((rate * volume) / 100, 0.01)` - a 1p tamper, a stale figure, a different convention. |
 | `line_vat_is_the_rounded_recompute` | Any VAT that is not the rounded recompute from the declared rate the line names. |
 | `every_line_names_a_declared_rate` | A line naming a rate nobody declared - the totality companion that keeps the VAT rule from passing emptily. |
+| `vat_rate_is_a_fraction`, `charge_inputs_are_non_negative` | Rates outside [0, 1] and negative tariffs or volumes - the accidental credit note. Credits are a different model (copy-negation from a committed line), and the boundary is enforced, not just stated in prose. |
 | `sealed_total_is_the_sum_of_its_lines` | A total computed any way other than per-line-then-sum - including the rival round-the-aggregate figure, which genuinely differs (two 0.4p lines: 0.00 per-line, 0.01 aggregate). |
 
 Transformations: `declare_vat_rate`, `add_charge_line`, `seal_invoice`.
