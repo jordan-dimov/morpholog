@@ -4,13 +4,15 @@
 //!
 //! Out-of-band by design: never part of `propose`, so read-model
 //! freshness is operational, not semantic. The exact `enumerate_derived`
-//! output is stored - SQL never recomputes a derived value. The summary
-//! prints what the refresh cost so an operator sees it.
+//! output is stored - SQL never recomputes a derived value. Stdout is
+//! the typed report an embedder consumes; stderr keeps the human
+//! summary with what the refresh cost.
 
+use morpholog_cli::envelopes::RefreshDerivedReport;
 use morpholog_postgres::refresh_derived;
 
 use crate::RefreshDerivedArgs;
-use crate::commands::{connect, hash::canonical_hash, parse_or_exit, validate_or_exit};
+use crate::commands::{connect, hash::canonical_hash, parse_or_exit, print_json, validate_or_exit};
 
 pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;
@@ -28,8 +30,9 @@ pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
         || "(no committed transitions)".to_string(),
         |t| t.to_string(),
     );
-    // Summary to stderr, leaving stdout free for future machine-readable
-    // output, matching the generators and batch commands.
+    // Typed report on stdout (the pinned envelope); the human summary
+    // with timings stays on stderr.
+    print_json(&RefreshDerivedReport::from(&summary))?;
     eprintln!(
         "refreshed {} derived claim(s) from {} derived predicate(s)\n  \
          source claims loaded: {}\n  \

@@ -1332,6 +1332,132 @@ async fn inspect_derived_unknown_derived_name_errors_to_stderr() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_derived_named_decodes_rows_and_default_stays_tagged() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    let ledger = ledger_morph();
+
+    let (status, stdout, stderr) =
+        run_cli(&["inspect", "derived", &ledger, "TrialBalanceRow", "--named"]);
+    assert!(status.success(), "--named should succeed; {stderr}");
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let row = &rows.as_array().expect("named output is an array")[0];
+    assert_eq!(row["predicate"], "TrialBalanceRow");
+    let args = row["args"].as_object().expect("named args are an object");
+    assert!(
+        args.contains_key("account") && args.contains_key("balance"),
+        "args are keyed by declared field name: {row}"
+    );
+
+    // The acceptance side: adding --named must not move the default,
+    // which stays the tagged array `inspect claims` also prints.
+    let (status, stdout, _stderr) = run_cli(&["inspect", "derived", &ledger, "TrialBalanceRow"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let row = &rows.as_array().expect("default output is an array")[0];
+    assert!(
+        row["args"].as_array().expect("default args are tagged")[0]
+            .get("type")
+            .is_some(),
+        "default rows keep the tagged positional encoding: {row}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_derived_named_composes_with_as_of() {
+    reset_db().await;
+    let first = post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 50);
+    let ledger = ledger_morph();
+
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "derived",
+        &ledger,
+        "TrialBalanceRow",
+        "--named",
+        "--as-of",
+        &first.to_string(),
+    ]);
+    assert!(status.success(), "--named --as-of should succeed; {stderr}");
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    let cash_balance = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["args"]["account"] == "account_cash")
+        .expect("cash row present as of the first entry")["args"]["balance"]
+        .clone();
+    assert_eq!(
+        cash_balance, "100",
+        "as of the first transition only entry_001 is visible: {rows}"
+    );
+}
+
+// ============================================================
+// `refresh derived`
+// ============================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_derived_emits_the_typed_report() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    let ledger = ledger_morph();
+
+    let (status, stdout, stderr) = run_cli(&["refresh", "derived", &ledger]);
+    assert!(status.success(), "refresh derived should succeed; {stderr}");
+    let report: Value = serde_json::from_str(&stdout).expect("stdout is the typed report");
+    // The ledger fixture declares exactly one derived predicate, which
+    // is what licenses comparing the report's total row count against
+    // one `inspect derived` read below.
+    assert_eq!(report["derived_predicate_count"], 1, "{report}");
+    assert!(
+        report["model_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"),
+        "{report}"
+    );
+    assert!(
+        report["source_snapshot_transition_id"].is_string()
+            && report["source_snapshot_committed_at"].is_string(),
+        "a populated ledger carries the snapshot pair together: {report}"
+    );
+    assert!(
+        stderr.contains("refreshed"),
+        "the human summary stays on stderr: {stderr}"
+    );
+
+    let (status, stdout, _stderr) = run_cli(&["inspect", "derived", &ledger, "TrialBalanceRow"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["derived_claim_count"].as_u64().unwrap(),
+        rows.as_array().unwrap().len() as u64,
+        "the report's count matches the sole derived predicate's rows"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_derived_report_without_transitions_omits_snapshot_pair() {
+    reset_db().await;
+    let ledger = ledger_morph();
+
+    let (status, stdout, stderr) = run_cli(&["refresh", "derived", &ledger]);
+    assert!(
+        status.success(),
+        "refresh on an empty ledger succeeds; {stderr}"
+    );
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["derived_claim_count"], 0, "{report}");
+    assert!(
+        report.get("source_snapshot_transition_id").is_none()
+            && report.get("source_snapshot_committed_at").is_none(),
+        "no committed transitions: the snapshot pair is absent together: {report}"
+    );
+}
+
 // ============================================================
 // `morpholog run` subcommand
 //

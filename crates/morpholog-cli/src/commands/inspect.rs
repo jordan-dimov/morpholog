@@ -301,7 +301,11 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
             .await
             .context("list_derived failed")?,
     };
-    print_json(&rows)
+    if args.named {
+        print_json(&decode_claims_named(program, &args.file, &rows)?)
+    } else {
+        print_json(&rows)
+    }
 }
 
 /// Run `inspect predicates <file.morph>`. Parses the source file, then
