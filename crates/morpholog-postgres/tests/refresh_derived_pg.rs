@@ -294,10 +294,12 @@ async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation
          ) VALUES ($1, 'post', '[]'::jsonb,
                    '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
-                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)",
+                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb)",
     )
     .bind(inflight_tid)
     .execute(&mut *writer)

@@ -256,11 +256,12 @@ fn make_signature(signer: &CheckpointSigner, head: &signing::TreeHead<'_>) -> Tr
 pub async fn create_checkpoint(
     pool: &PgPool,
     signer: Option<&CheckpointSigner>,
+    writers: Option<&[String]>,
 ) -> Result<CheckpointOutcome, PgError> {
     // Watermark first, then the deferrable read - the lossless-resume
     // ordering: only rows below the horizon are stable enough that no
     // in-flight writer can later insert inside the prefix.
-    let horizon = crate::audit::audit_resume_watermark(pool).await?;
+    let horizon = crate::audit::audit_resume_watermark(pool, writers).await?;
 
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let (leaves, last) = collect_leaves(&mut read_tx, Some(horizon), None).await?;

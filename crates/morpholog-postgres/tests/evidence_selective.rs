@@ -37,7 +37,7 @@ async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
 }
 
 async fn checkpointed(pool: &PgPool) -> morpholog_postgres::Checkpoint {
-    match create_checkpoint(pool, None).await.unwrap() {
+    match create_checkpoint(pool, None, None).await.unwrap() {
         CheckpointOutcome::Created(c) => c,
         other @ CheckpointOutcome::NoNewRows(_) => {
             panic!("expected a created checkpoint, got {other:?}")

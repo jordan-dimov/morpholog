@@ -71,9 +71,46 @@ pub enum PgError {
     #[error(
         "{hidden} session(s) in pg_stat_activity are hidden from this role, \
          so a lossless audit resume horizon cannot be computed; connect as \
-         the role the writers use, or grant pg_read_all_stats"
+         the role the writers use, or grant pg_read_all_stats \
+         (or, on a managed host where neither is possible, assert the \
+         audit-writing roles explicitly with --writer-role)"
     )]
     StatVisibility { hidden: i64 },
+    /// A writer assertion named a role that does not exist - almost
+    /// certainly a typo, refused before it can silently filter nothing.
+    #[error(
+        "asserted writer role(s) do not exist: {}",
+        roles.join(", ")
+    )]
+    WriterRoleUnknown { roles: Vec<String> },
+    /// The catalog shows non-superuser roles that can write
+    /// `morpholog.audit` (directly, by inheritance, or via SET ROLE)
+    /// and were not asserted, so a horizon over the asserted sessions
+    /// alone would be unsound.
+    #[error(
+        "role(s) not in the asserted writer set can write morpholog.audit: {}; \
+         assert them with --writer-role too, or revoke their access",
+        missing.join(", ")
+    )]
+    WriterAssertionIncomplete { missing: Vec<String> },
+    /// A session of an ASSERTED writer role is hidden from this role in
+    /// `pg_stat_activity`. The assertion cannot compensate for that:
+    /// the asserted writers' own sessions must be visible (they are by
+    /// construction when the asserted role is the connecting role).
+    #[error(
+        "{hidden} session(s) of asserted writer roles are hidden from this \
+         role in pg_stat_activity; connect as the role the writers use, or \
+         grant pg_read_all_stats"
+    )]
+    WriterSessionsHidden { hidden: i64 },
+    /// An empty writer assertion is vacuous, never a lawful "no one
+    /// writes audit" claim - omit the assertion to get the default
+    /// all-sessions horizon instead.
+    #[error(
+        "an empty writer-role assertion is vacuous; name the role(s) whose \
+         sessions write morpholog.audit, or omit the assertion"
+    )]
+    WriterAssertionEmpty,
     /// A [`morpholog_core::Transition`] named a transformation the compiled programme
     /// does not declare. Surfaced by the `propose_against_pg*` facade
     /// when it resolves `transition.transformation_name` against the

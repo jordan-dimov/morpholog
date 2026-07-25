@@ -89,7 +89,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
 
     // The whole history - legacy prefix plus attested suffix -
     // verifies, live and offline.
-    create_checkpoint(&pool, None).await.unwrap();
+    create_checkpoint(&pool, None, None).await.unwrap();
     let verification = verify_audit_tree(&pool, None).await.unwrap();
     assert!(
         matches!(verification, TreeVerification::Intact { .. }),
@@ -143,7 +143,7 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     .await
     .map(expect_committed)
     .unwrap();
-    create_checkpoint(&pool, None).await.unwrap();
+    create_checkpoint(&pool, None, None).await.unwrap();
 
     // An attacker with full DDL control can drop the database floor;
     // the tree is the layer that still catches them. Rewriting the
