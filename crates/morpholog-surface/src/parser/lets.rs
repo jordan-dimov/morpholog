@@ -286,7 +286,8 @@ fn substitutable_term(value: &ValueExpr) -> Option<Term> {
         ValueExpr::Arith { .. }
         | ValueExpr::Sum { .. }
         | ValueExpr::ValueOf { .. }
-        | ValueExpr::Abs(_) => None,
+        | ValueExpr::Abs(_)
+        | ValueExpr::Round { .. } => None,
     }
 }
 
@@ -404,6 +405,10 @@ fn substitute_in_value(
             }
         }
         ValueExpr::Abs(operand) => substitute_in_value(operand, name, value, binding, errors),
+        ValueExpr::Round { value: v, quantum } => {
+            substitute_in_value(v, name, value, binding, errors);
+            substitute_in_value(quantum, name, value, binding, errors);
+        }
     }
 }
 
@@ -466,6 +471,10 @@ fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
             }
         }
         ValueExpr::Abs(operand) => collect_binders_in_value(operand, out),
+        ValueExpr::Round { value, quantum } => {
+            collect_binders_in_value(value, out);
+            collect_binders_in_value(quantum, out);
+        }
         ValueExpr::Term(_) => {}
     }
 }
@@ -539,6 +548,10 @@ fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
             }
         }
         ValueExpr::Abs(operand) => vars_in_value(operand, out),
+        ValueExpr::Round { value, quantum } => {
+            vars_in_value(value, out);
+            vars_in_value(quantum, out);
+        }
     }
 }
 
@@ -577,6 +590,9 @@ fn count_value(expr: &ValueExpr, name: &Var) -> usize {
                 + default.as_ref().map_or(0, |d| count_value(d, name))
         }
         ValueExpr::Abs(operand) => count_value(operand, name),
+        ValueExpr::Round { value, quantum } => {
+            count_value(value, name) + count_value(quantum, name)
+        }
     }
 }
 
@@ -618,6 +634,9 @@ fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
             default.as_ref().map_or(0, |d| count_growth_value(d, name))
         }
         ValueExpr::Abs(operand) => count_growth_value(operand, name),
+        ValueExpr::Round { value, quantum } => {
+            count_growth_value(value, name) + count_growth_value(quantum, name)
+        }
     }
 }
 
@@ -645,5 +664,6 @@ fn value_nodes(expr: &ValueExpr) -> usize {
             args.len() + default.as_ref().map_or(0, |d| value_nodes(d))
         }
         ValueExpr::Abs(operand) => value_nodes(operand),
+        ValueExpr::Round { value, quantum } => value_nodes(value) + value_nodes(quantum),
     }
 }

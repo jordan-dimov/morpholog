@@ -74,6 +74,14 @@ pub enum EvalError {
     /// by cross-multiplying with `Mul`.
     #[error("division by zero")]
     DivisionByZero,
+    /// A `round(x, quantum)` evaluated with a zero or negative quantum.
+    /// "Round to the nearest multiple of nothing" has no meaning, and a
+    /// negative quantum is a sign error in the rule, not a policy - both
+    /// are refused by name. `Program::validate` catches a literal
+    /// non-positive quantum at authoring time; this is the runtime
+    /// backstop for a quantum that arrives through a variable.
+    #[error("round quantum must be positive, got {0}")]
+    RoundQuantumNotPositive(String),
     /// A `Prop::Defined` call named a definition the evaluation context
     /// does not carry. Unlike an unmatched predicate (which lawfully
     /// matches nothing), a call without its definition is a programme
@@ -1151,6 +1159,31 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 runtime_kind_label(&other)
             ))),
         },
+        ValueExpr::Round { value, quantum } => {
+            let v = eval_value(value, ctx)?;
+            let q = eval_value(quantum, ctx)?;
+            match (v, q) {
+                (EvalValue::Decimal(v), EvalValue::Decimal(q)) => {
+                    if q <= Decimal::ZERO {
+                        return Err(EvalError::RoundQuantumNotPositive(q.to_string()));
+                    }
+                    // Nearest multiple of the quantum, exact halves away
+                    // from zero: scale to quantum units, round to a whole
+                    // count, scale back. Exact for the terminating
+                    // quotients real quanta produce (0.01, 0.05, 0.25, 1).
+                    let count = (v / q).round_dp_with_strategy(
+                        0,
+                        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                    );
+                    Ok(EvalValue::Decimal((count * q).normalize()))
+                }
+                (v, q) => Err(EvalError::TypeMismatch(format!(
+                    "round is defined on decimals (value and quantum), not {} and {}",
+                    runtime_kind_label(&v),
+                    runtime_kind_label(&q)
+                ))),
+            }
+        }
     }
 }
 

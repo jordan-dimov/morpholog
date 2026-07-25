@@ -122,6 +122,10 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
             }
         }
         ValueExpr::Abs(operand) => lower_in_value(operand, ctx),
+        ValueExpr::Round { value, quantum } => {
+            lower_in_value(value, ctx);
+            lower_in_value(quantum, ctx);
+        }
     }
 }
 

@@ -183,6 +183,19 @@ transformation post(l, rate, volume, net):
     admit Line(l, rate, volume, net)
 ";
 
+/// `round` nested in arithmetic inside a let-sugared invariant, plus a
+/// literal-quantum boundary: the new node meets every walker in the
+/// context the billing example actually uses it.
+const ROUND_IN_LET_SUGARED_BODY: &str = "\
+program round_in_let_sugared_body
+predicate Line(l: Subject, rate: Decimal, volume: Decimal, net: Decimal)
+invariant net_is_the_rounded_recompute:
+    let raw = ((rate * volume) / 100)
+    Line(_, rate, volume, net) implies net = round(raw, 0.01)
+transformation post(l, rate, volume, net):
+    admit Line(l, rate, volume, net)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -194,6 +207,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
+        ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
     ]
 }
 

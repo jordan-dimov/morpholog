@@ -43,6 +43,9 @@ pub(crate) fn any_prop_node_in_value(expr: &ValueExpr, f: &impl Fn(&Prop) -> boo
             any_prop_node_in_value(left, f) || any_prop_node_in_value(right, f)
         }
         ValueExpr::Abs(inner) => any_prop_node_in_value(inner, f),
+        ValueExpr::Round { value, quantum } => {
+            any_prop_node_in_value(value, f) || any_prop_node_in_value(quantum, f)
+        }
     }
 }
 
@@ -127,6 +130,9 @@ fn any_term_value_scoped<'p>(
             any_term_value_scoped(left, f, scope) || any_term_value_scoped(right, f, scope)
         }
         ValueExpr::Abs(inner) => any_term_value_scoped(inner, f, scope),
+        ValueExpr::Round { value, quantum } => {
+            any_term_value_scoped(value, f, scope) || any_term_value_scoped(quantum, f, scope)
+        }
     }
 }
 

@@ -1045,6 +1045,30 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::UnknownOrAny => InferredKind::UnknownOrAny,
             },
+            ValueExpr::Round { value, quantum } => {
+                for operand in [value, quantum] {
+                    if let InferredKind::Known(kind) = self.infer_value(operand, scope)
+                        && kind != PredicateArgKind::Decimal
+                    {
+                        let context = self.context.clone();
+                        self.errors
+                            .push(ValidationError::RoundKind { kind, context });
+                    }
+                }
+                // A literal quantum must be positive; a variable quantum
+                // is the runtime backstop's job.
+                if let ValueExpr::Term(Term::Literal(Value::Decimal(s))) = quantum.as_ref()
+                    && s.parse::<rust_decimal::Decimal>()
+                        .is_ok_and(|d| d <= rust_decimal::Decimal::ZERO)
+                {
+                    let context = self.context.clone();
+                    self.errors.push(ValidationError::RoundQuantumNotPositive {
+                        quantum: s.clone(),
+                        context,
+                    });
+                }
+                InferredKind::Known(PredicateArgKind::Decimal)
+            }
         }
     }
 

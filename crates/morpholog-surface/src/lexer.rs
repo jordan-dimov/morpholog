@@ -165,6 +165,9 @@ pub enum Token {
     KwMax,
     /// `abs` function keyword (unary magnitude: `abs(x)`).
     KwAbs,
+    /// `round` function keyword (`round(x, quantum)`: nearest multiple,
+    /// halves away from zero).
+    KwRound,
     /// `value` claim-lookup keyword.
     KwValue,
     /// `default` keyword (only meaningful after `value Pred(args)`
@@ -285,6 +288,7 @@ impl fmt::Display for Token {
             Token::KwMin => write!(f, "`min`"),
             Token::KwMax => write!(f, "`max`"),
             Token::KwAbs => write!(f, "`abs`"),
+            Token::KwRound => write!(f, "`round`"),
             Token::KwValue => write!(f, "`value`"),
             Token::KwDefault => write!(f, "`default`"),
             Token::KwIn => write!(f, "`in`"),
@@ -383,6 +387,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         "min" => Token::KwMin,
         "max" => Token::KwMax,
         "abs" => Token::KwAbs,
+        "round" => Token::KwRound,
         "value" => Token::KwValue,
         "default" => Token::KwDefault,
         "in" => Token::KwIn,
