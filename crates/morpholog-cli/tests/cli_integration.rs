@@ -15,14 +15,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::process::Command;
 
 use serde_json::Value;
 use sqlx::PgPool;
-
-fn morpholog_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_morpholog")
-}
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").expect(
@@ -35,7 +33,7 @@ async fn reset_db() {
     let pool = PgPool::connect(&database_url())
         .await
         .expect("connect to test DB");
-    sqlx::query("TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, morpholog.audit_checkpoints, morpholog.rejections CASCADE")
+    sqlx::query(morpholog_postgres::testing::RESET_SQL)
         .execute(&pool)
         .await
         .expect("truncate");
@@ -46,7 +44,7 @@ async fn reset_db() {
 /// the caller asserts on what they expect.
 fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let url = database_url();
-    let mut command = Command::new(morpholog_bin());
+    let mut command = Command::new(common::bin());
     command.args(args).args(["--database-url", &url]);
     let output = command.output().expect("spawn morpholog binary");
     (
@@ -60,7 +58,7 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
 /// for the offline subcommands whose contract is that they take no
 /// connection (`evidence verify`).
 fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
-    let output = Command::new(morpholog_bin())
+    let output = Command::new(common::bin())
         .args(args)
         .output()
         .expect("spawn morpholog binary");
@@ -82,20 +80,26 @@ fn ledger_morph() -> String {
     )
 }
 
-/// Issue a balanced journal entry via the CLI's `run` subcommand against
-/// the shipped ledger example. Returns the `transition_id` from the
-/// receipt so subsequent tests can use it as an as-of coordinate.
-fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
-    let args_json = format!(
+/// The tagged-args JSON for one balanced ledger posting - the payload
+/// every propose-shaped test builds.
+fn ledger_args_json(entry_id: &str, date: &str, period: &str, amount: &str) -> String {
+    format!(
         r#"[
             {{"type":"subject","value":"{entry_id}"}},
-            {{"type":"subject","value":"2026-04-15"}},
-            {{"type":"subject","value":"q1_2026"}},
+            {{"type":"subject","value":"{date}"}},
+            {{"type":"subject","value":"{period}"}},
             {{"type":"subject","value":"account_cash"}},
             {{"type":"subject","value":"account_revenue"}},
             {{"type":"decimal","value":"{amount}"}}
         ]"#
-    );
+    )
+}
+
+/// Issue a balanced journal entry via the CLI's `run` subcommand against
+/// the shipped ledger example. Returns the `transition_id` from the
+/// receipt so subsequent tests can use it as an as-of coordinate.
+fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
+    let args_json = ledger_args_json(entry_id, "2026-04-15", "q1_2026", &amount.to_string());
     let (status, stdout, stderr) = run_cli(&[
         "propose",
         &ledger_morph(),
@@ -166,14 +170,7 @@ async fn run_business_rejection_exits_one_with_rejected_receipt_on_stdout() {
         "--actor",
         "alex",
         "--args",
-        r#"[
-            {"type":"subject","value":"entry_001"},
-            {"type":"subject","value":"2026-04-15"},
-            {"type":"subject","value":"q1_2026"},
-            {"type":"subject","value":"account_cash"},
-            {"type":"subject","value":"account_revenue"},
-            {"type":"decimal","value":"100"}
-        ]"#,
+        &ledger_args_json("entry_001", "2026-04-15", "q1_2026", "100"),
     ]);
     assert!(
         !status.success(),
@@ -359,14 +356,7 @@ async fn inspect_claims_unknown_predicate_returns_empty_array() {
 #[tokio::test(flavor = "current_thread")]
 async fn explain_without_json_renders_prose_for_both_verdicts() {
     reset_db().await;
-    let entry_args = r#"[
-        {"type":"subject","value":"e1"},
-        {"type":"subject","value":"2026-04-15"},
-        {"type":"subject","value":"q1_2026"},
-        {"type":"subject","value":"account_cash"},
-        {"type":"subject","value":"account_revenue"},
-        {"type":"decimal","value":"100"}
-    ]"#;
+    let entry_args = &ledger_args_json("e1", "2026-04-15", "q1_2026", "100");
 
     // Open period: the same proposal is admissible.
     let (status, stdout, stderr) = run_cli(&[
@@ -838,7 +828,7 @@ async fn evaluate_train_until_reports_per_slice_scores() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn evaluate_train_until_conflicts_with_packs() {
-    let output = Command::new(morpholog_bin())
+    let output = Command::new(common::bin())
         .args([
             "evaluate",
             "whatever.morph",
@@ -869,7 +859,7 @@ async fn evaluate_rejects_a_pre_candidate_before_connecting() {
     // A deliberately unreachable database: if the CLI connected before
     // checking, the failure would be a connection error, not the pre
     // rejection. The rejection must come first.
-    let output = Command::new(morpholog_bin())
+    let output = Command::new(common::bin())
         .args([
             "evaluate",
             f.path().to_str().unwrap(),
@@ -1199,16 +1189,6 @@ predicate Solo(only_id: Subject)
     );
 }
 
-/// The connecting role's name, for the writer-assertion tests.
-async fn cli_session_user() -> String {
-    let pool = PgPool::connect(&database_url()).await.unwrap();
-    let (name,): (String,) = sqlx::query_as("SELECT session_user::text")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    name
-}
-
 // The managed-Postgres opt-in reaches both watermark consumers. The
 // local/CI test role is a superuser, so the catalog census is
 // trivially satisfiable here; the census's own teeth are tested in
@@ -1218,7 +1198,7 @@ async fn cli_session_user() -> String {
 async fn inspect_audit_writer_role_assertion_streams_the_tail() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
-    let me = cli_session_user().await;
+    let me = common::session_user(&database_url()).await;
 
     let (status, stdout, stderr) = run_cli(&["inspect", "audit", "--writer-role", &me]);
     assert!(status.success(), "asserted tail should stream; {stderr}");
@@ -1248,7 +1228,7 @@ async fn inspect_audit_unknown_writer_role_is_refused_as_a_typo() {
 async fn checkpoint_accepts_the_writer_assertion() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
-    let me = cli_session_user().await;
+    let me = common::session_user(&database_url()).await;
 
     let (status, stdout, stderr) = run_cli(&["checkpoint", "--writer-role", &me]);
     assert!(
@@ -1289,14 +1269,7 @@ async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
         "--actor",
         "alex",
         "--args",
-        r#"[
-            {"type":"subject","value":"entry_001"},
-            {"type":"subject","value":"2026-04-15"},
-            {"type":"subject","value":"q1_2026"},
-            {"type":"subject","value":"account_cash"},
-            {"type":"subject","value":"account_revenue"},
-            {"type":"decimal","value":"100"}
-        ]"#,
+        &ledger_args_json("entry_001", "2026-04-15", "q1_2026", "100"),
     ]);
     assert!(!status.success(), "posting into a closed period rejects");
 
@@ -1560,14 +1533,7 @@ transformation post_simple_entry(entry_id, posting_date, period, debit_account, 
 async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
     reset_db().await;
     let path = write_temp_ledger_morph();
-    let args_json = r#"[
-        {"type":"subject","value":"entry_001"},
-        {"type":"subject","value":"2026-04-15"},
-        {"type":"subject","value":"q1_2026"},
-        {"type":"subject","value":"account_cash"},
-        {"type":"subject","value":"account_revenue"},
-        {"type":"decimal","value":"100"}
-    ]"#;
+    let args_json = &ledger_args_json("entry_001", "2026-04-15", "q1_2026", "100");
     let (status, stdout, stderr) = run_cli(&[
         "propose",
         path.to_str().unwrap(),
@@ -1958,14 +1924,7 @@ async fn run_rejects_parse_failure_in_user_morph() {
 async fn run_with_trace_emits_structured_trace_alongside_outcome() {
     reset_db().await;
     let path = write_temp_ledger_morph();
-    let args_json = r#"[
-        {"type":"subject","value":"entry_002"},
-        {"type":"subject","value":"2026-04-15"},
-        {"type":"subject","value":"q1_2026"},
-        {"type":"subject","value":"account_cash"},
-        {"type":"subject","value":"account_revenue"},
-        {"type":"decimal","value":"50"}
-    ]"#;
+    let args_json = &ledger_args_json("entry_002", "2026-04-15", "q1_2026", "50");
     let (status, stdout, _stderr) = run_cli(&[
         "propose",
         path.to_str().unwrap(),
@@ -2316,14 +2275,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
     //    transformation against PostgreSQL - no Rust, no baked-in
     //    programmes, just a file path.
     let path = write_temp_ledger_morph();
-    let args_json = r#"[
-        {"type":"subject","value":"e2e_entry"},
-        {"type":"subject","value":"2026-05-01"},
-        {"type":"subject","value":"q2_2026"},
-        {"type":"subject","value":"account_cash"},
-        {"type":"subject","value":"account_revenue"},
-        {"type":"decimal","value":"500"}
-    ]"#;
+    let args_json = &ledger_args_json("e2e_entry", "2026-05-01", "q2_2026", "500");
     let (status, stdout, stderr) = run_cli(&[
         "propose",
         path.to_str().unwrap(),
@@ -2502,14 +2454,7 @@ async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
         "alex",
         "--explain-on-reject",
         "--args",
-        r#"[
-            {"type":"subject","value":"entry_001"},
-            {"type":"subject","value":"2026-04-15"},
-            {"type":"subject","value":"q1_2026"},
-            {"type":"subject","value":"account_cash"},
-            {"type":"subject","value":"account_revenue"},
-            {"type":"decimal","value":"100"}
-        ]"#,
+        &ledger_args_json("entry_001", "2026-04-15", "q1_2026", "100"),
     ]);
     assert!(!status.success(), "rejection still exits one");
     let v: Value = serde_json::from_str(&stdout).expect("envelope is JSON");
@@ -2651,7 +2596,7 @@ async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
     // custom extensions), while the wire shape stays the bare decimal
     // pattern - the declaration is the single source of truth.
     // `schema` is static (no database flag), so it bypasses run_cli.
-    let output = Command::new(morpholog_bin())
+    let output = Command::new(common::bin())
         .args(["schema", path, "settle"])
         .output()
         .expect("spawn morpholog binary");

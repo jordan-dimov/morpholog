@@ -225,8 +225,14 @@ fn findings_against_generated_invariants_resolve_to_none() {
 fn a_lint_resolves_to_its_invariant() {
     let (program, map) = parsed();
     let found = lints(&compiled(&program));
-    assert_eq!(found.len(), 1, "the trip shape is deliberate: {found:?}");
-    let span = map.span_for_lint(&found[0]).expect("authored invariant");
+    // Find the gate finding rather than pinning a count: this test is
+    // about span mapping, and a future lint firing on the shared
+    // fixture must not redden it.
+    let finding = found
+        .iter()
+        .find(|l| matches!(l, morpholog_core::Lint::GateVsInvariant { .. }))
+        .unwrap_or_else(|| panic!("the trip shape is deliberate: {found:?}"));
+    let span = map.span_for_lint(finding).expect("authored invariant");
     assert!(text_at(span).starts_with("invariant postings_need_label"));
 }
 

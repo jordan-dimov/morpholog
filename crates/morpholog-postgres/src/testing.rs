@@ -16,6 +16,15 @@ use chrono::{DateTime, Utc};
 
 use crate::{Deliverer, DeliveryOutcome, OutboxRow};
 
+/// The one authoritative reset for a disposable test database: every
+/// governed table, in one statement. Consumed by the integration
+/// suites here, in `morpholog-outbox`, in the CLI, and by the bench's
+/// `--reset` - a governed table added to the schema is added HERE,
+/// once (a hand-copied list in the bench once drifted and silently
+/// stopped truncating checkpoints).
+pub const RESET_SQL: &str = "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, \
+     morpholog.audit_checkpoints, morpholog.rejections CASCADE";
+
 /// Always returns [`DeliveryOutcome::Delivered`]. The simplest
 /// happy-path deliverer for tests that want to verify the processor
 /// moves rows to `delivered` and that the worker reports successful

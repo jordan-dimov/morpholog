@@ -7,35 +7,13 @@
 use morpholog_core::CaseOutcome;
 use morpholog_core::Program;
 use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, var, wildcard};
-use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
     score_candidate, score_candidate_against_pack, score_candidate_against_packs,
 };
 
 mod common;
-use common::{dec, reset_db, subj, test_pool};
-
-async fn commit_entry(pool: &PgPool, id: &str) -> uuid::Uuid {
-    let compiled = common::compiled(double_entry_ledger::program());
-    let t = double_entry_ledger::post_simple_entry();
-    let outcome = common::propose_pg_with_test_actor(
-        pool,
-        &compiled,
-        &t,
-        vec![
-            subj(id),
-            subj("d_2026_05_17"),
-            subj("p1"),
-            subj(&format!("cash_{id}")),
-            subj(&format!("rev_{id}")),
-            dec(100),
-        ],
-    )
-    .await
-    .unwrap();
-    common::expect_committed(outcome)
-}
+use common::{reset_db, test_pool};
 
 fn candidate(inv: morpholog_core::Invariant) -> Program {
     Program {
@@ -70,8 +48,8 @@ async fn export_history_pack(pool: &PgPool) -> EvidencePack {
 async fn a_candidate_history_violates_reports_the_introducing_commit() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
-    commit_entry(&pool, "e1").await;
+    common::commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e1").await;
 
     // "No journal entries may exist" - a prohibition the ledger violates.
     let inv = invariant(
@@ -100,7 +78,7 @@ async fn a_candidate_history_violates_reports_the_introducing_commit() {
 async fn a_candidate_that_always_holds_refuses_nothing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
 
     // References a predicate the ledger never asserts: never violated.
     let inv = invariant(
@@ -116,7 +94,7 @@ async fn a_candidate_that_always_holds_refuses_nothing() {
 async fn a_pre_candidate_is_rejected_not_silently_mis_scored() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
 
     let inv = invariant(
         "UsesPre",
@@ -138,8 +116,8 @@ async fn a_pre_candidate_is_rejected_not_silently_mis_scored() {
 async fn pack_backed_score_reproduces_the_database_score() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
-    commit_entry(&pool, "e1").await;
+    common::commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e1").await;
     let pack = export_history_pack(&pool).await;
 
     let candidate = no_entries();
@@ -159,7 +137,7 @@ async fn pack_backed_score_reproduces_the_database_score() {
 async fn refuses_to_score_a_tampered_pack() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
     let pack = export_history_pack(&pool).await;
 
     // Edit a row's content the way an attacker holding the file would.
@@ -178,7 +156,7 @@ async fn refuses_to_score_a_tampered_pack() {
 async fn refuses_a_pre_candidate_against_a_pack() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
     let pack = export_history_pack(&pool).await;
 
     let pre_candidate = candidate(invariant(
@@ -196,8 +174,8 @@ async fn refuses_a_pre_candidate_against_a_pack() {
 async fn pack_row_order_is_not_load_bearing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
-    commit_entry(&pool, "e1").await;
+    common::commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e1").await;
     let pack = export_history_pack(&pool).await;
     let candidate = no_entries();
 
@@ -218,7 +196,7 @@ async fn pack_row_order_is_not_load_bearing() {
 async fn refuses_to_score_against_a_mismatched_anchor() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
     let pack = export_history_pack(&pool).await;
 
     // An anchor at a size the pack covers but with a different identity:
@@ -240,7 +218,7 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
 /// what the CLI would use.
 async fn build_case_pack(pool: &PgPool, id: &str) -> (String, EvidencePack) {
     reset_db(pool).await;
-    commit_entry(pool, id).await;
+    common::commit_entry(pool, id).await;
     (format!("{id}.json"), export_history_pack(pool).await)
 }
 
@@ -338,8 +316,8 @@ fn no_e1() -> Program {
 async fn a_split_attributes_violations_to_their_introducing_slice() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let e0 = commit_entry(&pool, "e0").await;
-    commit_entry(&pool, "e1").await;
+    let e0 = common::commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e1").await;
 
     // NoEntries is introduced by e0 - the boundary transition itself -
     // so it counts in train and its inherited presence never recounts
@@ -367,8 +345,8 @@ async fn a_split_attributes_violations_to_their_introducing_slice() {
 async fn a_timestamp_boundary_matches_the_transition_form() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let e0 = commit_entry(&pool, "e0").await;
-    commit_entry(&pool, "e1").await;
+    let e0 = common::commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e1").await;
 
     let mut conn = pool.acquire().await.unwrap();
     let (at, _) = morpholog_postgres::audit_cursor_for(&mut conn, e0)
@@ -406,8 +384,8 @@ async fn a_timestamp_boundary_matches_the_transition_form() {
 async fn a_pack_split_reproduces_the_database_split() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let e0 = commit_entry(&pool, "e0").await;
-    commit_entry(&pool, "e1").await;
+    let e0 = common::commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e1").await;
     let pack = export_history_pack(&pool).await;
 
     let boundary = Some(morpholog_postgres::SplitBoundary::Transition(e0));
@@ -426,7 +404,7 @@ async fn a_pack_split_reproduces_the_database_split() {
 async fn an_unknown_boundary_transition_is_an_error_in_both_modes() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
     let pack = export_history_pack(&pool).await;
 
     let ghost = uuid::Uuid::from_u128(42);
@@ -443,7 +421,7 @@ async fn an_unknown_boundary_transition_is_an_error_in_both_modes() {
 async fn a_boundary_before_all_history_is_an_error_not_an_empty_slice() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
+    common::commit_entry(&pool, "e0").await;
 
     let dawn = chrono::DateTime::from_timestamp(0, 0).unwrap();
     let err = score_candidate(
@@ -460,8 +438,8 @@ async fn a_boundary_before_all_history_is_an_error_not_an_empty_slice() {
 async fn a_boundary_at_the_end_of_history_leaves_an_empty_test_slice() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    commit_entry(&pool, "e0").await;
-    let e1 = commit_entry(&pool, "e1").await;
+    common::commit_entry(&pool, "e0").await;
+    let e1 = common::commit_entry(&pool, "e1").await;
 
     let report = score_candidate(
         &pool,

@@ -7,56 +7,25 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, PgPool, WindowEvidencePack, WindowStart, WindowVerification,
-    create_checkpoint, export_window, verify_window,
+    Checkpoint, PgPool, WindowEvidencePack, WindowStart, WindowVerification, export_window,
+    verify_window,
 };
 
 mod common;
-use common::{dec, reset_db, subj, test_pool};
-
-async fn commit_entry(pool: &PgPool, id: &str) {
-    let compiled = common::compiled(double_entry_ledger::program());
-    let t = double_entry_ledger::post_simple_entry();
-    let outcome = common::propose_pg_with_test_actor(
-        pool,
-        &compiled,
-        &t,
-        vec![
-            subj(id),
-            subj("d_2026_05_17"),
-            subj("p1"),
-            subj(&format!("cash_{id}")),
-            subj(&format!("rev_{id}")),
-            dec(100),
-        ],
-    )
-    .await
-    .unwrap();
-    common::expect_committed(outcome);
-}
-
-async fn make_checkpoint(pool: &PgPool) -> Checkpoint {
-    match create_checkpoint(pool, None, None).await.unwrap() {
-        CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint, got {other:?}")
-        }
-    }
-}
+use common::{reset_db, test_pool};
 
 /// Commit two entries, checkpoint (the prior period's anchor), commit two
 /// more, checkpoint again (the window end), and export `[from, to)`.
 async fn window_q1_q2(pool: &PgPool, tag: &str) -> (WindowEvidencePack, Checkpoint, Checkpoint) {
     for i in 0..2 {
-        commit_entry(pool, &format!("{tag}_q1_{i}")).await;
+        common::commit_entry(pool, &format!("{tag}_q1_{i}")).await;
     }
-    let q1 = make_checkpoint(pool).await; // tree_size 2
+    let q1 = common::make_checkpoint(pool).await; // tree_size 2
     for i in 0..2 {
-        commit_entry(pool, &format!("{tag}_q2_{i}")).await;
+        common::commit_entry(pool, &format!("{tag}_q2_{i}")).await;
     }
-    let q2 = make_checkpoint(pool).await; // tree_size 4
+    let q2 = common::make_checkpoint(pool).await; // tree_size 4
     let pack = export_window(
         pool,
         WindowStart::TreeSize(q1.tree_size),
@@ -65,15 +34,6 @@ async fn window_q1_q2(pool: &PgPool, tag: &str) -> (WindowEvidencePack, Checkpoi
     .await
     .unwrap();
     (pack, q1, q2)
-}
-
-fn edit_json(
-    pack: &WindowEvidencePack,
-    edit: impl FnOnce(&mut serde_json::Value),
-) -> WindowEvidencePack {
-    let mut v = serde_json::to_value(pack).unwrap();
-    edit(&mut v);
-    serde_json::from_value(v).unwrap()
 }
 
 #[tokio::test]
@@ -111,7 +71,7 @@ async fn a_tampered_window_row_is_caught_by_inclusion_not_consistency() {
     reset_db(&pool).await;
     let (pack, _q1, _q2) = window_q1_q2(&pool, "tamper").await;
 
-    let tampered = edit_json(&pack, |v| {
+    let tampered = common::edit_json(&pack, |v| {
         v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     });
     assert!(matches!(
@@ -126,7 +86,7 @@ async fn a_corrupted_consistency_proof_is_an_inconsistent_extension() {
     reset_db(&pool).await;
     let (pack, _q1, _q2) = window_q1_q2(&pool, "incon").await;
 
-    let broken = edit_json(&pack, |v| {
+    let broken = common::edit_json(&pack, |v| {
         v["consistency_proof"][0] = serde_json::json!(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         );
@@ -166,9 +126,9 @@ async fn export_refuses_a_window_with_an_unknown_endpoint() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     for i in 0..2 {
-        commit_entry(&pool, &format!("end_{i}")).await;
+        common::commit_entry(&pool, &format!("end_{i}")).await;
     }
-    make_checkpoint(&pool).await; // only checkpoint, tree_size 2
+    common::make_checkpoint(&pool).await; // only checkpoint, tree_size 2
 
     // `from` is not an existing checkpoint.
     assert!(matches!(

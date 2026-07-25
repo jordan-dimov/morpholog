@@ -9,15 +9,12 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _support import add_client_to_path, golden
+
+add_client_to_path()
 
 from python_client import envelopes
 
-GOLDEN_DIR = Path(__file__).resolve().parents[3] / "tests" / "golden" / "envelopes"
-
-
-def golden(name):
-    return json.loads((GOLDEN_DIR / name).read_text())
 
 
 class RunOutcomes(unittest.TestCase):

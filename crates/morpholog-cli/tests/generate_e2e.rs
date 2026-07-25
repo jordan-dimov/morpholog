@@ -5,19 +5,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+use common::{bin, repo_root};
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_morpholog")
-}
-
-fn repo_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop();
-    p.pop();
-    p
-}
 
 fn trade_lifecycle() -> PathBuf {
     repo_root().join("examples/10_trade_lifecycle/trade_lifecycle.morph")

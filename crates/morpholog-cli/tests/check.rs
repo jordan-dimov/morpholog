@@ -2,20 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::PathBuf;
+mod common;
+use common::{bin, repo_root};
+
 use std::process::Command;
 use tempfile::NamedTempFile;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_morpholog")
-}
-
-fn repo_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop();
-    p.pop();
-    p
-}
 
 /// Write `source` to a uniquely-named temp file and return the
 /// handle. The file is auto-deleted when the handle drops; tests
@@ -299,34 +290,34 @@ fn developer_intro_complete_program_checks() {
 
 #[test]
 fn check_all_worked_examples_are_well_formed() {
-    // Every worked example .morph must parse and validate cleanly.
-    // Any future change that breaks one would fail here loudly.
-    for rel in [
-        "examples/01_settlement_netting/netting.morph",
-        "examples/02_verified_revenue/verified_revenue.morph",
-        "examples/03_double_entry_ledger/ledger.morph",
-        "examples/04_approval_controls/approval_controls.morph",
-        "examples/05_insurance_claim_settlement/insurance_claim_settlement.morph",
-        "examples/06_clinical_trial_enrolment/clinical_trial_enrolment.morph",
-        "examples/07_chess_transition_invariants/chess.morph",
-        "examples/08_kyc_sanctions_screening/kyc.morph",
-        "examples/09_carbon_credit_provenance/carbon_credit_provenance.morph",
-        "examples/10_trade_lifecycle/trade_lifecycle.morph",
-        "examples/11_borrowing_base/borrowing_base.morph",
-        "examples/12_laytime_demurrage/laytime.morph",
-    ] {
-        let path = repo_root().join(rel);
-        let out = Command::new(bin())
-            .arg("check")
-            .arg(&path)
-            .output()
-            .expect("morpholog check should run");
-        assert!(
-            out.status.success(),
-            "{rel} failed check; stderr:\n{}",
-            String::from_utf8_lossy(&out.stderr),
-        );
+    // Every worked example .morph must parse and validate cleanly -
+    // discovered by walking examples/, so a new example is covered the
+    // day it lands (a hardcoded list here once silently stopped at 12).
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(repo_root().join("examples")).expect("examples dir") {
+        let dir = entry.expect("dir entry").path();
+        if !dir.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(&dir).expect("example dir") {
+            let path = file.expect("file entry").path();
+            if path.extension().is_some_and(|e| e == "morph") {
+                let out = Command::new(bin())
+                    .arg("check")
+                    .arg(&path)
+                    .output()
+                    .expect("morpholog check should run");
+                assert!(
+                    out.status.success(),
+                    "{} failed check; stderr:\n{}",
+                    path.display(),
+                    String::from_utf8_lossy(&out.stderr),
+                );
+                checked += 1;
+            }
+        }
     }
+    assert!(checked >= 12, "the walk found only {checked} examples");
 }
 
 const LINT_TRIP: &str = r#"

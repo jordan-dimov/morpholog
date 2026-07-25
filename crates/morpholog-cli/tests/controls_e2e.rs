@@ -5,21 +5,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::io::Write;
+mod common;
+use common::bin;
+
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_morpholog")
-}
-
-fn write_fixture(content: &str) -> tempfile::TempPath {
-    let mut f = tempfile::Builder::new()
-        .suffix(".morph")
-        .tempfile()
-        .expect("create tempfile");
-    f.write_all(content.as_bytes()).expect("write fixture");
-    f.into_temp_path()
-}
 
 const TWO_PERSON: &str = "\
 program two_person
@@ -39,7 +28,7 @@ transformation decide(d, m):
 
 #[test]
 fn controls_prose_shows_gates_and_guarantees() {
-    let path = write_fixture(TWO_PERSON);
+    let path = common::write_fixture("controls", TWO_PERSON);
     let out = Command::new(bin())
         .args(["inspect", "controls", path.to_str().unwrap()])
         .output()
@@ -72,7 +61,7 @@ fn controls_prose_shows_gates_and_guarantees() {
 
 #[test]
 fn controls_json_carries_the_structured_matrix() {
-    let path = write_fixture(TWO_PERSON);
+    let path = common::write_fixture("controls", TWO_PERSON);
     let out = Command::new(bin())
         .args(["inspect", "controls", path.to_str().unwrap(), "--json"])
         .output()
