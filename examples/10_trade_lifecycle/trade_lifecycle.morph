@@ -262,11 +262,13 @@ invariant settled_trade_was_confirmed:
 -- limit. Each trade contributes its current quantity (the define above), so
 -- an amendment that grows a position can breach the limit just as a new
 -- trade can, and the runtime refuses the change that would cross it.
+-- The `let` lines name the two sides of the book; nothing is stored,
+-- the rule simply reads as the desk says it: bought minus sold, within
+-- the limit either way.
 invariant within_position_limit:
-    PositionLimit(commodity, limit) implies (
-        abs(sum(q | TradeCaptured(t, commodity, #buy) and current_quantity(t, q))
-            - sum(q | TradeCaptured(t, commodity, #sell) and current_quantity(t, q)))
-        <= limit)
+    let bought = (sum(q | TradeCaptured(t, commodity, #buy) and current_quantity(t, q)))
+    let sold = (sum(q | TradeCaptured(t, commodity, #sell) and current_quantity(t, q)))
+    PositionLimit(commodity, limit) implies (abs((bought) - (sold)) <= limit)
 
 
 -- The only ways state may change. A transformation proposes a set of

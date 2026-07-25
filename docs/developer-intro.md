@@ -60,19 +60,20 @@ fine - it is the part that pays off at the end of this guide.
 
 ## Setup
 
-Morpholog runs on PostgreSQL 18+ and ships as a single CLI. One-time setup:
+Morpholog runs on PostgreSQL 18+ and ships as a single CLI. The quickest
+path is the prebuilt binary (static linux x86_64) - the full
+fresh-machine walkthrough, PostgreSQL included, is
+[`install.md`](install.md). On any other platform, build from the repo
+instead: `cargo install --path crates/morpholog-cli`. Then:
 
 ```bash
-# install the CLI from the repo
-cargo install --path crates/morpholog-cli
-
 # a throwaway database to play in
 createdb morpholog_intro
 export DATABASE_URL=postgres:///morpholog_intro
 morpholog init
 ```
 
-Four explicit steps, no magic. `init` provisions Morpholog's own schema - a
+Explicit steps, no magic. `init` provisions Morpholog's own schema - a
 claims table, an audit table, an outbox - from a copy embedded in the binary
 itself, so there is nothing else to download and nothing to drift. You will
 never design a table in this guide.

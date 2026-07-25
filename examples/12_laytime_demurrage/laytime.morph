@@ -140,10 +140,19 @@ invariant cargo_within_capacity:
 -- there is no stored "amount due" to drift or to quietly edit. The
 -- rule only takes hold once the clock has started: before that there
 -- is no counted time to price.
+--
+-- The `let` lines name the recompute's stages - all the counted time,
+-- then the excess past the allowance, floored at zero. Nothing is
+-- stored: the rule means exactly what it would mean with each formula
+-- written out in place. The names let the final line read the way the
+-- charterparty does: settled at most the daily rate times the excess
+-- in days.
 invariant settlements_within_due:
+    let counted = (sum(len | CountingInterval(_, v, _, _, len)))
+    let excess = (max((counted) - allowed, duration(PT0S)))
     ((DemurrageRate(v, daily) and VoyageFixture(v, _, _, allowed) and LaytimeCommenced(v, _)) implies
         sum(amount | DemurrageSettled(_, v, amount)) <=
-            daily * (max(sum(len | CountingInterval(_, v, _, _, len)) - allowed, duration(PT0S)) / duration(PT24H)))
+            daily * ((excess) / duration(PT24H)))
 
 -- A settlement can only ever exist under an agreed rate. The gate on
 -- `settle_demurrage` checks the same thing at action time; this
