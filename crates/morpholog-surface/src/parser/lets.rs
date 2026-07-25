@@ -177,12 +177,15 @@ pub(crate) fn apply(
             if let Some(&j) = declaration_index.get(name.as_str())
                 && let Some(prior) = expanded[j].as_ref()
             {
+                // Diagnostics blame the REFERENCED let - it owns the
+                // computed value hitting a term slot, and its
+                // expansion is what grows the tree.
                 budgeted_substitute_value(
                     &mut value,
                     &Var::from(name.as_str()),
                     prior,
                     value_nodes(prior),
-                    b,
+                    &bindings[j],
                     &mut refusals,
                 );
             }

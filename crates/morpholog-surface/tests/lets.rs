@@ -312,6 +312,32 @@ fn computed_let_is_refused_in_every_term_only_position() {
     }
 }
 
+#[test]
+fn term_slot_refusal_inside_a_later_let_names_the_referenced_let() {
+    // The computed value hitting the term slot belongs to `net`, not
+    // to the let being expanded into - the diagnostic must blame the
+    // owner, or the author is sent to the wrong declaration.
+    let errs = parse_program(&header(
+        "define f(a, total):\n    \
+             let net = ((a) + 1)\n    \
+             let row = (sum(1 | Reading(m, net)))\n    \
+             total = (row)",
+    ))
+    .expect_err("computed let in a later let's term slot must refuse");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("computed let `net`")),
+        "expected the refusal to name `net`, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.message.contains("computed let `row`")),
+        "the refusal must not blame the let being expanded into"
+    );
+}
+
 // ------------------------------------------------------------
 // Growth guards.
 // ------------------------------------------------------------
