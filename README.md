@@ -48,6 +48,10 @@ There is no way around the check. No bypass flag, no skip-validation switch, no 
 
 One word to know before reading further: Morpholog's own term for a record is a **claim** - a statement admitted under someone's authority at a specific moment, not a neutral fact. That framing is why corrections supersede rather than overwrite, and it is the word the examples and docs use.
 
+## Where it fits in your stack
+
+Morpholog is not a general-purpose programming language, and it does not replace your application. You build the product the way you already do - Python, TypeScript, whatever you like - and the screens, jobs, pipelines, and analytics stay in those tools. What moves into Morpholog is the governed core: the records that must be defensible, and the rules they must obey. Your code computes whatever it needs to, then *proposes* the result - through the typed Python client the binary generates from your own model, the CLI, or batch import - and Morpholog decides whether it may become a record. Reads come back the same way, at any past moment, or through the typed SQL views it generates for reporting. It is the small fraction of any system that, when it fails, makes the news - and Morpholog owns only that fraction.
+
 ## What every commit gives you
 
 - **A full audit record** - the transformation, who proposed it, the arguments, what was added and removed, and the rules that were checked.
@@ -121,8 +125,6 @@ Each parses from `.morph` source and runs end to end against PostgreSQL. Nothing
 - [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes: exact instants, computed deadlines, cargo in tonnes, delay priced in dollars.
 - [**Biometric identification oversight**](examples/13_biometric_identification_oversight/) - an EU AI Act statute enforced as admission rules: the AI's output has no standing until verified by two distinct, currently-authorised people.
 - [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one.
-
-Morpholog is not the whole stack. UIs, dashboards, pipelines, and analytics stay in your normal tools. Morpholog owns the one line where *"may this become a record?"* needs a definite, provable answer - the small fraction of any system that, when it fails, makes the news.
 
 ## Try it yourself
 
