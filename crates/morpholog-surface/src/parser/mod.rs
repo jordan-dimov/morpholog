@@ -58,6 +58,7 @@
 //! site.
 
 mod expr;
+mod lets;
 mod program;
 mod stmt;
 
