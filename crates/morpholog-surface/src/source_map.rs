@@ -129,7 +129,8 @@ impl SourceMap {
     pub fn span_for_lint(&self, lint: &Lint) -> Option<Span> {
         match lint {
             Lint::GateVsInvariant { invariant, .. }
-            | Lint::UnsuppliedAntecedent { invariant, .. } => {
+            | Lint::UnsuppliedAntecedent { invariant, .. }
+            | Lint::GoverningSelectionWithoutTotality { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
         }
