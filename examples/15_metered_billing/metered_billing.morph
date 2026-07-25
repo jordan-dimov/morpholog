@@ -1,0 +1,151 @@
+program metered_billing
+
+-- ============================================================
+-- Metered billing: pricing measured consumption, to the penny
+-- ============================================================
+--
+-- A metered supply - electricity, gas, water - is billed in three
+-- moves. A meter measures how much was used: the volume, in kilowatt
+-- hours here. A tariff prices each unit, quoted in pence per kWh the
+-- way GB energy tariffs are. And the bill settles in pounds, where a
+-- payable amount has exactly two decimal places. Between the meter
+-- and the bill sits an awkward piece of arithmetic: rate times
+-- volume almost never lands on a whole penny. 13.5 pence times 431.7 kWh is 58.2795
+-- pounds - and nobody can pay 58.2795 pounds. Someone must decide
+-- what the payable figure is, and with money involved, "roughly" is
+-- a dispute waiting to happen.
+--
+-- The decision is a rounding convention. This programme makes the
+-- convention a law of the ledger rather than a habit of the billing
+-- engine. The engine still computes the figures - that is its job -
+-- but every figure it proposes is recomputed and compared by a rule
+-- the runtime enforces, and a figure that disagrees, by even a
+-- penny, cannot be admitted at all. Not by a buggy engine, not by a
+-- hand-edited correction, not by anyone.
+--
+-- The convention itself, spelled once and enforced everywhere:
+-- round to the NEAREST penny, and when the fraction is an exact
+-- half - 0.125 pounds, dead between 12p and 13p - round AWAY FROM
+-- ZERO, so 0.125 becomes 0.13 and a credit of -0.125 becomes -0.13.
+-- That symmetry matters: a convention that always rounded halves UP
+-- would quietly favour one side of every credit note.
+
+-- A declared VAT rate. Tax rates are law, not arithmetic: a rate is
+-- admitted here as a claim with its own identity, and every line
+-- must name the rate it was taxed under. `0.05` is the GB reduced
+-- rate most domestic energy carries; `rate` is a plain fraction.
+predicate VatRate(rate_id: Subject, rate: Decimal)
+    unique by (rate_id)
+
+-- One line of an invoice: a volume priced by a rate, with the net
+-- and VAT amounts the engine computed. The names carry the units -
+-- pence per kWh in, pounds out - which is the bare-decimal money
+-- convention: the numbers are exact decimals, and the field name
+-- says what they denominate.
+predicate ChargeLine(
+    line: Subject,
+    invoice: Subject,
+    rate_p_per_kwh: Decimal,
+    volume_kwh: Decimal,
+    net_gbp: Decimal,
+    vat_rate_id: Subject,
+    vat_gbp: Decimal,
+) unique by (line)
+
+-- An invoice sealed at a total. Sealing is the moment the figure
+-- becomes the official ask; after it, the line set is closed.
+predicate InvoiceSealed(invoice: Subject, total_gbp: Decimal)
+    unique by (invoice)
+
+-- The rules. An invariant is a rule the runtime will not let any
+-- change break - not a check the engine is asked to run, but a
+-- property the ledger cannot leave.
+
+-- Every line's net IS the rounded recompute. `let` names the raw
+-- product - pence times kilowatt hours, over 100 to reach pounds -
+-- and `round(raw, 0.01)` is the convention: nearest penny, halves
+-- away from zero. The engine's figure is not trusted; it is checked
+-- against this recompute on every admission, forever.
+invariant line_net_is_the_rounded_recompute:
+    let raw = ((rate_p_per_kwh * volume_kwh) / 100)
+    ChargeLine(_, _, rate_p_per_kwh, volume_kwh, net_gbp, _, _)
+    implies net_gbp = round(raw, 0.01)
+
+-- Every line's VAT is the rounded recompute from the declared rate
+-- it names. Note what this rule alone cannot see: if a line named a
+-- rate nobody declared, there would be no VatRate claim to compare
+-- against, and this rule would pass EMPTILY - a wrong VAT amount
+-- sailing through because the comparison never happened. Rules that
+-- select a governing claim go quiet when none exists.
+invariant line_vat_is_the_rounded_recompute:
+    (ChargeLine(_, _, _, _, net_gbp, vat_rate_id, vat_gbp) and VatRate(vat_rate_id, rate))
+    implies vat_gbp = round(net_gbp * rate, 0.01)
+
+-- ... which is why this companion exists: every line MUST name a
+-- declared rate. The two rules only govern together - the one above
+-- checks the arithmetic when the rate exists, this one guarantees
+-- the rate exists. Drop this rule and the one above becomes a
+-- promise that holds only on the happy path.
+invariant every_line_names_a_declared_rate:
+    ChargeLine(_, _, _, _, _, vat_rate_id, _) implies VatRate(vat_rate_id, _)
+
+-- The inputs live in their lawful ranges: a VAT rate is a fraction
+-- of the net, and a metered volume or tariff rate is never negative
+-- here. Without these two rules the model would quietly accept a
+-- negative line - a credit note by accident, independently rounded.
+-- Credits are a real thing, but they are a DIFFERENT model (an
+-- amount copy-negated from the committed line it reverses, never
+-- re-rounded), and a boundary a programme only describes in prose is
+-- not a boundary. These rules close it.
+invariant vat_rate_is_a_fraction:
+    VatRate(_, rate) implies 0 <= rate <= 1
+
+invariant charge_inputs_are_non_negative:
+    ChargeLine(_, _, rate_p_per_kwh, volume_kwh, _, _, _)
+    implies (0 <= rate_p_per_kwh and 0 <= volume_kwh)
+
+-- A sealed total is the sum of its rounded lines - net plus VAT,
+-- line by line. This pins the OTHER half of the convention: round
+-- per line, THEN sum. The rival reading - sum the raw figures, round
+-- once at the end - genuinely differs: two lines of 0.4 pence each
+-- round to 0.00 + 0.00 = 0.00 per-line, but 0.008 pounds rounded
+-- once is 0.01. Neither is more "correct"; they are different
+-- contracts. This ledger's contract is per-line, and a total
+-- computed the other way is refused, one penny of drift and all.
+invariant sealed_total_is_the_sum_of_its_lines:
+    let net_total = (sum(n | ChargeLine(_, invoice, _, _, n, _, _)))
+    let vat_total = (sum(v | ChargeLine(_, invoice, _, _, _, _, v)))
+    InvoiceSealed(invoice, total_gbp) implies total_gbp = net_total + vat_total
+
+-- The only ways state may change.
+
+-- Tax law arrives before any billing: a rate is declared once under
+-- its own identity.
+transformation declare_vat_rate(rate_id, rate):
+    require not VatRate(rate_id, _)
+    admit VatRate(rate_id, rate)
+
+-- The engine proposes a fully-computed line. The runtime does not
+-- compute the bill FOR the engine - it recomputes what the engine
+-- claims and refuses disagreement, which is the whole control:
+-- computation and enforcement in different hands. A line can only
+-- join an invoice that is not yet sealed.
+transformation add_charge_line(line, invoice, rate_p_per_kwh, volume_kwh, net_gbp, vat_rate_id, vat_gbp):
+    require not InvoiceSealed(invoice, _)
+    admit ChargeLine(line, invoice, rate_p_per_kwh, volume_kwh, net_gbp, vat_rate_id, vat_gbp)
+
+-- Sealing closes the invoice at a total. The gate demands at least
+-- one line; the invariant above demands the total be exactly the sum
+-- of the rounded lines.
+transformation seal_invoice(invoice, total_gbp):
+    require ChargeLine(_, invoice, _, _, _, _, _)
+    require not InvoiceSealed(invoice, _)
+    admit InvoiceSealed(invoice, total_gbp)
+
+-- What this example deliberately does not cover: credit notes and
+-- reversals (amounts copy-negate the committed line, never re-round
+-- - a modelling rule this gallery pins elsewhere; the non-negative
+-- rules above make the exclusion enforced, not just stated),
+-- corrections after sealing (supersession, as in the verified-
+-- revenue example), and period assignment for the volumes. One
+-- convention, made law, is the point.

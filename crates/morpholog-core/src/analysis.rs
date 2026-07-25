@@ -148,6 +148,10 @@ fn value_refs(
             prop_refs(body, definitions, seen, out);
         }
         ValueExpr::Abs(operand) => value_refs(operand, definitions, seen, out),
+        ValueExpr::Round { value, quantum } => {
+            value_refs(value, definitions, seen, out);
+            value_refs(quantum, definitions, seen, out);
+        }
         ValueExpr::Term(_) => {
             // No predicate references; operates on a Term only.
         }
@@ -1418,6 +1422,11 @@ impl<'a> ParamCollector<'a> {
             // abs preserves its operand's kind, so the operand carries
             // the same expected kind as the abs itself.
             ValueExpr::Abs(operand) => self.walk_value(operand, expected),
+            // Decimal-only in v0: both positions force Decimal.
+            ValueExpr::Round { value, quantum } => {
+                self.walk_value(value, Some(PredicateArgKind::Decimal));
+                self.walk_value(quantum, Some(PredicateArgKind::Decimal));
+            }
         }
     }
 

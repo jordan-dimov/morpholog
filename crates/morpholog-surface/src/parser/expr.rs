@@ -732,10 +732,27 @@ where
             )
             .map(|operand| ValueExpr::Abs(Box::new(operand)));
 
+        // round function: `round ( <value> , <value> )`. Nearest
+        // multiple of the quantum, exact halves away from zero; the
+        // money form is `round(raw, 0.01)`.
+        let round_expr = just(Token::KwRound)
+            .ignore_then(
+                value
+                    .clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(value.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|(v, quantum)| ValueExpr::Round {
+                value: Box::new(v),
+                quantum: Box::new(quantum),
+            });
+
         let primary = choice((
             sum_expr,
             min_max_expr,
             abs_expr,
+            round_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,

@@ -386,6 +386,23 @@ pub enum ValueExpr {
     /// not `max(x, 0 - x)`, so the operand is evaluated once and the form
     /// round-trips as `abs`.
     Abs(Box<ValueExpr>),
+    /// `round(x, quantum)`: the multiple of `quantum` nearest to `x`,
+    /// exact halves rounding AWAY FROM ZERO (2.345 to a 0.01 quantum is
+    /// 2.35; -2.345 is -2.35). One mode only - a second rounding policy
+    /// joins as a parameter when a real domain forces it, not before.
+    /// Decimal-only in v0: both operands are bare decimals and the
+    /// result is a bare decimal (money convention: currency lives in
+    /// field names). A non-positive quantum is refused by name at
+    /// validation when written literally and raises
+    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation
+    /// otherwise. A dedicated node for the `abs` reasons: the operand
+    /// evaluates once, the form round-trips as `round`, and the
+    /// sign-branched shift-and-remainder spelling it replaces can never
+    /// be mistaken for user arithmetic.
+    Round {
+        value: Box<ValueExpr>,
+        quantum: Box<ValueExpr>,
+    },
 }
 
 /// A comparison operator, independent of operand domain. Carried by

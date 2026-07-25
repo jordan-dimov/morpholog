@@ -263,6 +263,15 @@ pub fn abs(operand: ValueExpr) -> ValueExpr {
     ValueExpr::Abs(Box::new(operand))
 }
 
+/// `round(x, quantum)` - the multiple of `quantum` nearest to `x`,
+/// exact halves away from zero. Decimal-only.
+pub fn round(value: ValueExpr, quantum: ValueExpr) -> ValueExpr {
+    ValueExpr::Round {
+        value: Box::new(value),
+        quantum: Box::new(quantum),
+    }
+}
+
 // `modulo`, not `mod`: the latter is a Rust keyword.
 pub fn modulo(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     arith(ArithOp::Mod, lhs, rhs)

@@ -201,6 +201,15 @@ pub enum ValidationError {
         kind: PredicateArgKind,
         context: ValidationContext,
     },
+    /// A `round(...)` whose quantum is a literal zero or negative
+    /// decimal. Refused at authoring time; a non-positive quantum
+    /// arriving through a variable is the runtime backstop
+    /// `EvalError::RoundQuantumNotPositive`.
+    #[error("round quantum must be a positive decimal, got {quantum} in {context}")]
+    RoundQuantumNotPositive {
+        quantum: String,
+        context: ValidationContext,
+    },
     /// An equality (`==` or `!=`) had two operands of distinct,
     /// incompatible kinds. Symmetric by nature: there is no
     /// "expected" side - both kinds are equally constrained by the
@@ -533,6 +542,8 @@ fn value_depth_capped(
             None => 0,
         },
         ValueExpr::Abs(operand) => value_depth_capped(operand, inner, depths)?,
+        ValueExpr::Round { value, quantum } => value_depth_capped(value, inner, depths)?
+            .max(value_depth_capped(quantum, inner, depths)?),
     };
     let total = below + 1;
     (total <= budget).then_some(total)
@@ -658,6 +669,10 @@ fn value_exceeds_depth(
             .as_deref()
             .is_some_and(|d| value_exceeds_depth(d, budget, depths)),
         ValueExpr::Abs(operand) => value_exceeds_depth(operand, budget, depths),
+        ValueExpr::Round { value, quantum } => {
+            value_exceeds_depth(value, budget, depths)
+                || value_exceeds_depth(quantum, budget, depths)
+        }
     }
 }
 
