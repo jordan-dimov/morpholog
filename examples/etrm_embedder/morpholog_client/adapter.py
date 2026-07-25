@@ -118,6 +118,14 @@ class Morpholog:
     def _json(self, *args: str) -> object:
         return json.loads(self._invoke(*args))
 
+    @staticmethod
+    def _opt(flag: str, value: "str | None") -> list:
+        return [] if value is None else [flag, value]
+
+    @staticmethod
+    def _repeat(flag: str, values: "list[str] | None") -> list:
+        return [part for v in values or [] for part in (flag, v)]
+
     # ------------------------------------------------------------
     # Provisioning and model identity.
     # ------------------------------------------------------------
@@ -238,32 +246,24 @@ class Morpholog:
         transition id, or an RFC 3339 timestamp resolved to the last
         transition committed at or before it.
         """
-        flags = [flag for p in predicates for flag in ("--predicate", p)]
-        if as_of is not None:
-            flags.extend(["--as-of", as_of])
-        payload = self._json(
-            "inspect", "claims", *flags, "--database-url", self.database_url
-        )
-        return [envelopes.ClaimInstance.from_json(c) for c in payload]
+        return self._claims(predicates, named=False, as_of=as_of)
 
     def claims_named(self, *predicates: str, as_of: str | None = None) -> list:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
-        generated read models parse them by declared kind.
+        generated read models parse them by declared kind. `as_of` as
+        on ``claims``."""
+        return self._claims(predicates, named=True, as_of=as_of)
 
-        `as_of` reads the claims as they were at a past moment - a
-        transition id, or an RFC 3339 timestamp resolved to the last
-        transition committed at or before it.
-        """
-        flags = [flag for p in predicates for flag in ("--predicate", p)]
-        if as_of is not None:
-            flags.extend(["--as-of", as_of])
-        payload = self._json(
-            "inspect", "claims", *flags,
-            "--named", self.file,
-            "--database-url", self.database_url,
-        )
-        return [envelopes.NamedClaim.from_json(c) for c in payload]
+    def _claims(self, predicates, named: bool, as_of: "str | None") -> list:
+        argv = ["inspect", "claims"]
+        argv += self._repeat("--predicate", list(predicates))
+        argv += self._opt("--as-of", as_of)
+        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
+        if named:
+            argv += ["--named", self.file]
+        payload = self._json(*argv, "--database-url", self.database_url)
+        return [cls.from_json(c) for c in payload]
 
     def derived(self, name: str, *, as_of: str | None = None) -> list:
         """Compute a read-side view (a derived claim) directly from the
@@ -276,21 +276,22 @@ class Morpholog:
         the last transition committed at or before it. Diffing the same
         view at two coordinates is the correction blast-radius read.
         """
-        argv = ["inspect", "derived", self.file, name]
-        if as_of is not None:
-            argv.extend(["--as-of", as_of])
-        payload = self._json(*argv, "--database-url", self.database_url)
-        return [envelopes.ClaimInstance.from_json(c) for c in payload]
+        return self._derived(name, named=False, as_of=as_of)
 
     def derived_named(self, name: str, *, as_of: str | None = None) -> list:
         """``derived`` with each row's arguments decoded by declared
         field name (the generated read models parse them by declared
         kind). Same authority and skew contract as ``claims_named``."""
-        argv = ["inspect", "derived", self.file, name, "--named"]
-        if as_of is not None:
-            argv.extend(["--as-of", as_of])
+        return self._derived(name, named=True, as_of=as_of)
+
+    def _derived(self, name: str, named: bool, as_of: "str | None") -> list:
+        argv = ["inspect", "derived", self.file, name]
+        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
+        if named:
+            argv.append("--named")
+        argv += self._opt("--as-of", as_of)
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [envelopes.NamedClaim.from_json(c) for c in payload]
+        return [cls.from_json(c) for c in payload]
 
     def audit(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
@@ -337,8 +338,7 @@ class Morpholog:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
-        for role in writer_roles or []:
-            argv.extend(["--writer-role", role])
+        argv += self._repeat("--writer-role", writer_roles)
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
@@ -424,8 +424,7 @@ class Morpholog:
         args = ["checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
-        for role in writer_roles or []:
-            args.extend(["--writer-role", role])
+        args += self._repeat("--writer-role", writer_roles)
         return envelopes.parse_checkpoint_outcome(self._json(*args))
 
     def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:

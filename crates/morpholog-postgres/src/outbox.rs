@@ -67,26 +67,12 @@ pub enum OutboxUpdate {
 ///
 /// For other statuses or intent-type filtering, use [`list_outbox_rows`].
 pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgError> {
-    let rows = sqlx::query_as!(
-        OutboxRowRaw,
-        "SELECT intent_id, transition_id, intent_type, arguments,
-                idempotency_key, status, attempt_count, enqueued_at,
-                last_attempt_at, delivered_at, failed_at, failure_reason,
-                next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
-         FROM morpholog.outbox
-         WHERE status = $1
-         ORDER BY enqueued_at, intent_id",
-        "pending",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(classify)?;
-    rows.into_iter().map(decode_outbox_row).collect()
+    list_outbox_rows(pool, Some("pending"), None).await
 }
 /// Return outbox rows filtered by status and/or intent type. Both
 /// filters are optional: `None` drops that predicate entirely (any
 /// status, including the worker's internal compensation states; any
-/// intent type). Order matches [`list_pending_outbox`].
+/// intent type). Ordered by `(enqueued_at, intent_id)`.
 ///
 /// Lets a reader ask "what failed?" or "what is in flight?" without
 /// custom SQL; used by `morpholog inspect outbox` for non-pending rows.
@@ -95,65 +81,25 @@ pub async fn list_outbox_rows(
     status_filter: Option<&str>,
     intent_type_filter: Option<&str>,
 ) -> Result<Vec<OutboxRow>, PgError> {
-    // The macro needs one literal statement per filter shape, so each
-    // filter combination is a distinct query.
-    let rows = match (status_filter, intent_type_filter) {
-        (Some(status), Some(intent_type)) => sqlx::query_as!(
-            OutboxRowRaw,
-            "SELECT intent_id, transition_id, intent_type, arguments,
-                    idempotency_key, status, attempt_count, enqueued_at,
-                    last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
-             FROM morpholog.outbox
-             WHERE status = $1 AND intent_type = $2
-             ORDER BY enqueued_at, intent_id",
-            status,
-            intent_type,
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(classify)?,
-        (Some(status), None) => sqlx::query_as!(
-            OutboxRowRaw,
-            "SELECT intent_id, transition_id, intent_type, arguments,
-                    idempotency_key, status, attempt_count, enqueued_at,
-                    last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
-             FROM morpholog.outbox
-             WHERE status = $1
-             ORDER BY enqueued_at, intent_id",
-            status,
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(classify)?,
-        (None, Some(intent_type)) => sqlx::query_as!(
-            OutboxRowRaw,
-            "SELECT intent_id, transition_id, intent_type, arguments,
-                    idempotency_key, status, attempt_count, enqueued_at,
-                    last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
-             FROM morpholog.outbox
-             WHERE intent_type = $1
-             ORDER BY enqueued_at, intent_id",
-            intent_type,
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(classify)?,
-        (None, None) => sqlx::query_as!(
-            OutboxRowRaw,
-            "SELECT intent_id, transition_id, intent_type, arguments,
-                    idempotency_key, status, attempt_count, enqueued_at,
-                    last_attempt_at, delivered_at, failed_at, failure_reason,
-                    next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
-             FROM morpholog.outbox
-             ORDER BY enqueued_at, intent_id",
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(classify)?,
-    };
+    // One statement for every filter shape: a NULL parameter drops its
+    // predicate. An inspection surface over an unindexed scan either
+    // way, so the IS NULL guards cost nothing that matters.
+    let rows = sqlx::query_as!(
+        OutboxRowRaw,
+        r#"SELECT intent_id, transition_id, intent_type, arguments,
+                idempotency_key, status, attempt_count, enqueued_at,
+                last_attempt_at, delivered_at, failed_at, failure_reason,
+                next_attempt_at, compensation_transition_id, locked_by, lock_expires_at
+         FROM morpholog.outbox
+         WHERE ($1::text IS NULL OR status = $1)
+           AND ($2::text IS NULL OR intent_type = $2)
+         ORDER BY enqueued_at, intent_id"#,
+        status_filter,
+        intent_type_filter,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
     rows.into_iter().map(decode_outbox_row).collect()
 }
 /// One raw `morpholog.outbox` row as `query_as!` decodes it (DB shape

@@ -40,6 +40,16 @@ def _strict(name: str, payload: object, required: set, optional: set = frozenset
     return payload
 
 
+def _by_status(payload: object, label: str, mapping: dict) -> object:
+    """Dispatch a status-discriminated union to its model. An unknown
+    or missing discriminator is drift, refused with the union named."""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    cls = mapping.get(status)
+    if cls is None:
+        raise EnvelopeError(f"not {label}: {payload!r}")
+    return cls.from_json(payload)
+
+
 def _optional_timestamp(text: object) -> datetime | None:
     return None if text is None else values.parse_timestamp(str(text))
 
@@ -145,14 +155,14 @@ def parse_run_outcome(payload: object) -> "Committed | Rejected":
     """The ``propose`` outcome envelope: a lawful business outcome
     either way. (The wire keeps the historical ``run_outcome`` name in
     the pinned schema; only the command verb changed.)"""
-    status = payload.get("status") if isinstance(payload, dict) else None
-    match status:
-        case "committed":
-            return Committed.from_json(payload)
-        case "rejected":
-            return Rejected.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a propose outcome: {payload!r}")
+    return _by_status(
+        payload,
+        "a propose outcome",
+        {
+            "committed": Committed,
+            "rejected": Rejected,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -822,14 +832,14 @@ class ReplayDivergent:
 
 
 def parse_verify_outcome(payload: object) -> "ReplayConsistent | ReplayDivergent":
-    status = payload.get("status") if isinstance(payload, dict) else None
-    match status:
-        case "consistent":
-            return ReplayConsistent.from_json(payload)
-        case "divergent":
-            return ReplayDivergent.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a replay verdict: {payload!r}")
+    return _by_status(
+        payload,
+        "a replay verdict",
+        {
+            "consistent": ReplayConsistent,
+            "divergent": ReplayDivergent,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -983,26 +993,20 @@ TreeVerification = (
 def parse_tree_verification(payload: object) -> TreeVerification:
     """The tamper-evidence verdict, the output of `evidence verify` and
     the `tree` half of `verify`."""
-    status = payload.get("status") if isinstance(payload, dict) else None
-    match status:
-        case "intact":
-            return TreeIntact.from_json(payload)
-        case "tampered":
-            return TreeTampered.from_json(payload)
-        case "chain_broken":
-            return TreeChainBroken.from_json(payload)
-        case "anchor_mismatch":
-            return TreeAnchorMismatch.from_json(payload)
-        case "malformed_pack":
-            return TreeMalformedPack.from_json(payload)
-        case "signature_invalid":
-            return TreeSignatureInvalid.from_json(payload)
-        case "unauthorized_key":
-            return TreeUnauthorizedKey.from_json(payload)
-        case "signature_required":
-            return TreeSignatureRequired.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a tree verdict: {payload!r}")
+    return _by_status(
+        payload,
+        "a tree verdict",
+        {
+            "intact": TreeIntact,
+            "tampered": TreeTampered,
+            "chain_broken": TreeChainBroken,
+            "anchor_mismatch": TreeAnchorMismatch,
+            "malformed_pack": TreeMalformedPack,
+            "signature_invalid": TreeSignatureInvalid,
+            "unauthorized_key": TreeUnauthorizedKey,
+            "signature_required": TreeSignatureRequired,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -1048,17 +1052,15 @@ ViewsVerification = ViewsIntact | ViewsTampered | ViewsNotSealed
 
 def parse_views_verification(payload: object) -> ViewsVerification:
     """Parse a `views` verdict by its `status` tag."""
-    if not isinstance(payload, dict):
-        raise EnvelopeError(f"not a views verdict: {payload!r}")
-    match payload.get("status"):
-        case "intact":
-            return ViewsIntact.from_json(payload)
-        case "tampered":
-            return ViewsTampered.from_json(payload)
-        case "not_sealed":
-            return ViewsNotSealed.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a views verdict: {payload!r}")
+    return _by_status(
+        payload,
+        "a views verdict",
+        {
+            "intact": ViewsIntact,
+            "tampered": ViewsTampered,
+            "not_sealed": ViewsNotSealed,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -1184,14 +1186,14 @@ class CheckpointNoNewRows:
 
 
 def parse_checkpoint_outcome(payload: object) -> "CheckpointCreated | CheckpointNoNewRows":
-    status = payload.get("status") if isinstance(payload, dict) else None
-    match status:
-        case "created":
-            return CheckpointCreated.from_json(payload)
-        case "no_new_rows":
-            return CheckpointNoNewRows.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a checkpoint outcome: {payload!r}")
+    return _by_status(
+        payload,
+        "a checkpoint outcome",
+        {
+            "created": CheckpointCreated,
+            "no_new_rows": CheckpointNoNewRows,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -1468,24 +1470,19 @@ WindowVerification = (
 def parse_window_verification(payload: object) -> WindowVerification:
     """The windowed-pack verdict, the output of ``evidence verify`` on a v2
     window pack."""
-    status = payload.get("status") if isinstance(payload, dict) else None
-    match status:
-        case "intact":
-            return WindowIntact.from_json(payload)
-        case "inconsistent_extension":
-            return WindowInconsistentExtension.from_json(payload)
-        case "row_not_included":
-            return WindowRowNotIncluded.from_json(payload)
-        case "anchor_mismatch":
-            return WindowAnchorMismatch.from_json(payload)
-        case "signature_invalid":
-            return WindowSignatureInvalid.from_json(payload)
-        case "signature_required":
-            return WindowSignatureRequired.from_json(payload)
-        case "malformed":
-            return WindowMalformed.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a window verdict: {payload!r}")
+    return _by_status(
+        payload,
+        "a window verdict",
+        {
+            "intact": WindowIntact,
+            "inconsistent_extension": WindowInconsistentExtension,
+            "row_not_included": WindowRowNotIncluded,
+            "anchor_mismatch": WindowAnchorMismatch,
+            "signature_invalid": WindowSignatureInvalid,
+            "signature_required": WindowSignatureRequired,
+            "malformed": WindowMalformed,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -1655,19 +1652,15 @@ SelectiveVerification = (
 def parse_selective_verification(payload: object) -> SelectiveVerification:
     """The selective-pack verdict, the output of ``evidence verify`` on a v3
     selective pack."""
-    status = payload.get("status") if isinstance(payload, dict) else None
-    match status:
-        case "intact":
-            return SelectiveIntact.from_json(payload)
-        case "row_not_included":
-            return SelectiveRowNotIncluded.from_json(payload)
-        case "anchor_mismatch":
-            return SelectiveAnchorMismatch.from_json(payload)
-        case "signature_invalid":
-            return SelectiveSignatureInvalid.from_json(payload)
-        case "signature_required":
-            return SelectiveSignatureRequired.from_json(payload)
-        case "malformed":
-            return SelectiveMalformed.from_json(payload)
-        case _:
-            raise EnvelopeError(f"not a selective verdict: {payload!r}")
+    return _by_status(
+        payload,
+        "a selective verdict",
+        {
+            "intact": SelectiveIntact,
+            "row_not_included": SelectiveRowNotIncluded,
+            "anchor_mismatch": SelectiveAnchorMismatch,
+            "signature_invalid": SelectiveSignatureInvalid,
+            "signature_required": SelectiveSignatureRequired,
+            "malformed": SelectiveMalformed,
+        },
+    )

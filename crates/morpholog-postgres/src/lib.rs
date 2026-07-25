@@ -6,7 +6,7 @@
 //! See `crates/morpholog-core/sql/schema.sql` for the canonical schema
 //! and `docs/scope-and-ambition.md` for the runtime's positioning.
 
-pub mod sql_views;
+mod sql_views;
 pub mod testing;
 
 pub use sql_views::{RenderedViews, ViewRefusal, render_views};
@@ -44,19 +44,18 @@ pub use audit::{
     list_audit_rows, list_audit_rows_page,
 };
 pub use checkpoints::{
-    AUDIT_CHECKPOINT_PURPOSE, Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature,
-    TreeVerification, create_checkpoint, first_unsigned_checkpoint_size, verify_audit_tree,
+    Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature, TreeVerification,
+    create_checkpoint, first_unsigned_checkpoint_size, verify_audit_tree,
 };
 pub use claims::{list_claims, list_claims_for_predicates, load_scoped_state};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
-pub use keys::{AUDIT_SIGNING_KEY_PREDICATE, KeyTriple, authorized_keys_as_of};
 pub use outbox::{
-    CompensationArgsFromRow, CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxUpdate,
-    ProcessOutcome, begin_compensation, claim_pending_outbox_row, complete_compensation,
-    earliest_pending_retry, list_outbox_rows, list_pending_outbox, mark_compensation_failed,
-    mark_outbox_delivered, mark_outbox_failed, mark_outbox_transient_attempt,
-    process_one_outbox_row, record_compensation, release_outbox_claim, system_actor,
+    CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxUpdate, ProcessOutcome,
+    begin_compensation, claim_pending_outbox_row, complete_compensation, earliest_pending_retry,
+    list_outbox_rows, list_pending_outbox, mark_compensation_failed, mark_outbox_delivered,
+    mark_outbox_failed, mark_outbox_transient_attempt, process_one_outbox_row, record_compensation,
+    release_outbox_claim,
 };
 pub use pack::{
     EvidencePack, PackError, PackManifest, RowInclusionProof, SelectiveEvidencePack,
@@ -70,7 +69,7 @@ pub use propose::{
     propose_against_pg_with_trace,
 };
 pub use provision::{
-    InitOutcome, READER_ROLE, SCHEMA_SQL, WRITER_ROLE, initialise_schema, provision_least_privilege,
+    InitOutcome, READER_ROLE, WRITER_ROLE, initialise_schema, provision_least_privilege,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use score::{

@@ -31,7 +31,7 @@ use crate::audit::AuditRow;
 /// The predicate naming an authorised signing key. The operator declares
 /// it and admits/retracts it; the verifier recognises it by name and exact
 /// `(key_id, purpose, public_key): Subject` shape.
-pub const AUDIT_SIGNING_KEY_PREDICATE: &str = "AuditSigningKey";
+pub(crate) const AUDIT_SIGNING_KEY_PREDICATE: &str = "AuditSigningKey";
 
 /// The exact authorisation a checkpoint signature must match:
 /// `(key_id, purpose, public_key)`.
@@ -61,7 +61,7 @@ fn key_triple(claim: &ClaimInstance) -> Option<KeyTriple> {
 /// rows, given the rows in canonical `(committed_at, transition_id)` order.
 /// Each row's retractions are applied before its assertions, matching the
 /// kernel's candidate-build order.
-pub fn authorized_keys_as_of(rows: &[AuditRow], tree_size: i64) -> HashSet<KeyTriple> {
+pub(crate) fn authorized_keys_as_of(rows: &[AuditRow], tree_size: i64) -> HashSet<KeyTriple> {
     let mut keys = HashSet::new();
     let n = (tree_size.max(0) as usize).min(rows.len());
     for row in &rows[..n] {

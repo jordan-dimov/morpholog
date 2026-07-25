@@ -107,19 +107,8 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
 /// [`list_audit_rows_page`] under [`audit_resume_watermark`], which
 /// is what `inspect audit` streams.
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
-    let rows = sqlx::query_as!(
-        AuditRowRaw,
-        "SELECT transition_id, transformation_name, arguments, actor,
-                invariant_epoch, invariants_checked,
-                asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation
-         FROM morpholog.audit
-         ORDER BY committed_at, transition_id"
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(classify)?;
-    rows.into_iter().map(decode_audit_row).collect()
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    list_audit_rows_page(&mut conn, None, None, i64::MAX).await
 }
 /// One keyset page of audit rows in `(committed_at, transition_id)`
 /// order: strictly after `cursor` (when given) and strictly below

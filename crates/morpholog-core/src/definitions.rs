@@ -141,6 +141,29 @@ impl<'a> DefinitionIndex<'a> {
     pub(crate) fn get(&self, name: &DefinitionName) -> Option<&'a Definition> {
         self.definitions.iter().find(|d| &d.name == name)
     }
+
+    /// Run `f` against `name`'s body under the recursion-STACK guard
+    /// every static walker shares: returns `T::default()` when the
+    /// name is already on the stack (a cycle) or undeclared;
+    /// otherwise pushes, runs, pops. A stack guard, not a visited
+    /// set - a polarity-sensitive walker must re-expand a definition
+    /// reached again once it is off the stack.
+    pub(crate) fn enter<T: Default>(
+        &self,
+        name: &DefinitionName,
+        seen: &mut BTreeSet<DefinitionName>,
+        f: impl FnOnce(&'a Prop, &mut BTreeSet<DefinitionName>) -> T,
+    ) -> T {
+        if !seen.insert(name.clone()) {
+            return T::default();
+        }
+        let out = match self.get(name) {
+            Some(def) => f(&def.body, seen),
+            None => T::default(),
+        };
+        seen.remove(name);
+        out
+    }
 }
 
 /// Collect the definitions a proposition calls directly (not

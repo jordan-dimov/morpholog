@@ -347,9 +347,10 @@ pub(crate) struct VerifyArgs {
     pub(crate) views_schema: Option<String>,
 }
 
-/// Arguments for `checkpoint`: the connection, plus an optional Ed25519
-/// signing key. With `--signing-key` the new tree head is signed; both
-/// `--signing-key` and `--key-id` must be supplied together.
+/// Arguments for `checkpoint`: the connection, an optional Ed25519
+/// signing key, and the writer-set assertion. With `--signing-key`
+/// the new tree head is signed; both `--signing-key` and `--key-id`
+/// must be supplied together.
 #[derive(clap::Args, Debug)]
 pub(crate) struct CheckpointArgs {
     #[command(flatten)]
@@ -365,17 +366,8 @@ pub(crate) struct CheckpointArgs {
     #[arg(long, requires = "signing_key")]
     pub(crate) key_id: Option<String>,
 
-    /// Assert the session roles that write audit (repeatable), so the
-    /// resume horizon is computed over their sessions only - for
-    /// managed PostgreSQL, where the platform's own sessions are
-    /// hidden and `pg_read_all_stats` cannot be granted. The
-    /// assertion is verified against the catalog (every non-superuser
-    /// role that can write `morpholog.audit` must be asserted);
-    /// superuser writes are the residue the flag explicitly accepts,
-    /// and role grants, memberships, and login attributes must stay
-    /// unchanged until the command establishes its read snapshot.
-    #[arg(long = "writer-role", value_name = "ROLE")]
-    pub(crate) writer_role: Vec<String>,
+    #[command(flatten)]
+    pub(crate) writers: WriterRoleArgs,
 }
 
 /// Arguments for `keygen`: where to write the new Ed25519 keypair.
@@ -773,17 +765,8 @@ pub(crate) struct InspectAuditArgs {
     #[arg(long, value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
 
-    /// Assert the session roles that write audit (repeatable), so the
-    /// resume horizon is computed over their sessions only - for
-    /// managed PostgreSQL, where the platform's own sessions are
-    /// hidden and `pg_read_all_stats` cannot be granted. The
-    /// assertion is verified against the catalog (every non-superuser
-    /// role that can write `morpholog.audit` must be asserted);
-    /// superuser writes are the residue the flag explicitly accepts,
-    /// and role grants, memberships, and login attributes must stay
-    /// unchanged until the command establishes its read snapshot.
-    #[arg(long = "writer-role", value_name = "ROLE")]
-    pub(crate) writer_role: Vec<String>,
+    #[command(flatten)]
+    pub(crate) writers: WriterRoleArgs,
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate
@@ -843,6 +826,30 @@ pub(crate) struct InspectClaimsArgs {
     /// silent skip. Composes with `--predicate` and `--as-of`.
     #[arg(long = "named", value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
+}
+
+/// The writer-set assertion both watermark consumers share
+/// (`inspect audit`, `checkpoint`).
+#[derive(clap::Args, Debug)]
+pub(crate) struct WriterRoleArgs {
+    /// Assert the session roles that write audit (repeatable), so the
+    /// resume horizon is computed over their sessions only - for
+    /// managed PostgreSQL, where the platform's own sessions are
+    /// hidden and `pg_read_all_stats` cannot be granted. The
+    /// assertion is verified against the catalog (every non-superuser
+    /// role that can write `morpholog.audit` must be asserted);
+    /// superuser writes are the residue the flag explicitly accepts,
+    /// and role grants, memberships, and login attributes must stay
+    /// unchanged until the command establishes its read snapshot.
+    #[arg(long = "writer-role", value_name = "ROLE")]
+    pub(crate) writer_role: Vec<String>,
+}
+
+impl WriterRoleArgs {
+    /// `None` when unasserted - the adapter's lossless-or-loud default.
+    pub(crate) fn as_writers(&self) -> Option<&[String]> {
+        (!self.writer_role.is_empty()).then_some(self.writer_role.as_slice())
+    }
 }
 
 /// Arguments for `inspect derived`.

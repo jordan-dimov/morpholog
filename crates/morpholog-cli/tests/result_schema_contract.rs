@@ -321,21 +321,27 @@ fn composite_envelopes_serialize_as_pinned() {
     let explanation = explain(&p, &transition("open_account"), &flagged_state());
     assert_golden(
         "rejected_with_explanation.json",
-        &serde_json::json!({
-            "status": "rejected",
-            "reason": "invariant `no_flagged_accounts` violated",
-            "explanation": explanation,
+        &to_value(&morpholog_cli::envelopes::RejectedWithExplanation {
+            explanation,
+            reason: "invariant `no_flagged_accounts` violated",
+            status: "rejected",
         }),
     );
     assert_golden(
         "traced_committed.json",
-        &serde_json::json!({ "result": &committed_outcome(), "trace": [] }),
+        &to_value(&morpholog_cli::envelopes::Traced {
+            result: &committed_outcome(),
+            trace: [0u8; 0],
+        }),
     );
     assert_golden(
         "traced_errored.json",
-        &serde_json::json!({
-            "result": { "status": "errored", "error": "bind matched 2 claims" },
-            "trace": [],
+        &to_value(&morpholog_cli::envelopes::Traced {
+            result: morpholog_cli::envelopes::TracedError {
+                error: "bind matched 2 claims".to_string(),
+                status: "errored",
+            },
+            trace: [0u8; 0],
         }),
     );
 
