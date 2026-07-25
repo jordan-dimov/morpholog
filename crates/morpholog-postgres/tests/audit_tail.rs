@@ -297,7 +297,7 @@ async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passe
     )
     .await;
 
-    let err = audit_resume_watermark(&pool, Some(&[me.clone()]))
+    let err = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
         .await
         .expect_err("unasserted writers must refuse");
     let missing = match &err {
@@ -403,7 +403,7 @@ async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_r
     .await
     .unwrap();
 
-    let horizon = audit_resume_watermark(&pool, Some(&[me.clone()]))
+    let horizon = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
         .await
         .expect("asserting the connecting role passes");
     assert!(
@@ -421,7 +421,9 @@ async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_r
         vec![t1],
         "the in-flight row is withheld under the asserted horizon"
     );
-    let fresh = audit_resume_watermark(&pool, Some(&[me])).await.unwrap();
+    let fresh = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
+        .await
+        .unwrap();
     let cursor = audit_cursor_for(&mut conn, t1).await.unwrap();
     let page = list_audit_rows_page(&mut conn, Some(cursor), Some(fresh), 10)
         .await
