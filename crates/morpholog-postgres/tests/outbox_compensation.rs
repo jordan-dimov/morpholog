@@ -1,9 +1,9 @@
 //! Integration tests for the compensation lease helpers
 //! (`begin_compensation`, `complete_compensation`,
-//! `mark_compensation_failed`) added in PR 2 of the outbox arc.
+//! `mark_compensation_failed`).
 //!
-//! These helpers close the compensation-idempotency gap that the
-//! PR 1 substrate left open: under the new flow, the lease pattern
+//! These helpers close the compensation-idempotency gap the bare
+//! delivery-state helpers leave open: the lease pattern
 //! ensures at most one worker holds the right to invoke a
 //! compensating transformation for a given failed outbox row.
 //!

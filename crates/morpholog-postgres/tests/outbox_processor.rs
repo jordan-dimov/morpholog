@@ -1,5 +1,5 @@
 //! End-to-end integration tests for the single-row processor
-//! (`process_one_outbox_row`) added in PR 2 of the outbox arc.
+//! (`process_one_outbox_row`).
 //!
 //! These tests drive a real outbox row through every branch of the
 //! delivery-and-compensation state machine, against a real

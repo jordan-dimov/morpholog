@@ -99,9 +99,8 @@ mod tests {
     use super::*;
     use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
 
-    // The eight comparator variants were collapsed into one
-    // `Prop::Compare { op, domain }`. These boxed-operand builders keep the
-    // test call sites as terse as the old tuple variants were. Operands
+    // Boxed-operand builders keep comparator-heavy test call
+    // sites terse. Operands
     // are value expressions; the comparison itself is a proposition.
     fn le_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
         Prop::Compare {

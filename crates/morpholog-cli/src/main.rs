@@ -1794,8 +1794,8 @@ mod tests {
         );
     }
 
-    /// `parse` is no longer a subcommand - it folded into
-    /// `check --ir`. Pins both the removal and the fold.
+    /// `check --ir` owns IR output; a bare `parse` subcommand must
+    /// stay unknown. Pins both.
     #[test]
     fn parse_is_gone_and_check_ir_replaces_it() {
         let err = Cli::try_parse_from(["morpholog", "parse", "demo.morph"])

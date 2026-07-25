@@ -10,9 +10,7 @@
 //!
 //! Why a separate crate, not more code in `morpholog-postgres`:
 //! - Different dependency profile. The polling worker pulls in
-//!   the tokio runtime, jitter randomness, and eventually
-//!   per-target circuit breakers and at-least-one concrete
-//!   deliverer impl (HTTP client, Kafka producer, etc.).
+//!   the tokio runtime and jitter randomness;
 //!   `morpholog-postgres` stays a focused adapter crate.
 //! - The worker is replaceable. A deployment that wants to drive
 //!   the processor from a Lambda invocation, a Kafka-consumer

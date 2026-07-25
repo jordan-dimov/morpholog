@@ -1,8 +1,7 @@
 //! Test-support [`Deliverer`] implementations.
 //!
 //! Constant-outcome deliverers, one per [`DeliveryOutcome`] variant.
-//! Integration tests in this crate, in `morpholog-outbox`, and in
-//! future concrete-deliverer crates (e.g. an HTTP deliverer) use
+//! Integration tests in this crate and in `morpholog-outbox` use
 //! them as drop-in stubs whenever a test wants to exercise the
 //! processor or worker pipeline without tying behaviour to a
 //! specific external target.

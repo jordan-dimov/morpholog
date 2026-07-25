@@ -5,9 +5,9 @@
 //! re-defining the same handful of constructors and convenience
 //! wrappers: build an [`EvalValue::Subject`] from a `&str`, build an
 //! [`EvalValue::Decimal`] from an `i64`, run a sync [`propose`] with a
-//! default actor. Before this crate, those re-definitions lived
-//! inline in every per-test-file `mod common;` or directly in the
-//! test file. Same shapes, same names, drifting independently. This
+//! default actor. Without this crate each per-test-file `mod common;`
+//! would re-define them inline - same shapes, same names, drifting
+//! independently. This
 //! crate collapses them to one source of truth.
 //!
 //! Scope: **sync helpers only**. Async wrappers around

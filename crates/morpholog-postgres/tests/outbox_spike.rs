@@ -1,11 +1,11 @@
 //! Spike for the outbox worker + compensation pattern.
 //!
 //! Pairs with [`docs/outbox-sketch.md`]. Demonstrates the full
-//! delivery + compensation flow end-to-end using hand-rolled code,
-//! with no production worker, no `Deliverer` trait, no supervisor.
-//! Every caller who wants outbox delivery + compensation today has
-//! to write something equivalent to this. That ugliness is the case
-//! for the implementation PR(s).
+//! delivery + compensation flow end-to-end in deliberately
+//! hand-rolled code - the seam-level characterisation of exactly
+//! what `morpholog-outbox`'s worker and `Deliverer` now automate,
+//! kept so the substrate's contract stays pinned independently of
+//! the worker that consumes it.
 //!
 //! The spike uses the existing `double_entry_ledger` transformations
 //! as both the compensable step (`post_simple_entry` against

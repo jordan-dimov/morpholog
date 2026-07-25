@@ -38,7 +38,7 @@ That puts the `morpholog` binary on `~/.cargo/bin/`. Refresh it after pulling ch
 
 ## Build and test
 
-Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs every check CI runs, in the same order, plus the ASCII-only-dash convention that CI does not enforce. If it passes locally, CI passes.
+Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus two checks CI does not enforce (the ASCII-only-dash convention, and `morpholog check` over every `.morph`); CI additionally runs a coverage job for visibility only. If it passes locally, CI passes.
 
 ```bash
 ./scripts/precommit.sh                                        # without PG tests
@@ -138,6 +138,7 @@ The `README.md` is the example's **browsable face** - what renders when someone 
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - **read first** when reasoning about whether a direction fits the project.
 - [`docs/roadmap.md`](docs/roadmap.md) - what's imminent, deferred, and out of scope.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - what the kernel means.
+- [`docs/refactoring-playbook.md`](docs/refactoring-playbook.md) - how to make a codebase-wide type change safely.
 - [`docs/design-history.md`](docs/design-history.md) - for each significant IR decision, the worked example that forced it.
 - [`docs/embedder-integration.md`](docs/embedder-integration.md) - the pinned public contract for non-Rust integrations, including the generated Python client.
 - [`docs/prior-art.md`](docs/prior-art.md) - the influences behind the roadmap directions, with the calibrations that survived review.

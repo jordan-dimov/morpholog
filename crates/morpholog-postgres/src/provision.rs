@@ -23,7 +23,7 @@ pub enum InitOutcome {
 }
 
 /// Provision the `morpholog` schema in an existing database from the
-/// embedded [`SCHEMA_SQL`]. Day-zero only: if the schema already
+/// embedded `SCHEMA_SQL`. Day-zero only: if the schema already
 /// exists this returns [`InitOutcome::AlreadyInitialised`] without
 /// touching anything - it never drops and never migrates. Schema
 /// *evolution* is the deferred migrations story, not this function.

@@ -22,7 +22,7 @@ use crate::validate::ValidatedProgram;
 /// whole `morpholog.claims` table.
 ///
 /// The match below is **exhaustive over `Prop` variants on purpose**
-/// (no `_` arm). If a future PR adds a new `Prop` variant, the
+/// (no `_` arm). If a new `Prop` variant is added, the
 /// compiler will refuse this function until the new variant is
 /// handled. That compile-time check is what keeps the analysis
 /// honest: a missed variant here would silently produce
@@ -33,7 +33,7 @@ use crate::validate::ValidatedProgram;
 /// `In` takes only `Term`s (variables, wildcards, or literals), none of
 /// which can reference a predicate; it contributes nothing. Comparator
 /// operands are value expressions, walked by
-/// [`predicates_referenced_by_value`].
+/// `predicates_referenced_by_value`.
 pub fn predicates_referenced_by_prop(
     prop: &Prop,
     definitions: &[Definition],

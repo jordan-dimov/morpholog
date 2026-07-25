@@ -1128,7 +1128,6 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
- "sha2",
  "sqlx",
  "tempfile",
  "tokio",
@@ -1154,7 +1153,6 @@ dependencies = [
 name = "morpholog-examples"
 version = "0.0.2"
 dependencies = [
- "jiff",
  "morpholog-core",
  "morpholog-surface",
  "morpholog-test-support",
@@ -1172,7 +1170,6 @@ dependencies = [
  "morpholog-postgres",
  "morpholog-test-support",
  "rand 0.9.4",
- "rust_decimal",
  "serde_json",
  "sqlx",
  "tokio",

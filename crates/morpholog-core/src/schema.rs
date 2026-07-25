@@ -13,9 +13,7 @@
 //! dataclass, a TypeScript interface, an HTML form) - each would be
 //! a separate adapter built from the same analysis result, never a
 //! second source of truth. JSON Schema sits in `morpholog-core`
-//! today because it is small and self-contained; extraction into a
-//! `morpholog-schema` crate becomes the right home when additional
-//! encodings need shared helpers.
+//! because it is small and self-contained.
 //!
 //! The mapping leans toward stable, embedder-friendly encodings over
 //! exhaustively re-stating the kernel's contract:
