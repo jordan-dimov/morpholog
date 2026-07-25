@@ -126,7 +126,7 @@ impl std::fmt::Display for Lint {
                 write!(
                     f,
                     "invariant `{invariant}` appears to select the governing \
-                     version of {names} in force at a date (the \
+                     version of {names} in force at a coordinate (the \
                      not-a-later-one pattern), but no other invariant has \
                      the recognised totality shape for it. When no version \
                      is in force at a coordinate, this rule may pass \
@@ -134,8 +134,8 @@ impl std::fmt::Display for Lint {
                      totality backstop (an invariant guaranteeing every \
                      governed coordinate an effective version, e.g. \
                      `... implies (exists e: {names_first}(..., e) and e \
-                     on_or_before d)`) beside the ordinary action's \
-                     `require` gate",
+                     on_or_before d)` - `at_or_before` for timestamps) \
+                     beside the ordinary action's `require` gate",
                     names_first = predicates.first().map(String::as_str).unwrap_or("P"),
                 )
             }

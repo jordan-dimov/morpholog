@@ -899,3 +899,31 @@ invariant reading_priced_by_governing_tariff:
     let (invariant, _) = governing_finding(&found).expect("the authored finding");
     assert_eq!(invariant, "reading_priced_by_governing_tariff");
 }
+
+// The mirrored spelling - excluding a strictly EARLIER version -
+// selects the earliest-in-force, which is vacuous over an empty set in
+// exactly the same way. The tiebreak is direction-insensitive on
+// purpose.
+#[test]
+fn an_earliest_version_selection_fires_too() {
+    let found = lints_of(
+        r#"
+program earliest
+
+predicate Reading(meter: Subject, day: Date, kwh: Decimal)
+predicate Tariff(meter: Subject, rate: Decimal, effective_from: Date)
+
+transformation record_reading(m, d, k):
+    admit Reading(m, d, k)
+
+transformation set_tariff(m, r, ef):
+    admit Tariff(m, r, ef)
+
+invariant reading_priced_by_first_tariff:
+    (Reading(m, d, _) and Tariff(m, rate, ef) and ef on_or_before d and not (exists earlier: Tariff(m, _, earlier) and earlier on_or_before d and earlier before ef)) implies rate <= 1000
+"#,
+    );
+    let (invariant, predicates) = governing_finding(&found).expect("the earliest twin fires");
+    assert_eq!(invariant, "reading_priced_by_first_tariff");
+    assert_eq!(predicates, ["Tariff"]);
+}

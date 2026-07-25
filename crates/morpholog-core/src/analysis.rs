@@ -536,7 +536,11 @@ fn claim_vars(args: &[Term]) -> BTreeSet<&Var> {
 /// antecedent are opaque, and the unbounded ("current version")
 /// selection does not fire - this lint is about a governing version at
 /// a coordinate. Missing an exotic spelling is preferred over accusing
-/// ordinary temporal logic.
+/// ordinary temporal logic. The strict tiebreak is deliberately
+/// direction-insensitive: excluding a strictly LATER version selects
+/// the latest-in-force, excluding a strictly EARLIER one selects the
+/// earliest - and an earliest-version selection over an empty set is
+/// vacuous in exactly the same way.
 pub(crate) fn governing_selections(
     prop: &Prop,
     definitions: DefinitionIndex<'_>,
