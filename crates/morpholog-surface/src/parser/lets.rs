@@ -173,11 +173,15 @@ fn budgeted_substitute_prop(
     binding: &LetBinding,
     errors: &mut Vec<(Span, String)>,
 ) {
-    let occurrences = count_prop(target, name);
-    if occurrences == 0 {
+    if count_prop(target, name) == 0 {
         return;
     }
-    let projected = prop_nodes(target) + occurrences * value_nodes.saturating_sub(1);
+    // Budget on value-position occurrences only: a term-slot use is a
+    // 1-for-1 term swap or a refusal, never growth - counting it would
+    // inflate the projection and let the budget error mask the more
+    // specific term-slot diagnostic.
+    let growth_sites = count_growth_prop(target, name);
+    let projected = prop_nodes(target) + growth_sites * value_nodes.saturating_sub(1);
     if projected > MAX_BODY_NODES {
         errors.push((
             binding.span.clone(),
@@ -200,11 +204,11 @@ fn budgeted_substitute_value(
     binding: &LetBinding,
     errors: &mut Vec<(Span, String)>,
 ) {
-    let occurrences = count_value(target, name);
-    if occurrences == 0 {
+    if count_value(target, name) == 0 {
         return;
     }
-    let projected = self::value_nodes(target) + occurrences * value_nodes.saturating_sub(1);
+    let growth_sites = count_growth_value(target, name);
+    let projected = self::value_nodes(target) + growth_sites * value_nodes.saturating_sub(1);
     if projected > MAX_BODY_NODES {
         errors.push((
             binding.span.clone(),
@@ -525,6 +529,47 @@ fn count_value(expr: &ValueExpr, name: &Var) -> usize {
                 + default.as_ref().map_or(0, |d| count_value(d, name))
         }
         ValueExpr::Abs(operand) => count_value(operand, name),
+    }
+}
+
+// Growth counting: occurrences that can enlarge the tree when
+// substituted, i.e. value-position variable references only. Term
+// slots (claim/call arguments, membership operands, sum targets,
+// lookup keys) are excluded - substitution there is a 1-for-1 term
+// swap when the value is a plain term and a refusal otherwise.
+fn count_growth_prop(prop: &Prop, name: &Var) -> usize {
+    match prop {
+        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => 0,
+        Prop::And(props) | Prop::Or(props) => {
+            props.iter().map(|p| count_growth_prop(p, name)).sum()
+        }
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            count_growth_prop(left, name) + count_growth_prop(right, name)
+        }
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => count_growth_prop(p, name),
+        Prop::Forall { source, body, .. } => {
+            count_growth_prop(source, name) + count_growth_prop(body, name)
+        }
+        Prop::Eq(l, r) | Prop::Neq(l, r) => {
+            count_growth_value(l, name) + count_growth_value(r, name)
+        }
+        Prop::Compare { left, right, .. } => {
+            count_growth_value(left, name) + count_growth_value(right, name)
+        }
+    }
+}
+
+fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
+    match expr {
+        ValueExpr::Term(t) => count_term(t, name),
+        ValueExpr::Arith { left, right, .. } => {
+            count_growth_value(left, name) + count_growth_value(right, name)
+        }
+        ValueExpr::Sum { body, .. } => count_growth_prop(body, name),
+        ValueExpr::ValueOf { default, .. } => {
+            default.as_ref().map_or(0, |d| count_growth_value(d, name))
+        }
+        ValueExpr::Abs(operand) => count_growth_value(operand, name),
     }
 }
 

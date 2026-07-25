@@ -228,10 +228,12 @@ fn transitively_dead_let_chain_is_refused_whole() {
     }
 }
 
-// Computed lets in term-only positions: the five structurally distinct
+// Computed lets in term-only positions: the structurally distinct
 // slots share one refusal rule, so they are pinned table-style. Each
 // body uses `let net = (a + 1)` (computed, not a plain term) in a slot
-// that takes terms only.
+// that takes terms only. The remaining term slot - the sum target -
+// cannot reach this refusal: a let named as a sum target is always the
+// binder collision pinned above.
 #[test]
 fn computed_let_is_refused_in_every_term_only_position() {
     let cases: &[(&str, &str)] = &[
@@ -277,6 +279,27 @@ fn computed_let_is_refused_in_every_term_only_position() {
 // ------------------------------------------------------------
 // Growth guards.
 // ------------------------------------------------------------
+
+#[test]
+fn term_slot_refusal_wins_over_the_budget_projection() {
+    // A computed let used only in term slots can never grow the tree
+    // (each use is a refusal, not an expansion), so a body large
+    // enough to inflate a naive all-occurrences projection past the
+    // budget must still surface the term-slot refusal - not a budget
+    // error counting unsubstitutable occurrences.
+    let conjuncts = vec!["Reading(m, net)"; 4000].join(" and ");
+    let source = format!("define f(a):\n    let net = ((a) + 1)\n    {conjuncts}");
+    let errs = parse_program(&header(&source)).expect_err("computed let in term slots refuses");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("computed let `net`")),
+        "expected the term-slot refusal"
+    );
+    assert!(
+        !errs.iter().any(|e| e.message.contains("expression budget")),
+        "the budget projection must not count term-slot occurrences"
+    );
+}
 
 #[test]
 fn shallow_exponential_let_chain_is_refused_by_the_node_budget() {
