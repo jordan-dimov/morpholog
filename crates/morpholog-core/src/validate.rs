@@ -237,7 +237,7 @@ pub enum ValidationError {
     /// The kernel raises `EvalError::UnboundVariable` for this at
     /// evaluation time.
     #[error(
-        "variable `{variable}` is used in {context} but nothing binds it; a `require` match does not export its bindings to later statements"
+        "variable `{variable}` is used in {context} but nothing binds it; a `require` match does not export its bindings to later statements - `bind` looks up a claim and exports its fields, `let` binds a computed value"
     )]
     UnboundVariable {
         variable: String,

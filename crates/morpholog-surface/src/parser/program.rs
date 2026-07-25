@@ -408,7 +408,8 @@ where
         });
 
     // invariant_decl ::= "invariant" Ident ":" body
-    // body           ::= Indent expression Dedent | expression
+    // body           ::= Indent let_line* expression Dedent | expression
+    // let_line       ::= "let" Ident "=" "(" value_expression ")"
     //
     // The body alternative accepts both inline form
     // (`invariant cap: Foo(x)`) and indented multi-line form
@@ -416,17 +417,46 @@ where
     // `Indent`/`Dedent` around the indented form; the inline form
     // has no layout tokens.
     //
+    // A body `let` names a value expression and is substituted away
+    // before the IR exists (see [`super::lets`]). Lets live in the
+    // indented form only, and the value must be parenthesised:
+    // parens already mean "layout off", so the value can span lines
+    // freely, and a value ending in a bare decimal cannot absorb the
+    // next line's leading identifier as a quantity unit.
+    //
     // No version syntax in v0: the version field defaults to 1.
     // When versioning grows a second meaningful value, the surface
     // adds a clause (e.g. `version <N>`) and the parser starts
     // accepting it. Today, an attempted `invariant Name (v1):`
     // surfaces as an unexpected-token diagnostic on the `(`.
-    let invariant_body = super::indented_or_inline(expression_parser());
+    let let_line = just(Token::KwLet)
+        .ignore_then(ident)
+        .then_ignore(just(Token::Eq))
+        .then(value_expr_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
+        .map_with(|(name, value), e| {
+            let span: SimpleSpan = e.span();
+            super::lets::LetBinding {
+                name,
+                value,
+                span: span.start()..span.end(),
+            }
+        });
+    let body_with_lets = choice((
+        just(Token::Indent)
+            .ignore_then(let_line.repeated().collect::<Vec<_>>())
+            .then(expression_parser())
+            .then_ignore(just(Token::Dedent)),
+        expression_parser().map(|body| (Vec::new(), body)),
+    ));
     let invariant_decl = just(Token::KwInvariant)
         .ignore_then(ident)
         .then_ignore(just(Token::Colon))
-        .then(invariant_body)
-        .map_with(|(name, body), e| {
+        .then(body_with_lets.clone())
+        .validate(|(name, (bindings, body)), e, emitter| {
+            let (body, refusals) = super::lets::apply(bindings, &[], body);
+            for (span, message) in refusals {
+                emitter.emit(Rich::custom(span.into(), message));
+            }
             let span: SimpleSpan = e.span();
             TopLevelDecl::Invariant(
                 Invariant {
@@ -440,15 +470,13 @@ where
         });
 
     // definition_decl ::= "define" Ident "(" param-list ")" ":" body
-    // body            ::= Indent expression Dedent | expression
     //
     // A named, parameterised proposition. Params are bare identifiers
     // like a transformation's (their kinds are inferred from the body);
     // the body is one proposition in the invariant's inline-or-indented
-    // shape. Calls are claim-shaped references resolved by name after
-    // the whole programme is collected (a reference may precede the
-    // definition it names).
-    let definition_body = super::indented_or_inline(expression_parser());
+    // shape, `let` prefix included. Calls are claim-shaped references
+    // resolved by name after the whole programme is collected (a
+    // reference may precede the definition it names).
     let definition_param_list = ident
         .separated_by(just(Token::Comma))
         .allow_trailing()
@@ -457,8 +485,12 @@ where
         .ignore_then(ident)
         .then(definition_param_list.delimited_by(just(Token::LParen), just(Token::RParen)))
         .then_ignore(just(Token::Colon))
-        .then(definition_body)
-        .map_with(|((name, parameters), body), e| {
+        .then(body_with_lets)
+        .validate(|((name, parameters), (bindings, body)), e, emitter| {
+            let (body, refusals) = super::lets::apply(bindings, &parameters, body);
+            for (span, message) in refusals {
+                emitter.emit(Rich::custom(span.into(), message));
+            }
             let span: SimpleSpan = e.span();
             TopLevelDecl::Definition(
                 Definition {

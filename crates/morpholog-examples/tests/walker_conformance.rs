@@ -167,6 +167,22 @@ transformation materialise(r):
     admit Real(r)
 ";
 
+/// A define body opening with `let` lines: the sugar is substituted
+/// away at parse time, so every walker must see the desugared body -
+/// and see it identically to the hand-expanded spelling.
+const LET_SUGARED_DEFINE: &str = "\
+program let_sugared_define
+predicate Line(l: Subject, rate: Decimal, volume: Decimal, net: Decimal)
+define rounded_net(rate, volume, net):
+    let raw = ((rate * volume) / 100)
+    let shifted = ((raw) + 0.005)
+    net = ((shifted) - ((shifted) % 0.01))
+invariant net_is_the_rounded_recompute:
+    Line(_, rate, volume, net) implies rounded_net(rate, volume, net)
+transformation post(l, rate, volume, net):
+    admit Line(l, rate, volume, net)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -177,6 +193,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("valueof_sum_default", VALUEOF_SUM_DEFAULT),
         ("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
+        ("let_sugared_define", LET_SUGARED_DEFINE),
     ]
 }
 
