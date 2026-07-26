@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT predicate_name, arguments\n         FROM morpholog.claims\n         WHERE predicate_name = $1\n           AND (jsonb_array_length(arguments) <> $5 OR COALESCE(\n                (SELECT bool_and(\n                   CASE WHEN f.numeric\n                        THEN (arguments -> f.position ->> 'value')::numeric\n                             = (f.value ->> 'value')::numeric\n                        ELSE arguments -> f.position = f.value\n                   END)\n                 FROM unnest($2::int[], $3::jsonb[], $4::bool[])\n                   AS f(position, value, numeric)),\n                true))\n         ORDER BY asserted_at, predicate_name, arguments::text",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "predicate_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "predicate_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "arguments",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "arguments"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4Array",
+        "JsonbArray",
+        "BoolArray",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "873bd7b0800da87682d80aa6966437ab6e6e662944624abbd844d0fc626a5c07"
+}

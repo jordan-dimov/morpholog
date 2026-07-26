@@ -276,7 +276,9 @@ class Morpholog:
         on ``claims``.
 
         `where` narrows by argument value - ``where={"invoice_id": "inv_1"}``
-        - so a single-subject question stops reading the whole predicate.
+        - so rows that cannot match are never transferred or decoded.
+        That is what it saves: the database still scans the predicate,
+        because no index covers argument positions.
         Field names resolve against the programme, so exactly one
         predicate must be named and an undeclared field is an error, not
         an empty list. Filtering runs in the database except under

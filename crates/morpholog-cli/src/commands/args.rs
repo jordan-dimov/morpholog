@@ -413,10 +413,19 @@ pub(crate) fn decode_declared_value(
     kind: &PredicateArgKind,
     raw: &str,
 ) -> anyhow::Result<EvalValue> {
+    // A command line has only text, but the shared decoder is the named
+    // codec's, which takes booleans as JSON booleans. Without this,
+    // `--where settled=true` failed with "received string; expected
+    // `true` or `false`" - an error naming exactly what the caller wrote.
+    let json = match (kind, raw) {
+        (PredicateArgKind::Bool, "true") => Value::Bool(true),
+        (PredicateArgKind::Bool, "false") => Value::Bool(false),
+        _ => Value::String(raw.to_string()),
+    };
     decode_value(
         field,
         &ParamKind::Concrete(kind.clone()),
-        &Value::String(raw.to_string()),
+        &json,
         "a --where value is written bare, as in --where invoice_id=inv_1",
     )
 }

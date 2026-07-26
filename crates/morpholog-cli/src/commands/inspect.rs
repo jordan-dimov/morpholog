@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::commands::args::eval_value_to_bare_json;
 use crate::commands::filter::FieldFilter;
+use morpholog_postgres::ClaimFilter;
 
 use crate::commands::{compile_or_exit, connect, parse_or_exit, print_json, validate_or_exit};
 use crate::{AsOf, Inspect};
@@ -73,6 +74,9 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             // programme and exactly one predicate. Refused up front,
             // before any database work, so the message is about the
             // request rather than about an empty result.
+            // Set alongside the filters, from the same declaration, so
+            // the query cannot be handed an arity from a different one.
+            let mut declared_arity: i32 = 0;
             let filters = if args.filter.is_empty() {
                 Vec::new()
             } else {
@@ -95,6 +99,9 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                         file.display()
                     )
                 })?;
+                declared_arity = i32::try_from(decl.args.len()).with_context(|| {
+                    format!("`{predicate}` declares too many arguments to filter")
+                })?;
                 crate::commands::filter::resolve(decl, &args.filter)?
             };
 
@@ -112,30 +119,17 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                     .await
                     .context("list_claims_at_for_predicates failed")?,
                 (None, []) => list_claims(&pool).await.context("list_claims failed")?,
-                // One predicate plus filters is the whole point: the
-                // comparison happens in the database, so a single-subject
-                // question stops reading the whole predicate.
+                // The comparison happens in the database, so rows that
+                // cannot match never cross the wire. It is transfer and
+                // decoding this saves, not scanning: no index covers
+                // argument positions, so the scan is still the
+                // predicate's.
                 (None, [predicate]) if !filters.is_empty() => {
-                    // A position that does not fit is a declaration this
-                    // programme could not have parsed, so it is a broken
-                    // invariant rather than a filter that matches
-                    // nothing - saturating would probe an out-of-range
-                    // index and report an empty book.
-                    let positions: Vec<i32> = filters
-                        .iter()
-                        .map(|f| {
-                            i32::try_from(f.position).with_context(|| {
-                                format!("argument position {} does not fit", f.position)
-                            })
-                        })
-                        .collect::<Result<_, _>>()?;
-                    let values: Vec<serde_json::Value> = filters
-                        .iter()
-                        .map(|f| serde_json::to_value(&f.value))
-                        .collect::<Result<_, _>>()
-                        .context("encoding a --where value")?;
-                    let numeric: Vec<bool> = filters.iter().map(FieldFilter::is_numeric).collect();
-                    list_claims_where(&pool, predicate, &positions, &values, &numeric)
+                    // Arity comes from the declaration `--where` already
+                    // required, so a row that disagrees with it comes
+                    // back and the decoder refuses it - the filter must
+                    // not hide skew the unfiltered read would catch.
+                    list_claims_where(&pool, predicate, &pg_filters(&filters)?, declared_arity)
                         .await
                         .context("list_claims_where failed")?
                 }
@@ -437,4 +431,22 @@ fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> 
         );
         Ok(())
     }
+}
+
+/// Translate resolved filters into the adapter's shape.
+fn pg_filters(filters: &[FieldFilter]) -> anyhow::Result<Vec<ClaimFilter>> {
+    filters
+        .iter()
+        .map(|f| {
+            Ok(ClaimFilter {
+                // A position that does not fit is a declaration this
+                // programme could not have parsed - an invariant, not a
+                // filter that matches nothing.
+                position: i32::try_from(f.position)
+                    .with_context(|| format!("argument position {} does not fit", f.position))?,
+                value: serde_json::to_value(&f.value).context("encoding a --where value")?,
+                numeric: f.is_numeric(),
+            })
+        })
+        .collect()
 }

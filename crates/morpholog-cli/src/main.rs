@@ -864,9 +864,10 @@ pub(crate) struct InspectClaimsArgs {
     pub(crate) named: Option<PathBuf>,
 
     /// Optional, repeatable: return only claims whose named field equals
-    /// this value (`--where invoice_id=inv_2026_03`). Filters run in the
-    /// database, so a single-invoice question stops paying for the whole
-    /// predicate.
+    /// this value (`--where invoice_id=inv_2026_03`). The comparison runs
+    /// in the database, so rows that cannot match are never transferred
+    /// or decoded - it saves carrying the predicate, not scanning it,
+    /// since no index covers argument positions.
     ///
     /// Field names come from a declaration, so this needs `--named` and
     /// exactly one `--predicate` - without them a field name has no

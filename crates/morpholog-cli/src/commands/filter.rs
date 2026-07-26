@@ -16,6 +16,7 @@ use morpholog_core::{EvalValue, PredicateArgKind, PredicateDecl};
 
 /// One resolved filter: which argument position to compare, and the
 /// value to compare it against, already decoded to the declared kind.
+#[derive(Debug)]
 pub(crate) struct FieldFilter {
     pub(crate) position: usize,
     pub(crate) value: EvalValue,
@@ -92,4 +93,66 @@ pub(crate) fn matches(args: &[EvalValue], filters: &[FieldFilter]) -> bool {
     filters
         .iter()
         .all(|f| args.get(f.position).is_some_and(|arg| *arg == f.value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morpholog_core::ir_builder::predicate;
+
+    /// Every scalar kind the contract says is filterable, decoded from
+    /// the bare text a command line can carry.
+    ///
+    /// The Boolean row is why this table exists: `--where settled=true`
+    /// failed with "received string; expected `true` or `false`" - an
+    /// error naming exactly what the caller had written - because the
+    /// shared codec takes JSON booleans and a command line has only
+    /// text. Nothing refused Bool, so the contract implied support the
+    /// code did not have, and no test asked.
+    #[test]
+    fn every_supported_kind_resolves_from_bare_text() {
+        let decl = predicate("Every")
+            .subject("subject_field")
+            .decimal("decimal_field")
+            .date("date_field")
+            .timestamp("timestamp_field")
+            .duration("duration_field")
+            .boolean("bool_field")
+            .build();
+        let cases = [
+            ("subject_field=acct_1", "subject_field"),
+            ("decimal_field=13.50", "decimal_field"),
+            ("date_field=2026-06-01", "date_field"),
+            ("timestamp_field=2026-06-01T12:00:00Z", "timestamp_field"),
+            ("duration_field=PT6H", "duration_field"),
+            ("bool_field=true", "bool_field"),
+            ("bool_field=false", "bool_field"),
+        ];
+        for (raw, field) in cases {
+            let resolved = resolve(&decl, &[raw.to_string()])
+                .unwrap_or_else(|e| panic!("`{raw}` must resolve: {e:#}"));
+            assert_eq!(
+                resolved.len(),
+                1,
+                "`{raw}` resolves to one filter on {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_decimal_compares_numerically() {
+        let decl = predicate("Two").subject("s").decimal("d").build();
+        let subject = resolve(&decl, &["s=x".to_string()]).unwrap();
+        let decimal = resolve(&decl, &["d=1.5".to_string()]).unwrap();
+        assert!(!subject[0].is_numeric());
+        assert!(decimal[0].is_numeric(), "scale must not decide equality");
+    }
+
+    #[test]
+    fn an_undeclared_field_names_the_declared_ones() {
+        let decl = predicate("Line").subject("line").subject("invoice").build();
+        let err = resolve(&decl, &["invoice_id=x".to_string()]).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("line, invoice"), "got: {text}");
+    }
 }

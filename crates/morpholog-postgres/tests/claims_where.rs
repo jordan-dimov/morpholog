@@ -13,7 +13,7 @@ use common::{
     compiled, dec_str, expect_committed, propose_pg_with_test_actor, reset_db, subj, test_pool,
 };
 
-use morpholog_postgres::{PgPool, list_claims_where};
+use morpholog_postgres::{ClaimFilter, PgPool, list_claims_where};
 use serde_json::json;
 
 /// Lines spread across more than one invoice, with an amount stored at a
@@ -68,9 +68,12 @@ async fn a_filter_returns_only_the_matching_rows() {
     let rows = list_claims_where(
         &pool,
         "InvoiceLine",
-        &[1],
-        &[json!({"type": "subject", "value": "inv_1"})],
-        &[false],
+        &[ClaimFilter {
+            position: 1,
+            value: json!({"type": "subject", "value": "inv_1"}),
+            numeric: false,
+        }],
+        3,
     )
     .await
     .unwrap();
@@ -89,9 +92,12 @@ async fn a_decimal_matches_the_same_number_at_a_different_scale() {
         let rows = list_claims_where(
             &pool,
             "InvoiceLine",
-            &[2],
-            &[json!({"type": "decimal", "value": typed})],
-            &[true],
+            &[ClaimFilter {
+                position: 2,
+                value: json!({"type": "decimal", "value": typed}),
+                numeric: true,
+            }],
+            3,
         )
         .await
         .unwrap();
@@ -106,12 +112,19 @@ async fn filters_are_conjunctive_and_a_miss_returns_nothing() {
     let both = list_claims_where(
         &pool,
         "InvoiceLine",
-        &[1, 2],
         &[
-            json!({"type": "subject", "value": "inv_1"}),
-            json!({"type": "decimal", "value": "13.5"}),
+            ClaimFilter {
+                position: 1,
+                value: json!({"type": "subject", "value": "inv_1"}),
+                numeric: false,
+            },
+            ClaimFilter {
+                position: 2,
+                value: json!({"type": "decimal", "value": "13.5"}),
+                numeric: true,
+            },
         ],
-        &[false, true],
+        3,
     )
     .await
     .unwrap();
@@ -122,12 +135,19 @@ async fn filters_are_conjunctive_and_a_miss_returns_nothing() {
     let neither = list_claims_where(
         &pool,
         "InvoiceLine",
-        &[1, 2],
         &[
-            json!({"type": "subject", "value": "inv_1"}),
-            json!({"type": "decimal", "value": "12.50"}),
+            ClaimFilter {
+                position: 1,
+                value: json!({"type": "subject", "value": "inv_1"}),
+                numeric: false,
+            },
+            ClaimFilter {
+                position: 2,
+                value: json!({"type": "decimal", "value": "12.50"}),
+                numeric: true,
+            },
         ],
-        &[false, true],
+        3,
     )
     .await
     .unwrap();
@@ -141,7 +161,7 @@ async fn no_filters_means_every_row_not_none() {
     // everything an empty set - the wrong answer, silently.
     let pool = test_pool().await;
     seed(&pool).await;
-    let rows = list_claims_where(&pool, "InvoiceLine", &[], &[], &[])
+    let rows = list_claims_where(&pool, "InvoiceLine", &[], 3)
         .await
         .unwrap();
     let all = morpholog_postgres::list_claims_for_predicates(&pool, &["InvoiceLine".to_string()])
@@ -152,4 +172,41 @@ async fn no_filters_means_every_row_not_none() {
         "an unfiltered call must agree with the unfiltered read"
     );
     assert!(!rows.is_empty(), "and the fixture is not empty");
+}
+
+#[tokio::test]
+async fn a_row_of_the_wrong_arity_survives_the_filter() {
+    // The named read promises programme/database skew is a hard error,
+    // and the decoder raises it - but only for rows it is given. A
+    // filter on a position a short row does not have yields NULL, so
+    // without this the row is dropped in SQL and the filtered call
+    // succeeds where the unfiltered one refuses. Returning it keeps one
+    // answer to "does this database match this programme".
+    let pool = test_pool().await;
+    seed(&pool).await;
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'InvoiceLine', '[{\"type\":\"subject\",\"value\":\"legacy\"}]'::jsonb, transition_id
+         FROM morpholog.audit LIMIT 1",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let rows = list_claims_where(
+        &pool,
+        "InvoiceLine",
+        &[ClaimFilter {
+            position: 1,
+            value: json!({"type": "subject", "value": "inv_1"}),
+            numeric: false,
+        }],
+        3,
+    )
+    .await
+    .unwrap();
+    assert!(
+        rows.iter().any(|r| r.args.len() != 3),
+        "the short row must come back so the decoder can refuse it: {rows:?}"
+    );
 }
