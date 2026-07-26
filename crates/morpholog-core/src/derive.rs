@@ -45,10 +45,16 @@ pub fn eval_invariant(
 }
 
 /// The binding assignment that witnesses an invariant's failure: the
-/// values live where the drill-down stopped, sorted by variable so the
-/// same failure always renders identically (`Bindings` is a `HashMap`,
-/// whose iteration order is not stable and would flake the pinned
-/// envelopes).
+/// values live where the drill-down stopped, sorted by variable
+/// (`Bindings` is a `HashMap`, whose iteration order is not stable and
+/// would otherwise flake the pinned envelopes).
+///
+/// Sorting fixes how one assignment renders, not **which** assignment is
+/// chosen. When several subjects violate the same rule, the witness is
+/// the first violation in state order - so the same claims in a different
+/// order can name a different subject, while the verdict is unchanged.
+/// The PostgreSQL path loads claims ordered for exactly this reason; a
+/// hand-built `State` gets whatever order it was built in.
 ///
 /// Empty exactly when the failure has no binding assignment to report -
 /// which is a question about what was bound where the drill-down stopped,

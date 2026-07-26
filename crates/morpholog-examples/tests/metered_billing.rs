@@ -278,22 +278,21 @@ fn a_sealed_invoice_takes_no_further_lines() {
     );
 }
 
-/// A refusal names the offending values, not only the rule.
+/// A refusal names which line, and by how much.
 ///
-/// The operator's question after "line_net_is_the_rounded_recompute
-/// violated" is "which figures?" - so the witness carries them: the
-/// engine's tampered net alongside the tariff and volume it should have
-/// been computed from. Enough to see 13.5 * 431.7 / 100 rounds to 58.28,
-/// not the submitted 58.29, without opening the database.
+/// The biller's question after "line_net_is_the_rounded_recompute
+/// violated" is which row and what was wrong with it, so the witness
+/// answers both: the line and invoice it was reading, and the tampered
+/// net beside the tariff and volume it should have been computed from.
+/// Enough to see 13.5 * 431.7 / 100 rounds to 58.28, not the submitted
+/// 58.29, without opening the database.
 ///
-/// The line id is deliberately absent: this rule matches
-/// `ChargeLine(_, _, ...)`, and a witness can only name what the rule
-/// binds. Wildcard the subject and the refusal cannot tell you which row
-/// it was - a real cost of writing the rule that way, and the reason
-/// `borrowing_base` carries the companion test for a rule that does bind
-/// its subject.
+/// `line` and `invoice` reach the witness only because the rule names
+/// them - the arithmetic never uses either. Two lines can share a tariff,
+/// a volume and a net, so the figures alone are not a row identifier;
+/// what a rule binds decides how good its refusals are.
 #[test]
-fn a_refusal_names_the_offending_figures() {
+fn a_refusal_names_which_line_and_by_how_much() {
     let outcome = add_line(
         "line_a",
         "13.5",
@@ -316,6 +315,8 @@ fn a_refusal_names_the_offending_figures() {
     assert_eq!(
         named,
         vec![
+            ("invoice", "Subject(Subject(\"inv_1\"))".to_string()),
+            ("line", "Subject(Subject(\"line_a\"))".to_string()),
             ("net_gbp", "Decimal(58.29)".to_string()),
             ("rate_p_per_kwh", "Decimal(13.5)".to_string()),
             ("volume_kwh", "Decimal(431.7)".to_string()),

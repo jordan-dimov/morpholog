@@ -74,9 +74,15 @@ predicate InvoiceSealed(invoice: Subject, total_gbp: Decimal)
 -- and `round(raw, penny)` is the convention: nearest penny, halves
 -- away from zero. The engine's figure is not trusted; it is checked
 -- against this recompute on every admission, forever.
+--
+-- `line` and `invoice` are named rather than left as `_`, and nothing
+-- in the arithmetic uses them. They are here for the refusal: when this
+-- rule stops a bill, it can only report the values it named, so writing
+-- `_` would leave a biller reading "some line is wrong" with a whole
+-- invoice to search. What a rule binds decides how good its refusals are.
 invariant line_net_is_the_rounded_recompute:
     let raw = ((rate_p_per_kwh * volume_kwh) / 100)
-    ChargeLine(_, _, rate_p_per_kwh, volume_kwh, net_gbp, _, _)
+    ChargeLine(line, invoice, rate_p_per_kwh, volume_kwh, net_gbp, _, _)
     implies net_gbp = round(raw, penny)
 
 -- Every line's VAT is the rounded recompute from the declared rate

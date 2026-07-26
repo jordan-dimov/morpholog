@@ -116,10 +116,11 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         .await
         .context("the proposal could not be decided")?;
         match (&outcome, rejection_state) {
-            (PgProposalOutcome::Rejected { reason, .. }, Some(state)) => {
+            (PgProposalOutcome::Rejected { reason, witness }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
                 print_json(&envelopes::RejectedWithExplanation::new(
                     reason,
+                    witness,
                     explanation,
                 ))?;
                 exit_rejected(reason, &parsed);
@@ -334,12 +335,13 @@ async fn batch_row_outcome(
         )
         .await
         .map_err(classify_pg_error)?;
-        if let (PgProposalOutcome::Rejected { reason, .. }, Some(state)) =
+        if let (PgProposalOutcome::Rejected { reason, witness }, Some(state)) =
             (&outcome, rejection_state)
         {
             let explanation = explain(compiled.program(), &transition, &state);
             return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,
+                witness,
                 explanation,
             ))
             .context("serialising the receipt")

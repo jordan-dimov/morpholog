@@ -6,6 +6,7 @@
 //! the binary serializes these structs directly - so fields are
 //! declared in alphabetical order to keep the two byte-identical.
 
+use morpholog_core::WitnessBinding;
 use serde::Serialize;
 
 /// `check --json`: the uniform findings report.
@@ -183,14 +184,22 @@ pub struct RejectedWithExplanation<'a, E> {
     explanation: E,
     reason: &'a str,
     status: &'static str,
+    /// The refused rule's offending values. Carried here too because this
+    /// is the path an operator diagnosing a refusal actually uses - the
+    /// first cut destructured the outcome as `{ reason, .. }` and dropped
+    /// them, so the one command built for diagnosis was the one that
+    /// answered least.
+    #[serde(skip_serializing_if = "<[WitnessBinding]>::is_empty")]
+    witness: &'a [WitnessBinding],
 }
 
 impl<'a, E> RejectedWithExplanation<'a, E> {
-    pub fn new(reason: &'a str, explanation: E) -> Self {
+    pub fn new(reason: &'a str, witness: &'a [WitnessBinding], explanation: E) -> Self {
         Self {
             explanation,
             reason,
             status: "rejected",
+            witness,
         }
     }
 }

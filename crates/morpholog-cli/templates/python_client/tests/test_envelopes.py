@@ -58,6 +58,17 @@ class RunOutcomes(unittest.TestCase):
         self.assertIsInstance(
             explained.explanation.rejection, envelopes.InvariantRejection
         )
+        self.assertEqual(explained.witness, [])
+
+    def test_explanation_and_witness_arrive_together(self):
+        # --explain-on-reject is the path an operator diagnosing a refusal
+        # reaches for, so it must carry both: the why and the values.
+        both = envelopes.parse_run_outcome(
+            golden("rejected_with_explanation_and_witness.json")
+        )
+        self.assertIsInstance(both.explanation.rejection, envelopes.InvariantRejection)
+        self.assertEqual([w.var for w in both.witness], ["account", "exposure"])
+        self.assertEqual(both.witness[1].value, Decimal("105.50"))
 
     def test_traced_envelopes(self):
         committed = envelopes.TracedEnvelope.from_json(golden("traced_committed.json"))

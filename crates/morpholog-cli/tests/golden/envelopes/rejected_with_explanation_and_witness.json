@@ -1,0 +1,36 @@
+{
+  "explanation": {
+    "transition": {
+      "actor": "alex",
+      "args": [
+        "acct_1"
+      ],
+      "transformation": "open_account"
+    },
+    "verdict": {
+      "rejected": {
+        "kind": "invariant",
+        "name": "no_flagged_accounts",
+        "rule": "Account(a) implies (not Flag(a))"
+      }
+    }
+  },
+  "reason": "invariant `no_flagged_accounts` violated",
+  "status": "rejected",
+  "witness": [
+    {
+      "value": {
+        "type": "subject",
+        "value": "acct_1"
+      },
+      "var": "account"
+    },
+    {
+      "value": {
+        "type": "decimal",
+        "value": "105.50"
+      },
+      "var": "exposure"
+    }
+  ]
+}
