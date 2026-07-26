@@ -167,7 +167,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 |---|---|---|
 | `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
-| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" above). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
+| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date)` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" above). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
 | `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" above). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
 | `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
 | `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. The decimal domain admits two flavours: bare decimals, and unit-tagged quantities of the SAME unit (a `Decimal[U]` IS a decimal, under a contract label the comparison must respect - `Decimal[USD]` against `Decimal[t]` is refused by name). The domain is carried explicitly, so there is no operator overloading by operand kind. |
@@ -450,6 +450,33 @@ templates. The discipline clauses:
   invariant over both, and where it bites is a modelling decision: at
   admission, or - if corrections must stay retryable while a document is
   still a draft - only once the document is sealed.
+- **`effective by (keys) on (date_field)`** - this predicate is
+  effective-dated: one version per key per date, and the version governing
+  a moment is the latest whose date is not after it. Lowers to a generated
+  **definition**, `{snake(P)}_in_force_on`, taking the keys, an as-of
+  date, then every payload field - so the selector every temporal
+  programme was hand-rolling is written once by the runtime. Callers
+  wildcard the payload fields they do not want.
+
+  The date field must be a `Date` or `Timestamp`, and it may not also be a
+  key: grouping versions by the date that orders them leaves nothing able
+  to supersede anything. An authored definition of the generated name is
+  refused rather than silently winning - caught in the surface, the only
+  place that still knows which definitions the author wrote.
+
+  This is the only discipline that generates a definition rather than an
+  invariant, which is why the lowering runs in two parts: definitions
+  before call resolution (a call is spelled exactly like a claim
+  reference, so a selector that does not exist yet resolves as an
+  undeclared predicate), invariants after.
+
+  `current pointer by` governs corrections *within* a version; this
+  governs time *across* versions, and the two compose on one predicate.
+  What it does **not** do is make a stale-version reference unstateable:
+  the selector is proposition-valued, so a transformation still pairs
+  `max(...)` with a `bind` to name the governing version. Declaring the
+  totality companion, so a selector cannot go quietly vacuous when no
+  version exists, is the other half and is not here yet.
 - **`append only`** - no transformation may `retract` this predicate.
   Enforced statically: retraction only happens through a `retract`
   statement, so the authoring-time ban is complete and costs nothing

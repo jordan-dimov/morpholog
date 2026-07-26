@@ -117,7 +117,9 @@ impl SourceMap {
             // Anchored on the declaration, with its discipline siblings:
             // the clause the author wrote is there, not in the invariant
             // the lowering would have generated.
-            ValidationError::DisciplineOnDerived { predicate }
+            ValidationError::EffectiveDateIsAKey { predicate, .. }
+            | ValidationError::EffectiveDateNotATime { predicate, .. }
+            | ValidationError::DisciplineOnDerived { predicate }
             | ValidationError::DisciplineUnknownField { predicate, .. }
             | ValidationError::DisciplineVacuousKeys { predicate }
             | ValidationError::DisciplineDuplicateClause { predicate }

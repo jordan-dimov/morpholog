@@ -109,7 +109,27 @@ pub fn format_program(p: &Program) -> String {
         }
     }
 
+    // Discipline-generated selectors are implied by the declaration
+    // clauses rendered above, exactly as generated invariants are.
+    // Printing one would make it AUTHORED on reparse, which then trips
+    // the collision check that stops machinery being shadowed - so
+    // round-trip is what caught this. The names are derived from the
+    // declarations rather than marked on the definition, so no origin
+    // field is needed.
+    let generated: std::collections::BTreeSet<String> = p
+        .predicates
+        .iter()
+        .filter(|d| {
+            d.disciplines
+                .iter()
+                .any(|c| matches!(c, crate::ir::Discipline::EffectiveBy { .. }))
+        })
+        .map(|d| crate::disciplines::in_force_define_name(&d.name))
+        .collect();
     for def in &p.definitions {
+        if generated.contains(def.name.as_str()) {
+            continue;
+        }
         out.push('\n');
         out.push_str(&format_definition(def));
     }
@@ -152,6 +172,9 @@ pub(crate) fn format_predicate_decl(decl: &PredicateDecl) -> String {
         out.push_str(&match discipline {
             Discipline::UniqueBy { fields } => format!("unique by ({})", fields.join(", ")),
             Discipline::AppendOnly => "append only".to_string(),
+            Discipline::EffectiveBy { keys, on } => {
+                format!("effective by ({}) on ({on})", keys.join(", "))
+            }
             Discipline::CurrentPointerBy { fields } => {
                 format!("current pointer by ({})", fields.join(", "))
             }

@@ -702,3 +702,160 @@ fn an_unlowered_lineage_is_caught_and_an_unfit_one_is_not_expected() {
         "the missing no-fork invariant is named: {errors:?}"
     );
 }
+
+// ============================================================
+// effective by: the in-force-on-a-date selector, generated
+// ============================================================
+
+const EFFECTIVE_DATED: &str = r#"program eff
+
+predicate ChargeRate(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge) on (effective_from)
+predicate Priced(charge: Subject, amount: Decimal)
+
+invariant priced_at_the_rate_in_force:
+    Priced(charge, amount)
+    implies charge_rate_in_force_on(charge, @2026-06-01, amount)
+
+transformation add_rate(charge, effective_from, amount):
+    admit ChargeRate(charge, effective_from, amount)
+
+transformation price(charge, amount):
+    admit Priced(charge, amount)
+"#;
+
+/// The generated selector picks the latest version not after the date -
+/// so a superseded rate and a future rate are both refused, and only the
+/// one in force is admitted.
+///
+/// Three rates and three verdicts, because the two wrong answers fail
+/// differently: the 2025 rate is real but superseded, and the 2026-09
+/// rate is real but not yet in force. A selector that got only the
+/// `on_or_before` half right would admit the first; one that got only
+/// the `no later version` half right would admit the second.
+#[test]
+fn the_generated_selector_admits_only_the_rate_in_force() {
+    let p = parsed(EFFECTIVE_DATED);
+    let add = p.transformation("add_rate").expect("add_rate").clone();
+    let price = p.transformation("price").expect("price").clone();
+    let mut state = State::default();
+    for (from, amount) in [
+        ("2025-01-01", "10.00"),
+        ("2026-01-01", "12.00"),
+        ("2026-09-01", "99.00"),
+    ] {
+        state = must_accept(
+            &add,
+            vec![subj("c1"), common::date(from), common::dec_str(amount)],
+            state,
+            &p.invariants,
+            &p.definitions,
+        );
+    }
+
+    // In force on 2026-06-01.
+    let ok = must_accept(
+        &price,
+        vec![subj("c1"), common::dec_str("12.00")],
+        state.clone(),
+        &p.invariants,
+        &p.definitions,
+    );
+    assert!(common::has_claim(
+        &ok,
+        "Priced",
+        &[subj("c1"), common::dec_str("12.00")]
+    ));
+
+    for wrong in ["10.00", "99.00"] {
+        must_reject(
+            &price,
+            vec![subj("c1"), common::dec_str(wrong)],
+            &state,
+            &p.invariants,
+            &p.definitions,
+        );
+    }
+}
+
+/// Lowering twice must not generate the selector twice - a programme can
+/// be re-parsed, and a duplicate definition name would make the call
+/// ambiguous.
+#[test]
+fn generating_the_selector_is_idempotent() {
+    let mut p = parse_program(EFFECTIVE_DATED).expect("parses");
+    let before = p.definitions.len();
+    morpholog_core::lower_discipline_definitions(&mut p);
+    morpholog_core::lower_discipline_definitions(&mut p);
+    assert_eq!(
+        p.definitions.len(),
+        before,
+        "already-lowered programme must not gain another selector"
+    );
+}
+
+/// An authored definition of the generated name is refused rather than
+/// silently winning. Caught in the surface, the only place that still
+/// knows which definitions the author wrote - after lowering appends to
+/// the same list, nothing can tell them apart.
+#[test]
+fn an_authored_definition_may_not_shadow_the_generated_selector() {
+    let source = r#"program clash
+
+predicate ChargeRate(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge) on (effective_from)
+
+define charge_rate_in_force_on(charge, as_of, effective_from, amount):
+    ChargeRate(charge, effective_from, amount)
+
+transformation add_rate(charge, effective_from, amount):
+    admit ChargeRate(charge, effective_from, amount)
+"#;
+    let err = parse_program(source).expect_err("a shadowing definition must be refused");
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("already defines it"),
+        "must name the collision: {text}"
+    );
+}
+
+/// The dating field has to be a moment, and it cannot also be a key -
+/// grouping versions by the date that orders them would leave nothing
+/// able to supersede anything.
+#[test]
+fn an_unusable_effective_clause_is_refused_by_name() {
+    let not_a_time = r#"program nt
+predicate R(charge: Subject, tag: Subject, amount: Decimal)
+    effective by (charge) on (tag)
+transformation t(charge, tag, amount):
+    admit R(charge, tag, amount)
+"#;
+    let date_is_key = r#"program dk
+predicate R(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge, effective_from) on (effective_from)
+transformation t(charge, effective_from, amount):
+    admit R(charge, effective_from, amount)
+"#;
+    // Matched on the VARIANT, not the rendered message: the text is for a
+    // human and may be reworded, which is exactly the instability that
+    // makes an unnamed `require` hard to test (#261).
+    let program = parse_program(not_a_time).expect("parses; validation refuses the clause");
+    let errs = program
+        .validate()
+        .expect_err("a subject cannot order versions");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ValidationError::EffectiveDateNotATime { .. })),
+        "got {errs:?}"
+    );
+
+    let program = parse_program(date_is_key).expect("parses; validation refuses the clause");
+    let errs = program
+        .validate()
+        .expect_err("the date cannot also be a key");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ValidationError::EffectiveDateIsAKey { .. })),
+        "got {errs:?}"
+    );
+}

@@ -924,6 +924,15 @@ pub enum Discipline {
     /// every field (SQL-UNIQUE-style full agreement). Lowers to one
     /// generated invariant per clause; several clauses may coexist.
     UniqueBy { fields: Vec<String> },
+    /// `effective by (keys) on (date_field)`: this predicate is
+    /// effective-dated - one version per key per date, and the version
+    /// governing a moment is the latest whose date is not after it.
+    ///
+    /// Lowers to a generated DEFINITION rather than an invariant: the
+    /// selector is something the author calls, not a rule the runtime
+    /// enforces. `current pointer by` governs corrections *within* a
+    /// version; this governs time *across* versions, and the two compose.
+    EffectiveBy { keys: Vec<String>, on: String },
     /// `append only`: no transformation may `retract` this predicate.
     /// Enforced statically (retraction only happens through a
     /// `retract` statement, so the authoring-time ban is complete and
