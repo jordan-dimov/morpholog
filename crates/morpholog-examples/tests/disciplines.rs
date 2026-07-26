@@ -1063,3 +1063,163 @@ fn the_totality_clause_survives_a_format_and_reparse() {
         .collect();
     assert_eq!(declared, vec!["ChargeRate".to_string()]);
 }
+
+/// A rule cannot be its own backstop, and saying `total over P` does not
+/// make it one if it only applies where a version of `P` is already in
+/// force. Such a claim is circular - the rule is guarded by the very
+/// selector it promises will always match - so the demand stands.
+///
+/// The shape-recognised path has always excluded the invariant under test;
+/// the declared path is global, which is exactly how it could be fooled.
+#[test]
+fn a_rule_that_reads_the_selector_cannot_declare_its_own_totality() {
+    // The only invariant is guarded by the in-force selector for the very
+    // predicate it claims to make total.
+    let circular = r#"program circular
+
+predicate ChargeRate(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge) on (effective_from)
+predicate Priced(charge: Subject, priced_on: Date, amount: Decimal)
+
+invariant self_backing total over ChargeRate:
+    (Priced(charge, d, amount) and charge_rate_in_force_on(charge, d, amount))
+    implies Priced(charge, d, amount)
+
+transformation add_rate(charge, effective_from, amount):
+    admit ChargeRate(charge, effective_from, amount)
+
+transformation price(charge, priced_on, amount):
+    admit Priced(charge, priced_on, amount)
+"#;
+    let program = parse_program(circular).expect("parses");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::EffectiveWithoutDeclaredTotality { predicate } if predicate == "ChargeRate"
+        )),
+        "a self-backing declaration must not settle the demand, got {hints:?}"
+    );
+}
+
+/// The same circularity one call deeper. A definition body is where the
+/// selector reference hides most easily, so the reachability check follows
+/// definition calls rather than reading only the invariant's own body.
+#[test]
+fn self_backing_is_caught_through_a_definition_call() {
+    let indirect = r#"program indirect
+
+predicate ChargeRate(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge) on (effective_from)
+predicate Priced(charge: Subject, priced_on: Date, amount: Decimal)
+
+define via_helper(charge, d, amount):
+    charge_rate_in_force_on(charge, d, amount)
+
+invariant self_backing total over ChargeRate:
+    (Priced(charge, d, amount) and via_helper(charge, d, amount))
+    implies Priced(charge, d, amount)
+
+transformation add_rate(charge, effective_from, amount):
+    admit ChargeRate(charge, effective_from, amount)
+
+transformation price(charge, priced_on, amount):
+    admit Priced(charge, priced_on, amount)
+"#;
+    let program = parse_program(indirect).expect("parses");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::EffectiveWithoutDeclaredTotality { predicate } if predicate == "ChargeRate"
+        )),
+        "a declaration self-backing through a define must not settle it, got {hints:?}"
+    );
+}
+
+/// A hand-rolled governing selection that declares its own totality is
+/// still flagged. The declaration path is positional for the same reason
+/// the shape-recognised path is: a companion is by definition a DIFFERENT
+/// rule.
+///
+/// Distinct from the selector-reading case: this programme has no
+/// `effective by` clause and no generated selector, so only the positional
+/// exclusion can catch it.
+#[test]
+fn a_hand_rolled_selection_cannot_declare_its_own_totality() {
+    let source = r#"program cg
+
+predicate TradeTerms(trade: Subject, effective_from: Date, qty: Decimal)
+predicate TradeSettled(trade: Subject, settled_on: Date, settled: Decimal)
+
+invariant settled_within_effective_terms total over TradeTerms:
+    (TradeSettled(trade, d, settled)
+     and TradeTerms(trade, ef, qty) and ef on_or_before d
+     and not (exists later: TradeTerms(trade, later, _) and ef before later and later on_or_before d))
+    implies settled <= qty
+
+transformation add_terms(trade, effective_from, qty):
+    admit TradeTerms(trade, effective_from, qty)
+
+transformation settle(trade, settled_on, settled):
+    admit TradeSettled(trade, settled_on, settled)
+"#;
+    let program = parse_program(source).expect("parses");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::GoverningSelectionWithoutTotality { predicates, .. }
+                if predicates.iter().any(|p| p == "TradeTerms")
+        )),
+        "self-declaration must not settle the governing-selection lint, got {hints:?}"
+    );
+}
+
+/// `total over` a predicate the programme never declares is a hard error,
+/// not inert metadata. The declaration is load-bearing - it is what tells
+/// the vacuity lints which rule is the backstop - so a typo silently
+/// withdraws the guarantee it looks like it makes.
+#[test]
+fn a_totality_declaration_must_name_a_declared_predicate() {
+    let typo = TOTALITY.replace("total over ChargeRate", "total over Typo");
+    let program = parse_program(&typo).expect("parses - the name is unknown, not unparseable");
+    let errs = program.validate().expect_err("must not validate");
+    assert!(
+        errs.iter().any(|e| matches!(
+            e,
+            ValidationError::UnknownTotalityTarget { predicate, .. } if predicate == "Typo"
+        )),
+        "got {errs:?}"
+    );
+}
+
+/// The acceptance side: the target need NOT carry `effective by`. The
+/// governing-selection lint fires on hand-rolled dated selections too, so
+/// declaring the backstop for a predicate that has no generated selector
+/// is a legitimate way to settle it.
+#[test]
+fn a_totality_target_need_not_be_effective_dated() {
+    let source = r#"program plain
+
+predicate TradeTerms(trade: Subject, effective_from: Date, qty: Decimal)
+predicate TradeSettled(trade: Subject, settled_on: Date, settled: Decimal)
+
+invariant settled_terms_exist total over TradeTerms:
+    TradeSettled(trade, d, _)
+    implies (exists ef: TradeTerms(trade, ef, _) and ef on_or_before d)
+
+transformation add_terms(trade, effective_from, qty):
+    admit TradeTerms(trade, effective_from, qty)
+
+transformation settle(trade, settled_on, settled):
+    admit TradeSettled(trade, settled_on, settled)
+"#;
+    let program = parse_program(source).expect("parses");
+    program
+        .validate()
+        .expect("a totality declaration over an undated predicate is legal");
+}

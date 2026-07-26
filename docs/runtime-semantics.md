@@ -486,6 +486,21 @@ templates. The discipline clauses:
   a correct model; `--strict` promotes it for an author who wants the
   pairing guaranteed rather than remembered.
 
+  **A companion is a different rule.** A selecting invariant cannot settle
+  its own demand, matching the shape-recognised path, which has always
+  required another rule. And a rule that reads `P`'s selector is no one's
+  companion, not merely not its own: it applies only where a version is
+  already in force, so it cannot be the reason one exists. That declaration
+  is dropped outright (following definition calls, so the reference cannot
+  hide one level down).
+
+  `total over P` for an undeclared `P` is a validation error, not inert
+  metadata: the declaration is what tells the lints which rule is the
+  backstop, so a typo silently withdraws the guarantee it appears to make.
+  `P` need not carry `effective by` - the governing-selection lint fires on
+  hand-rolled dated selections too, and declaring the backstop is how an
+  author settles it.
+
   The declaration also settles the governing-selection lint, which
   previously had to recognise a backstop by its shape. Declared, the
   pairing is checked: an unusual-but-intended backstop counts, and a shape

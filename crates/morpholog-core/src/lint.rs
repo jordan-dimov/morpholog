@@ -23,7 +23,9 @@ use std::collections::BTreeSet;
 use crate::compiled::CompiledProgram;
 use crate::definitions::DefinitionIndex;
 use crate::disciplines::append_only_predicates;
-use crate::ir::{Discipline, Invariant, InvariantOrigin, PredicateName, Prop, Term, ValueExpr};
+use crate::ir::{
+    DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Prop, Term, ValueExpr,
+};
 
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +85,11 @@ pub enum Lint {
     /// at the edges - and nothing in the source says whether that was
     /// intended.
     ///
+    /// A rule that reads `P`'s in-force selector cannot declare `P`'s
+    /// totality: it only applies where a version is already in force, so
+    /// it cannot be the reason one exists. Such a declaration is ignored
+    /// and the finding stands.
+    ///
     /// A hint, not an error: a partial effective-dated predicate can be a
     /// correct model, where a rule genuinely should not apply before the
     /// first version exists. `--strict` promotes it for authors who want
@@ -98,8 +105,9 @@ impl std::fmt::Display for Lint {
                 "`{predicate}` is effective-dated but no invariant declares `total over \
                  {predicate}`: where no version is in force the generated selector matches \
                  nothing, so every rule reading it passes vacuously. Mark the invariant that \
-                 guarantees a version exists, or say so deliberately if the rule should not \
-                 apply at the edges"
+                 guarantees a version exists with `total over {predicate}`; if the gap is \
+                 intended, leaving this hint unaddressed is how you say so - it only refuses \
+                 under `--strict`"
             ),
             Lint::GateVsInvariant {
                 invariant,
@@ -185,18 +193,29 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     let declared = crate::analysis::declared_supplier_predicates(program);
     let do_gate = !append_only.is_empty() && !pointers.is_empty();
 
-    // Which invariants guarantee a dated witness for which predicates -
-    // the totality-backstop side of the governing-selection lint,
-    // computed once. Indexed so an invariant can never back itself: a
-    // companion is by definition a DIFFERENT rule.
-    // What the author has DECLARED they backstop, whatever shape the rule
-    // takes.
-    let declared_totality: BTreeSet<PredicateName> = program
+    // What an author has DECLARED they backstop, whatever shape the rule
+    // takes. Positional for the same reason `witnesses` is - so a consumer
+    // can skip the invariant under test. A declaration is also dropped
+    // outright when the declaring rule consults the in-force selector for
+    // the predicate it vouches for: a rule that only applies where a
+    // version is in force cannot be the reason one exists, so it is no
+    // one's companion, not merely not its own.
+    let declared_totality: Vec<Option<PredicateName>> = program
         .invariants
         .iter()
-        .filter_map(|i| i.totality_for.clone())
+        .map(|inv| {
+            if inv.origin != InvariantOrigin::Authored {
+                return None;
+            }
+            let target = inv.totality_for.clone()?;
+            let selector: DefinitionName = crate::in_force_define_name(&target).into();
+            (!calls_definition(&inv.body, &selector, definitions)).then_some(target)
+        })
         .collect();
 
+    // The shape-recognised side, for programmes that declare nothing.
+    // Positional, so the consumer can skip the invariant under test: a
+    // companion is by definition a DIFFERENT rule.
     let witnesses: Vec<BTreeSet<PredicateName>> = program
         .invariants
         .iter()
@@ -222,7 +241,8 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
             .disciplines
             .iter()
             .any(|d| matches!(d, crate::ir::Discipline::EffectiveBy { .. }));
-        if effective && !declared_totality.contains(&decl.name) {
+        let declared = declared_totality.iter().flatten().any(|p| *p == decl.name);
+        if effective && !declared {
             out.push(Lint::EffectiveWithoutDeclaredTotality {
                 predicate: decl.name.to_string(),
             });
@@ -272,12 +292,39 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
 /// governing version of a predicate at a coordinate, in a programme
 /// where no OTHER invariant carries the recognised totality-backstop
 /// shape for it. Names only the unbacked predicates.
+/// Whether `body` reaches `target`, following definition calls through the
+/// definitions they in turn call.
+fn calls_definition(
+    body: &Prop,
+    target: &DefinitionName,
+    definitions: DefinitionIndex<'_>,
+) -> bool {
+    let mut reached = BTreeSet::new();
+    crate::definitions::defined_calls_in_prop(body, &mut reached);
+    let mut frontier: Vec<DefinitionName> = reached.iter().cloned().collect();
+    while let Some(name) = frontier.pop() {
+        if &name == target {
+            return true;
+        }
+        if let Some(def) = definitions.get(&name) {
+            let mut inner = BTreeSet::new();
+            crate::definitions::defined_calls_in_prop(&def.body, &mut inner);
+            for call in inner {
+                if reached.insert(call.clone()) {
+                    frontier.push(call);
+                }
+            }
+        }
+    }
+    false
+}
+
 fn governing_selection_findings(
     inv: &Invariant,
     index: usize,
     implications: &[CollectedImplication<'_>],
     witnesses: &[BTreeSet<PredicateName>],
-    declared_totality: &BTreeSet<PredicateName>,
+    declared_totality: &[Option<PredicateName>],
     definitions: DefinitionIndex<'_>,
     out: &mut Vec<Lint>,
 ) {
@@ -299,7 +346,10 @@ fn governing_selection_findings(
     let unbacked: Vec<String> = selected
         .iter()
         .filter(|p| {
-            let declared = declared_totality.contains(*p);
+            let declared = declared_totality
+                .iter()
+                .enumerate()
+                .any(|(j, d)| j != index && d.as_ref() == Some(*p));
             let shaped = witnesses
                 .iter()
                 .enumerate()
