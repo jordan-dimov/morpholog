@@ -853,9 +853,12 @@ impl Program {
     /// first); a programme migration that adds declarations should
     /// see every site at once.
     ///
-    /// Out of scope for v0: recursive derived-claim references from
-    /// inside the same derived claim's domain; source spans on
-    /// diagnostics (the IR drops parser spans on lowering).
+    /// A derived claim's domain naming a derived claim - its own or
+    /// another's - is refused: a derived is computed from admitted
+    /// claims, and nothing admits a derived, so deriveds do not compose.
+    ///
+    /// Out of scope for v0: source spans on diagnostics (the IR drops
+    /// parser spans on lowering).
     ///
     /// `validate` is **not** called automatically by `propose`. The
     /// kernel boundary is statement-level, not programme-level;

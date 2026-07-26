@@ -169,6 +169,51 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// A predicate declaration carries a discipline and a `derived`
+    /// declaration computes it.
+    ///
+    /// Disciplines are promises about governed state - what may be
+    /// retracted, which claims must agree, which pointer is current. A
+    /// derived output is not governed state: it is computed on demand and
+    /// its materialised generations are replaced wholesale on refresh, so
+    /// it can honour none of them.
+    ///
+    /// Reported at the declaration rather than through the lowering,
+    /// because that is where the author wrote the clause. `unique by`
+    /// lowers to a generated invariant, so refusing it there names a rule
+    /// nobody typed; `append only` lowers to nothing at all and would
+    /// pass unnoticed.
+    #[error(
+        "`{predicate}` is computed by a derived claim, so it cannot carry a \
+         discipline: disciplines promise how governed state behaves, and a \
+         derived claim is a read model replaced wholesale on refresh."
+    )]
+    DisciplineOnDerived { predicate: String },
+
+    /// A rule named a predicate that a `derived` declaration computes.
+    ///
+    /// The kernel evaluates against admitted claims; a derived claim is a
+    /// read model, enumerated on demand and refreshed out of band, and no
+    /// transformation ever admits one. So `bind`, `require`, `for` and
+    /// the invariants cannot see it - the design type-checks and then
+    /// fails against a live database, which is where a trial lost an hour
+    /// to it.
+    ///
+    /// Refused as a modelling error rather than reported as a rule that
+    /// matches nothing: state outlives a source file, so rows admitted
+    /// under that name by an older shape of the programme may well exist.
+    /// That is precisely the problem - the name would have two sources,
+    /// the computed view and the stale rows.
+    #[error(
+        "`{predicate}` is a derived claim and {context} names it: a derived \
+         claim is computed from admitted claims and refreshed out of band, \
+         so a rule can neither match one nor admit one. Name the claims it \
+         is computed from, or make the figure a claim of its own."
+    )]
+    DerivedInRule {
+        predicate: String,
+        context: ValidationContext,
+    },
     /// `max`/`min` ranged over a kind with no order: a subject is an
     /// opaque identifier, a boolean is not a scale, a collection is not a
     /// point on one. Refused here rather than given an arbitrary order.
