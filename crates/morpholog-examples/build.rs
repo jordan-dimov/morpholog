@@ -122,6 +122,10 @@ fn declarations<'a>(source: &'a str, keyword: &str, terminator: char) -> Vec<&'a
         .filter_map(|line| line.trim().strip_prefix(&prefix))
         .filter_map(|rest| rest.split(terminator).next())
         .map(str::trim)
+        // The name is the first token: a declaration may carry clauses
+        // before its terminator (`invariant N total over P:`), and the
+        // accessor is named after N.
+        .filter_map(|head| head.split_whitespace().next())
         .filter(|name| !name.is_empty())
         .collect()
 }

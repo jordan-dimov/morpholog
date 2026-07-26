@@ -327,6 +327,7 @@ fn unique_invariant(decl: &PredicateDecl, fields: &[String]) -> Option<Invariant
         None => return None,
     };
     Some(Invariant {
+        totality_for: None,
         name: unique_invariant_name(&decl.name, fields).into(),
         version: 1,
         body: Prop::Implies {

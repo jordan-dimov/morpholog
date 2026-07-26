@@ -199,7 +199,12 @@ pub(crate) fn format_invariant(inv: &Invariant) -> String {
     let mut out = String::new();
     // Surface has no version syntax in v0; the IR's `version` field
     // defaults to 1 and the formatter omits it.
-    out.push_str(&format!("invariant {}:\n", inv.name));
+    // The totality declaration is authored, so it round-trips. Omitting
+    // it would silently downgrade a checked pairing back to a shape guess.
+    match &inv.totality_for {
+        Some(p) => out.push_str(&format!("invariant {} total over {p}:\n", inv.name)),
+        None => out.push_str(&format!("invariant {}:\n", inv.name)),
+    }
     out.push_str(&indent(1));
     out.push_str(&format_prop_inline(&inv.body));
     out.push('\n');

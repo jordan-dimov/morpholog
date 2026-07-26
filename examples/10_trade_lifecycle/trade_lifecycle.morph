@@ -238,7 +238,12 @@ invariant settled_within_effective_terms:
 -- compare against and pass vacuously. The settle gate refuses this on the
 -- ordinary path; this invariant is the backstop that closes it for any
 -- other path, so the effective cap is never vacuous for a real slice.
-invariant settled_date_has_effective_terms:
+--
+-- `total over TradeTerms` is that promise, said out loud. The rule was
+-- always the backstop; declaring it means the runtime checks the pairing
+-- instead of recognising its shape, and an author who deletes this rule
+-- is told what they broke.
+invariant settled_date_has_effective_terms total over TradeTerms:
     TradeSettled(trade, _, _, _, d) implies (exists ef: TradeTerms(trade, _, _, _, ef) and ef on_or_before d)
 
 -- A settled quantity is a positive figure. A "slice" of zero or a

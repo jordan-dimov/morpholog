@@ -347,6 +347,14 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
+        if let Some(target) = &inv.totality_for
+            && !program.predicates.iter().any(|d| &d.name == target)
+        {
+            cx.errors.push(ValidationError::UnknownTotalityTarget {
+                invariant: inv.name.to_string(),
+                predicate: target.to_string(),
+            });
+        }
         let mut scope = Scope::new();
         cx.walk_prop(&inv.body, &mut scope);
     }

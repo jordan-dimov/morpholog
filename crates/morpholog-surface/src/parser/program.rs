@@ -530,11 +530,20 @@ where
             .then_ignore(just(Token::Dedent)),
         expression_parser().map(|body| (Vec::new(), body)),
     ));
+    // invariant_decl ::= "invariant" Ident ("total" "over" Ident)? ":" body
+    //
+    // `total` is contextual, like every discipline clause word, so it
+    // stays usable as a variable name. `over` is already reserved by
+    // `derived ... over ...`, so it arrives as a keyword token - which is
+    // why this clause reuses it rather than matching an identifier.
+    let kw_total = select! { Token::Ident(s) if s == "total" => () };
+    let totality_clause = kw_total.ignore_then(just(Token::KwOver)).ignore_then(ident);
     let invariant_decl = just(Token::KwInvariant)
         .ignore_then(ident)
+        .then(totality_clause.or_not())
         .then_ignore(just(Token::Colon))
         .then(body_with_lets.clone())
-        .validate(|(name, (bindings, body)), e, emitter| {
+        .validate(|((name, totality_for), (bindings, body)), e, emitter| {
             let let_names: Vec<(String, Span)> = bindings
                 .iter()
                 .map(|b| (b.name.clone(), b.span.clone()))
@@ -550,6 +559,7 @@ where
                     version: 1,
                     body,
                     origin: InvariantOrigin::Authored,
+                    totality_for: totality_for.map(Into::into),
                 },
                 span.start()..span.end(),
                 let_names,

@@ -104,6 +104,12 @@ impl SourceMap {
                 };
                 self.decl_span(kind, name)
             }
+            // The clause is on the invariant's own declaration line, which
+            // is what the author can act on - the unknown predicate has no
+            // declaration to point at, that being the complaint.
+            ValidationError::UnknownTotalityTarget { invariant, .. } => {
+                self.decl_span(DeclKind::Invariant, invariant)
+            }
             ValidationError::DefinitionNameCollision { name } => {
                 self.decl_span(DeclKind::Definition, name)
             }
@@ -142,6 +148,12 @@ impl SourceMap {
             | Lint::UnsuppliedAntecedent { invariant, .. }
             | Lint::GoverningSelectionWithoutTotality { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
+            }
+            // Anchored on the PREDICATE: the omission is the missing
+            // companion, and the declaration that opted into
+            // effective-dating is the line the author can act on.
+            Lint::EffectiveWithoutDeclaredTotality { predicate } => {
+                self.decl_span(DeclKind::Predicate, predicate)
             }
         }
     }

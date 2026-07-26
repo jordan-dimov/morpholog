@@ -228,6 +228,25 @@ pub enum ValidationError {
     )]
     DisciplineOnDerived { predicate: String },
 
+    /// An invariant declared `total over P` for a `P` the programme does
+    /// not declare.
+    ///
+    /// Refused rather than ignored because the declaration is load-bearing:
+    /// it is what tells the vacuity lints that this rule is the backstop
+    /// for `P`. A typo therefore silently withdraws the guarantee it looks
+    /// like it is making, and the misspelling travels in the model hash as
+    /// if it meant something.
+    #[error(
+        "invariant `{invariant}` declares `total over {predicate}`, but no \
+         predicate `{predicate}` is declared. The totality declaration names \
+         the predicate whose coverage this rule guarantees, so an unknown name \
+         withdraws the guarantee silently."
+    )]
+    UnknownTotalityTarget {
+        invariant: String,
+        predicate: String,
+    },
+
     /// A rule named a predicate that a `derived` declaration computes.
     ///
     /// The kernel evaluates against admitted claims; a derived claim is a
