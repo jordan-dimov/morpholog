@@ -143,6 +143,12 @@ impl SourceMap {
             | Lint::GoverningSelectionWithoutTotality { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
+            // Anchored on the PREDICATE: the omission is the missing
+            // companion, and the declaration that opted into
+            // effective-dating is the line the author can act on.
+            Lint::EffectiveWithoutDeclaredTotality { predicate } => {
+                self.decl_span(DeclKind::Predicate, predicate)
+            }
         }
     }
 

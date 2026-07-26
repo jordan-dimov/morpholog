@@ -76,11 +76,31 @@ pub enum Lint {
         invariant: String,
         predicates: Vec<String>,
     },
+
+    /// A predicate declared `effective by` with no invariant declaring
+    /// `total over` it. The generated selector returns nothing where no
+    /// version is in force, so every rule reading it goes quietly vacuous
+    /// at the edges - and nothing in the source says whether that was
+    /// intended.
+    ///
+    /// A hint, not an error: a partial effective-dated predicate can be a
+    /// correct model, where a rule genuinely should not apply before the
+    /// first version exists. `--strict` promotes it for authors who want
+    /// the pairing guaranteed rather than remembered.
+    EffectiveWithoutDeclaredTotality { predicate: String },
 }
 
 impl std::fmt::Display for Lint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Lint::EffectiveWithoutDeclaredTotality { predicate } => write!(
+                f,
+                "`{predicate}` is effective-dated but no invariant declares `total over \
+                 {predicate}`: where no version is in force the generated selector matches \
+                 nothing, so every rule reading it passes vacuously. Mark the invariant that \
+                 guarantees a version exists, or say so deliberately if the rule should not \
+                 apply at the edges"
+            ),
             Lint::GateVsInvariant {
                 invariant,
                 append_only,
@@ -169,6 +189,14 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     // the totality-backstop side of the governing-selection lint,
     // computed once. Indexed so an invariant can never back itself: a
     // companion is by definition a DIFFERENT rule.
+    // What the author has DECLARED they backstop, whatever shape the rule
+    // takes.
+    let declared_totality: BTreeSet<PredicateName> = program
+        .invariants
+        .iter()
+        .filter_map(|i| i.totality_for.clone())
+        .collect();
+
     let witnesses: Vec<BTreeSet<PredicateName>> = program
         .invariants
         .iter()
@@ -182,6 +210,25 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
         .collect();
 
     let mut out = Vec::new();
+    // An `effective by` predicate with nothing declaring its totality: the
+    // selector goes quiet where no version is in force, and the omission
+    // is invisible. A hint rather than an error because a partial
+    // effective-dated predicate can be correct - a rule that should not
+    // apply before the first version exists is a legitimate model - but
+    // `--strict` turns it into the refusal an author who wants the pairing
+    // guaranteed is asking for.
+    for decl in &program.predicates {
+        let effective = decl
+            .disciplines
+            .iter()
+            .any(|d| matches!(d, crate::ir::Discipline::EffectiveBy { .. }));
+        if effective && !declared_totality.contains(&decl.name) {
+            out.push(Lint::EffectiveWithoutDeclaredTotality {
+                predicate: decl.name.to_string(),
+            });
+        }
+    }
+
     for (index, inv) in program.invariants.iter().enumerate() {
         let mut implications = Vec::new();
         collect_implications(
@@ -212,6 +259,7 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
                 index,
                 &implications,
                 &witnesses,
+                &declared_totality,
                 definitions,
                 &mut out,
             );
@@ -229,6 +277,7 @@ fn governing_selection_findings(
     index: usize,
     implications: &[CollectedImplication<'_>],
     witnesses: &[BTreeSet<PredicateName>],
+    declared_totality: &BTreeSet<PredicateName>,
     definitions: DefinitionIndex<'_>,
     out: &mut Vec<Lint>,
 ) {
@@ -242,13 +291,20 @@ fn governing_selection_findings(
     if selected.is_empty() {
         return;
     }
+    // A DECLARED backstop settles it. Shape-matching stays as the
+    // fallback for programmes that never declare one, but where the
+    // author has said which rule backstops the predicate, the pairing is
+    // checked rather than guessed - an unusual-but-intended backstop
+    // counts, and a shape that matched by accident does not.
     let unbacked: Vec<String> = selected
         .iter()
         .filter(|p| {
-            !witnesses
+            let declared = declared_totality.contains(*p);
+            let shaped = witnesses
                 .iter()
                 .enumerate()
-                .any(|(j, w)| j != index && w.contains(*p))
+                .any(|(j, w)| j != index && w.contains(*p));
+            !declared && !shaped
         })
         .map(ToString::to_string)
         .collect();

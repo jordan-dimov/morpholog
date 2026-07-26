@@ -501,6 +501,7 @@ pub fn predicate(name: &str) -> PredicateDeclBuilder {
 /// surface always emits.
 pub fn invariant(name: &str, body: Prop) -> Invariant {
     Invariant {
+        totality_for: None,
         name: name.into(),
         version: 1,
         body,

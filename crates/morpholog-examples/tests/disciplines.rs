@@ -967,3 +967,99 @@ transformation t(account, market, valid_from, published_at, amount):
         "got {errs:?}"
     );
 }
+
+// ============================================================
+// total over: declaring the companion an effective-dated
+// predicate needs
+// ============================================================
+
+const TOTALITY: &str = r#"program tot
+
+predicate ChargeRate(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge) on (effective_from)
+predicate Priced(charge: Subject, priced_on: Date, amount: Decimal)
+
+invariant priced_at_the_rate_in_force:
+    Priced(charge, d, amount)
+    implies charge_rate_in_force_on(charge, d, amount)
+
+invariant priced_charges_have_a_rate total over ChargeRate:
+    Priced(charge, d, _)
+    implies (exists ef: ChargeRate(charge, ef, _) and ef on_or_before d)
+
+transformation add_rate(charge, effective_from, amount):
+    admit ChargeRate(charge, effective_from, amount)
+
+transformation price(charge, priced_on, amount):
+    admit Priced(charge, priced_on, amount)
+"#;
+
+/// An effective-dated predicate with nothing declaring its totality earns
+/// a hint - and `--strict` turns that into a refusal.
+///
+/// The tier matters: a partial effective-dated predicate can be a correct
+/// model (a rule that genuinely should not apply before the first version
+/// exists), so this cannot be a hard error. An author who wants the
+/// pairing guaranteed rather than remembered runs `--strict`, and then the
+/// omission is unwritable.
+#[test]
+fn an_effective_predicate_without_a_declared_companion_is_flagged() {
+    let undeclared = TOTALITY.replace(" total over ChargeRate", "");
+    let program = parse_program(&undeclared).expect("parses either way");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::EffectiveWithoutDeclaredTotality { predicate } if predicate == "ChargeRate"
+        )),
+        "got {hints:?}"
+    );
+
+    // Declared: no finding.
+    let declared = parse_program(TOTALITY).expect("parses");
+    let compiled = morpholog_core::CompiledProgram::new(declared).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        !hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::EffectiveWithoutDeclaredTotality { .. }
+        )),
+        "a declared companion must satisfy it; got {hints:?}"
+    );
+}
+
+/// A declared companion settles the governing-selection lint too, which
+/// previously had to recognise the backstop by shape.
+///
+/// This is the "smell to checked pairing" half: the author says which rule
+/// backstops the predicate, so an unusual-but-intended backstop counts and
+/// a shape matching by accident does not.
+#[test]
+fn a_declared_companion_settles_the_governing_selection_lint() {
+    let declared = parse_program(TOTALITY).expect("parses");
+    let compiled = morpholog_core::CompiledProgram::new(declared).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        !hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::GoverningSelectionWithoutTotality { .. }
+        )),
+        "the declaration is the backstop; got {hints:?}"
+    );
+}
+
+/// The clause round-trips: formatting must not silently downgrade a
+/// checked pairing back to a shape guess.
+#[test]
+fn the_totality_clause_survives_a_format_and_reparse() {
+    let program = parse_program(TOTALITY).expect("parses");
+    let reparsed =
+        parse_program(&morpholog_core::format::format_program(&program)).expect("reparses");
+    let declared: Vec<_> = reparsed
+        .invariants
+        .iter()
+        .filter_map(|i| i.totality_for.as_ref().map(ToString::to_string))
+        .collect();
+    assert_eq!(declared, vec!["ChargeRate".to_string()]);
+}

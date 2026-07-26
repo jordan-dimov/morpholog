@@ -209,6 +209,17 @@ pub struct Invariant {
     /// them deterministically) and so the legibility surfaces can trace
     /// a generated rule back to its declaration.
     pub origin: InvariantOrigin,
+    /// The predicate this invariant declares itself the totality backstop
+    /// for: "whatever else I say, a version of `P` exists where one is
+    /// needed."
+    ///
+    /// An effective-dated selection passes vacuously when no version is in
+    /// force, so the rule silently stops applying at the edges. The
+    /// governing-selection lint has always looked for a backstop by SHAPE;
+    /// this lets the author say so, which makes the pairing checked rather
+    /// than guessed - an unusual but intended backstop is recognised, and
+    /// a shape that matches by accident no longer counts as one.
+    pub totality_for: Option<PredicateName>,
 }
 
 /// See [`Invariant::origin`].

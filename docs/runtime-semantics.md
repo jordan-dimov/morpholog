@@ -477,13 +477,25 @@ templates. The discipline clauses:
   reference, so a selector that does not exist yet resolves as an
   undeclared predicate), invariants after.
 
+  **Its companion:** an invariant may declare `total over P`, saying "I am
+  what guarantees a version of `P` exists where one is needed". An
+  effective-dated predicate with no such declaration earns a hint, because
+  where no version is in force the selector matches nothing and every rule
+  reading it passes vacuously - silently not applying at the edges. A hint
+  rather than an error, because a partial effective-dated predicate can be
+  a correct model; `--strict` promotes it for an author who wants the
+  pairing guaranteed rather than remembered.
+
+  The declaration also settles the governing-selection lint, which
+  previously had to recognise a backstop by its shape. Declared, the
+  pairing is checked: an unusual-but-intended backstop counts, and a shape
+  that matched by accident does not.
+
   `current pointer by` governs corrections *within* a version; this
   governs time *across* versions, and the two compose on one predicate.
   What it does **not** do is make a stale-version reference unstateable:
   the selector is proposition-valued, so a transformation still pairs
-  `max(...)` with a `bind` to name the governing version. Declaring the
-  totality companion, so a selector cannot go quietly vacuous when no
-  version exists, is the other half and is not here yet.
+  `max(...)` with a `bind` to name the governing version.
 - **`append only`** - no transformation may `retract` this predicate.
   Enforced statically: retraction only happens through a `retract`
   statement, so the authoring-time ban is complete and costs nothing

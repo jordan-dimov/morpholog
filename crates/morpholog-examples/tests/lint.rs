@@ -26,7 +26,9 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             Lint::UnsuppliedAntecedent { missing, .. } => {
                 Some(missing.iter().map(String::as_str).collect())
             }
-            Lint::GateVsInvariant { .. } | Lint::GoverningSelectionWithoutTotality { .. } => None,
+            Lint::GateVsInvariant { .. }
+            | Lint::GoverningSelectionWithoutTotality { .. }
+            | Lint::EffectiveWithoutDeclaredTotality { .. } => None,
         })
         .unwrap_or_default()
 }
@@ -42,7 +44,9 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
             invariant.as_str(),
             predicates.iter().map(String::as_str).collect(),
         )),
-        Lint::GateVsInvariant { .. } | Lint::UnsuppliedAntecedent { .. } => None,
+        Lint::GateVsInvariant { .. }
+        | Lint::UnsuppliedAntecedent { .. }
+        | Lint::EffectiveWithoutDeclaredTotality { .. } => None,
     })
 }
 
