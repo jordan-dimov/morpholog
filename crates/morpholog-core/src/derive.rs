@@ -53,7 +53,8 @@ pub fn eval_invariant(
 /// chosen. When several subjects violate the same rule, the witness is
 /// the first violation in state order - so the same claims in a different
 /// order can name a different subject, while the verdict is unchanged.
-/// The PostgreSQL path loads claims ordered for exactly this reason; a
+/// The PostgreSQL path loads claims in primary-key order for exactly this
+/// reason, so the same database explains a refusal the same way twice; a
 /// hand-built `State` gets whatever order it was built in.
 ///
 /// Empty exactly when the failure has no binding assignment to report -

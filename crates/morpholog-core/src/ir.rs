@@ -365,6 +365,30 @@ pub enum ValueExpr {
         body: Box<Prop>,
         seed: SumSeed,
     },
+    /// The largest or smallest `value` over the bindings satisfying
+    /// `body` - the selection a governing-claim rule needs on the commit
+    /// path ("the version in force at this date" is the greatest
+    /// `effective_from` not after it).
+    ///
+    /// Shaped like [`ValueExpr::Sum`] without a seed, because that is the
+    /// whole difference: an empty sum is a typed zero, and an empty
+    /// extremum has no answer to give. It raises
+    /// [`crate::EvalError::EmptyExtremum`] rather than inventing one, so
+    /// an author who wants a lawful refusal writes a `require` first -
+    /// the same division of labour as [`ValueExpr::ValueOf`] (errors)
+    /// against [`Stmt::BindOne`] (rejects).
+    ///
+    /// Ordered kinds only - decimals, dates, timestamps, durations, and
+    /// same-unit quantities. Subjects are opaque identifiers, booleans are
+    /// not a scale, and a collection is not a point on one, so none has a
+    /// largest member; all are refused at validation rather than given an
+    /// arbitrary order. The check is an allow-list, so a kind added later
+    /// has no order until someone decides it does.
+    Extremum {
+        op: ExtremumOp,
+        value: Term,
+        body: Box<Prop>,
+    },
     /// Reads exactly one matching claim and yields its value-position
     /// binding; wildcards in `args` mark the value position(s). Zero
     /// matches errors unless `default` is supplied; multiple matches
@@ -415,6 +439,28 @@ pub enum CompareOp {
     Lt,
     Ge,
     Gt,
+}
+
+/// Which end of the ordering an [`ValueExpr::Extremum`] takes.
+///
+/// Distinct from [`ArithOp::Min`] / [`ArithOp::Max`], which cap one value
+/// against another. This picks from a set the body defines, so the two
+/// never appear in the same position and the surface tells them apart by
+/// the `|` that introduces a body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtremumOp {
+    Max,
+    Min,
+}
+
+impl ExtremumOp {
+    /// The surface spelling, used by the formatter and diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExtremumOp::Max => "max",
+            ExtremumOp::Min => "min",
+        }
+    }
 }
 
 /// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];

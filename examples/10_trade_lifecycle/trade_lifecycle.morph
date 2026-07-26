@@ -148,6 +148,11 @@ predicate PositionLimit(commodity: Subject, limit: Decimal)
 -- The read-side projection (defined by the `derived` block at the foot of
 -- the file): one row per terms version, keyed by its identity and
 -- effective date, carrying the quantity in force from that date.
+-- Which terms version governed a settlement. The cap invariant already
+-- decides the figure; this records the version the desk actually settled
+-- under, so an auditor reads it instead of reconstructing it from dates.
+predicate SettledUnderTerms(settlement_id: Subject, version_id: Subject)
+
 predicate TermsTimeline(trade: Subject, version_id: Subject, delivery_period: Subject, effective_from: Date, quantity: Decimal)
 
 -- Intents are messages the system sends to the outside world after a
@@ -383,7 +388,21 @@ transformation settle_trade(trade, settled_qty, settlement_id, official_price_id
     require CurrentOfficialPrice(trade, official_price_id)
     require TradeTerms(trade, _, _, _, ef) and ef on_or_before effective_on
     require not TradeSettled(_, _, settlement_id, _, _)
+    -- Which version governs? The latest effective date that is not after
+    -- the settlement's own date. `terms_in_force_on` above asks the same
+    -- question, but it can only ANSWER yes or no - an invariant needs a
+    -- truth, and this needs a value to look the version up by. That is
+    -- what the aggregate form gives: the date itself, which then keys the
+    -- claim carrying the version.
+    --
+    -- The require above is what makes this safe. An aggregate over
+    -- nothing has no answer and stops the runtime with an error; the gate
+    -- refuses first, lawfully, so this line only ever runs where a
+    -- version exists.
+    let governing_from = max(ef | TradeTerms(trade, _, _, _, ef) and ef on_or_before effective_on)
+    bind TradeTerms(trade, governing_version, _, _, governing_from)
     admit TradeSettled(trade, settled_qty, settlement_id, official_price_id, effective_on)
+    admit SettledUnderTerms(settlement_id, governing_version)
     emit TradeSettlementRequested(settlement_id, trade, settled_qty)
 
 

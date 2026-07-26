@@ -1039,3 +1039,46 @@ fn an_amendment_that_grows_a_position_past_the_limit_is_refused() {
         .unwrap();
     assert_rejected(outcome, "within_position_limit");
 }
+
+/// A settlement records the terms version that governed it, chosen at
+/// commit time from the effective dates.
+///
+/// `terms_in_force_on` asks the same question for the cap invariant, but
+/// it can only answer yes or no - an invariant needs a truth, and this
+/// needs a value to look the version up by. The aggregate form yields the
+/// governing date itself, which then keys the claim carrying the version.
+///
+/// The trade is amended to a later version effective 2026-02-01, and a
+/// slice settled on 2026-01-20 must still name the ORIGINAL version:
+/// a later amendment does not retroactively govern an earlier settlement.
+#[test]
+fn a_settlement_names_the_version_that_governed_it() {
+    let captured = grant(captured(100), "mo", "power");
+    let amended = ex().must_accept_as(
+        &trade_lifecycle::amend_trade_terms(),
+        vec![
+            subj("t1"),
+            subj("tv1"),
+            subj("tv2"),
+            dec(120),
+            subj("cal26"),
+            date("2026-02-01"),
+        ],
+        "mo",
+        captured,
+    );
+    let confirmed = confirm_as(amended, "mo", "op1", 52);
+
+    let early = settle(confirmed.clone(), 100, "s1", "op1", "2026-01-20");
+    assert!(
+        has_claim(&early, "SettledUnderTerms", &[subj("s1"), subj("tv1")]),
+        "a January slice is governed by the version effective 2026-01-15, \
+         not the amendment effective 2026-02-01"
+    );
+
+    let late = settle(confirmed, 100, "s2", "op1", "2026-02-10");
+    assert!(
+        has_claim(&late, "SettledUnderTerms", &[subj("s2"), subj("tv2")]),
+        "a February slice is governed by the amendment"
+    );
+}

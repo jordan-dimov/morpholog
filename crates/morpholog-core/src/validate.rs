@@ -169,6 +169,22 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// `max`/`min` ranged over a kind with no order: a subject is an
+    /// opaque identifier, a boolean is not a scale, a collection is not a
+    /// point on one. Refused here rather than given an arbitrary order.
+    ///
+    /// The message names the kinds that DO order, because the checker is
+    /// an allow-list - listing the excluded ones would go stale the next
+    /// time a kind is added, which is how it came to name only two.
+    #[error(
+        "{op} needs an ordered kind but received {actual} in {context}; \
+         only decimals, dates, timestamps, durations and quantities have an order"
+    )]
+    UnorderedExtremum {
+        op: &'static str,
+        actual: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
     /// `value default`) received an operand of the wrong kind.
     /// `Le(date, decimal)`, `Add(subject, decimal)`,
@@ -536,7 +552,9 @@ fn value_depth_capped(
         ValueExpr::Arith { left, right, .. } => {
             value_depth_capped(left, inner, depths)?.max(value_depth_capped(right, inner, depths)?)
         }
-        ValueExpr::Sum { body, .. } => prop_depth_capped(body, inner, depths)?,
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+            prop_depth_capped(body, inner, depths)?
+        }
         ValueExpr::ValueOf { default, .. } => match default.as_deref() {
             Some(d) => value_depth_capped(d, inner, depths)?,
             None => 0,
@@ -664,7 +682,9 @@ fn value_exceeds_depth(
         ValueExpr::Arith { left, right, .. } => {
             value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
         }
-        ValueExpr::Sum { body, .. } => prop_exceeds_depth(body, budget, depths),
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+            prop_exceeds_depth(body, budget, depths)
+        }
         ValueExpr::ValueOf { default, .. } => default
             .as_deref()
             .is_some_and(|d| value_exceeds_depth(d, budget, depths)),

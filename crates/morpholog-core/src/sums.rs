@@ -104,6 +104,10 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
             lower_in_value(left, ctx);
             lower_in_value(right, ctx);
         }
+        // No seed to resolve: an empty extremum has no value, so there
+        // is nothing to type. The body still needs the pass, since a sum
+        // can sit inside it.
+        ValueExpr::Extremum { body, .. } => lower_in_prop(body, ctx),
         ValueExpr::Sum { value, body, seed } => {
             lower_in_prop(body, ctx);
             let resolved = match value {

@@ -531,14 +531,26 @@ fn refuse_open_initialiser(
                 walk(value, c, const_names, errors);
                 walk(quantum, c, const_names, errors);
             }
-            ValueExpr::Sum { .. } | ValueExpr::ValueOf { .. } => errors.push((
-                c.span.clone(),
-                format!(
-                    "const `{}` reads state (`sum`/`value`) - a figure that \
+            // Named individually: a diagnostic that lists constructs the
+            // author did not write sends them looking for the wrong line.
+            ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } | ValueExpr::ValueOf { .. } => {
+                let construct = match expr {
+                    ValueExpr::Sum { .. } => "`sum`",
+                    ValueExpr::Extremum { op, .. } => match op {
+                        morpholog_core::ExtremumOp::Max => "`max(.. | ..)`",
+                        morpholog_core::ExtremumOp::Min => "`min(.. | ..)`",
+                    },
+                    _ => "`value`",
+                };
+                errors.push((
+                    c.span.clone(),
+                    format!(
+                        "const `{}` reads state ({construct}) - a figure that \
                      changes with the ledger belongs in a rule, not a const",
-                    c.name
-                ),
-            )),
+                        c.name
+                    ),
+                ))
+            }
         }
     }
     walk(&c.value, c, const_names, errors);
@@ -630,7 +642,7 @@ fn refuse_pattern_positions_in_value(
         }
         // The sum TARGET never binds (consumed against the body's
         // bindings) - only the body's patterns are scanned.
-        ValueExpr::Sum { body, .. } => {
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
             refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
         }
         // ValueOf keys are ground lookups - they never bind.

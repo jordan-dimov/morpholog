@@ -104,6 +104,14 @@ pub enum EvalError {
     /// own rules, as the metered-billing example does for negatives.
     #[error("arithmetic out of range: {0}")]
     ArithOutOfRange(String),
+    /// `max`/`min` over a body that matched nothing. An empty sum has a
+    /// typed zero; an empty extremum has no answer, so it refuses rather
+    /// than inventing one. Guard with a `require` when "none in force"
+    /// should be a lawful rejection instead of an error.
+    #[error(
+        "{op} over `{body}` matched nothing; an empty {op} has no value (guard it with a require)"
+    )]
+    EmptyExtremum { op: &'static str, body: String },
     /// A `Prop::Defined` call named a definition the evaluation context
     /// does not carry. Unlike an unmatched predicate (which lawfully
     /// matches nothing), a call without its definition is a programme
@@ -1006,6 +1014,38 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 ))),
             }
         }
+        ValueExpr::Extremum { op, value, body } => {
+            // Order over a set, so the answer cannot depend on match
+            // order: every candidate is compared against the running
+            // best, and mixing kinds is an error rather than an
+            // arbitrary winner.
+            let matches = find_matches(body, ctx)?;
+            let mut best: Option<EvalValue> = None;
+            for m in matches {
+                let next = resolve_term(value, &m, ctx.actor)?;
+                best = Some(match best {
+                    None => {
+                        // Checked before it becomes the running best:
+                        // otherwise one unordered match succeeds and two
+                        // raise a type error, which makes validity a
+                        // question of cardinality.
+                        ensure_ordered(&next, *op)?;
+                        next
+                    }
+                    Some(current) => {
+                        let ordering = compare_ordered(&current, &next, *op)?;
+                        if ordering { next } else { current }
+                    }
+                });
+            }
+            // An empty sum has a typed zero to fall back on; an empty
+            // extremum has nothing. Refusing by name beats inventing a
+            // winner - guard with a `require` for a lawful rejection.
+            best.ok_or_else(|| EvalError::EmptyExtremum {
+                op: op.as_str(),
+                body: crate::format::format_prop_inline(body),
+            })
+        }
         ValueExpr::Sum { value, body, seed } => {
             // Type-driven accumulation: a sum of decimals is a decimal,
             // a sum of durations is a duration (counted laytime is the
@@ -1654,6 +1694,75 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
     }
 }
 
+/// Is `candidate` the one an extremum should keep over `current`?
+///
+/// Ordered kinds only. Subjects are opaque identifiers and booleans are
+/// not a scale, so neither has a largest member - they are refused at
+/// validation, and this is the runtime backstop for hand-built IR that
+/// skipped it. Quantities compare only within one unit, like every other
+/// quantity comparison.
+/// Does this value belong to a kind with an order at all?
+///
+/// The static checker refuses unordered kinds, so this is the backstop
+/// for hand-built IR and for a field the checker could not narrow. It has
+/// to run on the first candidate as well as the comparisons, or a
+/// singleton would slip through the gap between them.
+fn ensure_ordered(value: &EvalValue, op: crate::ir::ExtremumOp) -> Result<(), EvalError> {
+    match value {
+        EvalValue::Decimal(_)
+        | EvalValue::Date(_)
+        | EvalValue::Timestamp(_)
+        | EvalValue::Duration(_)
+        | EvalValue::Quantity { .. } => Ok(()),
+        other => Err(EvalError::TypeMismatch(format!(
+            "{} needs an ordered kind, got {other:?}",
+            op.as_str()
+        ))),
+    }
+}
+
+fn compare_ordered(
+    current: &EvalValue,
+    candidate: &EvalValue,
+    op: crate::ir::ExtremumOp,
+) -> Result<bool, EvalError> {
+    use std::cmp::Ordering;
+    let ordering = match (current, candidate) {
+        (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
+        (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
+        (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a.cmp(b),
+        (EvalValue::Duration(a), EvalValue::Duration(b)) => a.cmp(b),
+        (
+            EvalValue::Quantity {
+                amount: a,
+                unit: ua,
+            },
+            EvalValue::Quantity {
+                amount: b,
+                unit: ub,
+            },
+        ) => {
+            if ua != ub {
+                return Err(EvalError::TypeMismatch(format!(
+                    "{} cannot compare {ua} with {ub}: quantities order only within one unit",
+                    op.as_str()
+                )));
+            }
+            a.cmp(b)
+        }
+        (a, b) => {
+            return Err(EvalError::TypeMismatch(format!(
+                "{} needs an ordered kind, got {a:?} and {b:?}",
+                op.as_str()
+            )));
+        }
+    };
+    Ok(match op {
+        crate::ir::ExtremumOp::Max => ordering == Ordering::Less,
+        crate::ir::ExtremumOp::Min => ordering == Ordering::Greater,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1661,6 +1770,240 @@ mod tests {
         dec, div, max, min, modulo, mul, subj, term, value_of, value_of_with_default, wildcard,
     };
     use crate::state::{ClaimInstance, State};
+
+    /// The extremum picks from a set, so match order must not decide it,
+    /// and the answer must be the member itself rather than a position.
+    ///
+    /// Table-driven over both ends and both orderings of the same claims:
+    /// a max that depended on iteration would pass one row and fail its
+    /// mirror.
+    #[test]
+    fn an_extremum_picks_the_same_member_whatever_the_match_order() {
+        use crate::ir::ExtremumOp;
+        let rows = [("2025-01-01", 10), ("2026-01-01", 12), ("2024-06-01", 9)];
+        let build = |order: &[usize]| {
+            State::from_claims(
+                order
+                    .iter()
+                    .map(|&i| ClaimInstance {
+                        predicate: "Rate".into(),
+                        args: vec![
+                            EvalValue::Date(rows[i].0.parse().expect("date")),
+                            EvalValue::Decimal(rust_decimal::Decimal::from(rows[i].1)),
+                        ],
+                    })
+                    .collect(),
+            )
+        };
+        let aggregate = |op| ValueExpr::Extremum {
+            op,
+            value: Term::Var(Var::from("d")),
+            body: Box::new(crate::ir_builder::claim(
+                "Rate",
+                vec![Term::Var(Var::from("d")), Term::Wildcard],
+            )),
+        };
+        for order in [[0usize, 1, 2], [2, 1, 0], [1, 0, 2]] {
+            let state = build(&order);
+            let bindings = Bindings::new();
+            let ctx = EvalContext::new(
+                &state,
+                None,
+                &bindings,
+                None,
+                crate::definitions::DefinitionIndex::new(&[]),
+            );
+            assert_eq!(
+                eval_value(&aggregate(ExtremumOp::Max), &ctx).expect("max"),
+                EvalValue::Date("2026-01-01".parse().expect("date")),
+                "max over {order:?}"
+            );
+            assert_eq!(
+                eval_value(&aggregate(ExtremumOp::Min), &ctx).expect("min"),
+                EvalValue::Date("2024-06-01".parse().expect("date")),
+                "min over {order:?}"
+            );
+        }
+    }
+
+    /// Validity is a question of kind, never of how many claims happen
+    /// to match.
+    ///
+    /// The first cut checked only comparisons, so one unordered match
+    /// succeeded and two raised a type error - the same programme going
+    /// from working to broken because a second claim was admitted. Every
+    /// candidate is checked now, singletons included.
+    #[test]
+    fn an_unordered_candidate_is_refused_however_many_there_are() {
+        use crate::ir::ExtremumOp;
+        let unordered = [
+            ("subject", EvalValue::Subject(Subject::from("a"))),
+            ("bool", EvalValue::Bool(true)),
+            (
+                "collection",
+                EvalValue::Collection(vec![EvalValue::Subject(Subject::from("x"))]),
+            ),
+        ];
+        for (label, first) in unordered {
+            for count in [1usize, 2] {
+                let state = State::from_claims(
+                    (0..count)
+                        .map(|i| ClaimInstance {
+                            predicate: "Thing".into(),
+                            args: vec![if i == 0 {
+                                first.clone()
+                            } else {
+                                EvalValue::Subject(Subject::from("b"))
+                            }],
+                        })
+                        .collect(),
+                );
+                let bindings = Bindings::new();
+                let ctx = EvalContext::new(
+                    &state,
+                    None,
+                    &bindings,
+                    None,
+                    crate::definitions::DefinitionIndex::new(&[]),
+                );
+                let expr = ValueExpr::Extremum {
+                    op: ExtremumOp::Max,
+                    value: Term::Var(Var::from("v")),
+                    body: Box::new(crate::ir_builder::claim(
+                        "Thing",
+                        vec![Term::Var(Var::from("v"))],
+                    )),
+                };
+                let err =
+                    eval_value(&expr, &ctx).expect_err(&format!("{label} x{count} has no order"));
+                assert!(
+                    err.to_string().contains("ordered kind"),
+                    "{label} x{count}: {err}"
+                );
+            }
+        }
+    }
+
+    /// Every kind the checker admits must actually evaluate, or the
+    /// allow-list and the runtime disagree about what is filterable.
+    #[test]
+    fn every_ordered_kind_yields_its_largest_member() {
+        use crate::ir::ExtremumOp;
+        let cases: Vec<(&str, Vec<EvalValue>, EvalValue)> = vec![
+            (
+                "decimal",
+                vec![
+                    EvalValue::Decimal(rust_decimal::Decimal::from(1)),
+                    EvalValue::Decimal(rust_decimal::Decimal::from(9)),
+                ],
+                EvalValue::Decimal(rust_decimal::Decimal::from(9)),
+            ),
+            (
+                "date",
+                vec![
+                    EvalValue::Date("2025-01-01".parse().expect("date")),
+                    EvalValue::Date("2026-01-01".parse().expect("date")),
+                ],
+                EvalValue::Date("2026-01-01".parse().expect("date")),
+            ),
+            (
+                "timestamp",
+                vec![
+                    EvalValue::Timestamp("2025-01-01T00:00:00Z".parse().expect("ts")),
+                    EvalValue::Timestamp("2026-01-01T00:00:00Z".parse().expect("ts")),
+                ],
+                EvalValue::Timestamp("2026-01-01T00:00:00Z".parse().expect("ts")),
+            ),
+            (
+                "duration",
+                vec![
+                    EvalValue::Duration("PT1H".parse().expect("dur")),
+                    EvalValue::Duration("PT6H".parse().expect("dur")),
+                ],
+                EvalValue::Duration("PT6H".parse().expect("dur")),
+            ),
+            (
+                "quantity",
+                vec![
+                    EvalValue::Quantity {
+                        amount: rust_decimal::Decimal::from(5),
+                        unit: "USD".into(),
+                    },
+                    EvalValue::Quantity {
+                        amount: rust_decimal::Decimal::from(7),
+                        unit: "USD".into(),
+                    },
+                ],
+                EvalValue::Quantity {
+                    amount: rust_decimal::Decimal::from(7),
+                    unit: "USD".into(),
+                },
+            ),
+        ];
+        for (label, values, expected) in cases {
+            let state = State::from_claims(
+                values
+                    .into_iter()
+                    .map(|v| ClaimInstance {
+                        predicate: "Thing".into(),
+                        args: vec![v],
+                    })
+                    .collect(),
+            );
+            let bindings = Bindings::new();
+            let ctx = EvalContext::new(
+                &state,
+                None,
+                &bindings,
+                None,
+                crate::definitions::DefinitionIndex::new(&[]),
+            );
+            let expr = ValueExpr::Extremum {
+                op: ExtremumOp::Max,
+                value: Term::Var(Var::from("v")),
+                body: Box::new(crate::ir_builder::claim(
+                    "Thing",
+                    vec![Term::Var(Var::from("v"))],
+                )),
+            };
+            assert_eq!(
+                eval_value(&expr, &ctx).unwrap_or_else(|e| panic!("{label}: {e}")),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    /// An empty sum has a typed zero to fall back on; an empty extremum
+    /// has no answer, and inventing one would let a rule price against a
+    /// version that does not exist. It names the body so the author can
+    /// see which selection came up empty.
+    #[test]
+    fn an_extremum_over_nothing_refuses_by_name() {
+        use crate::ir::ExtremumOp;
+        let state = State::from_claims(vec![]);
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(
+            &state,
+            None,
+            &bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        );
+        let expr = ValueExpr::Extremum {
+            op: ExtremumOp::Max,
+            value: Term::Var(Var::from("d")),
+            body: Box::new(crate::ir_builder::claim(
+                "Rate",
+                vec![Term::Var(Var::from("d"))],
+            )),
+        };
+        let err = eval_value(&expr, &ctx).expect_err("an empty max has no value");
+        let text = err.to_string();
+        assert!(text.contains("matched nothing"), "got: {text}");
+        assert!(text.contains("Rate"), "must name the body: {text}");
+        assert!(text.contains("require"), "must name the remedy: {text}");
+    }
 
     /// `claim_matches` and `unify_args` share `match_args`, so they must
     /// agree on every verdict; `unify_args` must additionally extend the

@@ -83,6 +83,7 @@ impl SourceMap {
             | ValidationError::ArityMismatch { context, .. }
             | ValidationError::ArgKindMismatch { context, .. }
             | ValidationError::OperandKindMismatch { context, .. }
+            | ValidationError::UnorderedExtremum { context, .. }
             | ValidationError::NoArithRule { context, .. }
             | ValidationError::AbsKind { context, .. }
             | ValidationError::RoundQuantumNotPositive { context, .. }

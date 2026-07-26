@@ -184,6 +184,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 | `not`, `and`, `or`, `xor`, `implies` (keywords) | `Prop::Not`, `Prop::And`, `Prop::Or`, `Prop::Xor`, `Prop::Implies` | Boolean composition reads as keywords in business rules, not symbols. `and` flattens into `Prop::And(Vec<Prop>)` and `or` into `Prop::Or(Vec<Prop>)`; `implies` is right-associative. `xor` is exactly-one: it adds no expressiveness (it is `(a or b) and not (a and b)`, evaluated by lowering to exactly that), but reads far better than that hand-written form where the operands are long claim patterns. Binary, not flattened (n-ary xor is ambiguous); it sits between `and` and `or` in precedence. |
 | `forall x in coll: body`, `exists x: body` | `Prop::Forall`, `Prop::Exists` | Bounded quantification is mathematical convention. The `in` clause on `forall` makes unbounded quantification syntactically impossible. `exists` carries no source clause because the IR's `Prop::Exists` doesn't model one - the bound variable is whatever the body matches. |
 | `sum(target | body)` | `ValueExpr::Sum` | Set-builder notation. The target is a variable to sum, or a decimal literal - `sum(1 | body)` counts the matches (the chess material census forced this). Type-driven: a sum of decimals is a decimal, a sum of durations is a duration (counted laytime forced this), a sum of same-unit quantities is a quantity of that unit (the cargo book forced this); mixing kinds - or units - is an error. The empty sum is the typed zero of the summed variable's declared kind (`0 t` over a `Decimal[t]` position, `duration(PT0S)` over a duration, decimal zero otherwise), resolved statically by the `lower_sum_seeds` pass - so an empty cargo book compares against a capacity with no zero-valued seed claim needed to open it. A count sum's literal target, or a variable no declaration decides, stays decimal. A general expression target awaits an example that needs it. |
+| `max(target \| body)` / `min(target \| body)` | `ValueExpr::Extremum` | The largest or smallest target over the bindings the body admits - the selection a governing-claim rule needs on the commit path ("the version in force on this date" is the greatest `effective_from` not after it). Shaped like `sum` without a seed, because that is the whole difference: an empty sum has a typed zero to give, an empty extremum has no answer at all and raises `EmptyExtremum` rather than inventing one - guard it with a `require` when "none in force" should be a lawful rejection instead of an error. Ordered kinds only - decimals, dates, timestamps, durations and same-unit quantities. Subjects are opaque identifiers, booleans are not a scale, and a collection is not a point on one, so none has a largest member; the check is an allow-list, so a kind added later has no order until someone decides it does. Distinct from the binary `min(a, b)` / `max(a, b)` that caps one value against another; the `\|` tells them apart. **Why both this and the negated-exists idiom exist:** an invariant asking "is this the version in force?" only needs a truth, and `not (exists later: ...)` gives one; a transformation needs the value to look the claim up by, and `require` does not export bindings while `bind` needs a determined key. The aggregate turns that truth test into a key. |
 | `value Pred(args)` (with optional `default expr`) | `ValueExpr::ValueOf` | Claim-pattern form. The wildcard `_` in `args` marks the value position to extract. The kernel's `ValueOf { predicate, args, default }` is shaped this way deliberately; a `value(target | body)` shape would imply a general query and be more expressive than the IR. |
 | `derived Name(keys):` with an indented `over domain` clause and `value name = expr` clauses | `DerivedClaim { predicate, keys, values, domain }` | A governed read-side view, recomputed from admitted claims on demand - never stored, never admitted, so it cannot drift from the claims it reads. The head lists the KEY fields; enumeration yields one row per distinct key-tuple the `over` domain binds, and each `value` clause computes one output field against that row's bindings. The row is positional: keys, then values, in declaration order. The rules this shape enforces: at least one `value` clause is required (a derived is a computation over a domain, not a stored relation - a value-less "which subjects match" view is a domain query the embedder runs, or an invariant if it must be guaranteed); every non-computed field the row carries must be a key the domain binds (there is no projection list separate from the head); and value expressions see the per-key bindings only, never one another (no `let`-style chaining between clauses). |
 | `x in xs` (membership) | `Prop::In(Term, Term)` | Infix at comparator precedence. Distinct from the structural `in` in `forall x in xs: body`; disambiguated positionally (the structural `in` comes immediately after the binder in `forall`). |
@@ -234,6 +235,17 @@ proposal records like any other, under the system actor. Consumers:
 `inspect rejections` lists the rows; `inspect coverage` counts them
 into the `constrained` verdict.
 
+**A stored decimal carries a scale, and the scale is representation, not
+value.** `round(x, 0.01)` fixes the VALUE to the penny; it does not
+promise the figure is written with two decimal places. A runtime-computed
+total may store as `378.3` where a supplied one stores as `378.30`, and
+both satisfy the same recompute invariant because they are the same
+number. Two consequences worth knowing: comparisons and arithmetic are
+unaffected (they are numeric, not textual), but the audit leaf is derived
+from bytes, so two numerically equal figures with different scales are
+different leaves. Format money at the presentation edge rather than
+echoing the wire string.
+
 **A refusal names the offending values.** "invariant `x` violated" tells a
 reader which rule stopped them and nothing about why, so an invariant
 refusal also carries a *witness*: the variables and values that were live
@@ -253,9 +265,13 @@ noise; they are what its refusals can say.
 When several subjects violate the same rule, the witness reports the
 first violation in state order, not every one - sorting the bindings
 fixes how one assignment reads, not which assignment is chosen. The
-PostgreSQL path therefore loads claims in a deterministic order, so the
-same database explains a refusal the same way twice; a hand-built `State`
-gets whatever order it was built in. Naming every violator, and
+PostgreSQL path therefore loads claims in primary-key order, so the same
+database explains a refusal the same way twice; a hand-built `State` gets
+whatever order it was built in. The key order rather than the causal one
+because any total order gives determinism and this one the index already
+provides - ordering by admission time forces a sort worth ~1.8x on propose
+latency, which every accepted proposal would pay so that refusals
+reproduce. Naming every violator, and
 attributing an aggregate discrepancy (a sealed total disagreeing with its
 lines cannot blame one line from its bindings alone), are separate
 problems.
@@ -399,6 +415,16 @@ templates. The discipline clauses:
   (full agreement, the SQL-UNIQUE reading; partial agreement is
   deliberately not offered). Several clauses may coexist on one
   predicate. Lowered to a generated invariant per clause.
+
+  **It constrains the tuple you name, not the identities that tuple
+  references.** `ReversalLine unique by (invoice_id, line_id)` reads like
+  "one reversal per line" and means "one reversal per reversal": it says
+  nothing about how many reversals point AT a given line. An embedder
+  shipped that reading and credited a customer twice, permanently, under
+  append-only. What bounds a claim's references to another claim is an
+  invariant over both, and where it bites is a modelling decision: at
+  admission, or - if corrections must stay retryable while a document is
+  still a draft - only once the document is sealed.
 - **`append only`** - no transformation may `retract` this predicate.
   Enforced statically: retraction only happens through a `retract`
   statement, so the authoring-time ban is complete and costs nothing

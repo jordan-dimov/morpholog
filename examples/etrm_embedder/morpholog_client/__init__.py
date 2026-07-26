@@ -15,7 +15,7 @@ if sys.version_info < (3, 10):
     )
 
 PROGRAM = "trade_lifecycle"
-MODEL_HASH = "sha256:c3571c9f7c0ac2bee44ec10fe8c119d4ffee093438072d92d64d2cd4e70608a3"
+MODEL_HASH = "sha256:0ad57fcadaa4b46d340c6108610d794343efba19e3daff0eae1b85ebd1c9ccc8"
 MORPHOLOG_VERSION = "0.0.4"
 PYTHON_FLOOR = (3, 10)
 
