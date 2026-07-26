@@ -187,7 +187,7 @@ class Morpholog:
 
     def propose_batch(
         self,
-        rows: list[dict],
+        rows: list[dict[str, object]],
         timeout: float | None = None,
         *,
         explain_on_reject: bool = False,
@@ -337,7 +337,7 @@ class Morpholog:
 
     def _audit_lines(
         self, after: str | None, named: bool, writer_roles: list[str] | None = None
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.

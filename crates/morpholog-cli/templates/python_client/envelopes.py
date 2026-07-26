@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from collections.abc import Set as AbstractSet
 from typing import Callable, TypeVar
 
 from . import values
@@ -28,8 +29,8 @@ class EnvelopeError(ValueError):
 def _strict(
     name: str,
     payload: object,
-    required: set[str],
-    optional: set[str] = frozenset(),
+    required: AbstractSet[str],
+    optional: AbstractSet[str] = frozenset(),
 ) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise EnvelopeError(f"{name}: expected an object, got {payload!r}")
@@ -227,7 +228,10 @@ class MissingClaim:
         return cls(
             predicate=data["predicate"],
             rendered=data["rendered"],
-            candidate_supplier_transformations=list(data["candidate_supplier_transformations"]),
+            candidate_supplier_transformations=_str_list(
+                "candidate_supplier_transformations",
+                data["candidate_supplier_transformations"],
+            ),
         )
 
 
@@ -1044,7 +1048,10 @@ class ViewsTampered:
     @classmethod
     def from_json(cls, payload: object) -> ViewsTampered:
         data = _strict("tampered views", payload, {"status", "mismatched", "missing"})
-        return cls(mismatched=list(data["mismatched"]), missing=list(data["missing"]))
+        return cls(
+            mismatched=_str_list("mismatched", data["mismatched"]),
+            missing=_str_list("missing", data["missing"]),
+        )
 
 
 @dataclass(frozen=True)
