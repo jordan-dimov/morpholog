@@ -30,7 +30,7 @@ class CaptureTradeRequest:
     captured_on: date
     price: Decimal
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "trade": values.encode_named(self.trade),
             "commodity": values.encode_named(self.commodity),
@@ -56,7 +56,7 @@ class AmendTradeTermsRequest:
     delivery_period: str
     effective_from: date
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "trade": values.encode_named(self.trade),
             "prior_version_id": values.encode_named(self.prior_version_id),
@@ -76,7 +76,7 @@ class GrantConfirmAuthorityRequest:
     principal: str
     commodity: str
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "principal": values.encode_named(self.principal),
             "commodity": values.encode_named(self.commodity),
@@ -92,7 +92,7 @@ class SetPositionLimitRequest:
     commodity: str
     limit: Decimal
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "commodity": values.encode_named(self.commodity),
             "limit": values.encode_named(self.limit),
@@ -111,7 +111,7 @@ class ConfirmTradeRequest:
     official_price_id: str
     confirmed_price: Decimal
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "trade": values.encode_named(self.trade),
             "counterparty": values.encode_named(self.counterparty),
@@ -132,7 +132,7 @@ class CorrectOfficialPriceRequest:
     new_official_price_id: str
     corrected_price: Decimal
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "trade": values.encode_named(self.trade),
             "prior_official_price_id": values.encode_named(self.prior_official_price_id),
@@ -153,7 +153,7 @@ class SettleTradeRequest:
     official_price_id: str
     effective_on: date
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "trade": values.encode_named(self.trade),
             "settled_qty": values.encode_named(self.settled_qty),
@@ -174,7 +174,7 @@ class TradeCapturedClaim:
     direction: str
 
     @classmethod
-    def from_named(cls, args: dict) -> TradeCapturedClaim:
+    def from_named(cls, args: dict[str, object]) -> TradeCapturedClaim:
         raw = args["trade"]
         trade = raw
         raw = args["commodity"]
@@ -197,7 +197,7 @@ class TradeTermsClaim:
     effective_from: date
 
     @classmethod
-    def from_named(cls, args: dict) -> TradeTermsClaim:
+    def from_named(cls, args: dict[str, object]) -> TradeTermsClaim:
         raw = args["trade"]
         trade = raw
         raw = args["version_id"]
@@ -221,7 +221,7 @@ class TradeTermsSupersedesClaim:
     prior_version_id: str
 
     @classmethod
-    def from_named(cls, args: dict) -> TradeTermsSupersedesClaim:
+    def from_named(cls, args: dict[str, object]) -> TradeTermsSupersedesClaim:
         raw = args["new_version_id"]
         new_version_id = raw
         raw = args["prior_version_id"]
@@ -239,7 +239,7 @@ class CapturedPriceClaim:
     price: Decimal
 
     @classmethod
-    def from_named(cls, args: dict) -> CapturedPriceClaim:
+    def from_named(cls, args: dict[str, object]) -> CapturedPriceClaim:
         raw = args["trade"]
         trade = raw
         raw = args["price"]
@@ -257,7 +257,7 @@ class MayConfirmClaim:
     commodity: str
 
     @classmethod
-    def from_named(cls, args: dict) -> MayConfirmClaim:
+    def from_named(cls, args: dict[str, object]) -> MayConfirmClaim:
         raw = args["principal"]
         principal = raw
         raw = args["commodity"]
@@ -277,7 +277,7 @@ class TradeConfirmedClaim:
     confirmed_by: str
 
     @classmethod
-    def from_named(cls, args: dict) -> TradeConfirmedClaim:
+    def from_named(cls, args: dict[str, object]) -> TradeConfirmedClaim:
         raw = args["trade"]
         trade = raw
         raw = args["counterparty"]
@@ -300,7 +300,7 @@ class OfficialPriceClaim:
     official_price_id: str
 
     @classmethod
-    def from_named(cls, args: dict) -> OfficialPriceClaim:
+    def from_named(cls, args: dict[str, object]) -> OfficialPriceClaim:
         raw = args["trade"]
         trade = raw
         raw = args["price"]
@@ -320,7 +320,7 @@ class CurrentOfficialPriceClaim:
     official_price_id: str
 
     @classmethod
-    def from_named(cls, args: dict) -> CurrentOfficialPriceClaim:
+    def from_named(cls, args: dict[str, object]) -> CurrentOfficialPriceClaim:
         raw = args["trade"]
         trade = raw
         raw = args["official_price_id"]
@@ -338,7 +338,7 @@ class OfficialPriceSupersedesClaim:
     prior_official_price_id: str
 
     @classmethod
-    def from_named(cls, args: dict) -> OfficialPriceSupersedesClaim:
+    def from_named(cls, args: dict[str, object]) -> OfficialPriceSupersedesClaim:
         raw = args["new_official_price_id"]
         new_official_price_id = raw
         raw = args["prior_official_price_id"]
@@ -359,7 +359,7 @@ class TradeSettledClaim:
     effective_on: date
 
     @classmethod
-    def from_named(cls, args: dict) -> TradeSettledClaim:
+    def from_named(cls, args: dict[str, object]) -> TradeSettledClaim:
         raw = args["trade"]
         trade = raw
         raw = args["settled_qty"]
@@ -383,7 +383,7 @@ class PositionLimitClaim:
     limit: Decimal
 
     @classmethod
-    def from_named(cls, args: dict) -> PositionLimitClaim:
+    def from_named(cls, args: dict[str, object]) -> PositionLimitClaim:
         raw = args["commodity"]
         commodity = raw
         raw = args["limit"]
@@ -404,7 +404,7 @@ class TermsTimelineClaim:
     quantity: Decimal
 
     @classmethod
-    def from_named(cls, args: dict) -> TermsTimelineClaim:
+    def from_named(cls, args: dict[str, object]) -> TermsTimelineClaim:
         raw = args["trade"]
         trade = raw
         raw = args["version_id"]
@@ -428,7 +428,7 @@ class TradeCapturedAdmittedPayload:
     trade: str
 
     @classmethod
-    def from_args(cls, args: list) -> TradeCapturedAdmittedPayload:
+    def from_args(cls, args: list[object]) -> TradeCapturedAdmittedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 1:
@@ -451,7 +451,7 @@ class TradeTermsAmendedPayload:
     prior_version_id: str
 
     @classmethod
-    def from_args(cls, args: list) -> TradeTermsAmendedPayload:
+    def from_args(cls, args: list[object]) -> TradeTermsAmendedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
@@ -473,7 +473,7 @@ class ConfirmAuthorityGrantedPayload:
     commodity: str
 
     @classmethod
-    def from_args(cls, args: list) -> ConfirmAuthorityGrantedPayload:
+    def from_args(cls, args: list[object]) -> ConfirmAuthorityGrantedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 2:
@@ -496,7 +496,7 @@ class TradeConfirmedAdmittedPayload:
     official_price_id: str
 
     @classmethod
-    def from_args(cls, args: list) -> TradeConfirmedAdmittedPayload:
+    def from_args(cls, args: list[object]) -> TradeConfirmedAdmittedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
@@ -519,7 +519,7 @@ class OfficialPriceCorrectedPayload:
     prior_official_price_id: str
 
     @classmethod
-    def from_args(cls, args: list) -> OfficialPriceCorrectedPayload:
+    def from_args(cls, args: list[object]) -> OfficialPriceCorrectedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
@@ -542,7 +542,7 @@ class TradeSettlementRequestedPayload:
     settled_qty: Decimal
 
     @classmethod
-    def from_args(cls, args: list) -> TradeSettlementRequestedPayload:
+    def from_args(cls, args: list[object]) -> TradeSettlementRequestedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
@@ -564,7 +564,7 @@ class PositionLimitSetPayload:
     limit: Decimal
 
     @classmethod
-    def from_args(cls, args: list) -> PositionLimitSetPayload:
+    def from_args(cls, args: list[object]) -> PositionLimitSetPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 2:

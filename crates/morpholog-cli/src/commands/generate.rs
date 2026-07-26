@@ -399,7 +399,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         }
         let _ = write!(
             out,
-            "\n    def to_args_named(self) -> dict:\n        return {{\n{}\n        }}\n",
+            "\n    def to_args_named(self) -> dict[str, object]:\n        return {{\n{}\n        }}\n",
             encodes.join("\n")
         );
     }
@@ -437,7 +437,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
             .join(", ");
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_named(cls, args: dict) -> {class}:\n{}\n        return cls({field_list})\n",
+            "\n    @classmethod\n    def from_named(cls, args: dict[str, object]) -> {class}:\n{}\n        return cls({field_list})\n",
             parses.join("\n")
         );
     }
@@ -472,7 +472,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         }
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_args(cls, args: list) -> {class}:\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise ValueError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(*args)\n",
+            "\n    @classmethod\n    def from_args(cls, args: list[object]) -> {class}:\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise ValueError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(*args)\n",
             arity = intent.args.len(),
             intent = intent.name,
         );

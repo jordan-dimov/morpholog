@@ -157,7 +157,7 @@ class Morpholog:
         self,
         transformation: str,
         actor: str,
-        args_named: dict,
+        args_named: dict[str, object],
         explain_on_reject: bool = False,
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
@@ -187,11 +187,11 @@ class Morpholog:
 
     def propose_batch(
         self,
-        rows: list,
+        rows: list[dict],
         timeout: float | None = None,
         *,
         explain_on_reject: bool = False,
-    ) -> list:
+    ) -> list[envelopes.BatchReceipt]:
         """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
@@ -222,7 +222,7 @@ class Morpholog:
         return receipts
 
     def explain(
-        self, transformation: str, actor: str, args_named: dict
+        self, transformation: str, actor: str, args_named: dict[str, object]
     ) -> envelopes.Explanation:
         return envelopes.Explanation.from_json(
             self._json(
@@ -238,7 +238,7 @@ class Morpholog:
     # Reading governed state back.
     # ------------------------------------------------------------
 
-    def claims(self, *predicates: str, as_of: str | None = None) -> list:
+    def claims(self, *predicates: str, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """The bare read: the claims table is the authority, an unknown
         predicate matches nothing. Tagged args decoded to bare values.
 
@@ -248,14 +248,18 @@ class Morpholog:
         """
         return self._claims(predicates, named=False, as_of=as_of)
 
-    def claims_named(self, *predicates: str, as_of: str | None = None) -> list:
+    def claims_named(
+        self, *predicates: str, as_of: str | None = None
+    ) -> list[envelopes.NamedClaim]:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
         generated read models parse them by declared kind. `as_of` as
         on ``claims``."""
         return self._claims(predicates, named=True, as_of=as_of)
 
-    def _claims(self, predicates: tuple[str, ...], named: bool, as_of: str | None) -> list:
+    def _claims(
+        self, predicates: tuple[str, ...], named: bool, as_of: str | None
+    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
         argv = ["inspect", "claims"]
         argv += self._repeat("--predicate", list(predicates))
         argv += self._opt("--as-of", as_of)
@@ -265,7 +269,7 @@ class Morpholog:
         payload = self._json(*argv, "--database-url", self.database_url)
         return [cls.from_json(c) for c in payload]
 
-    def derived(self, name: str, *, as_of: str | None = None) -> list:
+    def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view (a derived claim) directly from the
         admitted claims - the authoritative, always-live read; it never
         consults the ``refresh_derived`` cache. Rows are tagged
@@ -278,13 +282,17 @@ class Morpholog:
         """
         return self._derived(name, named=False, as_of=as_of)
 
-    def derived_named(self, name: str, *, as_of: str | None = None) -> list:
+    def derived_named(
+        self, name: str, *, as_of: str | None = None
+    ) -> list[envelopes.NamedClaim]:
         """``derived`` with each row's arguments decoded by declared
         field name (the generated read models parse them by declared
         kind). Same authority and skew contract as ``claims_named``."""
         return self._derived(name, named=True, as_of=as_of)
 
-    def _derived(self, name: str, named: bool, as_of: str | None) -> list:
+    def _derived(
+        self, name: str, named: bool, as_of: str | None
+    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
         argv = ["inspect", "derived", self.file, name]
         cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
@@ -295,7 +303,7 @@ class Morpholog:
 
     def audit(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
-    ) -> list:
+    ) -> list[envelopes.AuditRow]:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
         a previously seen transition id - lossless: rows whose writers
@@ -316,7 +324,7 @@ class Morpholog:
 
     def audit_named(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
-    ) -> list:
+    ) -> list[envelopes.AuditRowNamed]:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
@@ -329,7 +337,7 @@ class Morpholog:
 
     def _audit_lines(
         self, after: str | None, named: bool, writer_roles: list[str] | None = None
-    ) -> list:
+    ) -> list[dict]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.
