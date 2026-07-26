@@ -47,7 +47,9 @@ pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature, TreeVerification,
     create_checkpoint, first_unsigned_checkpoint_size, verify_audit_tree,
 };
-pub use claims::{list_claims, list_claims_for_predicates, load_scoped_state};
+pub use claims::{
+    ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
+};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
 pub use outbox::{

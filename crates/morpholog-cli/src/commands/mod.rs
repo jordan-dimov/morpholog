@@ -26,6 +26,7 @@ pub(crate) mod checkpoint;
 pub(crate) mod evaluate;
 pub(crate) mod evidence;
 pub(crate) mod explain;
+pub(crate) mod filter;
 pub(crate) mod generate;
 pub(crate) mod generate_views;
 pub(crate) mod hash;

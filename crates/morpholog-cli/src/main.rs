@@ -862,6 +862,22 @@ pub(crate) struct InspectClaimsArgs {
     /// silent skip. Composes with `--predicate` and `--as-of`.
     #[arg(long = "named", value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
+
+    /// Optional, repeatable: return only claims whose named field equals
+    /// this value (`--where invoice_id=inv_2026_03`). The comparison runs
+    /// in the database, so rows that cannot match are never transferred
+    /// or decoded - it saves carrying the predicate, not scanning it,
+    /// since no index covers argument positions.
+    ///
+    /// Field names come from a declaration, so this needs `--named` and
+    /// exactly one `--predicate` - without them a field name has no
+    /// meaning. An undeclared field is a hard error naming the ones that
+    /// exist, never an empty result. Equality only, and repeats are
+    /// conjunctive; ranges and disjunction wait for a case that needs
+    /// them. Composes with `--as-of`, where the filter applies to the
+    /// replayed state.
+    #[arg(long = "where", value_name = "FIELD=VALUE")]
+    pub(crate) filter: Vec<String>,
 }
 
 /// The writer-set assertion both watermark consumers share
@@ -916,6 +932,17 @@ pub(crate) struct InspectDerivedArgs {
     /// argument here).
     #[arg(long)]
     pub(crate) named: bool,
+
+    /// Optional, repeatable: return only rows whose named field equals
+    /// this value, resolved against the derived claim's own head under
+    /// FILE. Same equality-only, conjunctive contract as `inspect claims
+    /// --where`, and the same hard error for an undeclared field.
+    ///
+    /// Unlike the claims filter, this one runs after enumeration: a
+    /// derived view is computed from claims, so the work happens either
+    /// way and this narrows the answer rather than the effort.
+    #[arg(long = "where", value_name = "FIELD=VALUE")]
+    pub(crate) filter: Vec<String>,
 }
 
 /// Arguments for `inspect outbox`: the connection-string flag plus the

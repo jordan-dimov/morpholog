@@ -265,20 +265,38 @@ class Morpholog:
         return self._claims(predicates, named=False, as_of=as_of)
 
     def claims_named(
-        self, *predicates: str, as_of: str | None = None
+        self,
+        *predicates: str,
+        as_of: str | None = None,
+        where: dict[str, str] | None = None,
     ) -> list[envelopes.NamedClaim]:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
         generated read models parse them by declared kind. `as_of` as
-        on ``claims``."""
-        return self._claims(predicates, named=True, as_of=as_of)
+        on ``claims``.
+
+        `where` narrows by argument value - ``where={"invoice_id": "inv_1"}``
+        - so rows that cannot match are never transferred or decoded.
+        That is what it saves: the database still scans the predicate,
+        because no index covers argument positions.
+        Field names resolve against the programme, so exactly one
+        predicate must be named and an undeclared field is an error, not
+        an empty list. Filtering runs in the database except under
+        `as_of`, where the state is replayed first.
+        """
+        return self._claims(predicates, named=True, as_of=as_of, where=where)
 
     def _claims(
-        self, predicates: tuple[str, ...], named: bool, as_of: str | None
+        self,
+        predicates: tuple[str, ...],
+        named: bool,
+        as_of: str | None,
+        where: dict[str, str] | None = None,
     ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
         argv = ["inspect", "claims"]
         argv += self._repeat("--predicate", list(predicates))
         argv += self._opt("--as-of", as_of)
+        argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv += ["--named", self.file]
@@ -299,21 +317,32 @@ class Morpholog:
         return self._derived(name, named=False, as_of=as_of)
 
     def derived_named(
-        self, name: str, *, as_of: str | None = None
+        self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
     ) -> list[envelopes.NamedClaim]:
         """``derived`` with each row's arguments decoded by declared
         field name (the generated read models parse them by declared
-        kind). Same authority and skew contract as ``claims_named``."""
-        return self._derived(name, named=True, as_of=as_of)
+        kind). Same authority and skew contract as ``claims_named``.
+
+        `where` narrows by field, as on ``claims_named``. A derived view
+        is computed from claims, so this narrows the answer rather than
+        the work - unlike the claims read, which pushes the comparison
+        into the database.
+        """
+        return self._derived(name, named=True, as_of=as_of, where=where)
 
     def _derived(
-        self, name: str, named: bool, as_of: str | None
+        self,
+        name: str,
+        named: bool,
+        as_of: str | None,
+        where: dict[str, str] | None = None,
     ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
         argv = ["inspect", "derived", self.file, name]
         cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv.append("--named")
         argv += self._opt("--as-of", as_of)
+        argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         payload = self._json(*argv, "--database-url", self.database_url)
         return [cls.from_json(c) for c in payload]
 
