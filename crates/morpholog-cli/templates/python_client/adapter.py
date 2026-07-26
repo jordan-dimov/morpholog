@@ -81,7 +81,7 @@ class Morpholog:
 
     def _run(
         self, args: list[str], stdin: str | None = None, *, timeout: float | None
-    ) -> "subprocess.CompletedProcess[str]":
+    ) -> subprocess.CompletedProcess[str]:
         """Every invocation lands here. A timeout is operational, not a
         decided outcome, so it raises ``MorphologError``."""
         try:
@@ -119,11 +119,11 @@ class Morpholog:
         return json.loads(self._invoke(*args))
 
     @staticmethod
-    def _opt(flag: str, value: "str | None") -> list:
+    def _opt(flag: str, value: str | None) -> list[str]:
         return [] if value is None else [flag, value]
 
     @staticmethod
-    def _repeat(flag: str, values: "list[str] | None") -> list:
+    def _repeat(flag: str, values: list[str] | None) -> list[str]:
         return [part for v in values or [] for part in (flag, v)]
 
     # ------------------------------------------------------------
@@ -159,7 +159,7 @@ class Morpholog:
         actor: str,
         args_named: dict,
         explain_on_reject: bool = False,
-    ) -> "envelopes.Committed | envelopes.Rejected":
+    ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
         every rule holds; a refusal is a lawful outcome, returned as
         ``Rejected``."""
@@ -175,7 +175,7 @@ class Morpholog:
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False
-    ) -> "envelopes.Committed | envelopes.Rejected":
+    ) -> envelopes.Committed | envelopes.Rejected:
         """Commit a generated request model: its class names the
         transformation, its fields encode themselves."""
         return self.propose(
@@ -255,7 +255,7 @@ class Morpholog:
         on ``claims``."""
         return self._claims(predicates, named=True, as_of=as_of)
 
-    def _claims(self, predicates, named: bool, as_of: "str | None") -> list:
+    def _claims(self, predicates: tuple[str, ...], named: bool, as_of: str | None) -> list:
         argv = ["inspect", "claims"]
         argv += self._repeat("--predicate", list(predicates))
         argv += self._opt("--as-of", as_of)
@@ -284,7 +284,7 @@ class Morpholog:
         kind). Same authority and skew contract as ``claims_named``."""
         return self._derived(name, named=True, as_of=as_of)
 
-    def _derived(self, name: str, named: bool, as_of: "str | None") -> list:
+    def _derived(self, name: str, named: bool, as_of: str | None) -> list:
         argv = ["inspect", "derived", self.file, name]
         cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
@@ -412,7 +412,7 @@ class Morpholog:
         key_id: str | None = None,
         *,
         writer_roles: list[str] | None = None,
-    ) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
+    ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
@@ -491,7 +491,7 @@ class Morpholog:
 
     def evidence_export_selective(
         self,
-        transitions: "list[str]",
+        transitions: list[str],
         tree_size: int | None = None,
     ) -> envelopes.SelectiveEvidencePack:
         """Export a SELECTIVE pack disclosing only the named transitions,
@@ -527,7 +527,7 @@ class Morpholog:
     @staticmethod
     def _evidence_verify_args(
         pack_file: str, anchor_file: str | None, require_signatures: bool
-    ) -> list:
+    ) -> list[str]:
         args = ["evidence", "verify", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
@@ -544,7 +544,7 @@ class Morpholog:
         intent_type: str,
         lease_seconds: int | None = None,
         worker_id: str | None = None,
-    ) -> "envelopes.OutboxRow | None":
+    ) -> envelopes.OutboxRow | None:
         args = [
             "outbox", "claim",
             "--intent-type", intent_type,
