@@ -1,4 +1,4 @@
-//! `morpholog verify` - replay the audit log against the claims table,
+//! `morpholog audit verify` - replay the audit log against the claims table,
 //! and verify the audit Merkle tree against its checkpoints.
 
 use anyhow::Context;

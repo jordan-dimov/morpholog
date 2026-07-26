@@ -129,7 +129,7 @@ fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchSco
 }
 
 /// Read an evidence pack (and optional external anchor) and score the
-/// candidate against it, offline. File handling mirrors `evidence verify`.
+/// candidate against it, offline. File handling mirrors `audit verify-pack`.
 fn score_against_pack(
     program: &Program,
     pack_path: &Path,

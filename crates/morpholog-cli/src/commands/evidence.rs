@@ -17,7 +17,7 @@ use anyhow::Context;
 use crate::commands::{connect, print_json};
 use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
-/// `evidence export`: a complete-prefix pack by default, a window between
+/// `audit export`: a complete-prefix pack by default, a window between
 /// two checkpoints with a `--from-*` start, or - with `--transition` - a
 /// selective pack disclosing only the named transitions, each proven
 /// included. Printed as JSON; redirect it to a file. Prefix and window
@@ -68,7 +68,7 @@ pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `evidence verify`: check a pack offline, with no database. A prefix pack
+/// `audit verify-pack`: check a pack offline, with no database. A prefix pack
 /// recomputes its root from every row; a window pack checks a consistency
 /// proof plus per-row inclusion proofs. The pack's `pack_format_version`
 /// selects which. One JSON verdict on stdout; exit one on any tamper,

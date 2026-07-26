@@ -306,8 +306,8 @@ pub(crate) struct VerifyArgs {
     #[command(flatten)]
     pub(crate) db: DatabaseArgs,
 
-    /// Path to a checkpoint JSON file (as printed by `checkpoint`), held
-    /// outside the database. The audit tree is verified to still match
+    /// Path to a checkpoint JSON file (as printed by `audit checkpoint`),
+    /// held outside the database. The audit tree is verified to still match
     /// it - the check a coordinated rewrite of audit + checkpoints cannot
     /// pass. Omit to verify only internal checkpoint consistency.
     #[arg(long)]
@@ -406,8 +406,10 @@ pub(crate) struct EvaluateArgs {
     pub(crate) train_until: Option<String>,
 }
 
-/// Evidence-pack subcommands. `export` is database-backed; `verify` is
-/// deliberately offline - it takes no connection string, only files.
+/// The audit log's integrity, end to end. `verify`, `checkpoint` and
+/// `export` read the database; `verify-pack` is deliberately offline -
+/// it takes no connection string, only files - and `keygen` touches
+/// neither.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum AuditCmd {
     /// Check that the claims table and the audit log still agree.
@@ -462,7 +464,7 @@ pub(crate) enum AuditCmd {
     Keygen(KeygenArgs),
 }
 
-/// Arguments for `evidence export`. With no `--from-*` it exports a
+/// Arguments for `audit export`. With no `--from-*` it exports a
 /// complete prefix; with one it exports the window between that earlier
 /// checkpoint and the covering one.
 #[derive(clap::Args, Debug)]
@@ -477,7 +479,7 @@ pub(crate) struct EvidenceExportArgs {
     pub(crate) tree_size: Option<i64>,
 
     /// Export a WINDOW starting at the checkpoint in this anchor file (as
-    /// printed by `checkpoint`, the prior period's externally-held anchor):
+    /// printed by `audit checkpoint`, the prior period's externally-held anchor):
     /// the pack proves the covered range extends it. The trusted start is
     /// the whole checkpoint, which is why a file is the main path.
     #[arg(long, conflicts_with = "from_tree_size")]
@@ -499,14 +501,14 @@ pub(crate) struct EvidenceExportArgs {
     pub(crate) transition: Vec<uuid::Uuid>,
 }
 
-/// Arguments for `evidence verify`: a pack file and an optional external
+/// Arguments for `audit verify-pack`: a pack file and an optional external
 /// anchor. No connection string - the offline guarantee is in the shape.
 #[derive(clap::Args, Debug)]
 pub(crate) struct EvidenceVerifyArgs {
-    /// Path to a pack JSON file (as printed by `evidence export`).
+    /// Path to a pack JSON file (as printed by `audit export`).
     pub(crate) pack_file: std::path::PathBuf,
 
-    /// Path to a checkpoint JSON file (as printed by `checkpoint`), held
+    /// Path to a checkpoint JSON file (as printed by `audit checkpoint`), held
     /// outside the database - the check a coordinated rewrite cannot pass.
     /// For a prefix pack the checkpoint at the anchor's `tree_size` in the
     /// pack's chain must match it (an older anchor is fine, as long as the

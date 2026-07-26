@@ -603,7 +603,7 @@ fn score_reports_serialize_as_pinned() {
                 pack: "case_2.json".to_string(),
                 outcome: CaseOutcome::Failed {
                     error: "refusing to score: the evidence pack does not verify \
-                            as intact (run `evidence verify` for the verdict)"
+                            as intact (run `audit verify-pack` for the verdict)"
                         .to_string(),
                 },
             },
