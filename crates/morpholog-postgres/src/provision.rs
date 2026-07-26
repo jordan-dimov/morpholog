@@ -63,12 +63,15 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
 /// documentation change, because the short form is not a Morpholog
 /// convention to revise - it is what Postgres tooling means.
 pub fn with_default_user(url: &str) -> String {
-    // Precedence follows libpq: PGUSER, then the OS user.
-    let user = std::env::var("PGUSER")
-        .ok()
-        .or_else(|| std::env::var("USER").ok())
-        .or_else(|| std::env::var("LOGNAME").ok())
-        .filter(|u| !u.is_empty());
+    // Precedence follows libpq: PGUSER, then the OS user. An EMPTY
+    // variable counts as unset and falls through - `PGUSER=` is how a
+    // CI environment often clears it, and treating it as a value
+    // suppressed the fallback entirely (found by the shell-twin
+    // agreement test, which the pure-function unit tests could not see).
+    let user = ["PGUSER", "USER", "LOGNAME"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|value| !value.is_empty());
     apply_default_user(url, user.as_deref())
 }
 
@@ -76,7 +79,7 @@ pub fn with_default_user(url: &str) -> String {
 /// workspace forbids `unsafe`, so a test cannot mutate the environment -
 /// and the substitution is the part worth pinning regardless.
 fn apply_default_user(url: &str, user: Option<&str>) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
+    let Some((_, rest)) = url.split_once("://") else {
         return url.to_string();
     };
     let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
@@ -100,18 +103,15 @@ fn apply_default_user(url: &str, user: Option<&str>) -> String {
     let Some(user) = user else {
         return url.to_string();
     };
-    // Two spellings, and the choice is forced rather than stylistic. The
-    // hostless socket form cannot take `user@` - that reads as an empty
-    // host and is rejected - and a username carrying a userinfo
-    // delimiter cannot go there either (`PGUSER=user@server`, the Azure
-    // shape, would produce two `@` and a wrong host). Both go in as the
-    // query parameter, which tolerates them.
-    let breaks_userinfo = user.contains(['@', ':', '/', '?', '#']);
-    if authority_end == 0 || breaks_userinfo {
-        let separator = if rest.contains('?') { '&' } else { '?' };
-        return format!("{url}{separator}user={user}");
-    }
-    format!("{scheme}://{user}@{rest}")
+    // Always the query parameter, never injected userinfo. Userinfo
+    // needs two special cases - the hostless socket form reads `user@`
+    // as an empty host and refuses it, and a username carrying a
+    // delimiter (`PGUSER=user@server`, the Azure shape) would give two
+    // `@` and a wrong host - while the parameter form has none and means
+    // the same thing to the driver. One spelling is also what lets the
+    // shell twin in the scripts stay verifiably identical.
+    let separator = if rest.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}user={user}")
 }
 
 /// A connection string with any userinfo stripped, for a message an
@@ -397,7 +397,7 @@ mod default_user_tests {
     fn a_host_without_a_user_still_gains_one() {
         assert_eq!(
             apply_default_user("postgres://localhost:5432/db", Some("alice")),
-            "postgres://alice@localhost:5432/db"
+            "postgres://localhost:5432/db?user=alice"
         );
     }
 
@@ -442,7 +442,7 @@ mod default_user_tests {
     }
 
     #[test]
-    fn a_username_carrying_a_delimiter_uses_the_query_form() {
+    fn a_username_carrying_a_delimiter_is_carried_safely() {
         // `PGUSER=user@server` is the Azure Postgres shape. Injected as
         // userinfo it would produce two `@` and a wrong host, so it goes
         // in as the parameter instead.

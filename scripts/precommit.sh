@@ -84,15 +84,34 @@ cargo test \
 # binaries compensate in code (`with_default_user`); the external CLI
 # cannot, so fill it in here for the documented `postgres:///db` form.
 sqlx_url() {
-    # Mirrors morpholog_postgres::with_default_user: skip when the caller
-    # named a user (userinfo, or a `user` parameter at a boundary - not a
-    # mere `...user=` substring), and always use the query form, which
-    # both the hostless socket shape and delimiter-carrying usernames
-    # accept.
-    case "$1" in
-        *@*|*\?user=*|*\&user=*) printf '%s' "$1" ;;
-        *\?*)                    printf '%s&user=%s' "$1" "${PGUSER:-$USER}" ;;
-        *)                       printf '%s?user=%s' "$1" "${PGUSER:-$USER}" ;;
+    # Mirrors morpholog_postgres::with_default_user, deliberately by the
+    # same structure rather than by approximation - a twin that drifts
+    # fails silently. Skip when the caller named a user: userinfo in the
+    # AUTHORITY only (an `@` in a database name is not credentials), or a
+    # `user` parameter at a boundary (not a `...user=` substring). With no
+    # username available, leave the URL alone and let the driver report.
+    local url="$1" after authority query user
+    # No scheme separator: not a URL this should touch, as on the Rust side.
+    case "$url" in *://*) ;; *) printf '%s' "$url"; return ;; esac
+    after="${url#*://}"
+    authority="${after%%[/?]*}"
+    query=""
+    case "$url" in *\?*) query="${url#*\?}" ;; esac
+    case "$authority" in *@*) printf '%s' "$url"; return ;; esac
+    local param
+    local IFS='&'
+    for param in $query; do
+        case "$param" in user|user=*) printf '%s' "$url"; return ;; esac
+    done
+    unset IFS
+    user="${PGUSER:-${USER:-${LOGNAME:-}}}"
+    if [ -z "$user" ]; then
+        printf '%s' "$url"
+        return
+    fi
+    case "$url" in
+        *\?*) printf '%s&user=%s' "$url" "$user" ;;
+        *)    printf '%s?user=%s' "$url" "$user" ;;
     esac
 }
 
