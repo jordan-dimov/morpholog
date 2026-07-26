@@ -254,6 +254,7 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
                     directly_missing_claims,
                     ..
                 },
+            ..
         }) => gate_verdict(
             program,
             expression,
@@ -267,6 +268,7 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
                     directly_missing_claims,
                     ..
                 },
+            ..
         }) => gate_verdict(
             program,
             expression,

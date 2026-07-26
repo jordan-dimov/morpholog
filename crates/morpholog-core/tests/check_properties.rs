@@ -195,10 +195,19 @@ fn arb_prop() -> impl Strategy<Value = Prop> {
 
 // ---------- recursive statement generator ----------
 
+fn arb_rule_name() -> impl Strategy<Value = Option<morpholog_core::RuleName>> {
+    prop_oneof![
+        Just(None),
+        arb_var_name().prop_map(|n| Some(morpholog_core::RuleName::from(n))),
+    ]
+}
+
 fn arb_stmt() -> impl Strategy<Value = Stmt> {
     let leaf = prop_oneof![
-        arb_prop().prop_map(Stmt::Require),
-        arb_prop().prop_map(Stmt::BindOne),
+        // Named and unnamed both generated, so a walker that mishandles
+        // the named shape is exercised rather than assumed correct.
+        (arb_prop(), arb_rule_name()).prop_map(|(prop, name)| Stmt::Require { prop, name }),
+        (arb_prop(), arb_rule_name()).prop_map(|(prop, name)| Stmt::BindOne { prop, name }),
         (arb_var_name(), arb_value_expr()).prop_map(|(name, value)| Stmt::Let {
             name: name.into(),
             value

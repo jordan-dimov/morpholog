@@ -95,7 +95,10 @@ impl SourceMap {
             | ValidationError::UnboundVariable { context, .. }
             | ValidationError::UnresolvedDefinitionCall { context, .. }
             | ValidationError::PreNotAvailable { context }
-            | ValidationError::RetractsAppendOnly { context, .. } => self.context_span(context),
+            | ValidationError::RetractsAppendOnly { context, .. }
+            // Carries the duplicate's own statement index, so the span lands
+            // on the second occurrence - the one to rename.
+            | ValidationError::DuplicateRuleName { context, .. } => self.context_span(context),
             ValidationError::DuplicateDecl { vocabulary, name } => {
                 let kind = match vocabulary {
                     VocabularyKind::Predicate => DeclKind::Predicate,

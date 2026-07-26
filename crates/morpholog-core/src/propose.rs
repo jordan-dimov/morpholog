@@ -22,8 +22,8 @@ use crate::eval::{
 };
 use crate::format;
 use crate::ir::{
-    Claim, Definition, Intent, Invariant, InvariantName, PredicateName, Stmt, Subject, Term,
-    Transformation, TransformationName, Var,
+    Claim, Definition, Intent, Invariant, InvariantName, PredicateName, RuleName, Stmt, Subject,
+    Term, Transformation, TransformationName, Var,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
@@ -95,10 +95,20 @@ pub enum RejectionReason {
         witness: Vec<WitnessBinding>,
     },
     /// A `require` gate found no witness over the pre-state.
-    Require { rendered: String },
+    ///
+    /// `name` is the gate's optional identifier. Present, it is what a
+    /// caller should hold on to: `rendered` changes the moment anyone
+    /// rewords the expression, so it reads well and identifies nothing.
+    Require {
+        name: Option<RuleName>,
+        rendered: String,
+    },
     /// A `bind` lookup matched no candidates. (Multi-match is an
     /// [`EvalError`], not a rejection.)
-    BindNone { rendered: String },
+    BindNone {
+        name: Option<RuleName>,
+        rendered: String,
+    },
 }
 
 impl std::fmt::Display for RejectionReason {
@@ -107,12 +117,17 @@ impl std::fmt::Display for RejectionReason {
             RejectionReason::Invariant { name, .. } => {
                 write!(f, "invariant `{name}` violated")
             }
-            RejectionReason::Require { rendered } => {
-                write!(f, "require failed: {rendered} did not hold over pre-state")
-            }
-            RejectionReason::BindNone { rendered } => {
-                write!(f, "bind_one failed: {rendered} matched no candidates")
-            }
+            RejectionReason::Require { name, rendered } => match name {
+                Some(n) => write!(
+                    f,
+                    "require `{n}` failed: {rendered} did not hold over pre-state"
+                ),
+                None => write!(f, "require failed: {rendered} did not hold over pre-state"),
+            },
+            RejectionReason::BindNone { name, rendered } => match name {
+                Some(n) => write!(f, "bind `{n}` failed: {rendered} matched no candidates"),
+                None => write!(f, "bind_one failed: {rendered} matched no candidates"),
+            },
         }
     }
 }
@@ -172,10 +187,17 @@ pub enum TracedProposal {
 pub enum TraceEntry {
     Require {
         expression: String,
+        /// The gate's name, when it has one - so a trace assertion can hold
+        /// an identifier the author chose instead of a statement position.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         outcome: RequireOutcome,
     },
     BindOne {
         expression: String,
+        /// As for [`TraceEntry::Require`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         outcome: BindOneOutcome,
     },
     Let {
@@ -480,7 +502,7 @@ pub(crate) fn execute_stmt(
     trace: &mut TraceSink<'_>,
 ) -> Result<StmtOutcome, EvalError> {
     match stmt {
-        Stmt::Require(expr) => {
+        Stmt::Require { prop: expr, name } => {
             // Transformation bodies read pre-state as the only state in
             // scope. Passing `None` for pre_state is what makes
             // `Prop::Pre` inside a `require` surface as
@@ -496,8 +518,10 @@ pub(crate) fn execute_stmt(
                     let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                     trace.push(TraceEntry::Require {
                         expression: rendered.clone(),
+                        name: name.as_ref().map(ToString::to_string),
                         outcome: RequireOutcome::Rejected {
                             reason: RejectionReason::Require {
+                                name: name.clone(),
                                 rendered: rendered.clone(),
                             }
                             .to_string(),
@@ -506,11 +530,15 @@ pub(crate) fn execute_stmt(
                         },
                     });
                 }
-                Ok(StmtOutcome::Rejected(RejectionReason::Require { rendered }))
+                Ok(StmtOutcome::Rejected(RejectionReason::Require {
+                    name: name.clone(),
+                    rendered,
+                }))
             } else {
                 if trace.is_on() {
                     trace.push(TraceEntry::Require {
                         expression: format::format_prop_inline(expr),
+                        name: name.as_ref().map(ToString::to_string),
                         outcome: RequireOutcome::Held {
                             match_count: matches.len(),
                         },
@@ -519,7 +547,7 @@ pub(crate) fn execute_stmt(
                 Ok(StmtOutcome::Continue)
             }
         }
-        Stmt::BindOne(expr) => {
+        Stmt::BindOne { prop: expr, name } => {
             // Deterministic unique lookup (see the `bind_one` rustdoc for
             // the multi-outcome contract). On a unique match we *replace*
             // the binding context with the returned match, not extend.
@@ -535,6 +563,7 @@ pub(crate) fn execute_stmt(
                         let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
                             expression: rendered.clone(),
+                            name: name.as_ref().map(ToString::to_string),
                             outcome: BindOneOutcome::NoMatch {
                                 failing_sub_expression: failing,
                                 directly_missing_claims,
@@ -542,6 +571,7 @@ pub(crate) fn execute_stmt(
                         });
                     }
                     Ok(StmtOutcome::Rejected(RejectionReason::BindNone {
+                        name: name.clone(),
                         rendered,
                     }))
                 }
@@ -555,6 +585,7 @@ pub(crate) fn execute_stmt(
                         sorted.sort_by(|a, b| a.0.cmp(&b.0));
                         trace.push(TraceEntry::BindOne {
                             expression: format::format_prop_inline(expr),
+                            name: name.as_ref().map(ToString::to_string),
                             outcome: BindOneOutcome::Bound { bindings: sorted },
                         });
                     }
@@ -569,6 +600,7 @@ pub(crate) fn execute_stmt(
                     if trace.is_on() {
                         trace.push(TraceEntry::BindOne {
                             expression: rendered,
+                            name: name.as_ref().map(ToString::to_string),
                             outcome: BindOneOutcome::MultipleMatches { count: n },
                         });
                     }

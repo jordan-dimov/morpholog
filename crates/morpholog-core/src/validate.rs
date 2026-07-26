@@ -247,6 +247,24 @@ pub enum ValidationError {
         predicate: String,
     },
 
+    /// Two refusing statements in one transformation answer to the same
+    /// name.
+    ///
+    /// A name exists so a refusal identifies one rule; two of them make the
+    /// refusal ambiguous, which is the defect the name was added to fix.
+    /// Scoped to the transformation deliberately - two acts may carry the
+    /// same gate verbatim, and programme-uniqueness would force
+    /// meaningless suffixes on them.
+    #[error(
+        "{context} reuses the rule name `{name}`. A rule name identifies the statement \
+         that refused, so a duplicate makes a refusal ambiguous - rename one, or leave \
+         the less interesting one unnamed."
+    )]
+    DuplicateRuleName {
+        context: ValidationContext,
+        name: String,
+    },
+
     /// A rule named a predicate that a `derived` declaration computes.
     ///
     /// The kernel evaluates against admitted claims; a derived claim is a
@@ -806,7 +824,9 @@ fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionNam
         return true;
     };
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => prop_exceeds_depth(p, budget, depths),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
+            prop_exceeds_depth(p, budget, depths)
+        }
         Stmt::Let { value, .. } => value_exceeds_depth(value, budget, depths),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {
             false
@@ -1133,8 +1153,8 @@ fn collect_retract_bans(
                 collect_retract_bans(inner, append_only, context, errors);
             }
         }
-        Stmt::Require(_)
-        | Stmt::BindOne(_)
+        Stmt::Require { .. }
+        | Stmt::BindOne { .. }
         | Stmt::Let { .. }
         | Stmt::LetNewSubject { .. }
         | Stmt::Assert(_)

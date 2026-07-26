@@ -183,6 +183,11 @@ impl TracedError {
 pub struct RejectedWithExplanation<'a, E> {
     explanation: E,
     reason: &'a str,
+    /// The refused rule's stable identifier. Absent when a gate has no
+    /// name - never the rendered expression, so a caller reading this
+    /// never gets a value a rewording can change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rule: Option<&'a str>,
     status: &'static str,
     /// The refused rule's offending values. Carried here too because this
     /// is the path an operator diagnosing a refusal actually uses - the
@@ -194,10 +199,16 @@ pub struct RejectedWithExplanation<'a, E> {
 }
 
 impl<'a, E> RejectedWithExplanation<'a, E> {
-    pub fn new(reason: &'a str, witness: &'a [WitnessBinding], explanation: E) -> Self {
+    pub fn new(
+        reason: &'a str,
+        rule: Option<&'a str>,
+        witness: &'a [WitnessBinding],
+        explanation: E,
+    ) -> Self {
         Self {
             explanation,
             reason,
+            rule,
             status: "rejected",
             witness,
         }

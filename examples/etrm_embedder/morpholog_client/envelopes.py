@@ -154,6 +154,10 @@ class WitnessBinding:
 @dataclass(frozen=True)
 class Rejected:
     reason: str
+    # The refused rule's stable identifier: an invariant's name, or a named
+    # gate's. None when the gate has no name - never the rendered
+    # expression, so this is safe to assert on where `reason` is not.
+    rule: str | None = None
     explanation: Explanation | None = None
     # Empty when the runtime could not attribute the refusal to one
     # iteration; the key is then absent from the envelope entirely.
@@ -162,11 +166,12 @@ class Rejected:
     @classmethod
     def from_json(cls, payload: object) -> Rejected:
         data = _strict(
-            "rejected outcome", payload, {"status", "reason"}, {"explanation", "witness"}
+            "rejected outcome", payload, {"status", "reason"}, {"explanation", "rule", "witness"}
         )
         explanation = data.get("explanation")
         return cls(
             reason=data["reason"],
+            rule=data.get("rule"),
             explanation=None if explanation is None else Explanation.from_json(explanation),
             witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
         )

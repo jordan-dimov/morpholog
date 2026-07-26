@@ -207,6 +207,7 @@ fn decision_admits_only_with_matching_standing() {
             TraceEntry::Require {
                 expression,
                 outcome,
+                ..
             } => Some((expression.as_str(), outcome)),
             _ => None,
         })

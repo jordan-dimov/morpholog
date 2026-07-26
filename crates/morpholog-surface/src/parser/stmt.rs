@@ -86,21 +86,31 @@ where
         let claim_pattern =
             ident.then(term_list.delimited_by(just(Token::LParen), just(Token::RParen)));
 
-        // require <proposition>
-        let require_stmt = just(Token::KwRequire)
-            .ignore_then(proposition.clone())
-            .map(Stmt::Require);
+        // An optional `<name>:` prefix on a refusing statement. Unambiguous
+        // because every proposition that can open a body starts with a
+        // keyword or is a claim call `Ident(`, so `Ident :` cannot begin one.
+        let rule_name = ident.then_ignore(just(Token::Colon)).or_not();
 
-        // bind <claim_pattern>
-        let bind_stmt =
-            just(Token::KwBind)
-                .ignore_then(claim_pattern.clone())
-                .map(|(predicate, args)| {
-                    Stmt::BindOne(Prop::Claim {
-                        predicate: predicate.into(),
-                        args,
-                    })
-                });
+        // require [<name>:] <proposition>
+        let require_stmt = just(Token::KwRequire)
+            .ignore_then(rule_name.clone())
+            .then(proposition.clone())
+            .map(|(name, prop)| Stmt::Require {
+                prop,
+                name: name.map(Into::into),
+            });
+
+        // bind [<name>:] <claim_pattern>
+        let bind_stmt = just(Token::KwBind)
+            .ignore_then(rule_name)
+            .then(claim_pattern.clone())
+            .map(|(name, (predicate, args))| Stmt::BindOne {
+                prop: Prop::Claim {
+                    predicate: predicate.into(),
+                    args,
+                },
+                name: name.map(Into::into),
+            });
 
         // admit <claim_pattern>
         //

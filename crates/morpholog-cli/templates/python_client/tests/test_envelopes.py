@@ -45,6 +45,13 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(outcome.witness[0].value, "acct_1")
         self.assertEqual(outcome.witness[1].value, Decimal("105.50"))
 
+    def test_a_refusal_names_the_rule_that_refused(self):
+        # The stable identifier, and the whole reason it exists: `reason` is
+        # prose that any rewording changes, so a test that holds it breaks
+        # for the wrong reason. `rule` does not move.
+        outcome = envelopes.parse_run_outcome(golden("rejected.json"))
+        self.assertEqual(outcome.rule, "no_flagged_accounts")
+
     def test_rejected_with_and_without_explanation(self):
         bare = envelopes.parse_run_outcome(golden("rejected.json"))
         self.assertIsInstance(bare, envelopes.Rejected)

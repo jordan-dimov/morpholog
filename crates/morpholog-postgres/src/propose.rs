@@ -3,7 +3,7 @@ use crate::error::{PgError, classify};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
-    InvariantName, Outcome, PredicateName, RejectionReason, State, Subject, TraceEntry,
+    InvariantName, Outcome, PredicateName, RejectionReason, RuleName, State, Subject, TraceEntry,
     TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, propose,
     propose_with_trace,
 };
@@ -39,6 +39,12 @@ pub enum PgProposalOutcome {
     },
     Rejected {
         reason: String,
+        /// The refused rule's stable identifier: an invariant's name, or a
+        /// named gate's. Absent when the gate has no name - never the
+        /// rendered expression, so a caller reading this field never gets a
+        /// value that rewording can change.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
         /// The values the refused rule was reading where it failed. Absent
         /// rather than empty when the kernel could not single out an
         /// iteration, so an envelope without a witness is byte-identical
@@ -301,6 +307,7 @@ pub(crate) async fn finalise_outcome(
             };
             Ok(PgProposalOutcome::Rejected {
                 reason: reason.to_string(),
+                rule: rule_identity(&reason),
                 witness,
             })
         }
@@ -443,6 +450,18 @@ pub(crate) const REJECTION_KIND_REQUIRE: &str = "require";
 
 pub(crate) const REJECTION_KIND_BIND: &str = "bind";
 
+/// The refused rule's stable identifier, or `None` when it has none.
+/// Matched off the variant, never parsed out of the Display text - the
+/// reason string is prose for a human, and this is the value a caller holds.
+fn rule_identity(reason: &RejectionReason) -> Option<String> {
+    match reason {
+        RejectionReason::Invariant { name, .. } => Some(name.to_string()),
+        RejectionReason::Require { name, .. } | RejectionReason::BindNone { name, .. } => {
+            name.as_ref().map(ToString::to_string)
+        }
+    }
+}
+
 /// Record a refused proposal in `morpholog.rejections`. Runs on the
 /// pool (implicit autocommit transaction) because the refusing
 /// transaction has already rolled back - see `finalise_outcome` for
@@ -464,8 +483,20 @@ pub(crate) async fn write_rejection(
             name.as_str(),
             Some(i64::from(*version)),
         ),
-        RejectionReason::Require { rendered } => (REJECTION_KIND_REQUIRE, rendered.as_str(), None),
-        RejectionReason::BindNone { rendered } => (REJECTION_KIND_BIND, rendered.as_str(), None),
+        // A named gate stores its name, so this column means the same
+        // thing for every kind and refusals group by cause. Unnamed keeps
+        // the rendered expression: this log is an operational floor, and
+        // fuller beats emptier here even when the text is not stable.
+        RejectionReason::Require { name, rendered } => (
+            REJECTION_KIND_REQUIRE,
+            name.as_ref().map_or(rendered.as_str(), RuleName::as_str),
+            None,
+        ),
+        RejectionReason::BindNone { name, rendered } => (
+            REJECTION_KIND_BIND,
+            name.as_ref().map_or(rendered.as_str(), RuleName::as_str),
+            None,
+        ),
     };
     let args_json: serde_json::Value =
         serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;

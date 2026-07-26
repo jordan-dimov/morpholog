@@ -1833,6 +1833,7 @@ mod tests {
 
         let rejected = PgProposalOutcome::Rejected {
             reason: "require failed".to_string(),
+            rule: None,
             witness: Vec::new(),
         };
         let json = serde_json::to_string(&rejected).unwrap();

@@ -1,5 +1,6 @@
 {
   "reason": "invariant `no_flagged_accounts` violated",
   "row": 2,
+  "rule": "no_flagged_accounts",
   "status": "rejected"
 }

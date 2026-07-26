@@ -95,6 +95,12 @@ pub struct GateFrontLoad {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GateControl {
+    /// The author's stable identifier for this gate, absent when it has
+    /// none. The name a refusal reports, and what reads best here: a
+    /// reviewer scanning the control matrix wants the rule's name, not its
+    /// expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// `"require"` or `"bind"` - the statement form the precondition
     /// takes. A `require` is a yes/no condition; a `bind` demands
     /// exactly one matching claim and refuses on zero (or several).
@@ -193,14 +199,15 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
                 .body
                 .iter()
                 .filter_map(|stmt| match stmt {
-                    Stmt::Require(prop) => Some(("require", prop)),
-                    Stmt::BindOne(prop) => Some(("bind", prop)),
+                    Stmt::Require { prop, name } => Some(("require", prop, name)),
+                    Stmt::BindOne { prop, name } => Some(("bind", prop, name)),
                     _ => None,
                 })
-                .map(|(form, prop)| {
+                .map(|(form, prop, name)| {
                     gate(
                         form,
                         prop,
+                        name.as_ref().map(ToString::to_string),
                         &program.definitions,
                         defs,
                         &asserted,
@@ -337,6 +344,7 @@ fn authored_implications(program: &Program, defs: DefinitionIndex<'_>) -> Vec<In
 fn gate(
     form: &str,
     prop: &Prop,
+    name: Option<String>,
     definitions: &[crate::ir::Definition],
     defs: DefinitionIndex<'_>,
     asserted: &BTreeSet<PredicateName>,
@@ -384,6 +392,7 @@ fn gate(
 
     GateControl {
         form: form.to_string(),
+        name,
         condition: format::format_prop_inline(prop),
         consults: consults.into_iter().map(|p| p.to_string()).collect(),
         front_loads,

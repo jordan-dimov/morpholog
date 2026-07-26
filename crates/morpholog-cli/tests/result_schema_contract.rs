@@ -142,6 +142,7 @@ fn committed_outcome() -> PgProposalOutcome {
 fn rejected_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Rejected {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
+        rule: Some("no_flagged_accounts".to_string()),
         witness: Vec::new(),
     }
 }
@@ -153,6 +154,7 @@ fn rejected_outcome() -> PgProposalOutcome {
 fn rejected_with_witness_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Rejected {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
+        rule: Some("no_flagged_accounts".to_string()),
         witness: witness_sample(),
     }
 }
@@ -354,6 +356,7 @@ fn composite_envelopes_serialize_as_pinned() {
         "rejected_with_explanation.json",
         &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(
             "invariant `no_flagged_accounts` violated",
+            Some("no_flagged_accounts"),
             &[],
             explanation,
         )),
@@ -366,6 +369,7 @@ fn composite_envelopes_serialize_as_pinned() {
         "rejected_with_explanation_and_witness.json",
         &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(
             "invariant `no_flagged_accounts` violated",
+            Some("no_flagged_accounts"),
             &witness_sample(),
             explanation,
         )),

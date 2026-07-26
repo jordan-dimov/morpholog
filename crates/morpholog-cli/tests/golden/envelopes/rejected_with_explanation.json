@@ -16,5 +16,6 @@
     }
   },
   "reason": "invariant `no_flagged_accounts` violated",
+  "rule": "no_flagged_accounts",
   "status": "rejected"
 }

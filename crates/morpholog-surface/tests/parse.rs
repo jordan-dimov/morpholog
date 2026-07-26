@@ -477,7 +477,7 @@ fn parses_require_statement() {
     use morpholog_core::Stmt;
     assert!(matches!(
         program.transformations[0].body[0],
-        Stmt::Require(_)
+        Stmt::Require { .. }
     ));
 }
 
@@ -490,7 +490,7 @@ fn parses_bind_statement() {
     use morpholog_core::Stmt;
     assert!(matches!(
         program.transformations[0].body[0],
-        Stmt::BindOne(_)
+        Stmt::BindOne { .. }
     ));
 }
 
@@ -533,9 +533,9 @@ fn statement_order_is_preserved() {
     use morpholog_core::Stmt;
     let body = &program.transformations[0].body;
     assert_eq!(body.len(), 3);
-    assert!(matches!(body[0], Stmt::BindOne(_)));
+    assert!(matches!(body[0], Stmt::BindOne { .. }));
     assert!(matches!(body[1], Stmt::Let { .. }));
-    assert!(matches!(body[2], Stmt::Require(_)));
+    assert!(matches!(body[2], Stmt::Require { .. }));
 }
 
 #[test]
@@ -636,11 +636,12 @@ fn bind_accepts_claim_pattern() {
     use morpholog_core::{Prop, Stmt};
     let body = &program.transformations[0].body;
     assert_eq!(body.len(), 1);
-    let Stmt::BindOne(Prop::Claim { predicate, args }) = &body[0] else {
-        panic!(
-            "expected Stmt::BindOne(Prop::Claim {{ .. }}); got {:?}",
-            body[0]
-        );
+    let Stmt::BindOne {
+        prop: Prop::Claim { predicate, args },
+        ..
+    } = &body[0]
+    else {
+        panic!("expected a bind of Prop::Claim {{ .. }}; got {:?}", body[0]);
     };
     assert_eq!(predicate.as_str(), "Foo");
     assert_eq!(args.len(), 3);
@@ -726,8 +727,8 @@ fn for_body_preserves_statement_order() {
         panic!("expected Stmt::For");
     };
     assert_eq!(for_body.len(), 3);
-    assert!(matches!(for_body[0], Stmt::BindOne(_)));
-    assert!(matches!(for_body[1], Stmt::Require(_)));
+    assert!(matches!(for_body[0], Stmt::BindOne { .. }));
+    assert!(matches!(for_body[1], Stmt::Require { .. }));
     assert!(matches!(for_body[2], Stmt::Assert(_)));
 }
 
@@ -774,7 +775,7 @@ fn for_inside_mixed_transformation_body() {
     use morpholog_core::Stmt;
     let body = &program.transformations[0].body;
     assert_eq!(body.len(), 3);
-    assert!(matches!(body[0], Stmt::Require(_)));
+    assert!(matches!(body[0], Stmt::Require { .. }));
     assert!(matches!(body[1], Stmt::For { .. }));
     assert!(matches!(body[2], Stmt::Assert(_)));
 }
@@ -857,7 +858,7 @@ fn bind_still_accepts_wildcard_arg() {
     use morpholog_core::Stmt;
     assert!(matches!(
         program.transformations[0].body[0],
-        Stmt::BindOne(_)
+        Stmt::BindOne { .. }
     ));
 }
 

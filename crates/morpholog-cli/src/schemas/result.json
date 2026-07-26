@@ -168,6 +168,7 @@
       "properties": {
         "status": { "const": "rejected" },
         "reason": { "type": "string" },
+        "rule": { "type": "string" },
         "witness": { "type": "array", "items": { "$ref": "#/$defs/witness_binding" } },
         "explanation": { "$ref": "#/$defs/explanation" }
       }
@@ -305,6 +306,7 @@
             "row": { "type": "integer", "minimum": 1 },
             "status": { "const": "rejected" },
             "reason": { "type": "string" },
+            "rule": { "type": "string" },
             "witness": { "type": "array", "items": { "$ref": "#/$defs/witness_binding" } },
             "explanation": { "$ref": "#/$defs/explanation" }
           }
