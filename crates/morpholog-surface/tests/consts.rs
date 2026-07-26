@@ -89,14 +89,80 @@ fn a_const_may_use_earlier_consts() {
 }
 
 #[test]
-fn a_term_valued_const_flows_into_pattern_arguments() {
-    // Claim and bind patterns take term-valued consts - pattern
-    // variables are relational, not binders, mirroring body-let's
-    // algebraic doctrine.
-    assert_equivalent(
+fn a_const_in_a_claim_pattern_is_refused_not_filtered() {
+    // The action-at-a-distance trap: substituting here would turn the
+    // pattern variable into a literal filter, silently shrinking the
+    // rule's universe. Refused - match a variable and compare.
+    refusal_containing(
         "const house_cap = (250)\n\n\
          invariant the_house_cap_exists:\n    Cap(c, _) implies Cap(c, house_cap)",
-        "invariant the_house_cap_exists:\n    Cap(c, _) implies Cap(c, 250)",
+        "stands in the `Cap` claim pattern",
+    );
+}
+
+#[test]
+fn the_vacuous_filter_shape_is_refused() {
+    // A distant const sharing a plausible variable name must not
+    // quietly rewrite `ChargeLine(_, net)` into a filter on 0.01.
+    refusal_containing(
+        "const net = (0.01)\n\n\
+         invariant nets_are_non_negative:\n    Line(_, net) implies 0 <= net",
+        "stands in the `Line` claim pattern",
+    );
+}
+
+#[test]
+fn a_const_in_a_bind_pattern_or_defined_call_is_refused() {
+    refusal_containing(
+        "const cap = (250)\n\n\
+         transformation post(l, net):\n    \
+             bind Cap(cap, limit)\n    \
+             admit Line(l, net)",
+        "stands in the `Cap` claim pattern",
+    );
+    // A defined call is claim-shaped until resolution, which runs
+    // AFTER the const pass - so the refusal names it as a pattern.
+    refusal_containing(
+        "const cap = (250)\n\n\
+         define within(limit):\n    Cap(_, limit)\n\n\
+         invariant r:\n    Line(_, net) implies within(cap)",
+        "stands in the `within` claim pattern",
+    );
+}
+
+#[test]
+fn constructive_and_resolved_slots_still_take_consts() {
+    // admit builds a claim, retract resolves its arguments, emit
+    // constructs an intent - none bind, so a const is an ordinary use.
+    assert_equivalent(
+        "const default_net = (10)\n\n\
+         intent Posted(l: Subject, net: Decimal)\n\n\
+         transformation post(l):\n    \
+             admit Line(l, default_net)\n    \
+             emit Posted(l, default_net)\n\n\
+         transformation unpost(l):\n    \
+             retract Line(l, default_net)",
+        "intent Posted(l: Subject, net: Decimal)\n\n\
+         transformation post(l):\n    \
+             admit Line(l, 10)\n    \
+             emit Posted(l, 10)\n\n\
+         transformation unpost(l):\n    \
+             retract Line(l, 10)",
+    );
+}
+
+#[test]
+fn a_const_reaches_a_nested_for_body() {
+    assert_equivalent(
+        "const floor = (5)\n\n\
+         transformation post_all(ls):\n    \
+             for l in ls:\n        \
+                 require floor <= 10\n        \
+                 admit Line(l, floor)",
+        "transformation post_all(ls):\n    \
+             for l in ls:\n        \
+                 require 5 <= 10\n        \
+                 admit Line(l, 5)",
     );
 }
 
@@ -211,9 +277,56 @@ fn body_let_collisions_are_refused_not_shadowed() {
 
 #[test]
 fn a_computed_const_in_a_term_slot_is_refused() {
+    // Patterns refuse consts outright, so the computed-value refusal
+    // is now reachable only through the constructive slots.
     refusal_containing(
         "const cap = (100 + 50)\n\n\
-         invariant r:\n    Cap(c, _) implies Cap(c, cap)",
+         transformation post(l, net):\n    admit Line(l, cap)",
         "computed const `cap`",
+    );
+}
+
+#[test]
+fn an_open_initialiser_is_refused() {
+    // A free variable would capture whichever local exists at each
+    // use site - an unhygienic macro, not a constant.
+    refusal_containing(
+        "const uplifted = (rate + 0.01)\n\n\
+         transformation post(l, rate):\n    \
+             let result = uplifted\n    \
+             admit Line(l, result)",
+        "references `rate`, which is not a const",
+    );
+}
+
+#[test]
+fn actor_and_wildcards_cannot_be_const_values() {
+    refusal_containing(
+        "const proposer = (actor)\n\n\
+         transformation post(l, net):\n    \
+             require proposer = proposer\n    \
+             admit Line(l, net)",
+        "references `actor`, which varies with every proposal",
+    );
+    refusal_containing(
+        "const anything = (_)\n\n\
+         invariant r:\n    Line(_, net) implies net = anything",
+        "contains a wildcard",
+    );
+}
+
+#[test]
+fn a_state_reading_initialiser_is_refused() {
+    // sum/value read the ledger; a figure that changes with state is
+    // a rule's job, not a const's.
+    refusal_containing(
+        "const total = (sum(n | Line(_, n)))\n\n\
+         invariant r:\n    Line(_, net) implies net <= total",
+        "reads state",
+    );
+    refusal_containing(
+        "const cap = (value Cap(_, _))\n\n\
+         invariant r:\n    Line(_, net) implies net <= cap",
+        "reads state",
     );
 }

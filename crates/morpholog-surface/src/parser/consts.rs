@@ -11,17 +11,31 @@
 //! `over` and `value` clauses, and transformation statements - the
 //! contexts that have no local-naming alternative.
 //!
-//! Refusals, all parse-time with spans, per the shadowing-is-refused
-//! doctrine: duplicate consts; `actor` as a name; self- and
-//! forward-references among consts (earlier-only, like lets); a const
-//! name colliding with ANY parameter, quantifier binder, statement
-//! binding (`let`/`for`/`new Subject()`), derived key, or body-level
-//! `let` anywhere in the programme - a programme-wide name must be
-//! programme-wide unambiguous; computed consts in term-only slots;
-//! and a const no body uses (dead vocabulary, transitively). Claim-
-//! and bind-pattern variables are NOT binders here, mirroring `let`'s
-//! algebraic doctrine: a const flowing into a pattern argument is an
-//! ordinary term substitution.
+//! Two properties keep a const honest, both review-forced:
+//!
+//! CLOSED INITIALISERS - a const is built from literals and earlier
+//! consts only. A free variable would capture whichever local exists
+//! at each use site (an unhygienic macro, not a constant); `actor`
+//! varies per proposal; `sum`/`value` read state. All refused.
+//!
+//! NO PATTERN POSITIONS - a const name may not stand where arguments
+//! bind relationally (claim patterns, defined calls, `bind`).
+//! Substituting there would silently turn a binding into a literal
+//! filter, shrinking a rule's universe from hundreds of lines away -
+//! the exact distant disagreement const exists to prevent. The
+//! body-`let` precedent does not transfer: a let is adjacent to what
+//! it rewrites, a const is not. Constructive and resolved slots
+//! (admit/emit/retract arguments, `value` lookup keys, sum targets)
+//! stay ordinary uses - none of them bind.
+//!
+//! The remaining refusals, per the shadowing-is-refused doctrine:
+//! duplicate consts; `actor` as a name; self- and forward-references
+//! among consts (earlier-only, like lets); a const name colliding
+//! with ANY parameter, quantifier binder, statement binding
+//! (`let`/`for`/`new Subject()`), derived key, or body-level `let`
+//! anywhere in the programme; computed consts in the constructive
+//! term slots; and a const no body uses (dead vocabulary,
+//! transitively).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -160,6 +174,47 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
                 )),
                 _ => {}
             }
+        }
+    }
+    if !errors.is_empty() {
+        return errors;
+    }
+
+    // Closed initialisers: a const is built from literals and earlier
+    // consts, nothing else. A free variable would capture whichever
+    // local exists at each use site (an unhygienic macro, not a
+    // constant); `actor` varies per proposal; a wildcard is not a
+    // value; and `sum`/`value` read STATE - a figure that changes with
+    // the ledger is a rule's job, not a const's.
+    for c in &consts {
+        refuse_open_initialiser(c, &const_names, &mut errors);
+    }
+    if !errors.is_empty() {
+        return errors;
+    }
+
+    // Pattern positions: a const name may not stand where arguments
+    // bind relationally - a claim pattern, a defined call (unbound
+    // parameters are generators), or a `bind` pattern. Substituting
+    // there would silently turn a binding into a literal filter,
+    // shrinking a rule's universe from hundreds of lines away.
+    // Constructive and ground slots (admit/emit/retract arguments,
+    // `value` lookup keys, sum targets) stay ordinary uses.
+    for (d, span) in targets.definitions.iter() {
+        refuse_pattern_positions_in_prop(&d.body, &const_names, span, &mut errors);
+    }
+    for (i, span) in targets.invariants.iter() {
+        refuse_pattern_positions_in_prop(&i.body, &const_names, span, &mut errors);
+    }
+    for (t, span, _) in targets.transformations.iter() {
+        for s in &t.body {
+            refuse_pattern_positions_in_stmt(s, &const_names, span, &mut errors);
+        }
+    }
+    for (d, span) in targets.derived_claims.iter() {
+        refuse_pattern_positions_in_prop(&d.domain, &const_names, span, &mut errors);
+        for v in &d.values {
+            refuse_pattern_positions_in_value(&v.expr, &const_names, span, &mut errors);
         }
     }
     if !errors.is_empty() {
@@ -418,6 +473,201 @@ fn stmt_vars(stmt: &Stmt, out: &mut BTreeSet<String>) {
             vars_in_value(collection, out);
             for s in body {
                 stmt_vars(s, out);
+            }
+        }
+    }
+}
+
+/// A const initialiser must be closed: literals and earlier consts
+/// only. Reports every violation with its reason.
+fn refuse_open_initialiser(
+    c: &LetBinding,
+    const_names: &BTreeSet<&str>,
+    errors: &mut Vec<(Span, String)>,
+) {
+    fn walk(
+        expr: &ValueExpr,
+        c: &LetBinding,
+        const_names: &BTreeSet<&str>,
+        errors: &mut Vec<(Span, String)>,
+    ) {
+        match expr {
+            ValueExpr::Term(Term::Var(v)) => {
+                if !const_names.contains(v.as_str()) {
+                    errors.push((
+                        c.span.clone(),
+                        format!(
+                            "const `{}` references `{v}`, which is not a const - a \
+                             const is built from literals and earlier consts only \
+                             (a free variable would mean something different at \
+                             every use site)",
+                            c.name
+                        ),
+                    ));
+                }
+            }
+            ValueExpr::Term(Term::Actor) => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` references `actor`, which varies with every \
+                     proposal - not a constant",
+                    c.name
+                ),
+            )),
+            ValueExpr::Term(Term::Wildcard) => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` contains a wildcard, which is not a value",
+                    c.name
+                ),
+            )),
+            ValueExpr::Term(Term::Literal(_)) => {}
+            ValueExpr::Arith { left, right, .. } => {
+                walk(left, c, const_names, errors);
+                walk(right, c, const_names, errors);
+            }
+            ValueExpr::Abs(operand) => walk(operand, c, const_names, errors),
+            ValueExpr::Round { value, quantum } => {
+                walk(value, c, const_names, errors);
+                walk(quantum, c, const_names, errors);
+            }
+            ValueExpr::Sum { .. } | ValueExpr::ValueOf { .. } => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` reads state (`sum`/`value`) - a figure that \
+                     changes with the ledger belongs in a rule, not a const",
+                    c.name
+                ),
+            )),
+        }
+    }
+    walk(&c.value, c, const_names, errors);
+}
+
+fn refuse_pattern_slot(
+    args: &[Term],
+    shape: &str,
+    const_names: &BTreeSet<&str>,
+    decl_span: &Span,
+    errors: &mut Vec<(Span, String)>,
+) {
+    for arg in args {
+        if let Term::Var(v) = arg
+            && const_names.contains(v.as_str())
+        {
+            errors.push((
+                decl_span.clone(),
+                format!(
+                    "const `{v}` stands in {shape} in this declaration - pattern \
+                     arguments bind relationally, and a constant there would \
+                     silently filter instead of bind; match a variable and \
+                     compare it with `{v}` explicitly"
+                ),
+            ));
+        }
+    }
+}
+
+fn refuse_pattern_positions_in_prop(
+    prop: &morpholog_core::Prop,
+    const_names: &BTreeSet<&str>,
+    decl_span: &Span,
+    errors: &mut Vec<(Span, String)>,
+) {
+    use morpholog_core::Prop;
+    match prop {
+        Prop::Claim { predicate, args } => {
+            let shape = format!("the `{predicate}` claim pattern");
+            refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
+        }
+        Prop::Defined { name, args } => {
+            let shape = format!("the `{name}` call");
+            refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
+        }
+        Prop::In(_, _) => {}
+        Prop::And(props) | Prop::Or(props) => {
+            for p in props {
+                refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
+            }
+        }
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            refuse_pattern_positions_in_prop(left, const_names, decl_span, errors);
+            refuse_pattern_positions_in_prop(right, const_names, decl_span, errors);
+        }
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
+            refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
+        }
+        Prop::Forall { source, body, .. } => {
+            refuse_pattern_positions_in_prop(source, const_names, decl_span, errors);
+            refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
+        }
+        Prop::Eq(l, r) | Prop::Neq(l, r) => {
+            refuse_pattern_positions_in_value(l, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(r, const_names, decl_span, errors);
+        }
+        Prop::Compare { left, right, .. } => {
+            refuse_pattern_positions_in_value(left, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(right, const_names, decl_span, errors);
+        }
+    }
+}
+
+fn refuse_pattern_positions_in_value(
+    expr: &ValueExpr,
+    const_names: &BTreeSet<&str>,
+    decl_span: &Span,
+    errors: &mut Vec<(Span, String)>,
+) {
+    match expr {
+        ValueExpr::Term(_) => {}
+        ValueExpr::Arith { left, right, .. } => {
+            refuse_pattern_positions_in_value(left, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(right, const_names, decl_span, errors);
+        }
+        // The sum TARGET never binds (consumed against the body's
+        // bindings) - only the body's patterns are scanned.
+        ValueExpr::Sum { body, .. } => {
+            refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
+        }
+        // ValueOf keys are ground lookups - they never bind.
+        ValueExpr::ValueOf { default, .. } => {
+            if let Some(d) = default {
+                refuse_pattern_positions_in_value(d, const_names, decl_span, errors);
+            }
+        }
+        ValueExpr::Abs(operand) => {
+            refuse_pattern_positions_in_value(operand, const_names, decl_span, errors);
+        }
+        ValueExpr::Round { value, quantum } => {
+            refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(quantum, const_names, decl_span, errors);
+        }
+    }
+}
+
+fn refuse_pattern_positions_in_stmt(
+    stmt: &Stmt,
+    const_names: &BTreeSet<&str>,
+    decl_span: &Span,
+    errors: &mut Vec<(Span, String)>,
+) {
+    match stmt {
+        // `bind` patterns bind; require's props carry claim patterns.
+        Stmt::Require(p) | Stmt::BindOne(p) => {
+            refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
+        }
+        Stmt::Let { value, .. } => {
+            refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
+        }
+        // Constructive and resolved-use slots: admit/emit build claims,
+        // retract resolves its arguments against bindings - none bind.
+        Stmt::LetNewSubject { .. } | Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) => {}
+        Stmt::For {
+            collection, body, ..
+        } => {
+            refuse_pattern_positions_in_value(collection, const_names, decl_span, errors);
+            for s in body {
+                refuse_pattern_positions_in_stmt(s, const_names, decl_span, errors);
             }
         }
     }
