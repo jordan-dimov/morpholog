@@ -2433,7 +2433,8 @@ async fn init_provisions_then_refuses_then_skips() {
         "--reset without the acknowledgement must refuse"
     );
     assert!(
-        stderr.contains("--i-know-this-deletes-data") && stderr.contains(&database_url()),
+        stderr.contains("--i-know-this-deletes-data")
+            && stderr.contains(&morpholog_postgres::redact_database_url(&database_url())),
         "the refusal names the flag AND the target it would have destroyed: {stderr}"
     );
     let (status, _stdout, stderr) = run_cli(&["init", "--i-know-this-deletes-data"]);

@@ -12,7 +12,9 @@
 //! `--skip-if-exists` to retrofit an existing database.
 
 use anyhow::{Context, anyhow};
-use morpholog_postgres::{InitOutcome, drop_schema, initialise_schema, provision_least_privilege};
+use morpholog_postgres::{
+    InitOutcome, drop_schema, initialise_schema, provision_least_privilege, redact_database_url,
+};
 
 use crate::InitArgs;
 use crate::commands::{connect, print_json};
@@ -32,7 +34,7 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
             "--reset DROPS the `morpholog` schema and every claim, audit row, and \
              outbox entry in it. Re-run with --i-know-this-deletes-data to \
              acknowledge. Target: {}",
-            args.db.database_url
+            redact_database_url(&args.db.database_url)
         ));
     }
 

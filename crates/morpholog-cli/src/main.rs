@@ -307,9 +307,9 @@ pub(crate) struct GeneratePythonClientArgs {
     pub(crate) out: PathBuf,
 
     /// Compare the would-be output against what is already at `--out`
-    /// and write nothing: exit zero when they agree, non-zero on the
-    /// first difference. The drift gate both consumer repos wrote by
-    /// hand as regenerate-into-a-tempdir-and-diff.
+    /// and write nothing: exit zero when they agree, non-zero when any
+    /// file differs or is missing, naming every one. The drift gate both
+    /// consumer repos wrote by hand as regenerate-into-a-tempdir-and-diff.
     #[arg(long)]
     pub(crate) check: bool,
 }
