@@ -1,12 +1,12 @@
 //! The shell twin of `with_default_user` must not drift from it.
 //!
-//! `precommit.sh` and `sqlx-prepare.sh` each carry a `sqlx_url` shell
-//! function, because the external `sqlx-cli` cannot call our Rust one.
-//! Two implementations of one rule drift silently - and did: an earlier
-//! cut treated an `@` anywhere in the URL as credentials, so a database
-//! named `weird@name` skipped the fill-in and connected as `anonymous`,
-//! while the Rust side handled it correctly. This pins the agreement
-//! rather than asserting it a third time.
+//! `precommit.sh` and `sqlx-prepare.sh` both source `sqlx_url` from
+//! `scripts/shared/sqlx_url.sh`, because the external `sqlx-cli` cannot
+//! call our Rust one. Two implementations of one rule drift silently -
+//! and did: an earlier cut treated an `@` anywhere in the URL as
+//! credentials, so a database named `weird@name` skipped the fill-in and
+//! connected as `anonymous`, while the Rust side handled it correctly.
+//! This pins the agreement rather than asserting it a third time.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -126,11 +126,17 @@ fn both_scripts_source_the_shared_twin() {
     // stock Python .gitignore excludes any directory named `lib`, so the
     // first home of this file was silently skipped by `git add -A` and
     // every test here passed locally against a file CI never received.
+    assert!(
+        std::path::Path::new(&format!("{root}/scripts/shared/sqlx_url.sh")).exists(),
+        "the shared twin is missing from the working tree"
+    );
     let tracked = std::process::Command::new("git")
         .args(["ls-files", "--error-unmatch", "scripts/shared/sqlx_url.sh"])
         .current_dir(&root)
         .output()
-        .expect("git runs");
+        .expect(
+            "this check needs git and a checkout; every context that runs these tests has both",
+        );
     assert!(
         tracked.status.success(),
         "the shared twin is not tracked by git, so a clean checkout has no copy of it"
