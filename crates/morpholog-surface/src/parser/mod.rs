@@ -57,6 +57,7 @@
 //! malformed expression surfaces as one diagnostic at the failure
 //! site.
 
+mod consts;
 mod expr;
 mod lets;
 mod program;

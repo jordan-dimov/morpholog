@@ -151,6 +151,29 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         return Err(diagnostics);
     }
 
+    // Programme-level `const` substitution: rewrites every body in
+    // place before the IR-facing passes below, so definitions resolve
+    // and disciplines lower over const-free bodies.
+    let mut raw = raw;
+    {
+        let const_errors = super::consts::apply(
+            std::mem::take(&mut raw.consts),
+            super::consts::ConstTargets {
+                definitions: &mut raw.definitions,
+                invariants: &mut raw.invariants,
+                transformations: &mut raw.transformations,
+                derived_claims: &mut raw.derived_claims,
+                body_let_names: &raw.body_let_names,
+            },
+        );
+        for (span, message) in const_errors {
+            diagnostics.push(Diagnostic::error(message, span));
+        }
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+    }
+
     let mut map = SourceMap::new();
     for (d, s) in &raw.predicates {
         map.insert_decl(DeclKind::Predicate, d.name.as_str(), s.clone());
@@ -241,6 +264,11 @@ struct RawProgram {
     invariants: Vec<(Invariant, Span)>,
     transformations: Vec<(Transformation, Span, Vec<Span>)>,
     derived_claims: Vec<(DerivedClaim, Span)>,
+    consts: Vec<super::lets::LetBinding>,
+    /// Body-`let` names with their spans, carried forward from the
+    /// per-body pass (which substitutes the lets away) so the const
+    /// pass can refuse a programme-level name a body shadows.
+    body_let_names: Vec<(String, Span)>,
 }
 
 /// One top-level declaration in a programme body. Predicates,
@@ -252,10 +280,11 @@ struct RawProgram {
 enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
     Intent(IntentDecl, Span),
-    Definition(Definition, Span),
-    Invariant(Invariant, Span),
+    Definition(Definition, Span, Vec<(String, Span)>),
+    Invariant(Invariant, Span, Vec<(String, Span)>),
     Transformation(Transformation, Span, Vec<Span>),
     Derived(DerivedClaim, Span),
+    Const(super::lets::LetBinding),
 }
 
 fn program_parser<'a, I>() -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
@@ -439,6 +468,7 @@ where
                 name,
                 value,
                 span: span.start()..span.end(),
+                noun: "let",
             }
         });
     let body_with_lets = choice((
@@ -453,6 +483,10 @@ where
         .then_ignore(just(Token::Colon))
         .then(body_with_lets.clone())
         .validate(|(name, (bindings, body)), e, emitter| {
+            let let_names: Vec<(String, Span)> = bindings
+                .iter()
+                .map(|b| (b.name.clone(), b.span.clone()))
+                .collect();
             let (body, refusals) = super::lets::apply(bindings, &[], body);
             for (span, message) in refusals {
                 emitter.emit(Rich::custom(span.into(), message));
@@ -466,6 +500,7 @@ where
                     origin: InvariantOrigin::Authored,
                 },
                 span.start()..span.end(),
+                let_names,
             )
         });
 
@@ -487,6 +522,10 @@ where
         .then_ignore(just(Token::Colon))
         .then(body_with_lets)
         .validate(|((name, parameters), (bindings, body)), e, emitter| {
+            let let_names: Vec<(String, Span)> = bindings
+                .iter()
+                .map(|b| (b.name.clone(), b.span.clone()))
+                .collect();
             let (body, refusals) = super::lets::apply(bindings, &parameters, body);
             for (span, message) in refusals {
                 emitter.emit(Rich::custom(span.into(), message));
@@ -499,7 +538,28 @@ where
                     body,
                 },
                 span.start()..span.end(),
+                let_names,
             )
+        });
+
+    // const_decl ::= "const" Ident "=" "(" value_expression ")"
+    //
+    // A programme-level named value, substituted away at parse time
+    // (see [`super::consts`]). The required parens are the body-let
+    // rationale: layout off inside them, and a value ending in a bare
+    // decimal cannot absorb a following identifier as a quantity unit.
+    let const_decl = just(Token::KwConst)
+        .ignore_then(ident)
+        .then_ignore(just(Token::Eq))
+        .then(value_expr_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
+        .map_with(|(name, value), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Const(super::lets::LetBinding {
+                name,
+                value,
+                span: span.start()..span.end(),
+                noun: "const",
+            })
         });
 
     // transformation_decl ::= "transformation" Ident "(" param-list ")" ":" Indent stmt+ Dedent
@@ -601,6 +661,7 @@ where
         invariant_decl,
         transformation_decl,
         derived_decl,
+        const_decl,
     ));
 
     // Sync at the next top-level keyword on failure; skip the rest
@@ -615,6 +676,7 @@ where
             .or(just(Token::KwInvariant).ignored())
             .or(just(Token::KwTransformation).ignored())
             .or(just(Token::KwDerived).ignored())
+            .or(just(Token::KwConst).ignored())
             .or(end()),
     ));
 
@@ -631,14 +693,23 @@ where
             let mut invariants = Vec::new();
             let mut transformations = Vec::new();
             let mut derived_claims = Vec::new();
+            let mut consts = Vec::new();
+            let mut body_let_names = Vec::new();
             for d in decls {
                 match d {
                     TopLevelDecl::Predicate(p, s) => predicates.push((p, s)),
                     TopLevelDecl::Intent(i, s) => intents.push((i, s)),
-                    TopLevelDecl::Definition(d, s) => definitions.push((d, s)),
-                    TopLevelDecl::Invariant(i, s) => invariants.push((i, s)),
+                    TopLevelDecl::Definition(d, s, lets) => {
+                        body_let_names.extend(lets);
+                        definitions.push((d, s));
+                    }
+                    TopLevelDecl::Invariant(i, s, lets) => {
+                        body_let_names.extend(lets);
+                        invariants.push((i, s));
+                    }
                     TopLevelDecl::Transformation(t, s, ss) => transformations.push((t, s, ss)),
                     TopLevelDecl::Derived(d, s) => derived_claims.push((d, s)),
+                    TopLevelDecl::Const(c) => consts.push(c),
                 }
             }
             RawProgram {
@@ -649,6 +720,8 @@ where
                 invariants,
                 transformations,
                 derived_claims,
+                consts,
+                body_let_names,
             }
         })
 }
