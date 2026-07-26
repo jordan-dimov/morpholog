@@ -44,7 +44,7 @@ def _strict(name: str, payload: object, required: set, optional: set = frozenset
 _T = TypeVar("_T")
 
 
-def _by_status(payload: object, label: str, mapping: "dict[str, Callable[[object], _T]]") -> _T:
+def _by_status(payload: object, label: str, mapping: dict[str, Callable[[object], _T]]) -> _T:
     """Dispatch a status-discriminated union to its model. An unknown
     or missing discriminator is drift, refused with the union named.
     Generic so each parser keeps its advertised return type under a
@@ -66,7 +66,7 @@ class ClaimInstance:
     args: list = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, payload: object) -> "ClaimInstance":
+    def from_json(cls, payload: object) -> ClaimInstance:
         data = _strict("claim", payload, {"predicate", "args"})
         return cls(
             predicate=data["predicate"],
@@ -80,7 +80,7 @@ class IntentInstance:
     args: list = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, payload: object) -> "IntentInstance":
+    def from_json(cls, payload: object) -> IntentInstance:
         data = _strict("intent", payload, {"name", "args"})
         return cls(
             name=data["name"],
@@ -96,7 +96,7 @@ class NamedClaim:
     args: dict
 
     @classmethod
-    def from_json(cls, payload: object) -> "NamedClaim":
+    def from_json(cls, payload: object) -> NamedClaim:
         data = _strict("named claim", payload, {"predicate", "args"})
         return cls(predicate=data["predicate"], args=dict(data["args"]))
 
@@ -110,7 +110,7 @@ class Committed:
     emitted_intents: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "Committed":
+    def from_json(cls, payload: object) -> Committed:
         data = _strict(
             "committed outcome",
             payload,
@@ -135,10 +135,10 @@ class Committed:
 @dataclass(frozen=True)
 class Rejected:
     reason: str
-    explanation: "Explanation | None" = None
+    explanation: Explanation | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "Rejected":
+    def from_json(cls, payload: object) -> Rejected:
         data = _strict("rejected outcome", payload, {"status", "reason"}, {"explanation"})
         explanation = data.get("explanation")
         return cls(
@@ -152,12 +152,12 @@ class Errored:
     error: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "Errored":
+    def from_json(cls, payload: object) -> Errored:
         data = _strict("errored result", payload, {"status", "error"})
         return cls(error=data["error"])
 
 
-def parse_run_outcome(payload: object) -> "Committed | Rejected":
+def parse_run_outcome(payload: object) -> Committed | Rejected:
     """The ``propose`` outcome envelope: a lawful business outcome
     either way. (The wire keeps the historical ``run_outcome`` name in
     the pinned schema; only the command verb changed.)"""
@@ -168,16 +168,16 @@ def parse_run_outcome(payload: object) -> "Committed | Rejected":
             "committed": Committed.from_json,
             "rejected": Rejected.from_json,
         },
-        )
+    )
 
 
 @dataclass(frozen=True)
 class TracedEnvelope:
-    result: "Committed | Rejected | Errored"
+    result: Committed | Rejected | Errored
     trace: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "TracedEnvelope":
+    def from_json(cls, payload: object) -> TracedEnvelope:
         data = _strict("traced envelope", payload, {"result", "trace"})
         result = data["result"]
         status = result.get("status") if isinstance(result, dict) else None
@@ -197,7 +197,7 @@ class TransitionRef:
     actor: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TransitionRef":
+    def from_json(cls, payload: object) -> TransitionRef:
         data = _strict("transition ref", payload, {"transformation", "args", "actor"})
         return cls(
             transformation=data["transformation"],
@@ -213,7 +213,7 @@ class MissingClaim:
     candidate_supplier_transformations: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "MissingClaim":
+    def from_json(cls, payload: object) -> MissingClaim:
         data = _strict(
             "missing claim",
             payload,
@@ -233,7 +233,7 @@ class GateRejection:
     directly_missing_claims: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "GateRejection":
+    def from_json(cls, payload: object) -> GateRejection:
         data = _strict(
             "gate rejection",
             payload,
@@ -254,7 +254,7 @@ class InvariantRejection:
     rule: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "InvariantRejection":
+    def from_json(cls, payload: object) -> InvariantRejection:
         data = _strict("invariant rejection", payload, {"kind", "name", "rule"})
         return cls(name=data["name"], rule=data["rule"])
 
@@ -264,12 +264,12 @@ class ErrorRejection:
     message: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "ErrorRejection":
+    def from_json(cls, payload: object) -> ErrorRejection:
         data = _strict("error rejection", payload, {"kind", "message"})
         return cls(message=data["message"])
 
 
-def _parse_rejection(payload: object) -> "GateRejection | InvariantRejection | ErrorRejection":
+def _parse_rejection(payload: object) -> GateRejection | InvariantRejection | ErrorRejection:
     kind = payload.get("kind") if isinstance(payload, dict) else None
     match kind:
         case "gate":
@@ -285,14 +285,14 @@ def _parse_rejection(payload: object) -> "GateRejection | InvariantRejection | E
 @dataclass(frozen=True)
 class Explanation:
     transition: TransitionRef
-    rejection: "GateRejection | InvariantRejection | ErrorRejection | None"
+    rejection: GateRejection | InvariantRejection | ErrorRejection | None
 
     @property
     def admissible(self) -> bool:
         return self.rejection is None
 
     @classmethod
-    def from_json(cls, payload: object) -> "Explanation":
+    def from_json(cls, payload: object) -> Explanation:
         data = _strict("explanation", payload, {"transition", "verdict"})
         verdict = data["verdict"]
         if verdict == "admissible":
@@ -311,10 +311,10 @@ class BatchError:
 @dataclass(frozen=True)
 class BatchReceipt:
     row: int
-    outcome: "Committed | Rejected | BatchError"
+    outcome: Committed | Rejected | BatchError
 
     @classmethod
-    def from_json(cls, payload: object) -> "BatchReceipt":
+    def from_json(cls, payload: object) -> BatchReceipt:
         if not isinstance(payload, dict) or "row" not in payload:
             raise EnvelopeError(f"not a batch receipt: {payload!r}")
         row = payload["row"]
@@ -345,7 +345,7 @@ class OutboxRow:
     lock_expires_at: datetime | None
 
     @classmethod
-    def from_json(cls, payload: object) -> "OutboxRow":
+    def from_json(cls, payload: object) -> OutboxRow:
         data = _strict(
             "outbox row",
             payload,
@@ -388,7 +388,7 @@ class OutboxRow:
         )
 
 
-def parse_outbox_claim(payload: object) -> "OutboxRow | None":
+def parse_outbox_claim(payload: object) -> OutboxRow | None:
     data = _strict("outbox claim", payload, {"row"})
     row = data["row"]
     return None if row is None else OutboxRow.from_json(row)
@@ -403,7 +403,7 @@ class OutboxUpdate:
         return self.status == "applied"
 
     @classmethod
-    def from_json(cls, payload: object) -> "OutboxUpdate":
+    def from_json(cls, payload: object) -> OutboxUpdate:
         data = _strict("outbox update", payload, {"status"})
         return cls(status=data["status"])
 
@@ -417,7 +417,7 @@ class AuditedInvariantCheck:
     version: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "AuditedInvariantCheck":
+    def from_json(cls, payload: object) -> AuditedInvariantCheck:
         data = _strict("audited invariant check", payload, {"name", "version"})
         return cls(name=data["name"], version=data["version"])
 
@@ -450,7 +450,7 @@ class Attestation:
     authenticated_by: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "Attestation":
+    def from_json(cls, payload: object) -> Attestation:
         data = _strict("attestation", payload, {"mode", "authenticated_by"})
         if data["mode"] != "gateway":
             raise EnvelopeError(
@@ -460,7 +460,7 @@ class Attestation:
         return cls(mode=data["mode"], authenticated_by=data["authenticated_by"])
 
 
-def _attestation_of(data: dict) -> "Attestation | None":
+def _attestation_of(data: dict) -> Attestation | None:
     raw = data.get("attestation")
     return None if raw is None else Attestation.from_json(raw)
 
@@ -483,10 +483,10 @@ class AuditRow:
     retracted_claims: list
     emitted_intents: list
     committed_at: datetime
-    attestation: "Attestation | None" = None
+    attestation: Attestation | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "AuditRow":
+    def from_json(cls, payload: object) -> AuditRow:
         data = _strict("audit row", payload, _AUDIT_ROW_KEYS, optional=_AUDIT_ROW_OPTIONAL_KEYS)
         return cls(
             transition_id=data["transition_id"],
@@ -522,10 +522,10 @@ class AuditRowNamed:
     retracted_claims: list
     emitted_intents: list
     committed_at: datetime
-    attestation: "Attestation | None" = None
+    attestation: Attestation | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "AuditRowNamed":
+    def from_json(cls, payload: object) -> AuditRowNamed:
         data = _strict("named audit row", payload, _AUDIT_ROW_KEYS, optional=_AUDIT_ROW_OPTIONAL_KEYS)
         return cls(
             transition_id=data["transition_id"],
@@ -565,7 +565,7 @@ class InvariantCoverage:
     not_in_programme: bool = False
 
     @classmethod
-    def from_json(cls, payload: object) -> "InvariantCoverage":
+    def from_json(cls, payload: object) -> InvariantCoverage:
         data = _strict(
             "invariant coverage",
             payload,
@@ -606,7 +606,7 @@ class TransformationUsage:
     not_in_programme: bool = False
 
     @classmethod
-    def from_json(cls, payload: object) -> "TransformationUsage":
+    def from_json(cls, payload: object) -> TransformationUsage:
         data = _strict(
             "transformation usage",
             payload,
@@ -636,7 +636,7 @@ class CoverageReport:
     transformations: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "CoverageReport":
+    def from_json(cls, payload: object) -> CoverageReport:
         data = _strict(
             "coverage report",
             payload,
@@ -669,7 +669,7 @@ class Diagnostic:
     column: int | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "Diagnostic":
+    def from_json(cls, payload: object) -> Diagnostic:
         data = _strict(
             "diagnostic",
             payload,
@@ -692,7 +692,7 @@ class CheckReport:
     diagnostics: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "CheckReport":
+    def from_json(cls, payload: object) -> CheckReport:
         data = _strict("check report", payload, {"file", "diagnostics"})
         return cls(
             file=data["file"],
@@ -706,7 +706,7 @@ class HashReport:
     hash: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "HashReport":
+    def from_json(cls, payload: object) -> HashReport:
         data = _strict("hash report", payload, {"program", "hash"})
         return cls(program=data["program"], hash=data["hash"])
 
@@ -721,7 +721,7 @@ class LeastPrivilege:
     writer_role: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "LeastPrivilege":
+    def from_json(cls, payload: object) -> LeastPrivilege:
         data = _strict(
             "least privilege", payload, {"next_steps", "reader_role", "writer_role"}
         )
@@ -739,7 +739,7 @@ class InitReport:
     least_privilege: LeastPrivilege | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "InitReport":
+    def from_json(cls, payload: object) -> InitReport:
         data = _strict(
             "init report", payload, {"status", "schema"}, optional={"least_privilege"}
         )
@@ -769,7 +769,7 @@ class RefreshDerivedReport:
     source_snapshot_transition_id: str | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "RefreshDerivedReport":
+    def from_json(cls, payload: object) -> RefreshDerivedReport:
         data = _strict(
             "refresh derived report",
             payload,
@@ -813,7 +813,7 @@ class ReplayConsistent:
     claims: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "ReplayConsistent":
+    def from_json(cls, payload: object) -> ReplayConsistent:
         data = _strict("consistent replay", payload, {"status", "transitions", "claims"})
         return cls(transitions=data["transitions"], claims=data["claims"])
 
@@ -827,7 +827,7 @@ class ReplayDivergent:
     only_in_replay: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "ReplayDivergent":
+    def from_json(cls, payload: object) -> ReplayDivergent:
         data = _strict(
             "divergent replay", payload, {"status", "only_in_claims_table", "only_in_replay"}
         )
@@ -837,7 +837,7 @@ class ReplayDivergent:
         )
 
 
-def parse_verify_outcome(payload: object) -> "ReplayConsistent | ReplayDivergent":
+def parse_verify_outcome(payload: object) -> ReplayConsistent | ReplayDivergent:
     return _by_status(
         payload,
         "a replay verdict",
@@ -845,7 +845,7 @@ def parse_verify_outcome(payload: object) -> "ReplayConsistent | ReplayDivergent
             "consistent": ReplayConsistent.from_json,
             "divergent": ReplayDivergent.from_json,
         },
-        )
+    )
 
 
 @dataclass(frozen=True)
@@ -854,7 +854,7 @@ class TreeIntact:
     tree_size: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeIntact":
+    def from_json(cls, payload: object) -> TreeIntact:
         data = _strict("intact tree", payload, {"status", "checkpoints", "tree_size"})
         return cls(checkpoints=data["checkpoints"], tree_size=data["tree_size"])
 
@@ -866,7 +866,7 @@ class TreeTampered:
     recomputed_root: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeTampered":
+    def from_json(cls, payload: object) -> TreeTampered:
         data = _strict(
             "tampered tree", payload, {"status", "tree_size", "recorded_root", "recomputed_root"}
         )
@@ -882,7 +882,7 @@ class TreeChainBroken:
     detail: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeChainBroken":
+    def from_json(cls, payload: object) -> TreeChainBroken:
         data = _strict("chain-broken tree", payload, {"status", "detail"})
         return cls(detail=data["detail"])
 
@@ -894,7 +894,7 @@ class TreeAnchorMismatch:
     stored_checkpoint_hash: str | None
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeAnchorMismatch":
+    def from_json(cls, payload: object) -> TreeAnchorMismatch:
         data = _strict(
             "anchor-mismatch tree",
             payload,
@@ -915,7 +915,7 @@ class TreeMalformedPack:
     detail: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeMalformedPack":
+    def from_json(cls, payload: object) -> TreeMalformedPack:
         data = _strict("malformed pack", payload, {"status", "detail"})
         return cls(detail=data["detail"])
 
@@ -931,7 +931,7 @@ class TreeSignatureInvalid:
     public_key: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeSignatureInvalid":
+    def from_json(cls, payload: object) -> TreeSignatureInvalid:
         data = _strict(
             "signature-invalid tree",
             payload,
@@ -957,7 +957,7 @@ class TreeUnauthorizedKey:
     public_key: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeUnauthorizedKey":
+    def from_json(cls, payload: object) -> TreeUnauthorizedKey:
         data = _strict(
             "unauthorized-key tree",
             payload,
@@ -979,7 +979,7 @@ class TreeSignatureRequired:
     tree_size: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeSignatureRequired":
+    def from_json(cls, payload: object) -> TreeSignatureRequired:
         data = _strict("signature-required tree", payload, {"status", "tree_size"})
         return cls(tree_size=data["tree_size"])
 
@@ -1012,7 +1012,7 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             "unauthorized_key": TreeUnauthorizedKey.from_json,
             "signature_required": TreeSignatureRequired.from_json,
         },
-        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1022,7 +1022,7 @@ class ViewsIntact:
     views_checked: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "ViewsIntact":
+    def from_json(cls, payload: object) -> ViewsIntact:
         data = _strict("intact views", payload, {"status", "views_checked"})
         return cls(views_checked=data["views_checked"])
 
@@ -1037,7 +1037,7 @@ class ViewsTampered:
     missing: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "ViewsTampered":
+    def from_json(cls, payload: object) -> ViewsTampered:
         data = _strict("tampered views", payload, {"status", "mismatched", "missing"})
         return cls(mismatched=list(data["mismatched"]), missing=list(data["missing"]))
 
@@ -1048,7 +1048,7 @@ class ViewsNotSealed:
     never applied. Visible, not a failure."""
 
     @classmethod
-    def from_json(cls, payload: object) -> "ViewsNotSealed":
+    def from_json(cls, payload: object) -> ViewsNotSealed:
         _strict("unsealed views", payload, {"status"})
         return cls()
 
@@ -1066,7 +1066,7 @@ def parse_views_verification(payload: object) -> ViewsVerification:
             "tampered": ViewsTampered.from_json,
             "not_sealed": ViewsNotSealed.from_json,
         },
-        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1080,7 +1080,7 @@ class VerifyReport:
     views: ViewsVerification | None = None
 
     @classmethod
-    def from_json(cls, payload: object) -> "VerifyReport":
+    def from_json(cls, payload: object) -> VerifyReport:
         data = _strict("verify report", payload, {"replay", "tree"}, optional={"views"})
         views = data.get("views")
         return cls(
@@ -1102,7 +1102,7 @@ class TreeHeadSignature:
     signature: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "TreeHeadSignature":
+    def from_json(cls, payload: object) -> TreeHeadSignature:
         data = _strict(
             "tree-head signature", payload, {"key_id", "purpose", "public_key", "signature"}
         )
@@ -1135,7 +1135,7 @@ class Checkpoint:
     signatures: list = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, payload: object) -> "Checkpoint":
+    def from_json(cls, payload: object) -> Checkpoint:
         data = _strict(
             "checkpoint",
             payload,
@@ -1175,7 +1175,7 @@ class CheckpointCreated:
     checkpoint: Checkpoint
 
     @classmethod
-    def from_json(cls, payload: object) -> "CheckpointCreated":
+    def from_json(cls, payload: object) -> CheckpointCreated:
         return cls(checkpoint=_checkpoint_from_flattened("created checkpoint", payload))
 
 
@@ -1187,11 +1187,11 @@ class CheckpointNoNewRows:
     checkpoint: Checkpoint
 
     @classmethod
-    def from_json(cls, payload: object) -> "CheckpointNoNewRows":
+    def from_json(cls, payload: object) -> CheckpointNoNewRows:
         return cls(checkpoint=_checkpoint_from_flattened("no-new-rows checkpoint", payload))
 
 
-def parse_checkpoint_outcome(payload: object) -> "CheckpointCreated | CheckpointNoNewRows":
+def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointNoNewRows:
     return _by_status(
         payload,
         "a checkpoint outcome",
@@ -1199,7 +1199,7 @@ def parse_checkpoint_outcome(payload: object) -> "CheckpointCreated | Checkpoint
             "created": CheckpointCreated.from_json,
             "no_new_rows": CheckpointNoNewRows.from_json,
         },
-        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1210,7 +1210,7 @@ class PackManifest:
     checkpoint_hash: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "PackManifest":
+    def from_json(cls, payload: object) -> PackManifest:
         data = _strict(
             "pack manifest",
             payload,
@@ -1234,7 +1234,7 @@ class EvidencePack:
     rows: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "EvidencePack":
+    def from_json(cls, payload: object) -> EvidencePack:
         data = _strict("evidence pack", payload, {"manifest", "checkpoints", "rows"})
         return cls(
             manifest=PackManifest.from_json(data["manifest"]),
@@ -1255,7 +1255,7 @@ class WindowPackManifest:
     to_root_hash: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowPackManifest":
+    def from_json(cls, payload: object) -> WindowPackManifest:
         data = _strict(
             "window pack manifest",
             payload,
@@ -1300,7 +1300,7 @@ class RowInclusionProof:
     proof: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "RowInclusionProof":
+    def from_json(cls, payload: object) -> RowInclusionProof:
         data = _strict("row inclusion proof", payload, {"leaf_index", "proof"})
         return cls(leaf_index=data["leaf_index"], proof=_str_list("proof", data["proof"]))
 
@@ -1319,7 +1319,7 @@ class WindowEvidencePack:
     inclusion_proofs: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowEvidencePack":
+    def from_json(cls, payload: object) -> WindowEvidencePack:
         data = _strict(
             "window evidence pack",
             payload,
@@ -1349,7 +1349,7 @@ class WindowIntact:
     rows: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowIntact":
+    def from_json(cls, payload: object) -> WindowIntact:
         data = _strict(
             "intact window", payload, {"status", "from_tree_size", "to_tree_size", "rows"}
         )
@@ -1369,7 +1369,7 @@ class WindowInconsistentExtension:
     to_tree_size: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowInconsistentExtension":
+    def from_json(cls, payload: object) -> WindowInconsistentExtension:
         data = _strict(
             "inconsistent-extension window", payload, {"status", "from_tree_size", "to_tree_size"}
         )
@@ -1384,7 +1384,7 @@ class WindowRowNotIncluded:
     leaf_index: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowRowNotIncluded":
+    def from_json(cls, payload: object) -> WindowRowNotIncluded:
         data = _strict("row-not-included window", payload, {"status", "leaf_index"})
         return cls(leaf_index=data["leaf_index"])
 
@@ -1398,7 +1398,7 @@ class WindowAnchorMismatch:
     pack_checkpoint_hash: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowAnchorMismatch":
+    def from_json(cls, payload: object) -> WindowAnchorMismatch:
         data = _strict(
             "anchor-mismatch window",
             payload,
@@ -1422,7 +1422,7 @@ class WindowSignatureInvalid:
     public_key: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowSignatureInvalid":
+    def from_json(cls, payload: object) -> WindowSignatureInvalid:
         data = _strict(
             "signature-invalid window",
             payload,
@@ -1444,7 +1444,7 @@ class WindowSignatureRequired:
     tree_size: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowSignatureRequired":
+    def from_json(cls, payload: object) -> WindowSignatureRequired:
         data = _strict("signature-required window", payload, {"status", "tree_size"})
         return cls(tree_size=data["tree_size"])
 
@@ -1457,7 +1457,7 @@ class WindowMalformed:
     detail: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "WindowMalformed":
+    def from_json(cls, payload: object) -> WindowMalformed:
         data = _strict("malformed window", payload, {"status", "detail"})
         return cls(detail=data["detail"])
 
@@ -1488,7 +1488,7 @@ def parse_window_verification(payload: object) -> WindowVerification:
             "signature_required": WindowSignatureRequired.from_json,
             "malformed": WindowMalformed.from_json,
         },
-        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1502,7 +1502,7 @@ class SelectivePackManifest:
     checkpoint_hash: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectivePackManifest":
+    def from_json(cls, payload: object) -> SelectivePackManifest:
         data = _strict(
             "selective pack manifest",
             payload,
@@ -1530,7 +1530,7 @@ class SelectiveEvidencePack:
     inclusion_proofs: list
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveEvidencePack":
+    def from_json(cls, payload: object) -> SelectiveEvidencePack:
         data = _strict(
             "selective evidence pack",
             payload,
@@ -1554,7 +1554,7 @@ class SelectiveIntact:
     rows_disclosed: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveIntact":
+    def from_json(cls, payload: object) -> SelectiveIntact:
         data = _strict("intact selective", payload, {"status", "tree_size", "rows_disclosed"})
         return cls(tree_size=data["tree_size"], rows_disclosed=data["rows_disclosed"])
 
@@ -1567,7 +1567,7 @@ class SelectiveRowNotIncluded:
     leaf_index: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveRowNotIncluded":
+    def from_json(cls, payload: object) -> SelectiveRowNotIncluded:
         data = _strict("row-not-included selective", payload, {"status", "leaf_index"})
         return cls(leaf_index=data["leaf_index"])
 
@@ -1581,7 +1581,7 @@ class SelectiveAnchorMismatch:
     pack_checkpoint_hash: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveAnchorMismatch":
+    def from_json(cls, payload: object) -> SelectiveAnchorMismatch:
         data = _strict(
             "anchor-mismatch selective",
             payload,
@@ -1605,7 +1605,7 @@ class SelectiveSignatureInvalid:
     public_key: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveSignatureInvalid":
+    def from_json(cls, payload: object) -> SelectiveSignatureInvalid:
         data = _strict(
             "signature-invalid selective",
             payload,
@@ -1627,7 +1627,7 @@ class SelectiveSignatureRequired:
     tree_size: int
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveSignatureRequired":
+    def from_json(cls, payload: object) -> SelectiveSignatureRequired:
         data = _strict("signature-required selective", payload, {"status", "tree_size"})
         return cls(tree_size=data["tree_size"])
 
@@ -1640,7 +1640,7 @@ class SelectiveMalformed:
     detail: str
 
     @classmethod
-    def from_json(cls, payload: object) -> "SelectiveMalformed":
+    def from_json(cls, payload: object) -> SelectiveMalformed:
         data = _strict("malformed selective", payload, {"status", "detail"})
         return cls(detail=data["detail"])
 
@@ -1669,4 +1669,4 @@ def parse_selective_verification(payload: object) -> SelectiveVerification:
             "signature_required": SelectiveSignatureRequired.from_json,
             "malformed": SelectiveMalformed.from_json,
         },
-        )
+    )
