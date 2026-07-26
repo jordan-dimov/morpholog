@@ -49,9 +49,8 @@ jobs:
       # could land em-dashes silently.
       - name: ASCII-only dashes
         run: |
-          if grep -RIn --include='*.md' --include='*.rs' --include='*.morph' \
-                  -e $'\u2014' -e $'\u2013' \
-                  docs/ README.md examples/ crates/; then
+          if git grep -In -e $'\u2014' -e $'\u2013' \
+                  -- '*.md' '*.rs' '*.morph'; then
             echo '::error::Found em-dashes (U+2014) or en-dashes (U+2013). Project rule: ASCII `-` only.'
             exit 1
           fi
@@ -71,12 +70,19 @@ jobs:
       - name: Read rust-version from the workspace
         id: floor
         run: |
-          floor=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          floor=$(python3 -c '
+          import sys, tomllib
+          with open("Cargo.toml", "rb") as f:
+              v = tomllib.load(f).get("workspace", {}).get("package", {}).get("rust-version")
+          if not v:
+              sys.exit("no workspace.package.rust-version in Cargo.toml - this job verifies that key, so its absence is the defect")
+          print(v)
+          ')
           echo "version=$floor" >> "$GITHUB_OUTPUT"
           echo "declared floor: $floor"
 
       - name: Install the declared floor toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: ${{ steps.floor.outputs.version }}
 
