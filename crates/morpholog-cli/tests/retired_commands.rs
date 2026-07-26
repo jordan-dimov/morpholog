@@ -17,6 +17,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_morpholog");
 /// Command paths the `audit` rename retired. Each must be rejected by
 /// the CLI, and none may appear in a message.
 const RETIRED_PATHS: &[&[&str]] = &[
+    &["evidence"],
     &["evidence", "export"],
     &["evidence", "verify"],
     &["checkpoint"],
@@ -33,6 +34,13 @@ const RETIRED_IN_PROSE: &[&str] = &[
     "run `checkpoint`",
     "run `verify`",
     "run `keygen`",
+    // The `morpholog x` spelling is unambiguous whatever follows, and is
+    // the one the first cut of this gate missed: a module header still
+    // announced itself as `morpholog evidence`.
+    "morpholog evidence",
+    "morpholog checkpoint",
+    "morpholog keygen",
+    "morpholog verify`",
 ];
 
 #[test]
@@ -67,6 +75,9 @@ fn no_source_message_recommends_a_retired_command() {
         }
         let text = std::fs::read_to_string(path).expect("source readable");
         for (number, line) in text.lines().enumerate() {
+            // Case-insensitively: a sentence-leading "Run `checkpoint`"
+            // slipped past the first cut of this list.
+            let line = line.to_lowercase();
             for retired in RETIRED_IN_PROSE {
                 if line.contains(retired) {
                     offenders.push(format!("{}:{} names {retired}", path.display(), number + 1));

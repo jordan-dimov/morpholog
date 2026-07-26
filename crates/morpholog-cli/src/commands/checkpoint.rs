@@ -1,4 +1,4 @@
-//! `morpholog checkpoint` - record a tamper-evident checkpoint over the
+//! `morpholog audit checkpoint` - record a tamper-evident checkpoint over the
 //! audit log and print it as an external anchor.
 
 use anyhow::Context;
@@ -7,7 +7,7 @@ use morpholog_postgres::{CheckpointSigner, create_checkpoint, signing_key_from_p
 use crate::CheckpointArgs;
 use crate::commands::{connect, print_json};
 
-/// Run `checkpoint`: compute the audit Merkle root over the committed
+/// Run `audit checkpoint`: compute the audit Merkle root over the committed
 /// prefix, chain it onto the previous checkpoint, optionally sign the new
 /// tree head, and print the checkpoint as JSON. Save that output outside
 /// the database - a later `verify --anchor-file` against it is the check a

@@ -1,4 +1,4 @@
-//! `morpholog keygen` - generate an Ed25519 audit-signing keypair.
+//! `morpholog audit keygen` - generate an Ed25519 audit-signing keypair.
 
 use std::io::Write;
 

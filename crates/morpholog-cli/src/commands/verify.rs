@@ -10,7 +10,7 @@ use morpholog_postgres::{
 use crate::VerifyArgs;
 use crate::commands::{connect, print_json};
 
-/// Run `verify`: replay (claims vs audit), then the tamper-evidence
+/// Run `audit verify`: replay (claims vs audit), then the tamper-evidence
 /// check (recompute the audit Merkle root against each checkpoint, and
 /// against an external anchor if given). One JSON object on stdout
 /// carrying both verdicts; exit one if either fails - the same
