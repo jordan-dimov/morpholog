@@ -15,14 +15,7 @@ use morpholog_postgres::{
 use anyhow::Context;
 
 use crate::commands::{connect, print_json};
-use crate::{EvidenceCmd, EvidenceExportArgs, EvidenceVerifyArgs};
-
-pub(crate) async fn run(cmd: EvidenceCmd) -> anyhow::Result<()> {
-    match cmd {
-        EvidenceCmd::Export(args) => export(args).await,
-        EvidenceCmd::Verify(args) => verify(args),
-    }
-}
+use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
 /// `evidence export`: a complete-prefix pack by default, a window between
 /// two checkpoints with a `--from-*` start, or - with `--transition` - a
@@ -32,7 +25,7 @@ pub(crate) async fn run(cmd: EvidenceCmd) -> anyhow::Result<()> {
 /// intents - and may contain confidential business data; a selective pack
 /// carries only the chosen rows, and proves them authentic without
 /// proving the selection complete.
-async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
+pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
 
     if !args.transition.is_empty() {
@@ -81,7 +74,7 @@ async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
 /// selects which. One JSON verdict on stdout; exit one on any tamper,
 /// divergence, or malformed pack - the same data-on-stdout,
 /// exit-code-as-verdict shape as `verify`.
-fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
+pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)
         .with_context(|| format!("reading pack file {}", args.pack_file.display()))?;
 

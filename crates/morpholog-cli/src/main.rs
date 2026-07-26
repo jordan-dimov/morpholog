@@ -35,6 +35,15 @@ mod commands;
         morpholog init                     set up the database tables\n  \
         morpholog propose rules.morph <transformation> --actor you --args-named '{...}'\n  \
         morpholog inspect claims           what is admitted right now?\n\n\
+        The commands, by what you are doing:\n  \
+        authoring a programme    check, hash, schema, generate\n  \
+        governing state          propose, explain, inspect\n  \
+        running a deployment     init, refresh, outbox\n  \
+        proving the record       audit\n  \
+        discovering rules        evaluate\n\n\
+        Only invariants and transformations are first-class in Morpholog: propose\n\
+        is the one verb by which governed state changes, and everything else\n\
+        either prepares a programme or observes what the rules have done.\n\n\
         Database commands read the connection from --database-url or $DATABASE_URL.\n\
         Every command has deeper help: morpholog help <command>."
 )]
@@ -115,41 +124,6 @@ enum Command {
         what: Inspect,
     },
 
-    /// Check that the claims table and the audit log still agree.
-    ///
-    /// The two tables are independent records of the same history, so
-    /// replaying the audit log must land on exactly the current
-    /// claims - a difference is evidence that one was modified
-    /// outside the runtime. Prints the outcome as JSON; consistent
-    /// exits zero, divergent prints the claims each record holds that
-    /// the other does not and exits one. Read-only; an empty database
-    /// is trivially consistent.
-    ///
-    /// Also recomputes the audit Merkle tree against its checkpoints
-    /// (tamper evidence). Pass `--anchor-file` with a checkpoint saved
-    /// earlier by `checkpoint` to detect a coordinated edit of the audit
-    /// log and the checkpoint table - the only check an attacker with
-    /// full database access cannot defeat.
-    Verify(VerifyArgs),
-
-    /// Record a tamper-evident checkpoint over the audit log.
-    ///
-    /// Computes the RFC 6962 Merkle root of the committed audit prefix
-    /// and chains it onto the previous checkpoint. Prints the checkpoint
-    /// as JSON - save it outside the database as an anchor: a later
-    /// `verify --anchor-file` against it catches any rewrite of the log,
-    /// even one that also rewrites the checkpoint table. With
-    /// `--signing-key` the tree head is signed, so the anchor is
-    /// attributable as well as tamper-evident.
-    Checkpoint(CheckpointArgs),
-
-    /// Generate an Ed25519 audit-signing keypair.
-    ///
-    /// Writes the private key as PKCS#8 PEM (keep it secret) and the
-    /// public key as `ed25519-pub:<hex>` - the value you admit as an
-    /// `AuditSigningKey` claim and give to verifiers. No database.
-    Keygen(KeygenArgs),
-
     /// Score a candidate programme against committed history.
     ///
     /// Replays the committed audit log under the candidate's invariants -
@@ -161,18 +135,19 @@ enum Command {
     /// transition-relational candidates using `pre(...)` are rejected.
     Evaluate(EvaluateArgs),
 
-    /// Export and verify portable evidence packs over the audit log.
+    /// Everything about the audit log: prove it, anchor it, carry it.
     ///
-    /// `export` writes a complete, checkpointed prefix of the log (its
-    /// rows, the checkpoint chain, a thin manifest) as JSON; `verify`
-    /// checks one offline - recomputing the Merkle root and matching it
-    /// against the pack's checkpoints and an external anchor - with no
-    /// database access at all. A pack carries the full audit prefix
-    /// (actors, arguments, claims, intents): it is not selective
-    /// disclosure and may hold confidential business data.
-    Evidence {
+    /// The audit log is the record a regulator reads and an auditor
+    /// challenges, so the commands that establish its integrity live
+    /// together: `verify` checks it against the claims table and its
+    /// own Merkle tree, `checkpoint` records an anchor to hold outside
+    /// the database, `export` writes a portable pack, `verify-pack`
+    /// checks such a pack with no database at all, and `keygen` makes
+    /// the signing key that turns an anchor from tamper-evident into
+    /// attributable.
+    Audit {
         #[command(subcommand)]
-        what: EvidenceCmd,
+        what: AuditCmd,
     },
 
     /// Print a stable fingerprint of a programme's rules.
@@ -434,19 +409,57 @@ pub(crate) struct EvaluateArgs {
 /// Evidence-pack subcommands. `export` is database-backed; `verify` is
 /// deliberately offline - it takes no connection string, only files.
 #[derive(clap::Subcommand, Debug)]
-pub(crate) enum EvidenceCmd {
-    /// Export an evidence pack as JSON (redirect to a file): a complete
-    /// prefix by default, or - with `--from-anchor`/`--from-tree-size` - the
-    /// window between that earlier checkpoint and the covering one, proving
-    /// it extends the earlier anchor. Refuses if a named checkpoint does not
-    /// exist.
+pub(crate) enum AuditCmd {
+    /// Check that the claims table and the audit log still agree.
+    ///
+    /// The two tables are independent records of the same history, so
+    /// replaying the audit log must land on exactly the current
+    /// claims - a difference is evidence that one was modified outside
+    /// the runtime. Also recomputes the audit Merkle tree against its
+    /// checkpoints. Pass `--anchor-file` with a checkpoint saved
+    /// earlier to detect a coordinated edit of the log AND the
+    /// checkpoint table - the only check an attacker with full
+    /// database access cannot defeat. Read-only; exits one on
+    /// divergence.
+    Verify(VerifyArgs),
+
+    /// Record a tamper-evident checkpoint over the audit log.
+    ///
+    /// Computes the RFC 6962 Merkle root of the committed prefix and
+    /// chains it onto the previous checkpoint. Save the printed JSON
+    /// outside the database as an anchor; a later `audit verify
+    /// --anchor-file` against it catches any rewrite. With
+    /// `--signing-key` the tree head is signed, so the anchor is
+    /// attributable as well as tamper-evident.
+    Checkpoint(CheckpointArgs),
+
+    /// Export a portable evidence pack as JSON (redirect to a file).
+    ///
+    /// A complete checkpointed prefix by default; with
+    /// `--from-anchor`/`--from-tree-size` the window between that
+    /// earlier checkpoint and the covering one, proving it extends the
+    /// earlier anchor; with `--transition` a selective pack of just
+    /// those rows. A prefix or window pack carries the full audit
+    /// detail (actors, arguments, claims, intents) - it is not
+    /// selective disclosure and may hold confidential business data.
     Export(EvidenceExportArgs),
 
-    /// Verify a pack offline, with no database. Recomputes the Merkle
-    /// root from the pack's rows and checks it against the pack's
-    /// checkpoints, and against an external `--anchor-file` if given.
-    /// Exit one on any tamper, divergence, or malformed pack.
-    Verify(EvidenceVerifyArgs),
+    /// Verify an exported pack offline, with no database at all.
+    ///
+    /// Recomputes the Merkle root from the pack's own rows and checks
+    /// it against the pack's checkpoints, and against an external
+    /// `--anchor-file` if given. This is the check a recipient runs:
+    /// the database that produced the pack is not consulted, and
+    /// cannot be. Exits one on any tamper, divergence, or malformed
+    /// pack.
+    VerifyPack(EvidenceVerifyArgs),
+
+    /// Generate an Ed25519 audit-signing keypair.
+    ///
+    /// Writes the private key as PKCS#8 PEM (keep it secret) and the
+    /// public key as `ed25519-pub:<hex>` - the value you admit as an
+    /// `AuditSigningKey` claim and give to verifiers. No database.
+    Keygen(KeygenArgs),
 }
 
 /// Arguments for `evidence export`. With no `--from-*` it exports a
@@ -1180,11 +1193,14 @@ async fn main() -> anyhow::Result<()> {
             OutboxCmd::Release(args) => commands::outbox::release(args).await,
         },
         Command::Schema(args) => commands::schema::run(args),
-        Command::Verify(args) => commands::verify::run(args).await,
-        Command::Checkpoint(args) => commands::checkpoint::run(args).await,
-        Command::Keygen(args) => commands::keygen::run(&args),
         Command::Evaluate(args) => commands::evaluate::run(args).await,
-        Command::Evidence { what } => commands::evidence::run(what).await,
+        Command::Audit { what } => match what {
+            AuditCmd::Verify(args) => commands::verify::run(args).await,
+            AuditCmd::Checkpoint(args) => commands::checkpoint::run(args).await,
+            AuditCmd::Export(args) => commands::evidence::export(args).await,
+            AuditCmd::VerifyPack(args) => commands::evidence::verify(args),
+            AuditCmd::Keygen(args) => commands::keygen::run(&args),
+        },
         Command::Generate {
             what: GenerateCmd::PythonClient(args),
         } => commands::generate::run(&args),

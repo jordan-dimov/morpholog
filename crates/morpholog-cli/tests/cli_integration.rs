@@ -419,7 +419,7 @@ async fn verify_is_consistent_after_normal_commits() {
     post_balanced_entry("entry_001", 100);
     post_balanced_entry("entry_002", 200);
 
-    let (status, stdout, stderr) = run_cli(&["verify"]);
+    let (status, stdout, stderr) = run_cli(&["audit", "verify"]);
     assert!(status.success(), "verify should exit zero; {stderr}");
     let outcome: Value = serde_json::from_str(&stdout).expect("verify output is JSON");
     assert_eq!(outcome["replay"]["status"], "consistent", "got: {stdout}");
@@ -436,7 +436,7 @@ async fn verify_is_consistent_after_normal_commits() {
 #[tokio::test(flavor = "current_thread")]
 async fn verify_on_empty_database_is_consistent() {
     reset_db().await;
-    let (status, stdout, _stderr) = run_cli(&["verify"]);
+    let (status, stdout, _stderr) = run_cli(&["audit", "verify"]);
     assert!(status.success(), "empty database is trivially consistent");
     let outcome: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(outcome["replay"]["status"], "consistent");
@@ -460,7 +460,7 @@ async fn verify_stays_consistent_under_concurrent_commits() {
         }
     });
     for _ in 0..6 {
-        let (status, stdout, stderr) = run_cli(&["verify"]);
+        let (status, stdout, stderr) = run_cli(&["audit", "verify"]);
         assert!(
             status.success(),
             "verify must not report false divergence under concurrent \
@@ -490,7 +490,7 @@ async fn verify_detects_an_out_of_band_edit() {
     .await
     .expect("out-of-band UPDATE");
 
-    let (status, stdout, _stderr) = run_cli(&["verify"]);
+    let (status, stdout, _stderr) = run_cli(&["audit", "verify"]);
     assert!(!status.success(), "divergence must exit non-zero");
     let outcome: Value = serde_json::from_str(&stdout).expect("verify output is JSON");
     assert_eq!(outcome["replay"]["status"], "divergent", "got: {stdout}");
@@ -519,7 +519,7 @@ async fn checkpoint_then_verify_against_the_anchor() {
     post_balanced_entry("c2", 200);
 
     // `checkpoint` prints the checkpoint as JSON - the external anchor.
-    let (status, cp_stdout, stderr) = run_cli(&["checkpoint"]);
+    let (status, cp_stdout, stderr) = run_cli(&["audit", "checkpoint"]);
     assert!(status.success(), "checkpoint should succeed; {stderr}");
     let cp: Value = serde_json::from_str(&cp_stdout).expect("checkpoint output is JSON");
     assert_eq!(cp["status"], "created");
@@ -533,8 +533,12 @@ async fn checkpoint_then_verify_against_the_anchor() {
     // A unique temp file, auto-cleaned, so concurrent runs cannot collide.
     let mut anchor = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
-    let (status, stdout, stderr) =
-        run_cli(&["verify", "--anchor-file", anchor.path().to_str().unwrap()]);
+    let (status, stdout, stderr) = run_cli(&[
+        "audit",
+        "verify",
+        "--anchor-file",
+        anchor.path().to_str().unwrap(),
+    ]);
     assert!(
         status.success(),
         "verify against a fresh anchor should pass; {stderr}\n{stdout}"
@@ -548,11 +552,11 @@ async fn checkpoint_then_verify_against_the_anchor() {
 async fn verify_require_signatures_fails_an_unsigned_checkpoint() {
     reset_db().await;
     post_balanced_entry("rs1", 100);
-    let (status, _stdout, stderr) = run_cli(&["checkpoint"]);
+    let (status, _stdout, stderr) = run_cli(&["audit", "checkpoint"]);
     assert!(status.success(), "checkpoint should succeed; {stderr}");
 
     // Default verify: an unsigned checkpoint is intact (signing is opt-in).
-    let (status, stdout, _stderr) = run_cli(&["verify"]);
+    let (status, stdout, _stderr) = run_cli(&["audit", "verify"]);
     assert!(status.success(), "unsigned verify is intact: {stdout}");
     assert_eq!(
         serde_json::from_str::<Value>(&stdout).unwrap()["tree"]["status"],
@@ -560,7 +564,7 @@ async fn verify_require_signatures_fails_an_unsigned_checkpoint() {
     );
 
     // --require-signatures: the unsigned checkpoint now fails, exit non-zero.
-    let (status, stdout, _stderr) = run_cli(&["verify", "--require-signatures"]);
+    let (status, stdout, _stderr) = run_cli(&["audit", "verify", "--require-signatures"]);
     assert!(
         !status.success(),
         "require-signatures must fail an unsigned checkpoint: {stdout}"
@@ -579,12 +583,12 @@ async fn evidence_export_then_verify_offline() {
     post_balanced_entry("ev2", 200);
 
     // Anchor (saved outside the database), then export the pack.
-    let (status, cp_stdout, stderr) = run_cli(&["checkpoint"]);
+    let (status, cp_stdout, stderr) = run_cli(&["audit", "checkpoint"]);
     assert!(status.success(), "checkpoint should succeed; {stderr}");
     let mut anchor = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
 
-    let (status, pack_stdout, stderr) = run_cli(&["evidence", "export"]);
+    let (status, pack_stdout, stderr) = run_cli(&["audit", "export"]);
     assert!(status.success(), "evidence export should succeed; {stderr}");
     let pack: Value = serde_json::from_str(&pack_stdout).expect("pack is JSON");
     assert_eq!(pack["manifest"]["tree_size"], 2, "{pack_stdout}");
@@ -595,8 +599,8 @@ async fn evidence_export_then_verify_offline() {
 
     // Offline verify (NO --database-url) against the anchor: intact, exit 0.
     let (status, stdout, stderr) = run_cli_no_db(&[
-        "evidence",
-        "verify",
+        "audit",
+        "verify-pack",
         pack_path,
         "--anchor-file",
         anchor.path().to_str().unwrap(),
@@ -616,8 +620,11 @@ async fn evidence_export_then_verify_offline() {
     tampered_json["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut tamperedfile, tampered_json.to_string().as_bytes()).unwrap();
-    let (status, stdout, _stderr) =
-        run_cli_no_db(&["evidence", "verify", tamperedfile.path().to_str().unwrap()]);
+    let (status, stdout, _stderr) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        tamperedfile.path().to_str().unwrap(),
+    ]);
     assert!(
         !status.success(),
         "a tampered pack must exit non-zero: {stdout}"
@@ -636,14 +643,14 @@ async fn evidence_selective_export_then_verify_offline() {
     post_balanced_entry("sd_hidden", 200);
     let shown_b = post_balanced_entry("sd3", 300);
 
-    let (status, cp_stdout, stderr) = run_cli(&["checkpoint"]);
+    let (status, cp_stdout, stderr) = run_cli(&["audit", "checkpoint"]);
     assert!(status.success(), "checkpoint should succeed; {stderr}");
     let mut anchor = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
 
     // Disclose two of the three committed transitions.
     let (status, pack_stdout, stderr) = run_cli(&[
-        "evidence",
+        "audit",
         "export",
         "--transition",
         &shown_a.to_string(),
@@ -673,8 +680,8 @@ async fn evidence_selective_export_then_verify_offline() {
 
     // Offline verify (NO --database-url) against the anchor: intact, exit 0.
     let (status, stdout, stderr) = run_cli_no_db(&[
-        "evidence",
-        "verify",
+        "audit",
+        "verify-pack",
         pack_path,
         "--anchor-file",
         anchor.path().to_str().unwrap(),
@@ -692,8 +699,11 @@ async fn evidence_selective_export_then_verify_offline() {
     tampered_json["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut tamperedfile, tampered_json.to_string().as_bytes()).unwrap();
-    let (status, stdout, _stderr) =
-        run_cli_no_db(&["evidence", "verify", tamperedfile.path().to_str().unwrap()]);
+    let (status, stdout, _stderr) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        tamperedfile.path().to_str().unwrap(),
+    ]);
     assert!(
         !status.success(),
         "a tampered selective pack must exit non-zero: {stdout}"
@@ -707,7 +717,7 @@ async fn evidence_selective_export_then_verify_offline() {
     // Compliance mode: the covering checkpoint is unsigned, so
     // --require-signatures fails the otherwise-intact pack.
     let (status, stdout, _stderr) =
-        run_cli_no_db(&["evidence", "verify", pack_path, "--require-signatures"]);
+        run_cli_no_db(&["audit", "verify-pack", pack_path, "--require-signatures"]);
     assert!(!status.success(), "unsigned must fail the policy: {stdout}");
     assert_eq!(
         serde_json::from_str::<Value>(&stdout).unwrap()["status"],
@@ -726,7 +736,7 @@ async fn evidence_verify_names_an_unknown_future_pack_version() {
     )
     .unwrap();
     let (status, stdout, _stderr) =
-        run_cli_no_db(&["evidence", "verify", packfile.path().to_str().unwrap()]);
+        run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
     assert!(!status.success());
     let verdict: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
@@ -744,7 +754,7 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
     let mut packfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut packfile, br#"{"not": "a pack"}"#).unwrap();
     let (status, stdout, stderr) =
-        run_cli_no_db(&["evidence", "verify", packfile.path().to_str().unwrap()]);
+        run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
     assert!(
         !status.success(),
         "an invalid pack must exit non-zero: {stdout}"
@@ -883,9 +893,9 @@ async fn evaluate_against_a_pack_needs_no_database() {
     post_balanced_entry("ev2", 200);
 
     // Checkpoint + export a pack over the history (these need the DB).
-    let (s, _, e) = run_cli(&["checkpoint"]);
+    let (s, _, e) = run_cli(&["audit", "checkpoint"]);
     assert!(s.success(), "checkpoint: {e}");
-    let (s, pack_stdout, e) = run_cli(&["evidence", "export"]);
+    let (s, pack_stdout, e) = run_cli(&["audit", "export"]);
     assert!(s.success(), "export: {e}");
     let mut packfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut packfile, pack_stdout.as_bytes()).unwrap();
@@ -934,9 +944,9 @@ const CANDIDATE_NO_ENTRIES: &str = "program candidate\n\n\
 async fn write_case_pack(dir: &std::path::Path, name: &str, amount: i64) {
     reset_db().await;
     post_balanced_entry(name, amount);
-    let (s, _, e) = run_cli(&["checkpoint"]);
+    let (s, _, e) = run_cli(&["audit", "checkpoint"]);
     assert!(s.success(), "checkpoint {name}: {e}");
-    let (s, pack, e) = run_cli(&["evidence", "export"]);
+    let (s, pack, e) = run_cli(&["audit", "export"]);
     assert!(s.success(), "export {name}: {e}");
     std::fs::write(dir.join(format!("{name}.json")), pack).unwrap();
 }
@@ -1230,7 +1240,7 @@ async fn checkpoint_accepts_the_writer_assertion() {
     post_balanced_entry("entry_001", 100);
     let me = common::session_user(&database_url()).await;
 
-    let (status, stdout, stderr) = run_cli(&["checkpoint", "--writer-role", &me]);
+    let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--writer-role", &me]);
     assert!(
         status.success(),
         "asserted checkpoint should commit; {stderr}"
