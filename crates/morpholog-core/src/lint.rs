@@ -459,12 +459,12 @@ pub(crate) fn positive_claims(
             positive_claims(body, positive, definitions, seen, out);
         }
         Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            positive_value_claims(l, positive, out);
-            positive_value_claims(r, positive, out);
+            positive_value_claims(l, positive, definitions, seen, out);
+            positive_value_claims(r, positive, definitions, seen, out);
         }
         Prop::Compare { left, right, .. } => {
-            positive_value_claims(left, positive, out);
-            positive_value_claims(right, positive, out);
+            positive_value_claims(left, positive, definitions, seen, out);
+            positive_value_claims(right, positive, definitions, seen, out);
         }
         Prop::In(_, _) => {}
     }
@@ -475,7 +475,13 @@ pub(crate) fn positive_claims(
 /// polarity; one with a `default` tolerates absence and contributes
 /// only what its default expression carries. `sum` bodies tolerate
 /// zero matches, so they contribute nothing.
-fn positive_value_claims(expr: &ValueExpr, positive: bool, out: &mut BTreeSet<PredicateName>) {
+fn positive_value_claims(
+    expr: &ValueExpr,
+    positive: bool,
+    definitions: DefinitionIndex<'_>,
+    seen: &mut BTreeSet<crate::ir::DefinitionName>,
+    out: &mut BTreeSet<PredicateName>,
+) {
     match expr {
         ValueExpr::Term(_) => {}
         ValueExpr::ValueOf {
@@ -485,23 +491,29 @@ fn positive_value_claims(expr: &ValueExpr, positive: bool, out: &mut BTreeSet<Pr
                 out.insert(predicate.clone());
             }
             if let Some(d) = default {
-                positive_value_claims(d, positive, out);
+                positive_value_claims(d, positive, definitions, seen, out);
             }
         }
         ValueExpr::Arith { left, right, .. } => {
-            positive_value_claims(left, positive, out);
-            positive_value_claims(right, positive, out);
+            positive_value_claims(left, positive, definitions, seen, out);
+            positive_value_claims(right, positive, definitions, seen, out);
         }
         // abs reads its operand, so it requires whatever the operand does.
-        ValueExpr::Abs(operand) => positive_value_claims(operand, positive, out),
+        ValueExpr::Abs(operand) => positive_value_claims(operand, positive, definitions, seen, out),
         // round reads both operands, so it requires whatever they do.
         ValueExpr::Round { value, quantum } => {
-            positive_value_claims(value, positive, out);
-            positive_value_claims(quantum, positive, out);
+            positive_value_claims(value, positive, definitions, seen, out);
+            positive_value_claims(quantum, positive, definitions, seen, out);
         }
         // A sum tolerates zero matches; its body does not REQUIRE the
         // claims, so it contributes nothing.
-        ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } => {}
+        ValueExpr::Sum { .. } => {}
+        // An extremum is the opposite, which is why it cannot share the
+        // arm above: zero matches is an error, so its body IS required.
+        // Grouping the two would hide a rule over a permanent record that
+        // reads a retractable pointer - exactly the shape this lint
+        // exists to surface.
+        ValueExpr::Extremum { body, .. } => positive_claims(body, positive, definitions, seen, out),
     }
 }
 

@@ -378,9 +378,12 @@ pub enum ValueExpr {
     /// the same division of labour as [`ValueExpr::ValueOf`] (errors)
     /// against [`Stmt::BindOne`] (rejects).
     ///
-    /// Ordered kinds only. Subjects are opaque identifiers and booleans
-    /// are not a scale, so neither has a largest member; both are refused
-    /// at validation rather than given an arbitrary order.
+    /// Ordered kinds only - decimals, dates, timestamps, durations, and
+    /// same-unit quantities. Subjects are opaque identifiers, booleans are
+    /// not a scale, and a collection is not a point on one, so none has a
+    /// largest member; all are refused at validation rather than given an
+    /// arbitrary order. The check is an allow-list, so a kind added later
+    /// has no order until someone decides it does.
     Extremum {
         op: ExtremumOp,
         value: Term,
@@ -438,10 +441,6 @@ pub enum CompareOp {
     Gt,
 }
 
-/// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];
-/// the value-sort analogue of [`CompareOp`], replacing what would be a flat
-/// variant per operator. A new operator is one row here, not a fresh
-/// `ValueExpr` variant rippled across every match.
 /// Which end of the ordering an [`ValueExpr::Extremum`] takes.
 ///
 /// Distinct from [`ArithOp::Min`] / [`ArithOp::Max`], which cap one value
@@ -464,6 +463,10 @@ impl ExtremumOp {
     }
 }
 
+/// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];
+/// the value-sort analogue of [`CompareOp`], replacing what would be a flat
+/// variant per operator. A new operator is one row here, not a fresh
+/// `ValueExpr` variant rippled across every match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithOp {
     Add,

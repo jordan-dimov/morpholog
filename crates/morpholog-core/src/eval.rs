@@ -1024,7 +1024,14 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             for m in matches {
                 let next = resolve_term(value, &m, ctx.actor)?;
                 best = Some(match best {
-                    None => next,
+                    None => {
+                        // Checked before it becomes the running best:
+                        // otherwise one unordered match succeeds and two
+                        // raise a type error, which makes validity a
+                        // question of cardinality.
+                        ensure_ordered(&next, *op)?;
+                        next
+                    }
                     Some(current) => {
                         let ordering = compare_ordered(&current, &next, *op)?;
                         if ordering { next } else { current }
@@ -1694,6 +1701,26 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
 /// validation, and this is the runtime backstop for hand-built IR that
 /// skipped it. Quantities compare only within one unit, like every other
 /// quantity comparison.
+/// Does this value belong to a kind with an order at all?
+///
+/// The static checker refuses unordered kinds, so this is the backstop
+/// for hand-built IR and for a field the checker could not narrow. It has
+/// to run on the first candidate as well as the comparisons, or a
+/// singleton would slip through the gap between them.
+fn ensure_ordered(value: &EvalValue, op: crate::ir::ExtremumOp) -> Result<(), EvalError> {
+    match value {
+        EvalValue::Decimal(_)
+        | EvalValue::Date(_)
+        | EvalValue::Timestamp(_)
+        | EvalValue::Duration(_)
+        | EvalValue::Quantity { .. } => Ok(()),
+        other => Err(EvalError::TypeMismatch(format!(
+            "{} needs an ordered kind, got {other:?}",
+            op.as_str()
+        ))),
+    }
+}
+
 fn compare_ordered(
     current: &EvalValue,
     candidate: &EvalValue,
@@ -1795,6 +1822,154 @@ mod tests {
                 eval_value(&aggregate(ExtremumOp::Min), &ctx).expect("min"),
                 EvalValue::Date("2024-06-01".parse().expect("date")),
                 "min over {order:?}"
+            );
+        }
+    }
+
+    /// Validity is a question of kind, never of how many claims happen
+    /// to match.
+    ///
+    /// The first cut checked only comparisons, so one unordered match
+    /// succeeded and two raised a type error - the same programme going
+    /// from working to broken because a second claim was admitted. Every
+    /// candidate is checked now, singletons included.
+    #[test]
+    fn an_unordered_candidate_is_refused_however_many_there_are() {
+        use crate::ir::ExtremumOp;
+        let unordered = [
+            ("subject", EvalValue::Subject(Subject::from("a"))),
+            ("bool", EvalValue::Bool(true)),
+            (
+                "collection",
+                EvalValue::Collection(vec![EvalValue::Subject(Subject::from("x"))]),
+            ),
+        ];
+        for (label, first) in unordered {
+            for count in [1usize, 2] {
+                let state = State::from_claims(
+                    (0..count)
+                        .map(|i| ClaimInstance {
+                            predicate: "Thing".into(),
+                            args: vec![if i == 0 {
+                                first.clone()
+                            } else {
+                                EvalValue::Subject(Subject::from("b"))
+                            }],
+                        })
+                        .collect(),
+                );
+                let bindings = Bindings::new();
+                let ctx = EvalContext::new(
+                    &state,
+                    None,
+                    &bindings,
+                    None,
+                    crate::definitions::DefinitionIndex::new(&[]),
+                );
+                let expr = ValueExpr::Extremum {
+                    op: ExtremumOp::Max,
+                    value: Term::Var(Var::from("v")),
+                    body: Box::new(crate::ir_builder::claim(
+                        "Thing",
+                        vec![Term::Var(Var::from("v"))],
+                    )),
+                };
+                let err =
+                    eval_value(&expr, &ctx).expect_err(&format!("{label} x{count} has no order"));
+                assert!(
+                    err.to_string().contains("ordered kind"),
+                    "{label} x{count}: {err}"
+                );
+            }
+        }
+    }
+
+    /// Every kind the checker admits must actually evaluate, or the
+    /// allow-list and the runtime disagree about what is filterable.
+    #[test]
+    fn every_ordered_kind_yields_its_largest_member() {
+        use crate::ir::ExtremumOp;
+        let cases: Vec<(&str, Vec<EvalValue>, EvalValue)> = vec![
+            (
+                "decimal",
+                vec![
+                    EvalValue::Decimal(rust_decimal::Decimal::from(1)),
+                    EvalValue::Decimal(rust_decimal::Decimal::from(9)),
+                ],
+                EvalValue::Decimal(rust_decimal::Decimal::from(9)),
+            ),
+            (
+                "date",
+                vec![
+                    EvalValue::Date("2025-01-01".parse().expect("date")),
+                    EvalValue::Date("2026-01-01".parse().expect("date")),
+                ],
+                EvalValue::Date("2026-01-01".parse().expect("date")),
+            ),
+            (
+                "timestamp",
+                vec![
+                    EvalValue::Timestamp("2025-01-01T00:00:00Z".parse().expect("ts")),
+                    EvalValue::Timestamp("2026-01-01T00:00:00Z".parse().expect("ts")),
+                ],
+                EvalValue::Timestamp("2026-01-01T00:00:00Z".parse().expect("ts")),
+            ),
+            (
+                "duration",
+                vec![
+                    EvalValue::Duration("PT1H".parse().expect("dur")),
+                    EvalValue::Duration("PT6H".parse().expect("dur")),
+                ],
+                EvalValue::Duration("PT6H".parse().expect("dur")),
+            ),
+            (
+                "quantity",
+                vec![
+                    EvalValue::Quantity {
+                        amount: rust_decimal::Decimal::from(5),
+                        unit: "USD".into(),
+                    },
+                    EvalValue::Quantity {
+                        amount: rust_decimal::Decimal::from(7),
+                        unit: "USD".into(),
+                    },
+                ],
+                EvalValue::Quantity {
+                    amount: rust_decimal::Decimal::from(7),
+                    unit: "USD".into(),
+                },
+            ),
+        ];
+        for (label, values, expected) in cases {
+            let state = State::from_claims(
+                values
+                    .into_iter()
+                    .map(|v| ClaimInstance {
+                        predicate: "Thing".into(),
+                        args: vec![v],
+                    })
+                    .collect(),
+            );
+            let bindings = Bindings::new();
+            let ctx = EvalContext::new(
+                &state,
+                None,
+                &bindings,
+                None,
+                crate::definitions::DefinitionIndex::new(&[]),
+            );
+            let expr = ValueExpr::Extremum {
+                op: ExtremumOp::Max,
+                value: Term::Var(Var::from("v")),
+                body: Box::new(crate::ir_builder::claim(
+                    "Thing",
+                    vec![Term::Var(Var::from("v"))],
+                )),
+            };
+            assert_eq!(
+                eval_value(&expr, &ctx).unwrap_or_else(|e| panic!("{label}: {e}")),
+                expected,
+                "{label}"
             );
         }
     }

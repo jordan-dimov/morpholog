@@ -975,7 +975,19 @@ impl CheckCtx<'_> {
                 // so its kind is the member kind - provided that kind has
                 // an order at all.
                 if let InferredKind::Known(actual) = resolved {
-                    if matches!(actual, PredicateArgKind::Subject | PredicateArgKind::Bool) {
+                    // An allow-list, not an enumeration of the
+                    // unordered kinds: a kind added later has no order
+                    // until someone gives it one, and defaulting to
+                    // refuse keeps that decision explicit. Collections
+                    // are what the first cut let through.
+                    if !matches!(
+                        actual,
+                        PredicateArgKind::Decimal
+                            | PredicateArgKind::Date
+                            | PredicateArgKind::Timestamp
+                            | PredicateArgKind::Duration
+                            | PredicateArgKind::Quantity(_)
+                    ) {
                         let context = self.context.clone();
                         self.errors.push(ValidationError::UnorderedExtremum {
                             op: op.as_str(),
