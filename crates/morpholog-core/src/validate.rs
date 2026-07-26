@@ -169,6 +169,21 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// A predicate carries more than one `effective by` clause. Each would
+    /// generate the same selector name, so the second is silently skipped
+    /// and the doctrine ends up decided by declaration order.
+    ///
+    /// Unlike `unique by`, which composes because each clause generates
+    /// its own invariant, these cannot: there is one selector per
+    /// predicate. A predicate with two genuine time axes needs two
+    /// predicates, or a selector taking the axis as an argument - neither
+    /// of which this clause pretends to offer.
+    #[error(
+        "`{predicate}` carries more than one `effective by` clause: a predicate has \
+         one in-force selector, so a second clause would be silently ignored"
+    )]
+    MultipleEffectiveClauses { predicate: String },
+
     /// `effective by (..) on (f)` named `f` as both a key and the date.
     /// Each version would then be its own group, so nothing could
     /// supersede anything and the selector would return whatever row it
@@ -948,6 +963,21 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
         }
         if has_superseded && !is_pointer {
             errors.push(ValidationError::DisciplineSupersededWithoutPointer {
+                predicate: decl.name.to_string(),
+            });
+        }
+        // Every clause would generate the SAME selector name, so a second
+        // one is silently skipped by the lowering and the doctrine ends up
+        // chosen by declaration order. Unlike `unique by`, these cannot
+        // coexist under one generated API.
+        if decl
+            .disciplines
+            .iter()
+            .filter(|d| matches!(d, Discipline::EffectiveBy { .. }))
+            .count()
+            > 1
+        {
+            errors.push(ValidationError::MultipleEffectiveClauses {
                 predicate: decl.name.to_string(),
             });
         }

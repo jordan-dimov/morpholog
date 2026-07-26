@@ -52,7 +52,14 @@ pub fn lower_discipline_definitions(program: &mut Program) {
         for discipline in &decl.disciplines {
             if let Discipline::EffectiveBy { keys, on } = discipline
                 && let Some(def) = in_force_define(decl, keys, on)
-                && !program.definitions.iter().any(|d| d.name == def.name)
+                // Idempotent on PROVENANCE, not on the name: an
+                // authored definition of that name is a collision the
+                // surface refuses, not evidence that lowering already
+                // ran.
+                && !program
+                    .definitions
+                    .iter()
+                    .any(|d| d.name == def.name && d.origin == crate::ir::DefinitionOrigin::Discipline)
                 && !generated.iter().any(|d| d.name == def.name)
             {
                 generated.push(def);
@@ -72,10 +79,19 @@ pub fn lower_disciplines(program: &mut Program) {
                         generated.push(inv);
                     }
                 }
-                // Generates a definition, not an invariant - handled by
-                // `lower_discipline_definitions`, which must run before
-                // call resolution.
-                Discipline::EffectiveBy { .. } => {}
+                // The clause claims one version per key per date, so it
+                // owes the invariant that makes that true. Without it two
+                // rows tie for "latest" and the selector returns both -
+                // two contradictory prices each satisfying "priced at the
+                // rate in force", which is what the discipline exists to
+                // prevent.
+                Discipline::EffectiveBy { keys, on } => {
+                    let mut fields = keys.clone();
+                    fields.push(on.clone());
+                    if let Some(inv) = unique_invariant(decl, &fields) {
+                        generated.push(inv);
+                    }
+                }
                 Discipline::AppendOnly => {}
                 Discipline::SupersededVia { lineage } => {
                     let Some(lineage_decl) = program.predicates.iter().find(|p| p.name == *lineage)
@@ -171,9 +187,22 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
         _ => return None,
     };
 
-    let as_of = Var::from("as_of");
-    let effective = Var::from("effective_from__");
-    let later = Var::from("later_effective_from__");
+    // Fresh against the declaration's own field names. A payload field
+    // called `as_of` would otherwise land in the parameter list twice,
+    // and the resulting DuplicateParameter names a definition the author
+    // never wrote - unactionable. Underscores are appended until the name
+    // is unique, so the escape works whatever the fields are called.
+    let taken: Vec<&str> = decl.args.iter().map(|a| a.name.as_str()).collect();
+    let fresh = |base: &str, also: &[&Var]| {
+        let mut name = base.to_string();
+        while taken.contains(&name.as_str()) || also.iter().any(|v| v.as_str() == name) {
+            name.push('_');
+        }
+        Var::from(name)
+    };
+    let as_of = fresh("as_of", &[]);
+    let effective = fresh("effective_from", &[&as_of]);
+    let later = fresh("later_effective_from", &[&as_of, &effective]);
 
     // Positional, because the date field can sit anywhere in the
     // declaration - the keys are not necessarily first.
@@ -226,6 +255,7 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
     }));
 
     Some(Definition {
+        origin: crate::ir::DefinitionOrigin::Discipline,
         name: in_force_define_name(&decl.name).into(),
         parameters,
         body: Prop::And(vec![
@@ -324,8 +354,16 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
                         out.push((decl.name.clone(), unique_invariant_name(&decl.name, fields)));
                     }
                 }
-                // Generates a definition, so it has no invariant here.
-                Discipline::EffectiveBy { .. } => {}
+                Discipline::EffectiveBy { keys, on } => {
+                    let mut fields = keys.clone();
+                    fields.push(on.clone());
+                    if unique_invariant(decl, &fields).is_some() {
+                        out.push((
+                            decl.name.clone(),
+                            unique_invariant_name(&decl.name, &fields),
+                        ));
+                    }
+                }
                 Discipline::AppendOnly => {}
                 Discipline::SupersededVia { lineage } => {
                     let Some(lineage_decl) = program.predicates.iter().find(|p| p.name == *lineage)

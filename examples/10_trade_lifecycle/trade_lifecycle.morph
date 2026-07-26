@@ -108,7 +108,6 @@ predicate TradeCaptured(trade: Subject, commodity: Subject, direction: Subject)
 -- that is a separate move.)
 predicate TradeTerms(trade: Subject, version_id: Subject, quantity: Decimal, delivery_period: Subject, effective_from: Date)
     unique by (version_id)
-    unique by (trade, effective_from)
     effective by (trade) on (effective_from)
 -- Amendment lineage: append only (history is never rewritten), and a
 -- clean chain - one prior version has at most one direct successor,

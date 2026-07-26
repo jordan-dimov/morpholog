@@ -524,6 +524,7 @@ pub fn definition(name: &str, parameters: Vec<Var>, body: Prop) -> Definition {
         name: name.into(),
         parameters,
         body,
+        origin: crate::ir::DefinitionOrigin::Authored,
     }
 }
 

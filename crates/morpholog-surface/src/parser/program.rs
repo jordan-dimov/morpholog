@@ -585,6 +585,8 @@ where
             let span: SimpleSpan = e.span();
             TopLevelDecl::Definition(
                 Definition {
+                    // Parsed from source, so authored by definition.
+                    origin: morpholog_core::DefinitionOrigin::Authored,
                     name: name.into(),
                     parameters: parameters.into_iter().map(Var::from).collect(),
                     body,

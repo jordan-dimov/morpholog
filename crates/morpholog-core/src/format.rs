@@ -109,25 +109,12 @@ pub fn format_program(p: &Program) -> String {
         }
     }
 
-    // Discipline-generated selectors are implied by the declaration
-    // clauses rendered above, exactly as generated invariants are.
-    // Printing one would make it AUTHORED on reparse, which then trips
-    // the collision check that stops machinery being shadowed - so
-    // round-trip is what caught this. The names are derived from the
-    // declarations rather than marked on the definition, so no origin
-    // field is needed.
-    let generated: std::collections::BTreeSet<String> = p
-        .predicates
-        .iter()
-        .filter(|d| {
-            d.disciplines
-                .iter()
-                .any(|c| matches!(c, crate::ir::Discipline::EffectiveBy { .. }))
-        })
-        .map(|d| crate::disciplines::in_force_define_name(&d.name))
-        .collect();
     for def in &p.definitions {
-        if generated.contains(def.name.as_str()) {
+        // Omitted by PROVENANCE, not by name. Printing a generated
+        // selector would make it authored on reparse; omitting an
+        // AUTHORED definition that happens to share the name would lose
+        // it. Matching on the name alone did both wrong.
+        if def.origin == crate::ir::DefinitionOrigin::Discipline {
             continue;
         }
         out.push('\n');

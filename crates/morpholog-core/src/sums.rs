@@ -221,6 +221,7 @@ mod tests {
                 defined(&format!("d{}", i + 1), vec![Term::Var(Var::from("x"))])
             };
             definitions.push(Definition {
+                origin: crate::ir::DefinitionOrigin::Authored,
                 name: format!("d{i}").into(),
                 parameters: vec![Var::from("x")],
                 body,

@@ -753,6 +753,25 @@ pub struct Definition {
     pub name: DefinitionName,
     pub parameters: Vec<Var>,
     pub body: Prop,
+    /// Who wrote this definition. Discipline-generated selectors must be
+    /// distinguishable from authored ones: the formatter has to omit them
+    /// (printing one makes it authored on reparse), the lowering has to
+    /// know whether it has already run, and a hand-built programme that
+    /// shadows a generated name must not lose it silently. Matching on
+    /// the name alone got all three subtly wrong.
+    pub origin: DefinitionOrigin,
+}
+
+/// Where a [`Definition`] came from - the definition-sort analogue of
+/// [`InvariantOrigin`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DefinitionOrigin {
+    /// Written in the source, or hand-built by a caller.
+    #[default]
+    Authored,
+    /// Materialised by [`crate::lower_discipline_definitions`] from a
+    /// declared discipline clause.
+    Discipline,
 }
 
 /// A governed domain model: a named set of predicate and intent

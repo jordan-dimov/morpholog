@@ -859,3 +859,111 @@ transformation t(charge, effective_from, amount):
         "got {errs:?}"
     );
 }
+
+/// The generated selector's own variable names must not collide with the
+/// predicate's fields.
+///
+/// A payload field called `as_of` put that name in the parameter list
+/// twice, and the resulting error named `definition r_in_force_on` - a
+/// definition the author never wrote, so unactionable. Every field name
+/// here is one the generator wants for itself.
+#[test]
+fn the_generated_selector_avoids_the_predicates_own_field_names() {
+    let source = r#"program collide
+
+predicate R(charge: Subject, effective_from: Date, as_of: Decimal, later_effective_from: Decimal)
+    effective by (charge) on (effective_from)
+predicate Seen(charge: Subject)
+
+invariant seen_has_a_version_in_force:
+    Seen(charge)
+    implies r_in_force_on(charge, @2026-06-01, _, _)
+
+transformation add(charge, effective_from, as_of, later_effective_from):
+    admit R(charge, effective_from, as_of, later_effective_from)
+
+transformation see(charge):
+    admit Seen(charge)
+"#;
+    // Validation is the assertion: a collision surfaced as
+    // DuplicateParameter plus a kind conflict, both naming the generated
+    // definition rather than anything the author could edit.
+    let p = parsed(source);
+    let add = p.transformation("add").expect("add").clone();
+    let see = p.transformation("see").expect("see").clone();
+    let state = must_accept(
+        &add,
+        vec![
+            subj("c1"),
+            common::date("2026-01-01"),
+            common::dec_str("1"),
+            common::dec_str("2"),
+        ],
+        State::default(),
+        &p.invariants,
+        &p.definitions,
+    );
+    // And the selector still selects: a version is in force, so this is
+    // admitted rather than refused by the invariant above.
+    must_accept(&see, vec![subj("c1")], state, &p.invariants, &p.definitions);
+}
+
+/// The clause claims one version per key per date, so it owes the
+/// invariant that makes that true.
+///
+/// Without it two rows tie for "latest" and the selector returns BOTH -
+/// so two contradictory prices each satisfied "priced at the rate in
+/// force", which is precisely what the discipline exists to prevent. The
+/// adversarial shape is two different payloads at the same effective
+/// date; the second must be refused.
+#[test]
+fn two_versions_at_one_effective_date_cannot_both_stand() {
+    let p = parsed(EFFECTIVE_DATED);
+    let add = p.transformation("add_rate").expect("add_rate").clone();
+    let state = must_accept(
+        &add,
+        vec![
+            subj("c1"),
+            common::date("2026-01-01"),
+            common::dec_str("10.00"),
+        ],
+        State::default(),
+        &p.invariants,
+        &p.definitions,
+    );
+    must_reject(
+        &add,
+        vec![
+            subj("c1"),
+            common::date("2026-01-01"),
+            common::dec_str("12.00"),
+        ],
+        &state,
+        &p.invariants,
+        &p.definitions,
+    );
+}
+
+/// One selector per predicate, so one clause.
+///
+/// Both clauses generate the same name, so the second was silently
+/// skipped by the lowering and the governing doctrine ended up decided by
+/// declaration order - a programme that validates and means something
+/// other than it says.
+#[test]
+fn a_predicate_may_carry_only_one_effective_clause() {
+    let source = r#"program two
+predicate Rate(account: Subject, market: Subject, valid_from: Date, published_at: Timestamp, amount: Decimal)
+    effective by (account) on (valid_from)
+    effective by (market) on (published_at)
+transformation t(account, market, valid_from, published_at, amount):
+    admit Rate(account, market, valid_from, published_at, amount)
+"#;
+    let program = parse_program(source).expect("parses; validation refuses the pair");
+    let errs = program.validate().expect_err("two clauses cannot coexist");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ValidationError::MultipleEffectiveClauses { .. })),
+        "got {errs:?}"
+    );
+}

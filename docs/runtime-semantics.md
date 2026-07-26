@@ -458,6 +458,13 @@ templates. The discipline clauses:
   programme was hand-rolling is written once by the runtime. Callers
   wildcard the payload fields they do not want.
 
+  It also generates the uniqueness invariant it promises - keys plus the
+  date determine the row. Without that, two versions can tie for "latest"
+  and the selector returns both, so two contradictory figures each satisfy
+  "the one in force". A predicate carries at most **one** `effective by`
+  clause, because there is one selector per predicate; unlike `unique by`,
+  a second clause cannot coexist and would be silently ignored.
+
   The date field must be a `Date` or `Timestamp`, and it may not also be a
   key: grouping versions by the date that orders them leaves nothing able
   to supersede anything. An authored definition of the generated name is
