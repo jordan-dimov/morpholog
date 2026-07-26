@@ -205,6 +205,11 @@ struct CheckCtx<'a> {
     /// Inferred call signature per definition, computed callees-first
     /// before any caller body is walked.
     definition_sigs: HashMap<String, DefinitionSig>,
+    /// Predicates a `derived` declaration computes. The kernel evaluates
+    /// against admitted claims, and a derived is a read model refreshed
+    /// out of band, so naming one anywhere a rule reads state is a
+    /// modelling error rather than a rule that happens to match nothing.
+    derived_heads: std::collections::BTreeSet<&'a str>,
     context: ValidationContext,
     errors: Vec<ValidationError>,
 }
@@ -227,6 +232,11 @@ struct DefinitionSig {
 
 pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
     let mut cx = CheckCtx {
+        derived_heads: program
+            .derived_claims
+            .iter()
+            .map(|d| d.predicate.as_str())
+            .collect(),
         predicates: program
             .predicates
             .iter()
@@ -1226,6 +1236,19 @@ impl CheckCtx<'_> {
         mode: RefMode,
         scope: &mut Scope,
     ) {
+        // A derived predicate is computed from admitted claims and
+        // refreshed out of band; nothing ever admits one. Naming it where
+        // a rule reads state gives a rule with two possible sources - the
+        // view the runtime computes, and whatever rows an older shape of
+        // the programme left behind - so it is refused rather than left
+        // to fail against a live database.
+        if vocabulary == VocabularyKind::Predicate && self.derived_heads.contains(name) {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::DerivedOnCommitPath {
+                predicate: name.into(),
+                context,
+            });
+        }
         let decl_args = match vocabulary {
             VocabularyKind::Predicate => self.predicates.get(name).copied().map(|d| &d.args),
             VocabularyKind::Intent => self.intents.get(name).copied().map(|d| &d.args),
@@ -1781,6 +1804,99 @@ mod tests {
                 }
             )),
             "actor in a derived-claim value must flag ActorNotAvailable; got {errs:?}"
+        );
+    }
+
+    /// A derived claim is a read model. Every rule that names one is
+    /// refused at authoring time, because the alternative is a design
+    /// that type-checks and then fails against a live database - which is
+    /// how a trial lost an hour to `bind` over a derived.
+    ///
+    /// Table-driven over every position a rule can name a predicate,
+    /// because the first report was only about `bind` and the same
+    /// deadness applies to all of them.
+    #[test]
+    fn no_rule_may_name_a_derived_claim() {
+        let derived = |p: &mut crate::ir::Program| {
+            p.predicates = vec![
+                pdecl("Src", &[("k", PredicateArgKind::Subject)]),
+                pdecl("Row", &[("k", PredicateArgKind::Subject)]),
+                pdecl("Out", &[("k", PredicateArgKind::Subject)]),
+            ];
+            p.derived_claims = vec![crate::ir::DerivedClaim {
+                predicate: "Row".into(),
+                keys: vec!["k".into()],
+                values: vec![],
+                domain: claim("Src", vec![var("k")]),
+            }];
+        };
+
+        // Each case names `Row` - the derived - somewhere a rule reads.
+        let mut invariant_case = empty_program();
+        derived(&mut invariant_case);
+        invariant_case.invariants = vec![invariant("reads_derived", claim("Row", vec![var("k")]))];
+
+        let mut bind_case = empty_program();
+        derived(&mut bind_case);
+        bind_case.transformations = vec![transformation(
+            "binds_derived",
+            params(&["k"]),
+            vec![bind_one(claim("Row", vec![var("k")]))],
+        )];
+
+        let mut require_case = empty_program();
+        derived(&mut require_case);
+        require_case.transformations = vec![transformation(
+            "requires_derived",
+            params(&["k"]),
+            vec![require(claim("Row", vec![var("k")]))],
+        )];
+
+        let mut admit_case = empty_program();
+        derived(&mut admit_case);
+        admit_case.transformations = vec![transformation(
+            "admits_derived",
+            params(&["k"]),
+            vec![assert_("Row", vec![var("k")])],
+        )];
+
+        for (label, program) in [
+            ("invariant", invariant_case),
+            ("bind", bind_case),
+            ("require", require_case),
+            ("admit", admit_case),
+        ] {
+            let errs = check_program(&program);
+            assert!(
+                errs.iter()
+                    .any(|e| matches!(e, ValidationError::DerivedOnCommitPath { .. })),
+                "{label} over a derived must be refused; got {errs:?}"
+            );
+        }
+    }
+
+    /// The acceptance side of the same rule: a derived claim reading
+    /// ordinary admitted claims is exactly what a derived is for, and
+    /// tightening the check must not refuse it.
+    #[test]
+    fn a_derived_may_read_the_claims_it_is_computed_from() {
+        let mut p = empty_program();
+        p.predicates = vec![
+            pdecl("Src", &[("k", PredicateArgKind::Subject)]),
+            pdecl("Row", &[("k", PredicateArgKind::Subject)]),
+        ];
+        p.derived_claims = vec![crate::ir::DerivedClaim {
+            predicate: "Row".into(),
+            keys: vec!["k".into()],
+            values: vec![],
+            domain: claim("Src", vec![var("k")]),
+        }];
+        let errs = check_program(&p);
+        assert!(
+            !errs
+                .iter()
+                .any(|e| matches!(e, ValidationError::DerivedOnCommitPath { .. })),
+            "a derived reading its own sources must pass; got {errs:?}"
         );
     }
 

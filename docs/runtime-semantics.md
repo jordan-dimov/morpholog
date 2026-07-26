@@ -286,6 +286,21 @@ body witnesses nothing, because nothing was ever bound; a prohibition like
 than empty, so those envelopes stay byte-identical to what they were
 before witnesses existed.
 
+**A derived claim is a read model, and no rule may name one.** Derived
+claims are computed from admitted claims and refreshed out of band; the
+kernel evaluates rules against admitted claims, and nothing admits a
+derived. So `bind`, `require`, `for`, an invariant body, and another
+derived's domain are all refused at check time when they name one - the
+alternative is a design that passes `check --strict` and fails only
+against a live database, which is exactly how a trial lost an hour.
+
+The refusal is a modelling rule, not a claim that the reference could
+never match. State outlives a source file, so rows admitted under that
+name by an older shape of the programme may well exist - and that is the
+problem rather than the exception: the name would have two sources, the
+view the runtime computes and the rows left behind. Read the claims the
+view is computed from, or make the figure a claim of its own.
+
 ## Statements: the require / bind_one / let / for quartet
 
 Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation.

@@ -7,7 +7,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::ir_builder::{
-    assert_, claim, definition, implies, invariant, params, predicate, program, transformation, var,
+    assert_, claim, defined, definition, implies, invariant, params, predicate, program,
+    transformation, var,
 };
 use morpholog_core::{
     CompiledProgram, DerivedClaim, IntentDecl, IntentName, Program, TransformationName, Var,
@@ -31,11 +32,15 @@ fn fixture() -> Program {
             params(&["t"]),
             claim("Trade", vec![var("t")]),
         )])
+        // Over ordinary claims, not the derived: an invariant naming
+        // `TradeTotal` is refused, because a derived is computed and
+        // never admitted. This fixture carried exactly that dead rule
+        // until the check that refuses it existed.
         .invariants(vec![invariant(
             "total_needs_trade",
             implies(
-                claim("TradeTotal", vec![var("t")]),
                 claim("Trade", vec![var("t")]),
+                defined("is_captured", vec![var("t")]),
             ),
         )])
         .transformations(vec![transformation(

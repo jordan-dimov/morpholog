@@ -84,6 +84,7 @@ impl SourceMap {
             | ValidationError::ArgKindMismatch { context, .. }
             | ValidationError::OperandKindMismatch { context, .. }
             | ValidationError::UnorderedExtremum { context, .. }
+            | ValidationError::DerivedOnCommitPath { context, .. }
             | ValidationError::NoArithRule { context, .. }
             | ValidationError::AbsKind { context, .. }
             | ValidationError::RoundQuantumNotPositive { context, .. }
