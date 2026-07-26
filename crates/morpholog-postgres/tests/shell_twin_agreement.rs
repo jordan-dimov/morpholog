@@ -77,7 +77,7 @@ const HOSTILE_USERS: &[&str] = &[
 
 #[test]
 fn the_twin_encodes_hostile_usernames_identically() {
-    for script in ["scripts/lib/sqlx_url.sh"] {
+    for script in ["scripts/shared/sqlx_url.sh"] {
         let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
         for user in HOSTILE_USERS {
             let shell = shell_sqlx_url_as(&path, "postgres:///db", user);
@@ -120,14 +120,29 @@ fn an_unencoded_username_would_have_smuggled_in_an_option() {
 
 #[test]
 fn both_scripts_source_the_shared_twin() {
+    let root = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
+
+    // Present on this machine is not the same as present for everyone: a
+    // stock Python .gitignore excludes any directory named `lib`, so the
+    // first home of this file was silently skipped by `git add -A` and
+    // every test here passed locally against a file CI never received.
+    let tracked = std::process::Command::new("git")
+        .args(["ls-files", "--error-unmatch", "scripts/shared/sqlx_url.sh"])
+        .current_dir(&root)
+        .output()
+        .expect("git runs");
+    assert!(
+        tracked.status.success(),
+        "the shared twin is not tracked by git, so a clean checkout has no copy of it"
+    );
+
     // The agreement tests check one shared file; this is what keeps that
     // from being a dodge - a script that stopped sourcing it, or grew its
     // own copy, would pass those tests while diverging in use.
     for script in ["scripts/precommit.sh", "scripts/sqlx-prepare.sh"] {
-        let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
-        let text = std::fs::read_to_string(&path).expect("script readable");
+        let text = std::fs::read_to_string(format!("{root}/{script}")).expect("script readable");
         assert!(
-            text.contains("lib/sqlx_url.sh"),
+            text.contains("shared/sqlx_url.sh"),
             "{script} must source the shared twin"
         );
         assert!(
@@ -140,7 +155,7 @@ fn both_scripts_source_the_shared_twin() {
 #[test]
 fn the_shell_twin_agrees_with_the_rust_rule() {
     let mut filled = 0;
-    for script in ["scripts/lib/sqlx_url.sh"] {
+    for script in ["scripts/shared/sqlx_url.sh"] {
         let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
         for url in CASES {
             let shell = shell_sqlx_url(&path, url);

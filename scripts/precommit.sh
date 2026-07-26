@@ -81,8 +81,8 @@ cargo test \
 
 # The shell twin of `with_default_user`, shared by both scripts and
 # pinned against the Rust rule by shell_twin_agreement.rs.
-# shellcheck source=lib/sqlx_url.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/sqlx_url.sh"
+# shellcheck source=shared/sqlx_url.sh
+source "$(dirname "${BASH_SOURCE[0]}")/shared/sqlx_url.sh"
 
 step 'sqlx offline cache freshness (cargo sqlx prepare --check)'
 if [ -z "${DATABASE_URL:-}" ]; then
