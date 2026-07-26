@@ -44,6 +44,50 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --all-features --locked
 
+      # A project rule only the local precommit enforced, so any change
+      # authored without running it - a coding agent's PR, a web edit -
+      # could land em-dashes silently.
+      - name: ASCII-only dashes
+        run: |
+          if grep -RIn --include='*.md' --include='*.rs' --include='*.morph' \
+                  -e $'\u2014' -e $'\u2013' \
+                  docs/ README.md examples/ crates/; then
+            echo '::error::Found em-dashes (U+2014) or en-dashes (U+2013). Project rule: ASCII `-` only.'
+            exit 1
+          fi
+
+  msrv:
+    # The workspace declares `rust-version`, which Cargo enforces against
+    # anyone building from source (the documented path on non-x86_64).
+    # Every other job installs moving `stable`, so without this the floor
+    # is a claim nothing checks - and a dependency refresh is exactly
+    # where it would quietly stop being true.
+    name: declared Rust floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read rust-version from the workspace
+        id: floor
+        run: |
+          floor=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$floor" >> "$GITHUB_OUTPUT"
+          echo "declared floor: $floor"
+
+      - name: Install the declared floor toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.floor.outputs.version }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: cargo check on the floor
+        run: cargo check --workspace --all-targets --all-features --locked
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
