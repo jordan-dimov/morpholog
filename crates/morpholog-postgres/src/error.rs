@@ -119,7 +119,9 @@ pub enum PgError {
     UnknownTransformation { name: TransformationName },
     /// `export_pack` found no checkpoint to cover the requested prefix -
     /// the chain is empty, or no checkpoint exists at the requested size.
-    #[error("no checkpoint to export; run `checkpoint` first (or pass an existing --tree-size)")]
+    #[error(
+        "no checkpoint to export; run `audit checkpoint` first (or pass an existing --tree-size)"
+    )]
     NoCheckpoint,
     /// `export_window` was given a full anchor (`--from-anchor`) whose tree
     /// head does not match the stored checkpoint at its size. The

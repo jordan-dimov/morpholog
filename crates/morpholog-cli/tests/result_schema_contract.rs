@@ -613,7 +613,7 @@ fn score_reports_serialize_as_pinned() {
 }
 
 // The tamper-evidence family: the envelopes of `verify`, `checkpoint`,
-// and `evidence export`/`verify`. One golden per serialized variant so
+// and `audit export`/`verify-pack`. One golden per serialized variant so
 // the reality layer pins every shape an embedder decodes.
 
 fn sample_checkpoint() -> Checkpoint {
@@ -726,7 +726,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
     );
 
-    // `evidence export`: the portable pack.
+    // `audit export`: the portable pack.
     assert_golden(
         "evidence_pack.json",
         &to_value(&EvidencePack {
@@ -741,7 +741,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         }),
     );
 
-    // `evidence verify`: the remaining tree verdicts (intact and tampered
+    // `audit verify-pack`: the remaining tree verdicts (intact and tampered
     // are pinned via verify_report above).
     assert_golden(
         "tree_verification_chain_broken.json",
@@ -817,7 +817,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         }),
     );
 
-    // `evidence verify` window verdicts.
+    // `audit verify-pack` window verdicts.
     assert_golden(
         "window_verification_intact.json",
         &to_value(&WindowVerification::Intact {

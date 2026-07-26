@@ -57,7 +57,7 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
 
 /// Run `morpholog` with exactly the given args and NO `--database-url`,
 /// for the offline subcommands whose contract is that they take no
-/// connection (`evidence verify`).
+/// connection (`audit verify-pack`).
 fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let output = Command::new(common::bin())
         .args(args)
