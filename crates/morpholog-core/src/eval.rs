@@ -89,6 +89,21 @@ pub enum EvalError {
     /// named refusal - never an approximation, never a panic.
     #[error("round out of decimal range: no representable multiple of {quantum} near {value}")]
     RoundOutOfRange { value: String, quantum: String },
+    /// An arithmetic result outside the exact decimal (or time) range.
+    /// Same contract as [`EvalError::RoundOutOfRange`]: exactness or a
+    /// named refusal - never an approximation, never a panic. The plain
+    /// rust_decimal operators panic on overflow, so every arithmetic
+    /// site goes through checked variants.
+    ///
+    /// Classification, like every `EvalError`: a KERNEL evaluation
+    /// error (`PgError::Kernel` at the adapter, the error envelope at
+    /// the CLI) - operational, with no audit standing - never a
+    /// business rejection. The same line `DivisionByZero` draws: the
+    /// rule as written cannot be evaluated over this state. A domain
+    /// where extremes are business-possible range-guards them in its
+    /// own rules, as the metered-billing example does for negatives.
+    #[error("arithmetic out of range: {0}")]
+    ArithOutOfRange(String),
     /// A `Prop::Defined` call named a definition the evaluation context
     /// does not carry. Unlike an unmatched predicate (which lawfully
     /// matches nothing), a call without its definition is a programme
@@ -868,26 +883,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             let r = eval_value(right, ctx)?;
             match (l, r) {
                 (EvalValue::Decimal(a), EvalValue::Decimal(b)) => {
-                    let result = match op {
-                        ArithOp::Add => a + b,
-                        ArithOp::Sub => a - b,
-                        ArithOp::Mul => a * b,
-                        ArithOp::Div => {
-                            if b == Decimal::ZERO {
-                                return Err(EvalError::DivisionByZero);
-                            }
-                            a / b
-                        }
-                        ArithOp::Mod => {
-                            if b == Decimal::ZERO {
-                                return Err(EvalError::DivisionByZero);
-                            }
-                            a % b
-                        }
-                        ArithOp::Min => a.min(b),
-                        ArithOp::Max => a.max(b),
-                    };
-                    Ok(EvalValue::Decimal(result))
+                    Ok(EvalValue::Decimal(checked_decimal_op(*op, a, b)?))
                 }
                 // The time-arithmetic matrix the laytime example
                 // forces: an instant shifted by an exact span stays an
@@ -906,7 +902,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         }
                     };
                     shifted.map(EvalValue::Timestamp).map_err(|e| {
-                        EvalError::TypeMismatch(format!("timestamp arithmetic out of range: {e}"))
+                        EvalError::ArithOutOfRange(format!("timestamp {op:?} duration: {e}"))
                     })
                 }
                 (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => match op {
@@ -925,7 +921,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                             _ => unreachable!("outer match restricts the op"),
                         };
                         result.map(EvalValue::Duration).ok_or_else(|| {
-                            EvalError::TypeMismatch("duration arithmetic out of range".to_string())
+                            EvalError::ArithOutOfRange(format!("duration {op:?} duration"))
                         })
                     }
                     // The ratio between two spans is a dimensionless
@@ -942,7 +938,11 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         if divisor == Decimal::ZERO {
                             return Err(EvalError::DivisionByZero);
                         }
-                        Ok(EvalValue::Decimal(duration_nanos_decimal(a) / divisor))
+                        Ok(EvalValue::Decimal(checked_decimal_op(
+                            ArithOp::Div,
+                            duration_nanos_decimal(a),
+                            divisor,
+                        )?))
                     }
                     _ => Err(EvalError::TypeMismatch(format!(
                         "{op:?} is not defined for durations"
@@ -966,28 +966,13 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         )));
                     }
                     match op {
-                        ArithOp::Add => Ok(EvalValue::Quantity {
-                            amount: a + b,
-                            unit: u,
-                        }),
-                        ArithOp::Sub => Ok(EvalValue::Quantity {
-                            amount: a - b,
-                            unit: u,
-                        }),
-                        ArithOp::Min => Ok(EvalValue::Quantity {
-                            amount: a.min(b),
-                            unit: u,
-                        }),
-                        ArithOp::Max => Ok(EvalValue::Quantity {
-                            amount: a.max(b),
-                            unit: u,
-                        }),
-                        ArithOp::Div => {
-                            if b == Decimal::ZERO {
-                                return Err(EvalError::DivisionByZero);
-                            }
-                            Ok(EvalValue::Decimal(a / b))
+                        ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => {
+                            Ok(EvalValue::Quantity {
+                                amount: checked_decimal_op(*op, a, b)?,
+                                unit: u,
+                            })
                         }
+                        ArithOp::Div => Ok(EvalValue::Decimal(checked_decimal_op(*op, a, b)?)),
                         ArithOp::Mul | ArithOp::Mod => Err(EvalError::TypeMismatch(format!(
                             "{op:?} is not defined for Decimal[{u}] and Decimal[{u}]: \
                              two amounts of one unit multiply into no meaningful unit"
@@ -995,19 +980,10 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     }
                 }
                 (EvalValue::Quantity { amount: a, unit }, EvalValue::Decimal(b)) => match op {
-                    ArithOp::Mul => Ok(EvalValue::Quantity {
-                        amount: a * b,
+                    ArithOp::Mul | ArithOp::Div => Ok(EvalValue::Quantity {
+                        amount: checked_decimal_op(*op, a, b)?,
                         unit,
                     }),
-                    ArithOp::Div => {
-                        if b == Decimal::ZERO {
-                            return Err(EvalError::DivisionByZero);
-                        }
-                        Ok(EvalValue::Quantity {
-                            amount: a / b,
-                            unit,
-                        })
-                    }
                     _ => Err(EvalError::TypeMismatch(format!(
                         "{op:?} is not defined for Decimal[{unit}] and a bare decimal \
                          (only Mul/Div: a bare decimal scales a quantity)"
@@ -1015,7 +991,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 },
                 (EvalValue::Decimal(a), EvalValue::Quantity { amount: b, unit }) => match op {
                     ArithOp::Mul => Ok(EvalValue::Quantity {
-                        amount: a * b,
+                        amount: checked_decimal_op(*op, a, b)?,
                         unit,
                     }),
                     _ => Err(EvalError::TypeMismatch(format!(
@@ -1040,35 +1016,48 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             // with no zero-valued seed claim needed to open either.
             // Mixing kinds, or units within the quantity kind, is an
             // error.
+            //
+            // The accumulators are WIDER than the value types, so only
+            // the FINAL total decides representability. State is a set
+            // of claims: a checked fold in match order would let an
+            // intermediate overflow refuse one ordering of [MAX, 1,
+            // -MAX] and accept another - the answer must depend on the
+            // set, never the iteration history.
             enum SumTotal {
                 Empty,
-                Decimal(Decimal),
-                Duration(jiff::SignedDuration),
-                Quantity(Decimal, crate::ir::Unit),
+                Decimal(BigSum),
+                Duration(i128),
+                Quantity(BigSum, crate::ir::Unit),
             }
             let matches = find_matches(body, ctx)?;
             let mut total = SumTotal::Empty;
             for m in matches {
                 let next = resolve_term(value, &m, ctx.actor)?;
                 total = match (total, next) {
-                    (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(d),
-                    (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d),
+                    (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(BigSum::new(d)),
+                    (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d.as_nanos()),
                     (SumTotal::Empty, EvalValue::Quantity { amount, unit }) => {
-                        SumTotal::Quantity(amount, unit)
+                        SumTotal::Quantity(BigSum::new(amount), unit)
                     }
-                    (SumTotal::Decimal(t), EvalValue::Decimal(d)) => SumTotal::Decimal(t + d),
+                    (SumTotal::Decimal(mut t), EvalValue::Decimal(d)) => {
+                        t.add(d);
+                        SumTotal::Decimal(t)
+                    }
                     (SumTotal::Duration(t), EvalValue::Duration(d)) => {
-                        SumTotal::Duration(t.checked_add(d).ok_or_else(|| {
-                            EvalError::TypeMismatch("duration sum out of range".to_string())
-                        })?)
+                        // i128 nanoseconds cannot overflow from claim
+                        // counts a real state can hold: each element is
+                        // within +-9.3e27ns, so exceeding i128 needs
+                        // more claims than any memory can carry.
+                        SumTotal::Duration(t + d.as_nanos())
                     }
-                    (SumTotal::Quantity(t, u), EvalValue::Quantity { amount, unit }) => {
+                    (SumTotal::Quantity(mut t, u), EvalValue::Quantity { amount, unit }) => {
                         if u != unit {
                             return Err(EvalError::TypeMismatch(format!(
                                 "Sum cannot mix Decimal[{u}] and Decimal[{unit}] values"
                             )));
                         }
-                        SumTotal::Quantity(t + amount, u)
+                        t.add(amount);
+                        SumTotal::Quantity(t, u)
                     }
                     (
                         SumTotal::Decimal(_) | SumTotal::Duration(_) | SumTotal::Quantity(..),
@@ -1096,9 +1085,24 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         unit: unit.clone(),
                     },
                 },
-                SumTotal::Decimal(t) => EvalValue::Decimal(t),
-                SumTotal::Duration(t) => EvalValue::Duration(t),
-                SumTotal::Quantity(amount, unit) => EvalValue::Quantity { amount, unit },
+                SumTotal::Decimal(t) => EvalValue::Decimal(t.into_decimal().ok_or_else(|| {
+                    EvalError::ArithOutOfRange(
+                        "sum of decimals exceeds the exact decimal range".to_string(),
+                    )
+                })?),
+                SumTotal::Duration(t) => {
+                    EvalValue::Duration(nanos_to_duration(t).ok_or_else(|| {
+                        EvalError::ArithOutOfRange("sum of durations out of range".to_string())
+                    })?)
+                }
+                SumTotal::Quantity(t, unit) => EvalValue::Quantity {
+                    amount: t.into_decimal().ok_or_else(|| {
+                        EvalError::ArithOutOfRange(format!(
+                            "sum of Decimal[{unit}] values exceeds the exact decimal range"
+                        ))
+                    })?,
+                    unit,
+                },
             })
         }
         ValueExpr::ValueOf {
@@ -1184,6 +1188,99 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             }
         }
     }
+}
+
+/// Exact running total of decimals: a big-integer count of units at
+/// the largest scale seen. The fold itself cannot overflow, so the
+/// FINAL total alone decides representability - order-independent by
+/// construction, which is what makes a `sum` over set-valued state
+/// well-defined at the range boundary.
+struct BigSum {
+    units: num_bigint::BigInt,
+    scale: u32,
+}
+
+impl BigSum {
+    fn new(d: Decimal) -> Self {
+        Self {
+            units: num_bigint::BigInt::from(d.mantissa()),
+            scale: d.scale(),
+        }
+    }
+
+    fn add(&mut self, d: Decimal) {
+        let scale = d.scale();
+        if scale > self.scale {
+            self.units *= num_bigint::BigInt::from(10u32).pow(scale - self.scale);
+            self.scale = scale;
+        }
+        let mut mantissa = num_bigint::BigInt::from(d.mantissa());
+        if self.scale > scale {
+            mantissa *= num_bigint::BigInt::from(10u32).pow(self.scale - scale);
+        }
+        self.units += mantissa;
+    }
+
+    /// Back to an exact decimal: strip trailing zeros (a total of
+    /// 1.50 + 0.50 is 2, not an unrepresentable 200 at scale 2 short
+    /// of range), then refuse only if the normalised total genuinely
+    /// does not fit.
+    fn into_decimal(mut self) -> Option<Decimal> {
+        let ten = num_bigint::BigInt::from(10);
+        let zero = num_bigint::BigInt::from(0);
+        while self.scale > 0 && (&self.units % &ten) == zero {
+            self.units /= &ten;
+            self.scale -= 1;
+        }
+        let mantissa: i128 = self.units.try_into().ok()?;
+        Decimal::try_from_i128_with_scale(mantissa, self.scale).ok()
+    }
+}
+
+/// An exact i128 nanosecond total back to a span; `None` when the
+/// total lies outside what a signed duration can carry. Floor
+/// division puts a total near the negative extreme one second below
+/// `i64::MIN`; carrying the remainder back keeps the exact boundary
+/// representable instead of refusing it.
+fn nanos_to_duration(total: i128) -> Option<jiff::SignedDuration> {
+    const NANOS: i128 = 1_000_000_000;
+    let secs = total.div_euclid(NANOS);
+    let nanos = total.rem_euclid(NANOS);
+    if let Ok(s) = i64::try_from(secs) {
+        return Some(jiff::SignedDuration::new(s, nanos as i32));
+    }
+    let s = i64::try_from(secs + 1).ok()?;
+    Some(jiff::SignedDuration::new(s, (nanos - NANOS) as i32))
+}
+
+/// The one place raw decimal arithmetic happens: checked throughout,
+/// so an out-of-range result is a named refusal, never a panic - the
+/// plain rust_decimal operators panic on overflow, including division
+/// (a tiny divisor overflows the quotient). Zero divisors keep their
+/// own name.
+fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, EvalError> {
+    let result = match op {
+        ArithOp::Add => a.checked_add(b),
+        ArithOp::Sub => a.checked_sub(b),
+        ArithOp::Mul => a.checked_mul(b),
+        ArithOp::Div => {
+            if b == Decimal::ZERO {
+                return Err(EvalError::DivisionByZero);
+            }
+            a.checked_div(b)
+        }
+        ArithOp::Mod => {
+            if b == Decimal::ZERO {
+                return Err(EvalError::DivisionByZero);
+            }
+            a.checked_rem(b)
+        }
+        ArithOp::Min => Some(a.min(b)),
+        ArithOp::Max => Some(a.max(b)),
+    };
+    result.ok_or_else(|| {
+        EvalError::ArithOutOfRange(format!("{a} {op:?} {b} exceeds the exact decimal range"))
+    })
 }
 
 /// The multiple of `quantum` nearest to `v`, exact halves away from
