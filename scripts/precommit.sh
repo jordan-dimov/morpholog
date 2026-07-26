@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Local pre-push verification for Morpholog.
 #
-# Runs every check CI runs, in the same order, plus the ASCII-only
-# dash check that CI does not. A green local run means a green CI
-# run; bails on the first failure.
+# Runs every check CI runs, in the same order. A green local run means
+# a green CI run; bails on the first failure.
 #
 # Optional env:
 #   DATABASE_URL  if set, runs the PG-backed test suites; otherwise
@@ -28,18 +27,16 @@ step() {
 }
 
 # ----------------------------------------------------------------
-# ASCII-only dash check (project rule; CI does not enforce this).
+# ASCII-only dash check (CI runs this too; here it catches them pre-push).
 #
 # Per the convention in CLAUDE.md and docs/scope-and-ambition.md:
 # never U+2014 (em-dash) or U+2013 (en-dash) in `.md`, `.rs`, or
 # `.morph` files. Em-dashes are an AI-output marker, render
 # unreliably across terminals, and clutter `grep` / `diff`.
-# Catching them locally before push avoids review-time clean-up.
+# Catching them locally avoids a red CI run for a typographic slip.
 # ----------------------------------------------------------------
 step 'ASCII-only dashes'
-if grep -RIn --include='*.md' --include='*.rs' --include='*.morph' \
-        -e '—' -e '–' \
-        docs/ README.md examples/ crates/ 2>/dev/null; then
+if git grep -In -e '—' -e '–' -- '*.md' '*.rs' '*.morph'; then
     echo '' >&2
     echo 'Found em-dashes (U+2014) or en-dashes (U+2013) above.' >&2
     echo 'Project rule: use ASCII `-` only in committed text.' >&2
@@ -57,6 +54,19 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 step 'RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --all-features --locked'
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features --locked
+
+step 'declared Rust floor (cargo check on rust-version)'
+floor=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["rust-version"])')
+# `rust-version` is two-part ("1.95") while rustup installs three-part
+# ("1.95.0"), so match by prefix - asking rustup for "1.95" directly
+# fails and would make this step skip forever without saying why.
+installed=$(rustup toolchain list | awk '{print $1}' | grep -E "^${floor}(\.|-)" | head -1)
+if [ -n "$installed" ]; then
+    cargo "+$installed" check --workspace --all-targets --all-features --locked
+else
+    echo "  toolchain $floor not installed; skipping (CI checks it)."
+    echo "  Install it with: rustup toolchain install $floor"
+fi
 
 step 'cargo audit'
 cargo audit

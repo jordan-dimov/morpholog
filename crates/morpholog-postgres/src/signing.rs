@@ -98,11 +98,12 @@ pub fn verify_tree_head(
 
 /// Generate a fresh Ed25519 signing key from OS entropy.
 pub fn generate_signing_key() -> SigningKey {
-    // `fill_bytes` alone would accept any generator, so the seed's
-    // unguessability would rest on a comment. Requiring `CryptoRng`
-    // makes it a compile error to weaken - the seed is a private
-    // signing key, and nothing downstream could detect a predictable
-    // one.
+    // `fill_bytes` alone would accept any generator, so the bound
+    // rejects one not designated cryptographically secure - a real
+    // guard, since nothing downstream could detect a predictable
+    // signing key. It is not a proof of unpredictable seeding: a
+    // ChaCha built from a fixed seed satisfies `CryptoRng` too, so the
+    // entropy guarantee stays with the call site below.
     fn fill_from_csprng(rng: &mut impl rand::CryptoRng, seed: &mut [u8; 32]) {
         rng.fill_bytes(seed);
     }

@@ -44,6 +44,56 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --all-features --locked
 
+      # A project rule only the local precommit enforced, so any change
+      # authored without running it - a coding agent's PR, a web edit -
+      # could land em-dashes silently.
+      - name: ASCII-only dashes
+        run: |
+          if git grep -In -e $'\u2014' -e $'\u2013' \
+                  -- '*.md' '*.rs' '*.morph'; then
+            echo '::error::Found em-dashes (U+2014) or en-dashes (U+2013). Project rule: ASCII `-` only.'
+            exit 1
+          fi
+
+  msrv:
+    # The workspace declares `rust-version`, which Cargo enforces against
+    # anyone building from source (the documented path on non-x86_64).
+    # Every other job installs moving `stable`, so without this the floor
+    # is a claim nothing checks - and a dependency refresh is exactly
+    # where it would quietly stop being true.
+    name: declared Rust floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read rust-version from the workspace
+        id: floor
+        run: |
+          floor=$(python3 -c '
+          import sys, tomllib
+          with open("Cargo.toml", "rb") as f:
+              v = tomllib.load(f).get("workspace", {}).get("package", {}).get("rust-version")
+          if not v:
+              sys.exit("no workspace.package.rust-version in Cargo.toml - this job verifies that key, so its absence is the defect")
+          print(v)
+          ')
+          echo "version=$floor" >> "$GITHUB_OUTPUT"
+          echo "declared floor: $floor"
+
+      - name: Install the declared floor toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: ${{ steps.floor.outputs.version }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: cargo check on the floor
+        run: cargo check --workspace --all-targets --all-features --locked
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest

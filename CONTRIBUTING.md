@@ -38,7 +38,7 @@ That puts the `morpholog` binary on `~/.cargo/bin/`. Refresh it after pulling ch
 
 ## Build and test
 
-Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus two checks CI does not enforce (the ASCII-only-dash convention, and `morpholog check` over every `.morph`); CI additionally runs a coverage job for visibility only. If it passes locally, CI passes.
+Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus `morpholog check` over every `.morph`; CI additionally runs a coverage job for visibility only, and verifies the declared Rust floor (precommit does the same when that toolchain is installed, and says so when it is not). If it passes locally, CI passes.
 
 ```bash
 ./scripts/precommit.sh                                        # without PG tests
@@ -101,7 +101,7 @@ These are project rules, not style preferences:
 - **`#[forbid(unsafe_code)]`** at the workspace level. No exceptions.
 - **Decimal-first** for business values. Never `f64`/`f32` in financial arithmetic. The codebase uses `rust_decimal` and maps it to PostgreSQL `numeric`.
 - **UUIDs are always v7** and opaque to the surface language.
-- **ASCII-only dashes** in `.md`, `.rs`, and `.morph` files. Never em-dash (U+2014) or en-dash (U+2013). The precommit script enforces this. Em-dashes render unreliably across terminals and clutter `grep` / `diff`.
+- **ASCII-only dashes** in `.md`, `.rs`, and `.morph` files. Never em-dash (U+2014) or en-dash (U+2013). Both the precommit script and CI enforce this, over every tracked `.md`, `.rs`, and `.morph` file. Em-dashes render unreliably across terminals and clutter `grep` / `diff`.
 - **No bypass flags ever.** Anything resembling `skip_validation`, `force_commit`, or `--no-verify`-style escape hatches is rejected at review. Exceptions are first-class typed claims with full audit standing.
 
 ## Comments and prose

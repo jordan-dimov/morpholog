@@ -38,6 +38,16 @@ rand = "0.10"
 chumsky = "0.10"
 ariadne = "0.5"
 
+[profile.dev]
+# Line tables instead of full debug info. The parser's combinator types
+# monomorphise into enormous DWARF - a single morpholog-surface rlib was
+# 814 MB with the default `debug = true`, and cargo never collects the
+# superseded copies, so a few weeks of branch switching filled a 745 GB
+# disk. Line tables keep panic backtraces pointing at real source lines,
+# which is what test failures actually need; a debugger session that
+# wants variable inspection can pass `--config profile.dev.debug=true`.
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
