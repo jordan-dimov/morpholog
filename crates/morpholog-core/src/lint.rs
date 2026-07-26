@@ -501,7 +501,7 @@ fn positive_value_claims(expr: &ValueExpr, positive: bool, out: &mut BTreeSet<Pr
         }
         // A sum tolerates zero matches; its body does not REQUIRE the
         // claims, so it contributes nothing.
-        ValueExpr::Sum { .. } => {}
+        ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } => {}
     }
 }
 

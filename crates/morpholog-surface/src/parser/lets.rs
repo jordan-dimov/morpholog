@@ -289,6 +289,7 @@ fn substitutable_term(value: &ValueExpr) -> Option<Term> {
         ValueExpr::Term(t) => Some(t.clone()),
         ValueExpr::Arith { .. }
         | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
         | ValueExpr::ValueOf { .. }
         | ValueExpr::Abs(_)
         | ValueExpr::Round { .. } => None,
@@ -395,6 +396,24 @@ pub(super) fn substitute_in_value(
             substitute_term_slot(target, name, value, binding, "as a sum target", errors);
             substitute_in_prop(body, name, value, binding, errors);
         }
+        ValueExpr::Extremum {
+            op,
+            value: target,
+            body,
+        } => {
+            substitute_term_slot(
+                target,
+                name,
+                value,
+                binding,
+                match op {
+                    morpholog_core::ExtremumOp::Max => "as a max target",
+                    morpholog_core::ExtremumOp::Min => "as a min target",
+                },
+                errors,
+            );
+            substitute_in_prop(body, name, value, binding, errors);
+        }
         ValueExpr::ValueOf {
             predicate,
             args,
@@ -464,7 +483,9 @@ pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<Stri
         // The sum target is CONSUMED against the bindings the sum body
         // supplies - it introduces nothing, so it is not a binder. A
         // let flowing into it is an ordinary term-slot substitution.
-        ValueExpr::Sum { body, .. } => collect_binders_in_prop(body, out),
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+            collect_binders_in_prop(body, out)
+        }
         ValueExpr::Arith { left, right, .. } => {
             collect_binders_in_value(left, out);
             collect_binders_in_value(right, out);
@@ -539,6 +560,11 @@ pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
             value: target,
             body,
             ..
+        }
+        | ValueExpr::Extremum {
+            value: target,
+            body,
+            ..
         } => {
             vars_in_term(target, out);
             vars_in_prop(body, out);
@@ -588,6 +614,11 @@ fn count_value(expr: &ValueExpr, name: &Var) -> usize {
             value: target,
             body,
             ..
+        }
+        | ValueExpr::Extremum {
+            value: target,
+            body,
+            ..
         } => count_term(target, name) + count_prop(body, name),
         ValueExpr::ValueOf { args, default, .. } => {
             args.iter().map(|a| count_term(a, name)).sum::<usize>()
@@ -633,7 +664,9 @@ fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
         ValueExpr::Arith { left, right, .. } => {
             count_growth_value(left, name) + count_growth_value(right, name)
         }
-        ValueExpr::Sum { body, .. } => count_growth_prop(body, name),
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+            count_growth_prop(body, name)
+        }
         ValueExpr::ValueOf { default, .. } => {
             default.as_ref().map_or(0, |d| count_growth_value(d, name))
         }
@@ -663,7 +696,7 @@ pub(super) fn value_nodes(expr: &ValueExpr) -> usize {
     1 + match expr {
         ValueExpr::Term(_) => 0,
         ValueExpr::Arith { left, right, .. } => value_nodes(left) + value_nodes(right),
-        ValueExpr::Sum { body, .. } => 1 + prop_nodes(body),
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => 1 + prop_nodes(body),
         ValueExpr::ValueOf { args, default, .. } => {
             args.len() + default.as_ref().map_or(0, |d| value_nodes(d))
         }

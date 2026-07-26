@@ -144,7 +144,7 @@ fn value_refs(
             value_refs(left, definitions, seen, out);
             value_refs(right, definitions, seen, out);
         }
-        ValueExpr::Sum { body, .. } => {
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
             prop_refs(body, definitions, seen, out);
         }
         ValueExpr::Abs(operand) => value_refs(operand, definitions, seen, out),
@@ -1402,10 +1402,11 @@ impl<'a> ParamCollector<'a> {
                 value,
                 body,
                 seed: _,
-            } => {
-                // The summed term is decimal, duration, or quantity;
-                // its kind is observed from its claim position inside
-                // the body, so the aggregate itself pins nothing.
+            }
+            // An extremum yields one of the members it ranged over, so
+            // like a sum its kind is observed inside the body and the
+            // aggregate itself pins nothing.
+            | ValueExpr::Extremum { value, body, .. } => {
                 let _ = value;
                 self.walk_prop(body);
             }

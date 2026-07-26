@@ -392,6 +392,24 @@ class PositionLimitClaim:
 
 
 @dataclass(frozen=True)
+class SettledUnderTermsClaim:
+    """One admitted `SettledUnderTerms` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "SettledUnderTerms"
+
+    settlement_id: str
+    version_id: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> SettledUnderTermsClaim:
+        raw = args["settlement_id"]
+        settlement_id = raw
+        raw = args["version_id"]
+        version_id = raw
+        return cls(settlement_id=settlement_id, version_id=version_id)
+
+
+@dataclass(frozen=True)
 class TermsTimelineClaim:
     """One admitted `TermsTimeline` claim, decoded by declared kind."""
 

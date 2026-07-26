@@ -175,6 +175,18 @@ pub enum ValidationError {
     /// `For` over a Decimal value - the kernel raises these as
     /// `EvalError::TypeMismatch` at runtime; this validator
     /// surfaces them at authoring time.
+    /// `max`/`min` ranged over a kind with no order. Subjects are
+    /// opaque identifiers and booleans are not a scale, so neither has a
+    /// largest member - refused here rather than given an arbitrary one.
+    #[error(
+        "{op} needs an ordered kind but received {actual} in {context}; \
+         subjects and booleans have no order"
+    )]
+    UnorderedExtremum {
+        op: &'static str,
+        actual: PredicateArgKind,
+        context: ValidationContext,
+    },
     #[error("{operator} expects {expected} operand(s) but received {actual} in {context}")]
     OperandKindMismatch {
         operator: &'static str,
@@ -536,7 +548,9 @@ fn value_depth_capped(
         ValueExpr::Arith { left, right, .. } => {
             value_depth_capped(left, inner, depths)?.max(value_depth_capped(right, inner, depths)?)
         }
-        ValueExpr::Sum { body, .. } => prop_depth_capped(body, inner, depths)?,
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+            prop_depth_capped(body, inner, depths)?
+        }
         ValueExpr::ValueOf { default, .. } => match default.as_deref() {
             Some(d) => value_depth_capped(d, inner, depths)?,
             None => 0,
@@ -664,7 +678,9 @@ fn value_exceeds_depth(
         ValueExpr::Arith { left, right, .. } => {
             value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
         }
-        ValueExpr::Sum { body, .. } => prop_exceeds_depth(body, budget, depths),
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+            prop_exceeds_depth(body, budget, depths)
+        }
         ValueExpr::ValueOf { default, .. } => default
             .as_deref()
             .is_some_and(|d| value_exceeds_depth(d, budget, depths)),

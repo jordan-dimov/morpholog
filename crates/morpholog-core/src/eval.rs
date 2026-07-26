@@ -104,6 +104,14 @@ pub enum EvalError {
     /// own rules, as the metered-billing example does for negatives.
     #[error("arithmetic out of range: {0}")]
     ArithOutOfRange(String),
+    /// `max`/`min` over a body that matched nothing. An empty sum has a
+    /// typed zero; an empty extremum has no answer, so it refuses rather
+    /// than inventing one. Guard with a `require` when "none in force"
+    /// should be a lawful rejection instead of an error.
+    #[error(
+        "{op} over `{body}` matched nothing; an empty {op} has no value (guard it with a require)"
+    )]
+    EmptyExtremum { op: &'static str, body: String },
     /// A `Prop::Defined` call named a definition the evaluation context
     /// does not carry. Unlike an unmatched predicate (which lawfully
     /// matches nothing), a call without its definition is a programme
@@ -1006,6 +1014,31 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 ))),
             }
         }
+        ValueExpr::Extremum { op, value, body } => {
+            // Order over a set, so the answer cannot depend on match
+            // order: every candidate is compared against the running
+            // best, and mixing kinds is an error rather than an
+            // arbitrary winner.
+            let matches = find_matches(body, ctx)?;
+            let mut best: Option<EvalValue> = None;
+            for m in matches {
+                let next = resolve_term(value, &m, ctx.actor)?;
+                best = Some(match best {
+                    None => next,
+                    Some(current) => {
+                        let ordering = compare_ordered(&current, &next, *op)?;
+                        if ordering { next } else { current }
+                    }
+                });
+            }
+            // An empty sum has a typed zero to fall back on; an empty
+            // extremum has nothing. Refusing by name beats inventing a
+            // winner - guard with a `require` for a lawful rejection.
+            best.ok_or_else(|| EvalError::EmptyExtremum {
+                op: op.as_str(),
+                body: crate::format::format_prop_inline(body),
+            })
+        }
         ValueExpr::Sum { value, body, seed } => {
             // Type-driven accumulation: a sum of decimals is a decimal,
             // a sum of durations is a duration (counted laytime is the
@@ -1652,6 +1685,55 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
             format!("[{}]", inner.join(", "))
         }
     }
+}
+
+/// Is `candidate` the one an extremum should keep over `current`?
+///
+/// Ordered kinds only. Subjects are opaque identifiers and booleans are
+/// not a scale, so neither has a largest member - they are refused at
+/// validation, and this is the runtime backstop for hand-built IR that
+/// skipped it. Quantities compare only within one unit, like every other
+/// quantity comparison.
+fn compare_ordered(
+    current: &EvalValue,
+    candidate: &EvalValue,
+    op: crate::ir::ExtremumOp,
+) -> Result<bool, EvalError> {
+    use std::cmp::Ordering;
+    let ordering = match (current, candidate) {
+        (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
+        (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
+        (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a.cmp(b),
+        (EvalValue::Duration(a), EvalValue::Duration(b)) => a.cmp(b),
+        (
+            EvalValue::Quantity {
+                amount: a,
+                unit: ua,
+            },
+            EvalValue::Quantity {
+                amount: b,
+                unit: ub,
+            },
+        ) => {
+            if ua != ub {
+                return Err(EvalError::TypeMismatch(format!(
+                    "{} cannot compare {ua} with {ub}: quantities order only within one unit",
+                    op.as_str()
+                )));
+            }
+            a.cmp(b)
+        }
+        (a, b) => {
+            return Err(EvalError::TypeMismatch(format!(
+                "{} needs an ordered kind, got {a:?} and {b:?}",
+                op.as_str()
+            )));
+        }
+    };
+    Ok(match op {
+        crate::ir::ExtremumOp::Max => ordering == Ordering::Less,
+        crate::ir::ExtremumOp::Min => ordering == Ordering::Greater,
+    })
 }
 
 #[cfg(test)]

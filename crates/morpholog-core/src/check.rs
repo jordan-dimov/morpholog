@@ -962,6 +962,32 @@ impl CheckCtx<'_> {
                     _ => InferredKind::UnknownOrAny,
                 }
             }
+            ValueExpr::Extremum { op, value, body } => {
+                // Body-first on a cloned scope, as `Sum` does, so
+                // body-bound names do not leak outward.
+                let mut scoped = scope.clone();
+                self.walk_prop(body, &mut scoped);
+                if let Term::Var(name) = value {
+                    self.use_var(&scoped, name);
+                }
+                let resolved = resolved_term_kind(value, &scoped.kinds);
+                // An extremum yields one of the members it ranged over,
+                // so its kind is the member kind - provided that kind has
+                // an order at all.
+                if let InferredKind::Known(actual) = resolved {
+                    if matches!(actual, PredicateArgKind::Subject | PredicateArgKind::Bool) {
+                        let context = self.context.clone();
+                        self.errors.push(ValidationError::UnorderedExtremum {
+                            op: op.as_str(),
+                            actual: actual.clone(),
+                            context,
+                        });
+                        return InferredKind::UnknownOrAny;
+                    }
+                    return InferredKind::Known(actual);
+                }
+                InferredKind::UnknownOrAny
+            }
             ValueExpr::Sum {
                 value,
                 body,

@@ -531,14 +531,16 @@ fn refuse_open_initialiser(
                 walk(value, c, const_names, errors);
                 walk(quantum, c, const_names, errors);
             }
-            ValueExpr::Sum { .. } | ValueExpr::ValueOf { .. } => errors.push((
-                c.span.clone(),
-                format!(
-                    "const `{}` reads state (`sum`/`value`) - a figure that \
+            ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } | ValueExpr::ValueOf { .. } => {
+                errors.push((
+                    c.span.clone(),
+                    format!(
+                        "const `{}` reads state (`sum`/`value`) - a figure that \
                      changes with the ledger belongs in a rule, not a const",
-                    c.name
-                ),
-            )),
+                        c.name
+                    ),
+                ))
+            }
         }
     }
     walk(&c.value, c, const_names, errors);
@@ -630,7 +632,7 @@ fn refuse_pattern_positions_in_value(
         }
         // The sum TARGET never binds (consumed against the body's
         // bindings) - only the body's patterns are scanned.
-        ValueExpr::Sum { body, .. } => {
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
             refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
         }
         // ValueOf keys are ground lookups - they never bind.

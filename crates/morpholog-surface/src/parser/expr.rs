@@ -15,7 +15,7 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    ArithOp, CompareOp, OrderedDomain, Prop, SumSeed, Term, Unit, Value, ValueExpr,
+    ArithOp, CompareOp, ExtremumOp, OrderedDomain, Prop, SumSeed, Term, Unit, Value, ValueExpr,
 };
 
 /// Build a `Prop::Compare` from a factored operator and domain. The
@@ -666,6 +666,7 @@ where
         let sum_expr = just(Token::KwSum)
             .ignore_then(
                 sum_target
+                    .clone()
                     .then_ignore(just(Token::Pipe))
                     .then(prop.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
@@ -702,24 +703,53 @@ where
                 default: default.map(Box::new),
             });
 
-        // min / max functions: `min ( <value> , <value> )` and the same
-        // for `max`. Binary, both operands full value expressions. (Not
-        // aggregators - `sum` is the aggregator; these take two values.)
+        // `min` and `max` open two different things, told apart by what
+        // follows the target: a `,` gives the binary form that caps one
+        // value against another, a `|` gives the aggregate that ranges
+        // over the bindings a body defines. The keyword is consumed once
+        // and the inner shape decides, so neither form has to unwind a
+        // half-parsed call to try the other.
+        let extremum_body = sum_target
+            .clone()
+            .then_ignore(just(Token::Pipe))
+            .then(prop.clone())
+            .map(MinMaxShape::Aggregate);
+        let binary_body = value
+            .clone()
+            .then_ignore(just(Token::Comma))
+            .then(value.clone())
+            .map(MinMaxShape::Binary);
         let min_max_expr = choice((
-            just(Token::KwMin).to(ArithOp::Min),
-            just(Token::KwMax).to(ArithOp::Max),
+            just(Token::KwMin).to(ExtremumOp::Min),
+            just(Token::KwMax).to(ExtremumOp::Max),
         ))
         .then(
-            value
-                .clone()
-                .then_ignore(just(Token::Comma))
-                .then(value.clone())
+            choice((extremum_body, binary_body))
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .map(|(op, (lhs, rhs))| ValueExpr::Arith {
-            op,
-            left: Box::new(lhs),
-            right: Box::new(rhs),
+        .validate(|(op, shape), e, emitter| match shape {
+            MinMaxShape::Aggregate((target, body)) => {
+                if matches!(&target, Term::Var(n) if n.as_str() == "actor") {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`actor` cannot be an aggregate target: `actor` is reserved as the special term that resolves to the proposing transition's actor, not a regular variable",
+                    ));
+                }
+                ValueExpr::Extremum {
+                    op,
+                    value: target,
+                    body: Box::new(body),
+                }
+            }
+            MinMaxShape::Binary((lhs, rhs)) => ValueExpr::Arith {
+                op: match op {
+                    ExtremumOp::Min => ArithOp::Min,
+                    ExtremumOp::Max => ArithOp::Max,
+                },
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            },
         });
 
         // abs function: `abs ( <value> )`. Unary magnitude of a signed
@@ -846,4 +876,11 @@ fn value_as_term(e: &ValueExpr) -> Option<Term> {
         ValueExpr::Term(t) => Some(t.clone()),
         _ => None,
     }
+}
+
+/// Which shape a `min` / `max` call turned out to be, decided by the
+/// separator after its first operand.
+enum MinMaxShape {
+    Aggregate((Term, Prop)),
+    Binary((ValueExpr, ValueExpr)),
 }

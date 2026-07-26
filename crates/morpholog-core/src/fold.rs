@@ -38,7 +38,7 @@ pub(crate) fn any_prop_node_in_value(expr: &ValueExpr, f: &impl Fn(&Prop) -> boo
         ValueExpr::ValueOf { default, .. } => default
             .as_ref()
             .is_some_and(|d| any_prop_node_in_value(d, f)),
-        ValueExpr::Sum { body, .. } => any_prop_node(body, f),
+        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => any_prop_node(body, f),
         ValueExpr::Arith { left, right, .. } => {
             any_prop_node_in_value(left, f) || any_prop_node_in_value(right, f)
         }
@@ -125,7 +125,10 @@ fn any_term_value_scoped<'p>(
             value,
             body,
             seed: _,
-        } => f(value, scope) || any_term_prop_scoped(body, f, scope),
+        }
+        | ValueExpr::Extremum { value, body, .. } => {
+            f(value, scope) || any_term_prop_scoped(body, f, scope)
+        }
         ValueExpr::Arith { left, right, .. } => {
             any_term_value_scoped(left, f, scope) || any_term_value_scoped(right, f, scope)
         }
