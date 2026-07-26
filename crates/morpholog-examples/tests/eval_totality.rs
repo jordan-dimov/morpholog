@@ -22,6 +22,13 @@
 //! then again from every state one BASELINE acceptance step away -
 //! the ring where gates pass for the first time and aggregate
 //! invariants meet near-empty books (the empty-sum landmine's home).
+//!
+//! Range extremes: numeric witnesses include the decimal maximum, so
+//! recompute invariants multiply values past the exact range. The
+//! contract there is refined, not waived: the named out-of-range
+//! refusals (`ArithOutOfRange`, `RoundOutOfRange`) are lawful at
+//! extremes - they are the checked-arithmetic contract working - and
+//! every OTHER kernel error, and any panic, still fails the suite.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -32,7 +39,7 @@ use morpholog_core::{
     EvalValue, ParamKind, PredicateArgKind, Program, State, TransformationName, ValidatedProgram,
     transformation_param_kinds,
 };
-use morpholog_test_support::{Example, bool_, coll, date, dec, dur, qty, subj, ts};
+use morpholog_test_support::{Example, bool_, coll, date, dec, dec_str, dur, qty, subj, ts};
 
 /// One accepted step from empty, then every transformation again: the
 /// depth that reaches first-commission invariant evaluation.
@@ -41,6 +48,10 @@ const REACHABILITY_DEPTH: usize = 2;
 /// The name every shared-subject witness uses, so "two parameters
 /// naming the same subject" is among the tried shapes.
 const SHARED_SUBJECT: &str = "shared";
+
+/// The exact decimal ceiling: the witness that drives recompute
+/// arithmetic past the representable range.
+const DECIMAL_MAX: &str = "79228162514264337593543950335";
 
 /// The baseline argument for one parameter: kind-lawful, deterministic,
 /// with subjects named after the parameter so values join across
@@ -89,9 +100,13 @@ fn boundary_witnesses(kind: &ParamKind, name: &str) -> Vec<EvalValue> {
 fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<EvalValue> {
     match kind {
         PredicateArgKind::Subject | PredicateArgKind::Any => vec![subj(SHARED_SUBJECT)],
-        PredicateArgKind::Decimal => vec![dec(0), dec(-1)],
+        PredicateArgKind::Decimal => vec![dec(0), dec(-1), dec_str(DECIMAL_MAX)],
         PredicateArgKind::Quantity(unit) => {
-            vec![qty("0", unit.as_str()), qty("-1", unit.as_str())]
+            vec![
+                qty("0", unit.as_str()),
+                qty("-1", unit.as_str()),
+                qty(DECIMAL_MAX, unit.as_str()),
+            ]
         }
         PredicateArgKind::Bool => vec![bool_(false)],
         PredicateArgKind::Collection => vec![coll(vec![])],
@@ -153,6 +168,14 @@ fn propose_all(
                     }
                 }
                 Ok(morpholog_core::Outcome::Rejected { .. }) => {}
+                // The named out-of-range family is lawful at range
+                // extremes - checked arithmetic refusing an
+                // unrepresentable result IS the contract. Everything
+                // else stays a failure.
+                Err(
+                    morpholog_core::EvalError::ArithOutOfRange(_)
+                    | morpholog_core::EvalError::RoundOutOfRange { .. },
+                ) => {}
                 Err(e) => panic!(
                     "`{}::{}` with kind-lawful args {args:?} raised a kernel error \
                      instead of a lawful outcome: {e:?}",
