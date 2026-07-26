@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from collections.abc import Set as AbstractSet
 from typing import Callable, TypeVar
 
 from . import values
@@ -25,7 +26,12 @@ class EnvelopeError(ValueError):
     """An envelope that does not match the pinned contract."""
 
 
-def _strict(name: str, payload: object, required: set, optional: set = frozenset()) -> dict:
+def _strict(
+    name: str,
+    payload: object,
+    required: AbstractSet[str],
+    optional: AbstractSet[str] = frozenset(),
+) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise EnvelopeError(f"{name}: expected an object, got {payload!r}")
     keys = set(payload)
@@ -63,7 +69,7 @@ def _optional_timestamp(text: object) -> datetime | None:
 @dataclass(frozen=True)
 class ClaimInstance:
     predicate: str
-    args: list = field(default_factory=list)
+    args: list[object] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> ClaimInstance:
@@ -77,7 +83,7 @@ class ClaimInstance:
 @dataclass(frozen=True)
 class IntentInstance:
     name: str
-    args: list = field(default_factory=list)
+    args: list[object] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> IntentInstance:
@@ -93,7 +99,7 @@ class NamedClaim:
     """One row of the named read: bare values keyed by declared field."""
 
     predicate: str
-    args: dict
+    args: dict[str, object]
 
     @classmethod
     def from_json(cls, payload: object) -> NamedClaim:
@@ -105,9 +111,9 @@ class NamedClaim:
 class Committed:
     transition_id: str
     actor: str
-    asserted_claims: list
-    retracted_claims: list
-    emitted_intents: list
+    asserted_claims: list[ClaimInstance]
+    retracted_claims: list[ClaimInstance]
+    emitted_intents: list[IntentInstance]
 
     @classmethod
     def from_json(cls, payload: object) -> Committed:
@@ -174,7 +180,7 @@ def parse_run_outcome(payload: object) -> Committed | Rejected:
 @dataclass(frozen=True)
 class TracedEnvelope:
     result: Committed | Rejected | Errored
-    trace: list
+    trace: list[object]
 
     @classmethod
     def from_json(cls, payload: object) -> TracedEnvelope:
@@ -193,7 +199,7 @@ class TracedEnvelope:
 @dataclass(frozen=True)
 class TransitionRef:
     transformation: str
-    args: list
+    args: list[object]
     actor: str
 
     @classmethod
@@ -210,7 +216,7 @@ class TransitionRef:
 class MissingClaim:
     predicate: str
     rendered: str
-    candidate_supplier_transformations: list
+    candidate_supplier_transformations: list[str]
 
     @classmethod
     def from_json(cls, payload: object) -> MissingClaim:
@@ -222,7 +228,10 @@ class MissingClaim:
         return cls(
             predicate=data["predicate"],
             rendered=data["rendered"],
-            candidate_supplier_transformations=list(data["candidate_supplier_transformations"]),
+            candidate_supplier_transformations=_str_list(
+                "candidate_supplier_transformations",
+                data["candidate_supplier_transformations"],
+            ),
         )
 
 
@@ -230,7 +239,7 @@ class MissingClaim:
 class GateRejection:
     gate: str
     statement_kind: str
-    directly_missing_claims: list
+    directly_missing_claims: list[MissingClaim]
 
     @classmethod
     def from_json(cls, payload: object) -> GateRejection:
@@ -330,7 +339,7 @@ class OutboxRow:
     intent_id: str
     transition_id: str
     intent_type: str
-    arguments: list
+    arguments: list[object]
     idempotency_key: str
     status: str
     attempt_count: int
@@ -460,7 +469,7 @@ class Attestation:
         return cls(mode=data["mode"], authenticated_by=data["authenticated_by"])
 
 
-def _attestation_of(data: dict) -> Attestation | None:
+def _attestation_of(data: dict[str, object]) -> Attestation | None:
     raw = data.get("attestation")
     return None if raw is None else Attestation.from_json(raw)
 
@@ -475,13 +484,13 @@ class AuditRow:
 
     transition_id: str
     transformation_name: str
-    arguments: list
+    arguments: list[object]
     actor: str
     invariant_epoch: int
-    invariants_checked: list
-    asserted_claims: list
-    retracted_claims: list
-    emitted_intents: list
+    invariants_checked: list[AuditedInvariantCheck]
+    asserted_claims: list[ClaimInstance]
+    retracted_claims: list[ClaimInstance]
+    emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
 
@@ -514,13 +523,13 @@ class AuditRowNamed:
 
     transition_id: str
     transformation_name: str
-    arguments: list
+    arguments: list[object]
     actor: str
     invariant_epoch: int
-    invariants_checked: list
-    asserted_claims: list
-    retracted_claims: list
-    emitted_intents: list
+    invariants_checked: list[AuditedInvariantCheck]
+    asserted_claims: list[NamedClaim]
+    retracted_claims: list[NamedClaim]
+    emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
 
@@ -632,8 +641,8 @@ class CoverageReport:
     program: str
     transitions_replayed: int
     rejections_replayed: int
-    invariants: list
-    transformations: list
+    invariants: list[InvariantCoverage]
+    transformations: list[TransformationUsage]
 
     @classmethod
     def from_json(cls, payload: object) -> CoverageReport:
@@ -689,7 +698,7 @@ class Diagnostic:
 @dataclass(frozen=True)
 class CheckReport:
     file: str
-    diagnostics: list
+    diagnostics: list[Diagnostic]
 
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
@@ -823,8 +832,8 @@ class ReplayDivergent:
     """The claims table and the audit log disagree - evidence one was
     edited out of band."""
 
-    only_in_claims_table: list
-    only_in_replay: list
+    only_in_claims_table: list[ClaimInstance]
+    only_in_replay: list[ClaimInstance]
 
     @classmethod
     def from_json(cls, payload: object) -> ReplayDivergent:
@@ -1033,13 +1042,16 @@ class ViewsTampered:
     redefined in place, `missing` views lack a seal row or a live
     definition."""
 
-    mismatched: list
-    missing: list
+    mismatched: list[str]
+    missing: list[str]
 
     @classmethod
     def from_json(cls, payload: object) -> ViewsTampered:
         data = _strict("tampered views", payload, {"status", "mismatched", "missing"})
-        return cls(mismatched=list(data["mismatched"]), missing=list(data["missing"]))
+        return cls(
+            mismatched=_str_list("mismatched", data["mismatched"]),
+            missing=_str_list("missing", data["missing"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -1114,7 +1126,7 @@ class TreeHeadSignature:
         )
 
 
-def _parse_signatures(data: dict) -> list:
+def _parse_signatures(data: dict[str, object]) -> list[TreeHeadSignature]:
     raw = data.get("signatures", [])
     if not isinstance(raw, list):
         raise EnvelopeError(f"`signatures` must be a list, got {raw!r}")
@@ -1132,7 +1144,7 @@ class Checkpoint:
     root_hash: str
     prev_checkpoint_hash: str | None
     checkpoint_hash: str
-    signatures: list = field(default_factory=list)
+    signatures: list[TreeHeadSignature] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> Checkpoint:
@@ -1230,8 +1242,8 @@ class EvidencePack:
     the audit log: the covering checkpoint chain and the covered rows."""
 
     manifest: PackManifest
-    checkpoints: list
-    rows: list
+    checkpoints: list[Checkpoint]
+    rows: list[AuditRow]
 
     @classmethod
     def from_json(cls, payload: object) -> EvidencePack:
@@ -1282,7 +1294,7 @@ class WindowPackManifest:
         )
 
 
-def _str_list(label: str, value: object) -> list:
+def _str_list(label: str, value: object) -> list[str]:
     """A list of strings, or an `EnvelopeError`. The schema pins proof and
     consistency-proof hashes as string arrays; a bare string would otherwise
     pass `list(...)` as a list of characters."""
@@ -1297,7 +1309,7 @@ class RowInclusionProof:
     the to-checkpoint's tree, proven by ``proof`` (sibling hashes)."""
 
     leaf_index: int
-    proof: list
+    proof: list[str]
 
     @classmethod
     def from_json(cls, payload: object) -> RowInclusionProof:
@@ -1314,9 +1326,9 @@ class WindowEvidencePack:
     manifest: WindowPackManifest
     from_checkpoint: Checkpoint
     to_checkpoint: Checkpoint
-    consistency_proof: list
-    rows: list
-    inclusion_proofs: list
+    consistency_proof: list[str]
+    rows: list[AuditRow]
+    inclusion_proofs: list[RowInclusionProof]
 
     @classmethod
     def from_json(cls, payload: object) -> WindowEvidencePack:
@@ -1526,8 +1538,8 @@ class SelectiveEvidencePack:
 
     manifest: SelectivePackManifest
     checkpoint: Checkpoint
-    rows: list
-    inclusion_proofs: list
+    rows: list[AuditRow]
+    inclusion_proofs: list[RowInclusionProof]
 
     @classmethod
     def from_json(cls, payload: object) -> SelectiveEvidencePack:
