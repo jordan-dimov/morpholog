@@ -1,4 +1,4 @@
-//! `morpholog evidence` - export a portable evidence pack over the audit
+//! `morpholog audit export` / `verify-pack` - export a portable evidence pack over the audit
 //! log (a complete prefix, or a window between two checkpoints), and verify
 //! one offline.
 //!

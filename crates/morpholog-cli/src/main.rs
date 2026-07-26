@@ -865,7 +865,7 @@ pub(crate) struct InspectClaimsArgs {
 }
 
 /// The writer-set assertion both watermark consumers share
-/// (`inspect audit`, `checkpoint`).
+/// (`inspect audit`, `audit checkpoint`).
 #[derive(clap::Args, Debug)]
 pub(crate) struct WriterRoleArgs {
     /// Assert the session roles that write audit (repeatable), so the

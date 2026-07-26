@@ -57,7 +57,7 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
 
 /// Run `morpholog` with exactly the given args and NO `--database-url`,
 /// for the offline subcommands whose contract is that they take no
-/// connection (`evidence verify`).
+/// connection (`audit verify-pack`).
 fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let output = Command::new(common::bin())
         .args(args)
@@ -1503,7 +1503,7 @@ async fn refresh_derived_report_without_transitions_omits_snapshot_pair() {
 }
 
 // ============================================================
-// `morpholog run` subcommand
+// `morpholog propose` subcommand
 //
 // Parses a user-supplied `.morph` file by path, validates it, and
 // proposes a transformation from it - the CLI's commit path.
@@ -2282,7 +2282,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
     reset_db().await;
 
     // 1. INPUT BOUNDARY: a Python-shaped consumer writes its own
-    //    `.morph` file and invokes `morpholog run` to admit a
+    //    `.morph` file and invokes `morpholog propose` to admit a
     //    transformation against PostgreSQL - no Rust, no baked-in
     //    programmes, just a file path.
     let path = write_temp_ledger_morph();
