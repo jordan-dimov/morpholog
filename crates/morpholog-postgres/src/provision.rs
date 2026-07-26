@@ -50,6 +50,32 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     Ok(InitOutcome::Initialised)
 }
 
+/// Drop the `morpholog` schema and everything in it, for a
+/// development database that wants re-provisioning from scratch.
+///
+/// Destructive by definition and deliberately dumb: the caller owns
+/// the acknowledgement (see the CLI's `init --reset`), because a
+/// library function cannot tell a scratch database from production.
+/// Returns whether a schema was there to drop, so a caller can report
+/// honestly rather than implying it removed something.
+///
+/// One transaction with the re-provisioning it precedes is NOT
+/// possible here - the caller runs [`initialise_schema`] next, and a
+/// failure between the two leaves an un-provisioned database, which is
+/// the same state `init` starts from and recovers by re-running.
+pub async fn drop_schema(pool: &PgPool) -> Result<bool, PgError> {
+    let existed = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
+        .fetch_optional(pool)
+        .await
+        .map_err(classify)?
+        .is_some();
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
+        .execute(pool)
+        .await
+        .map_err(classify)?;
+    Ok(existed)
+}
+
 /// The group role holding exactly the runtime's write set. NOLOGIN and
 /// passwordless: the operator grants membership to the runtime's real
 /// login role.

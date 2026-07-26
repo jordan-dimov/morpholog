@@ -19,6 +19,20 @@ fn margin_call_run() -> PathBuf {
     repo_root().join("examples/14_margin_call_run/margin_call_run.morph")
 }
 
+fn check(file: &Path, out: &Path) -> std::process::Output {
+    Command::new(bin())
+        .args([
+            "generate",
+            "python-client",
+            file.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--check",
+        ])
+        .output()
+        .expect("cli runs")
+}
+
 fn generate(file: &Path, out: &Path) -> std::process::Output {
     Command::new(bin())
         .args([
@@ -265,4 +279,88 @@ fn laytime_is_refused_for_its_durations() {
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("Duration"), "got:\n{stderr}");
+}
+
+// ============================================================
+// `--check`: the drift gate both consumer repos hand-rolled. Its
+// contract is the exit code, so every case asserts on that.
+// ============================================================
+
+#[test]
+fn check_exits_zero_when_the_package_is_current() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path();
+    assert!(generate(&trade_lifecycle(), out).status.success());
+
+    let checked = check(&trade_lifecycle(), out);
+    assert!(
+        checked.status.success(),
+        "a freshly generated package must be reported current: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+#[test]
+fn check_exits_non_zero_on_a_modified_file_and_writes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path();
+    assert!(generate(&trade_lifecycle(), out).status.success());
+    let models = out.join("morpholog_client/models.py");
+    let before = std::fs::read_to_string(&models).expect("read");
+    std::fs::write(&models, format!("{before}\n# drift\n")).expect("write");
+
+    let checked = check(&trade_lifecycle(), out);
+    assert!(
+        !checked.status.success(),
+        "a modified file must fail the check"
+    );
+    let stderr = String::from_utf8_lossy(&checked.stderr);
+    assert!(
+        stderr.contains("models.py: differs"),
+        "stderr names the file: {stderr}"
+    );
+    // The whole point of a check mode: it must not repair what it found.
+    assert!(
+        std::fs::read_to_string(&models)
+            .expect("read")
+            .contains("# drift"),
+        "--check must write nothing, leaving the drift in place"
+    );
+}
+
+#[test]
+fn check_distinguishes_a_missing_file_from_a_differing_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path();
+    assert!(generate(&trade_lifecycle(), out).status.success());
+    std::fs::remove_file(out.join("morpholog_client/values.py")).expect("remove");
+
+    let checked = check(&trade_lifecycle(), out);
+    assert!(!checked.status.success());
+    let stderr = String::from_utf8_lossy(&checked.stderr);
+    assert!(
+        stderr.contains("values.py: missing"),
+        "stderr says missing: {stderr}"
+    );
+}
+
+#[test]
+fn check_exits_non_zero_when_nothing_has_been_generated_yet() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let checked = check(&trade_lifecycle(), dir.path());
+    assert!(
+        !checked.status.success(),
+        "an absent package is drift, not a pass - otherwise a CI gate would \
+         go green on a repo that never generated the client"
+    );
+}
+
+#[test]
+fn check_refuses_a_programme_the_generator_refuses() {
+    // The refusal sweep runs before the mode split, so --check reports
+    // the same refusals rather than silently passing an ungeneratable
+    // programme.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let checked = check(&margin_call_run(), dir.path());
+    assert!(!checked.status.success());
 }

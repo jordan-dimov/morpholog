@@ -69,7 +69,8 @@ pub use propose::{
     propose_against_pg_with_trace,
 };
 pub use provision::{
-    InitOutcome, READER_ROLE, WRITER_ROLE, initialise_schema, provision_least_privilege,
+    InitOutcome, READER_ROLE, WRITER_ROLE, drop_schema, initialise_schema,
+    provision_least_privilege,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use score::{

@@ -11,15 +11,37 @@
 //! database by default. Idempotent, so it composes with
 //! `--skip-if-exists` to retrofit an existing database.
 
-use anyhow::Context;
-use morpholog_postgres::{InitOutcome, initialise_schema, provision_least_privilege};
+use anyhow::{Context, anyhow};
+use morpholog_postgres::{InitOutcome, drop_schema, initialise_schema, provision_least_privilege};
 
 use crate::InitArgs;
 use crate::commands::{connect, print_json};
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
+    // The acknowledgement is checked before connecting: a mistyped
+    // production URL should be refused without the binary having
+    // touched that database at all.
+    if args.i_know_this_deletes_data && !args.reset {
+        return Err(anyhow!(
+            "--i-know-this-deletes-data is only meaningful with --reset"
+        ));
+    }
+    if args.reset && !args.i_know_this_deletes_data {
+        return Err(anyhow!(
+            "--reset DROPS the `morpholog` schema and every claim, audit row, and \
+             outbox entry in it. Re-run with --i-know-this-deletes-data to \
+             acknowledge. Target: {}",
+            args.db.database_url
+        ));
+    }
+
     let pool = connect(&args.db.database_url).await?;
+    let dropped = if args.reset {
+        Some(drop_schema(&pool).await.context("schema drop failed")?)
+    } else {
+        None
+    };
     let status = match initialise_schema(&pool)
         .await
         .context("schema provisioning failed")?
@@ -43,6 +65,15 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     } else {
         None
     };
+    // `reset` distinguishes "there was a schema and it is gone" from
+    // "there was nothing to drop" - reporting the drop unconditionally
+    // would imply removing something that was never there.
+    if let Some(existed) = dropped {
+        eprintln!(
+            "{} the pre-existing `morpholog` schema before provisioning",
+            if existed { "dropped" } else { "found no" }
+        );
+    }
     print_json(&InitReport {
         least_privilege,
         schema: "morpholog",
