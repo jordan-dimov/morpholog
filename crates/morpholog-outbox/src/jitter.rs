@@ -2,7 +2,7 @@
 //! testable without depending on a random RNG.
 //!
 //! Production uses [`RandJitter`] which draws from
-//! `rand::thread_rng`. Tests use [`crate::testing::FixedJitter`]
+//! `rand::rng()`. Tests use [`crate::testing::FixedJitter`]
 //! which returns a configured constant, making sleep-duration
 //! assertions deterministic.
 
@@ -20,7 +20,7 @@ pub struct RandJitter;
 
 impl JitterRng for RandJitter {
     fn jitter_factor(&self, low: f64, high: f64) -> f64 {
-        use rand::Rng;
+        use rand::RngExt;
         rand::rng().random_range(low..high)
     }
 }
