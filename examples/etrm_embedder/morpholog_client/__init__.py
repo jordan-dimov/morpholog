@@ -16,7 +16,7 @@ if sys.version_info < (3, 10):
 
 PROGRAM = "trade_lifecycle"
 MODEL_HASH = "sha256:0ad57fcadaa4b46d340c6108610d794343efba19e3daff0eae1b85ebd1c9ccc8"
-MORPHOLOG_VERSION = "0.0.4"
+MORPHOLOG_VERSION = "0.0.5"
 PYTHON_FLOOR = (3, 10)
 
 from . import envelopes, models, values  # noqa: E402
