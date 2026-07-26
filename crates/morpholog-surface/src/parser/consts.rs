@@ -580,8 +580,12 @@ fn refuse_pattern_positions_in_prop(
             let shape = format!("the `{predicate}` claim pattern");
             refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
         }
+        // Unreachable in the parse pipeline (defined calls are still
+        // claim-shaped here; resolution runs after this pass), kept
+        // for exhaustiveness with the wording the Claim arm uses, so
+        // a future pipeline reorder cannot diverge the diagnostic.
         Prop::Defined { name, args } => {
-            let shape = format!("the `{name}` call");
+            let shape = format!("the `{name}` claim pattern");
             refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
         }
         Prop::In(_, _) => {}
