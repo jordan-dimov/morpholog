@@ -26,6 +26,21 @@ const CASES: &[&str] = &[
     "not-a-url",
 ];
 
+fn shell_sqlx_url_as(script: &str, url: &str, user: &str) -> String {
+    let program = format!(
+        "set -euo pipefail\n\
+         source <(sed -n '/^sqlx_url()/,/^}}/p' {script})\n\
+         sqlx_url \"$1\"",
+    );
+    let out = Command::new("bash")
+        .args(["-c", &program, "--", url])
+        .env("PGUSER", user)
+        .output()
+        .expect("bash runs");
+    assert!(out.status.success(), "{script} failed for PGUSER={user}");
+    String::from_utf8(out.stdout).expect("utf8")
+}
+
 fn shell_sqlx_url(script: &str, url: &str) -> String {
     // Source just the function out of the script, then call it. `set -u`
     // is on so an unset-variable regression fails here too.
@@ -47,10 +62,85 @@ fn shell_sqlx_url(script: &str, url: &str) -> String {
     String::from_utf8(out.stdout).expect("utf8")
 }
 
+/// Hostile usernames, compared against the explicit-user form so the
+/// environment is not in the way. An unencoded `&` here would append a
+/// real connection option.
+const HOSTILE_USERS: &[&str] = &[
+    "alice",
+    "ops&sslmode=disable",
+    "ops#blue",
+    "ops user",
+    "ops%20already",
+    "user@server",
+    "acc:ount",
+];
+
+#[test]
+fn the_twin_encodes_hostile_usernames_identically() {
+    for script in ["scripts/lib/sqlx_url.sh"] {
+        let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
+        for user in HOSTILE_USERS {
+            let shell = shell_sqlx_url_as(&path, "postgres:///db", user);
+            let rust = morpholog_postgres::with_user("postgres:///db", user);
+            assert_eq!(shell, rust, "{script} disagrees on PGUSER={user}");
+        }
+    }
+}
+
+#[test]
+fn the_encoded_url_parses_back_to_the_intended_username() {
+    // The property that actually matters: not that the string LOOKS
+    // right, but that the driver reads the username we meant. A test
+    // comparing text alone would pass on a URL sqlx misinterprets.
+    for user in HOSTILE_USERS {
+        let url = morpholog_postgres::with_user("postgres:///db", user);
+        let opts: sqlx::postgres::PgConnectOptions = url
+            .parse()
+            .unwrap_or_else(|e| panic!("{url} must parse: {e}"));
+        assert_eq!(
+            opts.get_username(),
+            *user,
+            "{url} parsed to a different username than intended"
+        );
+    }
+}
+
+#[test]
+fn an_unencoded_username_would_have_smuggled_in_an_option() {
+    // Demonstrating the bug the encoding closes, rather than asserting
+    // only that the fix works: the naive form appends a real parameter.
+    let naive = format!("postgres:///db?user={}", "ops&sslmode=disable");
+    let encoded = morpholog_postgres::with_user("postgres:///db", "ops&sslmode=disable");
+    assert!(naive.contains("&sslmode=disable"), "the naive form injects");
+    assert!(
+        !encoded.contains("&sslmode="),
+        "the encoded form must not: {encoded}"
+    );
+}
+
+#[test]
+fn both_scripts_source_the_shared_twin() {
+    // The agreement tests check one shared file; this is what keeps that
+    // from being a dodge - a script that stopped sourcing it, or grew its
+    // own copy, would pass those tests while diverging in use.
+    for script in ["scripts/precommit.sh", "scripts/sqlx-prepare.sh"] {
+        let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).expect("script readable");
+        assert!(
+            text.contains("lib/sqlx_url.sh"),
+            "{script} must source the shared twin"
+        );
+        assert!(
+            !text.contains("sqlx_url() {"),
+            "{script} grew its own copy of the twin"
+        );
+    }
+}
+
 #[test]
 fn the_shell_twin_agrees_with_the_rust_rule() {
     let mut filled = 0;
-    for script in ["scripts/precommit.sh", "scripts/sqlx-prepare.sh"] {
+    for script in ["scripts/lib/sqlx_url.sh"] {
         let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
         for url in CASES {
             let shell = shell_sqlx_url(&path, url);

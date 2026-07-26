@@ -51,21 +51,29 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
 }
 
 /// A connection string with a username filled in when it specifies
-/// none, restoring the behaviour `libpq`, `psql`, and sqlx 0.8 all
-/// share: an unspecified user means the operating-system user. sqlx
-/// 0.9 stopped doing this and connects as `anonymous` instead, which
-/// turns the `postgres:///mydb` form every Postgres user reaches for -
-/// and that this project's own install guide teaches - into a
-/// peer-authentication failure. Precedence follows libpq: `PGUSER`,
-/// then the OS user.
+/// none, so `postgres:///mydb` keeps working. sqlx 0.9 stopped
+/// defaulting an unspecified user and connects as `anonymous` instead,
+/// which turns the short form every Postgres tool accepts - and that
+/// this project's install guide teaches - into a peer-authentication
+/// failure.
 ///
 /// Applied at the connection door rather than pushed onto users as a
 /// documentation change, because the short form is not a Morpholog
 /// convention to revise - it is what Postgres tooling means.
+///
+/// **Not a claim of libpq parity.** libpq resolves the EFFECTIVE
+/// operating-system account (`getpwuid(geteuid())`); this reads
+/// `PGUSER`, then `USER`, then `LOGNAME`, which agree with it in an
+/// ordinary login session and can diverge under `sudo`, a service
+/// manager, or a container that does not set them. Chasing exact
+/// parity would mean `getpwuid` behind a new dependency (the workspace
+/// forbids `unsafe`) for a convenience that those contexts should
+/// answer by naming the user in the URL. When nothing is available the
+/// URL is returned untouched, so the driver reports rather than this
+/// inventing an identity.
 pub fn with_default_user(url: &str) -> String {
-    // Precedence follows libpq: PGUSER, then the OS user. An EMPTY
-    // variable counts as unset and falls through - `PGUSER=` is how a
-    // CI environment often clears it, and treating it as a value
+    // An EMPTY variable counts as unset and falls through - `PGUSER=` is
+    // how a CI environment often clears it, and treating it as a value
     // suppressed the fallback entirely (found by the shell-twin
     // agreement test, which the pure-function unit tests could not see).
     let user = ["PGUSER", "USER", "LOGNAME"]
@@ -73,6 +81,30 @@ pub fn with_default_user(url: &str) -> String {
         .filter_map(|key| std::env::var(key).ok())
         .find(|value| !value.is_empty());
     apply_default_user(url, user.as_deref())
+}
+
+/// [`with_default_user`] with the username supplied rather than read
+/// from the environment - the testable core, and the form a caller with
+/// its own identity source wants.
+pub fn with_user(url: &str, user: &str) -> String {
+    apply_default_user(url, Some(user))
+}
+
+/// Percent-encode a username for a URL query value. Anything outside
+/// the unreserved set is escaped BY BYTE, so UTF-8 survives and a
+/// username carrying `&`, `#`, `%`, or a space cannot smuggle in
+/// connection options: `PGUSER='ops&sslmode=disable'` would otherwise
+/// append a real parameter and, in that example, disable TLS.
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// The rule itself, with the environment lookup lifted out: the
@@ -111,7 +143,7 @@ fn apply_default_user(url: &str, user: Option<&str>) -> String {
     // the same thing to the driver. One spelling is also what lets the
     // shell twin in the scripts stay verifiably identical.
     let separator = if rest.contains('?') { '&' } else { '?' };
-    format!("{url}{separator}user={user}")
+    format!("{url}{separator}user={}", percent_encode(user))
 }
 
 /// A connection string with any userinfo stripped, for a message an
@@ -446,9 +478,12 @@ mod default_user_tests {
         // `PGUSER=user@server` is the Azure Postgres shape. Injected as
         // userinfo it would produce two `@` and a wrong host, so it goes
         // in as the parameter instead.
+        // Percent-encoded, and provably still read as `alice@server`:
+        // the shell-twin suite parses this back through
+        // `PgConnectOptions` and asserts the username round-trips.
         assert_eq!(
             apply_default_user("postgres://host:5432/db", Some("alice@server")),
-            "postgres://host:5432/db?user=alice@server"
+            "postgres://host:5432/db?user=alice%40server"
         );
     }
 

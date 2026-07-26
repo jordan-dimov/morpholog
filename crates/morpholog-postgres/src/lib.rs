@@ -70,7 +70,7 @@ pub use propose::{
 };
 pub use provision::{
     InitOutcome, READER_ROLE, WRITER_ROLE, drop_schema, initialise_schema,
-    provision_least_privilege, redact_database_url, with_default_user,
+    provision_least_privilege, redact_database_url, with_default_user, with_user,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use score::{
