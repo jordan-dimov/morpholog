@@ -174,6 +174,8 @@ The doctrine governs every surface addition. A reviewer should reject any surfac
 
 **Block syntax: indentation, not braces.** Multi-statement blocks (transformation bodies, `for` loops, future statement-bearing constructs) use indentation, not braces or `end` keywords. This matches the colon-terminated forms at the expression level (`forall x in xs: body`, `exists x: body`, `invariant Name: body`) and keeps `.morph` source reading as rules, not config JSON or imperative scaffolding. The layout mechanism is an implementation choice; the doctrine is *indentation*.
 
+**One programme, one file - deliberately.** There is no `include`, no import, no module system; the word does not even lex. A governed rulebook's unit of trust is the whole programme - one file an auditor reads top to bottom, hashes as one identity, and can hold in one sitting. A module system would reintroduce the question "what else applies here?" that the single file exists to close. If a deployment genuinely outgrows one bounded context, the answer is a second *programme* (its own file, its own hash, its own audit), not a fragment mechanism inside this one.
+
 ## The right way to measure ambition
 
 The wrong question: *what percentage of the code is Morpholog?* The right question: *what percentage of the legitimacy-bearing failure modes does Morpholog make non-representable?*

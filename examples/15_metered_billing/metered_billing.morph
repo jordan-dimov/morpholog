@@ -30,6 +30,14 @@ program metered_billing
 -- That symmetry matters: a convention that always rounded halves UP
 -- would quietly favour one side of every credit note.
 
+-- One figure the whole rulebook shares: the penny, the quantum every
+-- money amount rounds to. A `const` names it once at the top of the
+-- file and is written out in place before the rules take effect -
+-- nothing is stored, and naming the figure provably cannot change
+-- what any rule means. What it buys is agreement: two rules can no
+-- longer round to DIFFERENT quanta by a typo one of them carries.
+const penny = (0.01)
+
 -- A declared VAT rate. Tax rates are law, not arithmetic: a rate is
 -- admitted here as a claim with its own identity, and every line
 -- must name the rate it was taxed under. `0.05` is the GB reduced
@@ -63,13 +71,13 @@ predicate InvoiceSealed(invoice: Subject, total_gbp: Decimal)
 
 -- Every line's net IS the rounded recompute. `let` names the raw
 -- product - pence times kilowatt hours, over 100 to reach pounds -
--- and `round(raw, 0.01)` is the convention: nearest penny, halves
+-- and `round(raw, penny)` is the convention: nearest penny, halves
 -- away from zero. The engine's figure is not trusted; it is checked
 -- against this recompute on every admission, forever.
 invariant line_net_is_the_rounded_recompute:
     let raw = ((rate_p_per_kwh * volume_kwh) / 100)
     ChargeLine(_, _, rate_p_per_kwh, volume_kwh, net_gbp, _, _)
-    implies net_gbp = round(raw, 0.01)
+    implies net_gbp = round(raw, penny)
 
 -- Every line's VAT is the rounded recompute from the declared rate
 -- it names. Note what this rule alone cannot see: if a line named a
@@ -79,7 +87,7 @@ invariant line_net_is_the_rounded_recompute:
 -- select a governing claim go quiet when none exists.
 invariant line_vat_is_the_rounded_recompute:
     (ChargeLine(_, _, _, _, net_gbp, vat_rate_id, vat_gbp) and VatRate(vat_rate_id, rate))
-    implies vat_gbp = round(net_gbp * rate, 0.01)
+    implies vat_gbp = round(net_gbp * rate, penny)
 
 -- ... which is why this companion exists: every line MUST name a
 -- declared rate. The two rules only govern together - the one above

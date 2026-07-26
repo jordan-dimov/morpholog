@@ -196,6 +196,23 @@ transformation post(l, rate, volume, net):
     admit Line(l, rate, volume, net)
 ";
 
+/// A programme-level `const` reaching an invariant, a define, and a
+/// transformation statement: substituted away at parse time, so every
+/// walker must see the inlined bodies - identically to the
+/// hand-inlined spelling.
+const CONST_ACROSS_BODY_SORTS: &str = "\
+program const_across_body_sorts
+const penny = (0.01)
+predicate Line(l: Subject, net: Decimal)
+define rounded(net):
+    net = round(net, penny)
+invariant nets_are_rounded:
+    Line(_, net) implies rounded(net)
+transformation post(l, net):
+    require penny <= net
+    admit Line(l, net)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -208,6 +225,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
+        ("const_across_body_sorts", CONST_ACROSS_BODY_SORTS),
     ]
 }
 

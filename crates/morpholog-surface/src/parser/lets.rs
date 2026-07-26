@@ -28,10 +28,14 @@ use morpholog_core::{Prop, Term, ValueExpr, Var};
 use crate::diagnostics::Span;
 
 /// One parsed `let name = (value)` line, spans kept for refusals.
+/// `noun` is the diagnostic word - "let" here, "const" when the
+/// programme-level pass reuses this machinery.
+#[derive(Debug)]
 pub(crate) struct LetBinding {
     pub(crate) name: String,
     pub(crate) value: ValueExpr,
     pub(crate) span: Span,
+    pub(crate) noun: &'static str,
 }
 
 /// The expansion ceiling: substitution may not grow a body past this
@@ -220,7 +224,7 @@ pub(crate) fn apply(
     (body, errors)
 }
 
-fn budgeted_substitute_prop(
+pub(super) fn budgeted_substitute_prop(
     target: &mut Prop,
     name: &Var,
     value: &ValueExpr,
@@ -241,9 +245,9 @@ fn budgeted_substitute_prop(
         errors.push((
             binding.span.clone(),
             format!(
-                "expanding let `{}` would grow this body past the expression \
+                "expanding {} `{}` would grow this body past the expression \
                  budget - inline less, or split the rule",
-                binding.name
+                binding.noun, binding.name
             ),
         ));
         return;
@@ -251,7 +255,7 @@ fn budgeted_substitute_prop(
     substitute_in_prop(target, name, value, binding, errors);
 }
 
-fn budgeted_substitute_value(
+pub(super) fn budgeted_substitute_value(
     target: &mut ValueExpr,
     name: &Var,
     value: &ValueExpr,
@@ -268,9 +272,9 @@ fn budgeted_substitute_value(
         errors.push((
             binding.span.clone(),
             format!(
-                "expanding let `{}` would grow this body past the expression \
+                "expanding {} `{}` would grow this body past the expression \
                  budget - inline less, or split the rule",
-                binding.name
+                binding.noun, binding.name
             ),
         ));
         return;
@@ -291,7 +295,7 @@ fn substitutable_term(value: &ValueExpr) -> Option<Term> {
     }
 }
 
-fn substitute_term_slot(
+pub(super) fn substitute_term_slot(
     term: &mut Term,
     name: &Var,
     value: &ValueExpr,
@@ -307,16 +311,16 @@ fn substitute_term_slot(
         None => errors.push((
             binding.span.clone(),
             format!(
-                "computed let `{}` is used {where_}, which takes plain terms \
+                "computed {} `{}` is used {where_}, which takes plain terms \
                  only - match a variable there and compare it with `{}` \
                  separately",
-                binding.name, binding.name
+                binding.noun, binding.name, binding.name
             ),
         )),
     }
 }
 
-fn substitute_in_prop(
+pub(super) fn substitute_in_prop(
     prop: &mut Prop,
     name: &Var,
     value: &ValueExpr,
@@ -367,7 +371,7 @@ fn substitute_in_prop(
     }
 }
 
-fn substitute_in_value(
+pub(super) fn substitute_in_value(
     expr: &mut ValueExpr,
     name: &Var,
     value: &ValueExpr,
@@ -418,7 +422,7 @@ fn substitute_in_value(
 // declare its behaviour here.
 // ------------------------------------------------------------
 
-fn collect_binders_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
+pub(super) fn collect_binders_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
     match prop {
         Prop::Exists { binding, body } => {
             out.insert(binding.to_string());
@@ -455,7 +459,7 @@ fn collect_binders_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
     }
 }
 
-fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
+pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
     match expr {
         // The sum target is CONSUMED against the bindings the sum body
         // supplies - it introduces nothing, so it is not a binder. A
@@ -479,7 +483,7 @@ fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
     }
 }
 
-fn vars_in_term(term: &Term, out: &mut BTreeSet<String>) {
+pub(super) fn vars_in_term(term: &Term, out: &mut BTreeSet<String>) {
     match term {
         Term::Var(v) => {
             out.insert(v.to_string());
@@ -488,7 +492,7 @@ fn vars_in_term(term: &Term, out: &mut BTreeSet<String>) {
     }
 }
 
-fn vars_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
+pub(super) fn vars_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
     match prop {
         Prop::Claim { args, .. } | Prop::Defined { args, .. } => {
             for a in args {
@@ -524,7 +528,7 @@ fn vars_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
     }
 }
 
-fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
+pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
     match expr {
         ValueExpr::Term(t) => vars_in_term(t, out),
         ValueExpr::Arith { left, right, .. } => {
@@ -655,7 +659,7 @@ fn prop_nodes(prop: &Prop) -> usize {
     }
 }
 
-fn value_nodes(expr: &ValueExpr) -> usize {
+pub(super) fn value_nodes(expr: &ValueExpr) -> usize {
     1 + match expr {
         ValueExpr::Term(_) => 0,
         ValueExpr::Arith { left, right, .. } => value_nodes(left) + value_nodes(right),
