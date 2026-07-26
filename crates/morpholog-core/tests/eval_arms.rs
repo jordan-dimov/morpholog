@@ -274,6 +274,7 @@ fn a_defined_call_projects_each_witness_once() {
     // distinct projection once, so counting the call counts
     // projections, never internal multiplicity.
     let definition = Definition {
+        origin: morpholog_core::DefinitionOrigin::Authored,
         name: "sensed".into(),
         parameters: vec![Var::from("s")],
         body: claim("Reading", vec![var("s"), Term::Wildcard]),
@@ -406,6 +407,7 @@ fn the_missing_claim_diagnosis_descends_a_defined_gate() {
         .build();
     let mut p = p;
     p.definitions = vec![Definition {
+        origin: morpholog_core::DefinitionOrigin::Authored,
         name: "is_approved".into(),
         parameters: vec![Var::from("i")],
         body: claim("Approved", vec![var("i")]),
@@ -565,6 +567,7 @@ fn a_repeated_call_variable_must_project_consistently() {
     // `pair(z, z)`: a witness whose two projected arguments differ is
     // discarded - the repeated variable is one binding, not two.
     let definition = Definition {
+        origin: morpholog_core::DefinitionOrigin::Authored,
         name: "pair".into(),
         parameters: vec![Var::from("p"), Var::from("q")],
         body: claim("Link", vec![var("p"), var("q")]),

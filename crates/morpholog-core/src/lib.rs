@@ -62,7 +62,7 @@ pub use coverage::{
 };
 pub use definitions::resolve_defined_calls;
 pub use derive::{enumerate_derived, eval_invariant, invariant_witness};
-pub use disciplines::lower_disciplines;
+pub use disciplines::{in_force_define_name, lower_discipline_definitions, lower_disciplines};
 pub use eval::{EvalError, RenderedClaim};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
@@ -70,8 +70,8 @@ pub use explain::{
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
-    ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DerivedClaim, DerivedValue,
-    Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant, InvariantName,
+    ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin, DerivedClaim,
+    DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant, InvariantName,
     InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop,
     Stmt, Subject, SumSeed, Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
 };

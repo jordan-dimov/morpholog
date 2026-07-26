@@ -110,6 +110,13 @@ pub fn format_program(p: &Program) -> String {
     }
 
     for def in &p.definitions {
+        // Omitted by PROVENANCE, not by name. Printing a generated
+        // selector would make it authored on reparse; omitting an
+        // AUTHORED definition that happens to share the name would lose
+        // it. Matching on the name alone did both wrong.
+        if def.origin == crate::ir::DefinitionOrigin::Discipline {
+            continue;
+        }
         out.push('\n');
         out.push_str(&format_definition(def));
     }
@@ -152,6 +159,9 @@ pub(crate) fn format_predicate_decl(decl: &PredicateDecl) -> String {
         out.push_str(&match discipline {
             Discipline::UniqueBy { fields } => format!("unique by ({})", fields.join(", ")),
             Discipline::AppendOnly => "append only".to_string(),
+            Discipline::EffectiveBy { keys, on } => {
+                format!("effective by ({}) on ({on})", keys.join(", "))
+            }
             Discipline::CurrentPointerBy { fields } => {
                 format!("current pointer by ({})", fields.join(", "))
             }

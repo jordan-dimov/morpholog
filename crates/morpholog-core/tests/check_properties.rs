@@ -293,6 +293,7 @@ fn arb_derived_claim() -> impl Strategy<Value = DerivedClaim> {
 /// validate must refuse a mismatch, never panic on one.
 fn fuzz_definition() -> Definition {
     Definition {
+        origin: morpholog_core::DefinitionOrigin::Authored,
         name: "fuzz_defined".into(),
         parameters: vec![Var::from("fx"), Var::from("fy")],
         body: Prop::Claim {

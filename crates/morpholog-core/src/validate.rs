@@ -169,6 +169,44 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// A predicate carries more than one `effective by` clause. Each would
+    /// generate the same selector name, so the second is silently skipped
+    /// and the doctrine ends up decided by declaration order.
+    ///
+    /// Unlike `unique by`, which composes because each clause generates
+    /// its own invariant, these cannot: there is one selector per
+    /// predicate. A predicate with two genuine time axes needs two
+    /// predicates, or a selector taking the axis as an argument - neither
+    /// of which this clause pretends to offer.
+    #[error(
+        "`{predicate}` carries more than one `effective by` clause: a predicate has \
+         one in-force selector, so a second clause would be silently ignored"
+    )]
+    MultipleEffectiveClauses { predicate: String },
+
+    /// `effective by (..) on (f)` named `f` as both a key and the date.
+    /// Each version would then be its own group, so nothing could
+    /// supersede anything and the selector would return whatever row it
+    /// was handed.
+    #[error(
+        "`{predicate}` is effective-dated by `{field}`, which is also one of its \
+         keys: a version cannot be grouped by the date that orders it"
+    )]
+    EffectiveDateIsAKey { predicate: String, field: String },
+
+    /// `effective by (..) on (f)` where `f` is not a moment. Effective
+    /// dating orders versions in time; a field with no time in it has no
+    /// order to give.
+    #[error(
+        "`{predicate}` is effective-dated by `{field}`, which is declared {actual}: \
+         effective dating needs a Date or Timestamp field"
+    )]
+    EffectiveDateNotATime {
+        predicate: String,
+        field: String,
+        actual: PredicateArgKind,
+    },
+
     /// A predicate declaration carries a discipline and a `derived`
     /// declaration computes it.
     ///
@@ -928,6 +966,21 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                 predicate: decl.name.to_string(),
             });
         }
+        // Every clause would generate the SAME selector name, so a second
+        // one is silently skipped by the lowering and the doctrine ends up
+        // chosen by declaration order. Unlike `unique by`, these cannot
+        // coexist under one generated API.
+        if decl
+            .disciplines
+            .iter()
+            .filter(|d| matches!(d, Discipline::EffectiveBy { .. }))
+            .count()
+            > 1
+        {
+            errors.push(ValidationError::MultipleEffectiveClauses {
+                predicate: decl.name.to_string(),
+            });
+        }
         for d in &decl.disciplines {
             match d {
                 Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
@@ -946,6 +999,41 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                     if fields.is_empty() || keys_everything {
                         errors.push(ValidationError::DisciplineVacuousKeys {
                             predicate: decl.name.to_string(),
+                        });
+                    }
+                }
+                Discipline::EffectiveBy { keys, on } => {
+                    for field in keys.iter().chain(std::iter::once(on)) {
+                        if !decl.args.iter().any(|a| a.name == *field) {
+                            errors.push(ValidationError::DisciplineUnknownField {
+                                predicate: decl.name.to_string(),
+                                field: field.clone(),
+                            });
+                        }
+                    }
+                    // A date that is also a key would make each version
+                    // its own group, so nothing could ever supersede
+                    // anything - the selector would always return the row
+                    // it was handed.
+                    if keys.contains(on) {
+                        errors.push(ValidationError::EffectiveDateIsAKey {
+                            predicate: decl.name.to_string(),
+                            field: on.clone(),
+                        });
+                    }
+                    // Effective dating orders versions in time, so the
+                    // dating field has to be a moment. Refused by name
+                    // rather than given an invented ordering.
+                    if let Some(arg) = decl.args.iter().find(|a| a.name == *on)
+                        && !matches!(
+                            arg.kind,
+                            PredicateArgKind::Date | PredicateArgKind::Timestamp
+                        )
+                    {
+                        errors.push(ValidationError::EffectiveDateNotATime {
+                            predicate: decl.name.to_string(),
+                            field: on.clone(),
+                            actual: arg.kind.clone(),
                         });
                     }
                 }

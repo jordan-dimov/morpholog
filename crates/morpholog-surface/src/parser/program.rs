@@ -204,6 +204,46 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         transformations: raw.transformations.into_iter().map(|(t, _, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
     };
+    // The one place authored-ness is still known: `raw.definitions` are
+    // what the author wrote, and lowering is about to append to the same
+    // list. After that nothing can tell the two apart, so an authored
+    // definition colliding with a generated selector has to be caught
+    // here - otherwise the author's version silently wins and the
+    // discipline quietly generates nothing.
+    let mut collisions: Vec<Diagnostic> = Vec::new();
+    for decl in &program.predicates {
+        for discipline in &decl.disciplines {
+            if !matches!(discipline, morpholog_core::Discipline::EffectiveBy { .. }) {
+                continue;
+            }
+            let generated = morpholog_core::in_force_define_name(&decl.name);
+            if program
+                .definitions
+                .iter()
+                .any(|d| d.name.as_str() == generated)
+            {
+                collisions.push(Diagnostic::error(
+                    format!(
+                        "`{}` is effective-dated, which generates a definition named \
+                         `{generated}` - but this programme already defines it. Rename one \
+                         of them; the generated selector is not overridable.",
+                        decl.name
+                    ),
+                    map.decl_span(DeclKind::Predicate, decl.name.as_str())
+                        .unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    if !collisions.is_empty() {
+        return Err(collisions);
+    }
+    // Discipline-generated DEFINITIONS first, because the next pass
+    // resolves calls by name: a selector `effective by` writes would
+    // otherwise not exist yet, and its call would resolve as a claim
+    // reference to an undeclared predicate - a baffling error for
+    // something the runtime was supposed to author.
+    morpholog_core::lower_discipline_definitions(&mut program);
     // A call is spelled exactly like a claim reference; only the
     // declaration table can tell them apart, and a reference may
     // precede the definition it names, so resolution runs over the
@@ -349,6 +389,7 @@ where
     //                      | "append" "only"
     //                      | "current" "pointer" "by" "(" ident,+ ")"
     //                      | "superseded" "via" Ident
+    //                      | "effective" "by" "(" ident,+ ")" "on" "(" ident ")"
     //
     // Every clause word is a contextual identifier (the `before` /
     // `duration` precedent), so none is reserved and all stay usable
@@ -362,6 +403,8 @@ where
     let kw_only = select! { Token::Ident(s) if s == "only" => () };
     let kw_current = select! { Token::Ident(s) if s == "current" => () };
     let kw_pointer = select! { Token::Ident(s) if s == "pointer" => () };
+    let kw_effective = select! { Token::Ident(s) if s == "effective" => () };
+    let kw_on = select! { Token::Ident(s) if s == "on" => () };
     let kw_superseded = select! { Token::Ident(s) if s == "superseded" => () };
     let kw_via = select! { Token::Ident(s) if s == "via" => () };
     let field_list = ident
@@ -370,7 +413,16 @@ where
         .at_least(1)
         .collect::<Vec<String>>()
         .delimited_by(just(Token::LParen), just(Token::RParen));
+    let single_field = ident.delimited_by(just(Token::LParen), just(Token::RParen));
     let discipline_clause = choice((
+        // Before `current pointer by`, because both can open a clause and
+        // this one is longer; the parenthesised date distinguishes it.
+        kw_effective
+            .ignore_then(kw_by)
+            .ignore_then(field_list.clone())
+            .then_ignore(kw_on)
+            .then(single_field)
+            .map(|(keys, on)| Discipline::EffectiveBy { keys, on }),
         kw_unique
             .ignore_then(kw_by)
             .ignore_then(field_list.clone())
@@ -379,7 +431,7 @@ where
         kw_current
             .ignore_then(kw_pointer)
             .ignore_then(kw_by)
-            .ignore_then(field_list)
+            .ignore_then(field_list.clone())
             .map(|fields| Discipline::CurrentPointerBy { fields }),
         kw_superseded
             .ignore_then(kw_via)
@@ -533,6 +585,8 @@ where
             let span: SimpleSpan = e.span();
             TopLevelDecl::Definition(
                 Definition {
+                    // Parsed from source, so authored by definition.
+                    origin: morpholog_core::DefinitionOrigin::Authored,
                     name: name.into(),
                     parameters: parameters.into_iter().map(Var::from).collect(),
                     body,

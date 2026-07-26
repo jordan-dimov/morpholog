@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 
 use crate::ir::{
-    Discipline, Invariant, InvariantOrigin, PredicateDecl, PredicateName, Program, Prop, Term,
-    ValueExpr, Var,
+    CompareOp, Definition, Discipline, Invariant, InvariantOrigin, OrderedDomain, PredicateArgKind,
+    PredicateDecl, PredicateName, Program, Prop, Term, ValueExpr, Var,
 };
 
 /// Lower every declared discipline that generates an invariant into
@@ -35,6 +35,40 @@ use crate::ir::{
 /// cannot be lowered soundly (unknown field names, no value fields,
 /// a malformed lineage predicate) are skipped here; `Program::validate`
 /// reports each with its own error.
+/// Materialise the DEFINITIONS declared disciplines generate.
+///
+/// Separate from [`lower_disciplines`], and it must run **before** call
+/// resolution: a call is spelled exactly like a claim reference, so a
+/// selector that does not exist yet resolves as an undeclared predicate -
+/// a baffling error for something the runtime was supposed to write. The
+/// invariant half has no such constraint and stays after resolution,
+/// where a variable bound inside a call can still be followed.
+///
+/// Idempotent, like its sibling: a generated name already present is left
+/// alone, so parsing an already-lowered programme is a no-op.
+pub fn lower_discipline_definitions(program: &mut Program) {
+    let mut generated: Vec<Definition> = Vec::new();
+    for decl in &program.predicates {
+        for discipline in &decl.disciplines {
+            if let Discipline::EffectiveBy { keys, on } = discipline
+                && let Some(def) = in_force_define(decl, keys, on)
+                // Idempotent on PROVENANCE, not on the name: an
+                // authored definition of that name is a collision the
+                // surface refuses, not evidence that lowering already
+                // ran.
+                && !program
+                    .definitions
+                    .iter()
+                    .any(|d| d.name == def.name && d.origin == crate::ir::DefinitionOrigin::Discipline)
+                && !generated.iter().any(|d| d.name == def.name)
+            {
+                generated.push(def);
+            }
+        }
+    }
+    program.definitions.extend(generated);
+}
+
 pub fn lower_disciplines(program: &mut Program) {
     let mut generated: Vec<Invariant> = Vec::new();
     for decl in &program.predicates {
@@ -42,6 +76,19 @@ pub fn lower_disciplines(program: &mut Program) {
             match discipline {
                 Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
                     if let Some(inv) = unique_invariant(decl, fields) {
+                        generated.push(inv);
+                    }
+                }
+                // The clause claims one version per key per date, so it
+                // owes the invariant that makes that true. Without it two
+                // rows tie for "latest" and the selector returns both -
+                // two contradictory prices each satisfying "priced at the
+                // rate in force", which is what the discipline exists to
+                // prevent.
+                Discipline::EffectiveBy { keys, on } => {
+                    let mut fields = keys.clone();
+                    fields.push(on.clone());
+                    if let Some(inv) = unique_invariant(decl, &fields) {
                         generated.push(inv);
                     }
                 }
@@ -97,6 +144,134 @@ pub(crate) fn unique_invariant_name(predicate: &PredicateName, fields: &[String]
         snake_case(predicate.as_str()),
         fields.join("_")
     )
+}
+
+/// The name of the selector `effective by` generates.
+pub fn in_force_define_name(predicate: &PredicateName) -> String {
+    format!("{}_in_force_on", snake_case(predicate.as_str()))
+}
+
+/// The in-force-on-a-date selector for `decl`, keyed by `keys` and dated
+/// by `on`: the three lines every temporal programme was hand-rolling -
+/// the dated claim, an on-or-before bound, and a negated exists of a
+/// strictly later version.
+///
+/// A definition rather than an invariant, because the author calls it.
+/// That makes it the first thing the lowering generates which is not an
+/// invariant, and it is why the definition half of the lowering has to
+/// run before call resolution: a call is spelled exactly like a claim
+/// reference, so a selector that does not exist yet resolves as an
+/// undeclared predicate.
+///
+/// Parameters are the keys, an as-of date, then every payload field. The
+/// as-of is use-only - it appears in comparisons and binds nothing - so
+/// it must arrive bound at each call, which is what the runtime frame
+/// already requires. Callers wildcard the payload fields they do not
+/// want.
+///
+/// `None` when the clause cannot be lowered soundly (an unknown field, or
+/// a key that is also the date); validation owns the diagnostic.
+fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<Definition> {
+    let known = |f: &String| decl.args.iter().any(|a| a.name == *f);
+    if !keys.iter().all(known)
+        || !decl.args.iter().any(|a| a.name == on)
+        || keys.contains(&on.to_string())
+    {
+        return None;
+    }
+    let domain = match decl.args.iter().find(|a| a.name == on)?.kind {
+        PredicateArgKind::Date => OrderedDomain::Date,
+        PredicateArgKind::Timestamp => OrderedDomain::Timestamp,
+        // A selector over anything else is refused at validation; the
+        // lowering declines rather than inventing an ordering.
+        _ => return None,
+    };
+
+    // Fresh against the declaration's own field names. A payload field
+    // called `as_of` would otherwise land in the parameter list twice,
+    // and the resulting DuplicateParameter names a definition the author
+    // never wrote - unactionable. Underscores are appended until the name
+    // is unique, so the escape works whatever the fields are called.
+    let taken: Vec<&str> = decl.args.iter().map(|a| a.name.as_str()).collect();
+    let fresh = |base: &str, also: &[&Var]| {
+        let mut name = base.to_string();
+        while taken.contains(&name.as_str()) || also.iter().any(|v| v.as_str() == name) {
+            name.push('_');
+        }
+        Var::from(name)
+    };
+    let as_of = fresh("as_of", &[]);
+    let effective = fresh("effective_from", &[&as_of]);
+    let later = fresh("later_effective_from", &[&as_of, &effective]);
+
+    // Positional, because the date field can sit anywhere in the
+    // declaration - the keys are not necessarily first.
+    let mut parameters: Vec<Var> = Vec::new();
+    let mut outer: Vec<Term> = Vec::new();
+    let mut inner: Vec<Term> = Vec::new();
+    let mut payload: Vec<Var> = Vec::new();
+    for arg in &decl.args {
+        if keys.contains(&arg.name) {
+            let k = Var::from(arg.name.as_str());
+            parameters.push(k.clone());
+            outer.push(Term::Var(k.clone()));
+            inner.push(Term::Var(k));
+        } else if arg.name == on {
+            outer.push(Term::Var(effective.clone()));
+            inner.push(Term::Var(later.clone()));
+        } else {
+            let v = Var::from(arg.name.as_str());
+            payload.push(v.clone());
+            outer.push(Term::Var(v));
+            // The later version's payload is irrelevant - only its date
+            // decides whether it supersedes.
+            inner.push(Term::Wildcard);
+        }
+    }
+    parameters.push(as_of.clone());
+    parameters.extend(payload);
+
+    let var = |v: &Var| Box::new(ValueExpr::Term(Term::Var(v.clone())));
+    let no_later = Prop::Not(Box::new(Prop::Exists {
+        binding: later.clone(),
+        body: Box::new(Prop::And(vec![
+            Prop::Claim {
+                predicate: decl.name.clone(),
+                args: inner,
+            },
+            Prop::Compare {
+                op: CompareOp::Le,
+                domain,
+                left: var(&later),
+                right: var(&as_of),
+            },
+            Prop::Compare {
+                op: CompareOp::Gt,
+                domain,
+                left: var(&later),
+                right: var(&effective),
+            },
+        ])),
+    }));
+
+    Some(Definition {
+        origin: crate::ir::DefinitionOrigin::Discipline,
+        name: in_force_define_name(&decl.name).into(),
+        parameters,
+        body: Prop::And(vec![
+            Prop::Claim {
+                predicate: decl.name.clone(),
+                args: outer,
+            },
+            Prop::Compare {
+                op: CompareOp::Le,
+                domain,
+                left: var(&effective),
+                right: var(&as_of),
+            },
+            no_later,
+        ]),
+    })
 }
 
 /// The uniqueness invariant for `decl` keyed by `fields`:
@@ -179,6 +354,16 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
                         out.push((decl.name.clone(), unique_invariant_name(&decl.name, fields)));
                     }
                 }
+                Discipline::EffectiveBy { keys, on } => {
+                    let mut fields = keys.clone();
+                    fields.push(on.clone());
+                    if unique_invariant(decl, &fields).is_some() {
+                        out.push((
+                            decl.name.clone(),
+                            unique_invariant_name(&decl.name, &fields),
+                        ));
+                    }
+                }
                 Discipline::AppendOnly => {}
                 Discipline::SupersededVia { lineage } => {
                     let Some(lineage_decl) = program.predicates.iter().find(|p| p.name == *lineage)
@@ -213,6 +398,7 @@ pub(crate) fn discipline_provenance(
     for decl in &program.predicates {
         for discipline in &decl.disciplines {
             match discipline {
+                Discipline::EffectiveBy { .. } => {}
                 Discipline::UniqueBy { fields } => {
                     if unique_invariant(decl, fields).is_some() {
                         out.insert(
@@ -265,6 +451,10 @@ pub(crate) fn append_only_predicates(program: &Program) -> BTreeSet<PredicateNam
     for decl in &program.predicates {
         for discipline in &decl.disciplines {
             match discipline {
+                // Effective-dating says nothing about retraction: a new
+                // version supersedes by date, and whether the old one may
+                // be withdrawn is `append only`'s business.
+                Discipline::EffectiveBy { .. } => {}
                 Discipline::AppendOnly => {
                     out.insert(decl.name.clone());
                 }
