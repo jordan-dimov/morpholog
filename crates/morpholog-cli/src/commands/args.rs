@@ -404,6 +404,23 @@ fn schema_hint(file: &Path, transformation: &TransformationName) -> String {
     )
 }
 
+/// Decode one bare `--where` value under its declared kind, reusing the
+/// named codec so a filter and an argument agree on what "431.7" means.
+/// The raw text is treated as the codec's string form; every kind the
+/// named codec accepts as a string is therefore filterable.
+pub(crate) fn decode_declared_value(
+    field: &str,
+    kind: &PredicateArgKind,
+    raw: &str,
+) -> anyhow::Result<EvalValue> {
+    decode_value(
+        field,
+        &ParamKind::Concrete(kind.clone()),
+        &Value::String(raw.to_string()),
+        "a --where value is written bare, as in --where invoice_id=inv_1",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_schema_decimal;

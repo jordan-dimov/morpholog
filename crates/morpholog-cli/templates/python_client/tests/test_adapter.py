@@ -95,6 +95,28 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertIsInstance(outcome, envelopes.Rejected)
         self.assertIn("cap", outcome.reason)
 
+    def test_where_narrows_by_argument_on_both_named_reads(self):
+        # The read pattern the trial reported: reconcile.py read every
+        # InvoiceLine and filtered by invoice in Python. Both named reads
+        # now carry the filter, so the question goes to the binary.
+        self._mode("record_argv")
+        with recording_argv() as argv_after:
+            argv = argv_after(
+                lambda: self.client.claims_named(
+                    "InvoiceLine", where={"invoice_id": "inv_1"}
+                )
+            )
+            self.assertIn("--where", argv)
+            self.assertEqual(argv[argv.index("--where") + 1], "invoice_id=inv_1")
+
+            argv = argv_after(lambda: self.client.claims_named("InvoiceLine"))
+            self.assertNotIn("--where", argv)
+
+            argv = argv_after(
+                lambda: self.client.derived_named("StaleLine", where={"invoice_id": "inv_1"})
+            )
+            self.assertIn("--where", argv)
+
     def test_init_can_reach_the_destructive_reset(self):
         # The fixture embedder-integration.md documents was reachable only
         # from the CLI, so an embedder wanting it had to shell out around

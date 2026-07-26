@@ -71,6 +71,60 @@ pub async fn list_claims_for_predicates(
             .collect(),
     )
 }
+/// Claims of one predicate whose arguments match every `(position,
+/// value)` pair - argument-level selection, evaluated in the database.
+///
+/// The point is that a single-subject question stops paying for the whole
+/// predicate: the filter runs here, not after the rows cross the wire.
+///
+/// The filters arrive as parallel arrays rather than as generated `AND`
+/// clauses so this stays one static statement, checked against the schema
+/// at build time like every other query in this crate. A dynamically
+/// assembled `WHERE` would have needed an `AssertSqlSafe` escape and lost
+/// that.
+///
+/// `numeric` marks the filters whose values must compare as numbers
+/// rather than as JSON. Decimals are stored as strings to keep them
+/// exact, so `13.5` and `13.50` are equal numbers and different strings -
+/// comparing the JSON would answer "no such row" for a row that exists,
+/// which is the worst thing a filter can do.
+///
+/// Order matches [`list_claims`].
+pub async fn list_claims_where(
+    pool: &PgPool,
+    predicate: &str,
+    positions: &[i32],
+    values: &[serde_json::Value],
+    numeric: &[bool],
+) -> Result<Vec<ClaimInstance>, PgError> {
+    let rows = sqlx::query!(
+        "SELECT predicate_name, arguments
+         FROM morpholog.claims
+         WHERE predicate_name = $1
+           AND (SELECT bool_and(
+                  CASE WHEN f.numeric
+                       THEN (arguments -> f.position ->> 'value')::numeric
+                            = (f.value ->> 'value')::numeric
+                       ELSE arguments -> f.position = f.value
+                  END)
+                FROM unnest($2::int[], $3::jsonb[], $4::bool[])
+                  AS f(position, value, numeric))
+         ORDER BY asserted_at, predicate_name, arguments::text",
+        predicate,
+        positions,
+        values,
+        numeric,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify)?;
+    decode_claim_rows(
+        rows.into_iter()
+            .map(|r| (r.predicate_name, r.arguments))
+            .collect(),
+    )
+}
+
 /// Load the current scoped pre-state a transformation would see, the
 /// read-only counterpart of the load inside [`crate::propose_against_pg`].
 /// Scopes to exactly the predicates the transformation body reads and

@@ -6,13 +6,14 @@ use anyhow::{Context, anyhow, bail};
 use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
     PgPool, begin_audit_tail, list_claims, list_claims_at, list_claims_at_for_predicates,
-    list_claims_for_predicates, list_derived, list_derived_at, list_outbox_rows,
+    list_claims_for_predicates, list_claims_where, list_derived, list_derived_at, list_outbox_rows,
     list_rejection_rows, resolve_transition_at_or_before,
 };
 use std::path::Path;
 use uuid::Uuid;
 
 use crate::commands::args::eval_value_to_bare_json;
+use crate::commands::filter::FieldFilter;
 
 use crate::commands::{compile_or_exit, connect, parse_or_exit, print_json, validate_or_exit};
 use crate::{AsOf, Inspect};
@@ -67,6 +68,36 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                 }
                 None => None,
             };
+            // `--where` names fields, and a field name means nothing
+            // without a declaration to read it against - hence a
+            // programme and exactly one predicate. Refused up front,
+            // before any database work, so the message is about the
+            // request rather than about an empty result.
+            let filters = if args.filter.is_empty() {
+                Vec::new()
+            } else {
+                let Some((program, file)) = named_program.as_ref() else {
+                    bail!(
+                        "`--where` needs `--named <FILE>`: a field name is resolved against a \
+                         declaration, and without one there is nothing to resolve it against"
+                    );
+                };
+                let [predicate] = args.predicate.as_slice() else {
+                    bail!(
+                        "`--where` needs exactly one `--predicate`, because the field names \
+                         belong to one claim shape; got {}",
+                        args.predicate.len()
+                    );
+                };
+                let decl = program.predicate(predicate).ok_or_else(|| {
+                    anyhow!(
+                        "predicate `{predicate}` is not declared in `{}`",
+                        file.display()
+                    )
+                })?;
+                crate::commands::filter::resolve(decl, &args.filter)?
+            };
+
             let pool = connect(&args.db.database_url).await?;
             let as_of = resolve_as_of(&pool, args.as_of).await?;
             // Four paths, one rule: `--as-of` picks current-vs-replay,
@@ -81,9 +112,39 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                     .await
                     .context("list_claims_at_for_predicates failed")?,
                 (None, []) => list_claims(&pool).await.context("list_claims failed")?,
+                // One predicate plus filters is the whole point: the
+                // comparison happens in the database, so a single-subject
+                // question stops reading the whole predicate.
+                (None, [predicate]) if !filters.is_empty() => {
+                    let positions: Vec<i32> = filters
+                        .iter()
+                        .map(|f| i32::try_from(f.position).unwrap_or(i32::MAX))
+                        .collect();
+                    let values: Vec<serde_json::Value> = filters
+                        .iter()
+                        .map(|f| serde_json::to_value(&f.value))
+                        .collect::<Result<_, _>>()
+                        .context("encoding a --where value")?;
+                    let numeric: Vec<bool> = filters.iter().map(FieldFilter::is_numeric).collect();
+                    list_claims_where(&pool, predicate, &positions, &values, &numeric)
+                        .await
+                        .context("list_claims_where failed")?
+                }
                 (None, preds) => list_claims_for_predicates(&pool, preds)
                     .await
                     .context("list_claims_for_predicates failed")?,
+            };
+            // The replayed paths filter after reconstruction: `--as-of`
+            // rebuilds past state from the audit log, so there is no
+            // table to push a comparison into. Same answer, more work -
+            // stated in the flag's help rather than implied.
+            let claims = if filters.is_empty() || as_of.is_none() {
+                claims
+            } else {
+                claims
+                    .into_iter()
+                    .filter(|c| crate::commands::filter::matches(&c.args, &filters))
+                    .collect()
             };
             match named_program {
                 Some((program, file)) => print_json(&decode_claims_named(&program, file, &claims)?),
@@ -300,6 +361,26 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
         None => list_derived(&pool, derived, &program.definitions)
             .await
             .context("list_derived failed")?,
+    };
+    // A derived view's own output predicate is declared like any other,
+    // so `--where` resolves field names the same way `inspect claims`
+    // does - no second vocabulary. The filter runs here rather than in
+    // SQL because the rows were computed from claims, not stored.
+    let rows = if args.filter.is_empty() {
+        rows
+    } else {
+        let decl = program.predicate(&args.derived).ok_or_else(|| {
+            anyhow!(
+                "`--where` needs `{}` declared as a predicate in `{}` to resolve field names \
+                 against; a derived claim's head is its declaration",
+                args.derived,
+                args.file.display()
+            )
+        })?;
+        let filters = crate::commands::filter::resolve(decl, &args.filter)?;
+        rows.into_iter()
+            .filter(|r| crate::commands::filter::matches(&r.args, &filters))
+            .collect()
     };
     if args.named {
         print_json(&decode_claims_named(program, &args.file, &rows)?)
