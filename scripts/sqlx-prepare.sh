@@ -25,10 +25,15 @@ set -euo pipefail
 # binaries compensate in code (`with_default_user`); the external CLI
 # cannot, so fill it in here for the documented `postgres:///db` form.
 sqlx_url() {
+    # Mirrors morpholog_postgres::with_default_user: skip when the caller
+    # named a user (userinfo, or a `user` parameter at a boundary - not a
+    # mere `...user=` substring), and always use the query form, which
+    # both the hostless socket shape and delimiter-carrying usernames
+    # accept.
     case "$1" in
-        *@*|*user=*) printf '%s' "$1" ;;
-        *\?*)        printf '%s&user=%s' "$1" "${PGUSER:-$USER}" ;;
-        *)           printf '%s?user=%s' "$1" "${PGUSER:-$USER}" ;;
+        *@*|*\?user=*|*\&user=*) printf '%s' "$1" ;;
+        *\?*)                    printf '%s&user=%s' "$1" "${PGUSER:-$USER}" ;;
+        *)                       printf '%s?user=%s' "$1" "${PGUSER:-$USER}" ;;
     esac
 }
 

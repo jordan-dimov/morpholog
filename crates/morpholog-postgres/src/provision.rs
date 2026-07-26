@@ -80,8 +80,19 @@ fn apply_default_user(url: &str, user: Option<&str>) -> String {
         return url.to_string();
     };
     let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
-    // Userinfo present, or a `user=` parameter: the caller has spoken.
-    if rest[..authority_end].contains('@') || url.contains("user=") {
+    // Userinfo present, or a `user` query parameter: the caller has
+    // spoken. Matched at a parameter boundary, so a database or option
+    // named `...user` (`clusteruser=`, `superuser=1`) does not silently
+    // suppress the fill-in and leave the caller connecting as anonymous.
+    let has_user_param = rest
+        .split_once('?')
+        .map(|(_, query)| {
+            query
+                .split('&')
+                .any(|param| param == "user" || param.starts_with("user="))
+        })
+        .unwrap_or(false);
+    if rest[..authority_end].contains('@') || has_user_param {
         return url.to_string();
     }
     // Nothing to fill in with: let the driver report its own error
@@ -89,12 +100,15 @@ fn apply_default_user(url: &str, user: Option<&str>) -> String {
     let Some(user) = user else {
         return url.to_string();
     };
-    if authority_end == 0 {
-        // The hostless socket form. Injecting `user@` here would read as
-        // an empty host and be rejected, so the username goes in as the
-        // query parameter instead - the same thing, spelled the way this
-        // form accepts.
-        let separator = if url.contains('?') { '&' } else { '?' };
+    // Two spellings, and the choice is forced rather than stylistic. The
+    // hostless socket form cannot take `user@` - that reads as an empty
+    // host and is rejected - and a username carrying a userinfo
+    // delimiter cannot go there either (`PGUSER=user@server`, the Azure
+    // shape, would produce two `@` and a wrong host). Both go in as the
+    // query parameter, which tolerates them.
+    let breaks_userinfo = user.contains(['@', ':', '/', '?', '#']);
+    if authority_end == 0 || breaks_userinfo {
+        let separator = if rest.contains('?') { '&' } else { '?' };
         return format!("{url}{separator}user={user}");
     }
     format!("{scheme}://{user}@{rest}")
@@ -409,6 +423,32 @@ mod default_user_tests {
         assert_eq!(
             apply_default_user("postgres:///weird@name", Some("alice")),
             "postgres:///weird@name?user=alice"
+        );
+    }
+
+    #[test]
+    fn a_parameter_merely_ending_in_user_does_not_suppress_the_fill_in() {
+        // Found by self-review, not by the first cut of these tests: a
+        // substring match on "user=" would skip the fill-in here and
+        // leave the caller connecting as `anonymous`.
+        assert_eq!(
+            apply_default_user("postgres:///db?clusteruser=x", Some("alice")),
+            "postgres:///db?clusteruser=x&user=alice"
+        );
+        assert_eq!(
+            apply_default_user("postgres:///db?superuser=1", Some("alice")),
+            "postgres:///db?superuser=1&user=alice"
+        );
+    }
+
+    #[test]
+    fn a_username_carrying_a_delimiter_uses_the_query_form() {
+        // `PGUSER=user@server` is the Azure Postgres shape. Injected as
+        // userinfo it would produce two `@` and a wrong host, so it goes
+        // in as the parameter instead.
+        assert_eq!(
+            apply_default_user("postgres://host:5432/db", Some("alice@server")),
+            "postgres://host:5432/db?user=alice@server"
         );
     }
 
