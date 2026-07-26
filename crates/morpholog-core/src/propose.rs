@@ -62,6 +62,19 @@ pub enum Outcome {
     },
 }
 
+/// One variable and the value it held where an invariant failed.
+///
+/// The values are the offending ones, so a reader is told *which* subject
+/// broke the rule and not only that the rule broke. Carried structurally
+/// rather than rendered into the reason string: the reason string is a
+/// pinned wire format, and an embedder that wants to show the account it
+/// refused should read a value, not parse prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WitnessBinding {
+    pub var: Var,
+    pub value: EvalValue,
+}
+
 /// Why a proposal was rejected, structured at the source. Every consumer
 /// that needs prose (envelopes, trace entries, the operational rejection
 /// log's `reason` column) renders through [`std::fmt::Display`], whose
@@ -72,7 +85,15 @@ pub enum RejectionReason {
     /// An invariant did not hold over the candidate state. Carries the
     /// version checked because the rejecting site is the only place
     /// that knows it; Display deliberately omits it.
-    Invariant { name: InvariantName, version: u32 },
+    ///
+    /// `witness` is the binding assignment the failure was diagnosed
+    /// under, empty when no single iteration can be blamed. Display omits
+    /// it too - the pinned string is unchanged by this field's presence.
+    Invariant {
+        name: InvariantName,
+        version: u32,
+        witness: Vec<WitnessBinding>,
+    },
     /// A `require` gate found no witness over the pre-state.
     Require { rendered: String },
     /// A `bind` lookup matched no candidates. (Multi-match is an
@@ -425,10 +446,14 @@ pub(crate) fn propose_inner(
             });
         }
         if !held {
+            // Diagnosed only now: the accepting path never pays for it.
+            let witness =
+                crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?;
             return Ok(Outcome::Rejected {
                 reason: RejectionReason::Invariant {
                     name: inv.name.clone(),
                     version: inv.version,
+                    witness,
                 },
             });
         }

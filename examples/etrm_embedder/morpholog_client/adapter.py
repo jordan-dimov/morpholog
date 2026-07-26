@@ -131,13 +131,29 @@ class Morpholog:
     # ------------------------------------------------------------
 
     def init(
-        self, skip_if_exists: bool = False, least_privilege: bool = False
+        self,
+        skip_if_exists: bool = False,
+        least_privilege: bool = False,
+        reset: bool = False,
+        i_know_this_deletes_data: bool = False,
     ) -> envelopes.InitReport:
+        """Provision the Morpholog tables.
+
+        `reset` DESTROYS every claim, audit row and outbox entry in the
+        target database, and needs `i_know_this_deletes_data` alongside
+        it. Both flags are passed straight through, so the pairing is
+        enforced in one place - the binary - rather than re-implemented
+        here where it could drift.
+        """
         args = ["init", "--database-url", self.database_url]
         if skip_if_exists:
             args.append("--skip-if-exists")
         if least_privilege:
             args.append("--least-privilege")
+        if reset:
+            args.append("--reset")
+        if i_know_this_deletes_data:
+            args.append("--i-know-this-deletes-data")
         return envelopes.InitReport.from_json(self._json(*args))
 
     def hash(self) -> envelopes.HashReport:

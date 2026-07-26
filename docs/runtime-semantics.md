@@ -234,6 +234,42 @@ proposal records like any other, under the system actor. Consumers:
 `inspect rejections` lists the rows; `inspect coverage` counts them
 into the `constrained` verdict.
 
+**A refusal names the offending values.** "invariant `x` violated" tells a
+reader which rule stopped them and nothing about why, so an invariant
+refusal also carries a *witness*: the variables and values that were live
+where the rule failed, sorted by variable so one failure always reads the
+same way. It is diagnosed only after the refusal is decided - the
+accepting path never pays for it - and it is structured rather than
+rendered into the reason, because the reason string is a pinned wire
+format and an embedder should read a value, not parse prose. The `Display`
+string is unchanged by its presence.
+
+A witness names exactly what the rule binds. `ChargeLine(_, _, rate,
+volume, net, _, _)` wildcards the line id, so its refusal reports the
+figures but cannot say which row carried them; bind the subject and the
+refusal can name it. The variables a rule binds but never uses are not
+noise; they are what its refusals can say.
+
+When several subjects violate the same rule, the witness reports the
+first violation in state order, not every one - sorting the bindings
+fixes how one assignment reads, not which assignment is chosen. The
+PostgreSQL path therefore loads claims in a deterministic order, so the
+same database explains a refusal the same way twice; a hand-built `State`
+gets whatever order it was built in. Naming every violator, and
+attributing an aggregate discrepancy (a sealed total disagreeing with its
+lines cannot blame one line from its bindings alone), are separate
+problems.
+
+A witness is empty when the failure has no binding assignment to report,
+which depends on what was bound where the drill-down stopped rather than
+on which operator failed. A comparison failing under a quantifier or an
+implication witnesses the variables its antecedent bound - that is the
+metered-billing case above. The same comparison as an entire invariant
+body witnesses nothing, because nothing was ever bound; a prohibition like
+`not Flag(acct_1)` is the same. In that case the field is absent rather
+than empty, so those envelopes stay byte-identical to what they were
+before witnesses existed.
+
 ## Statements: the require / bind_one / let / for quartet
 
 Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation.

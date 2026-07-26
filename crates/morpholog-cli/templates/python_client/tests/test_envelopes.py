@@ -37,14 +37,38 @@ class RunOutcomes(unittest.TestCase):
         )
         self.assertEqual(outcome.emitted_intents[0].name, "AccountOpened")
 
+    def test_a_refusal_carries_the_values_the_rule_was_reading(self):
+        # The point of a structured witness: read the offending value,
+        # never parse it out of the reason string.
+        outcome = envelopes.parse_run_outcome(golden("rejected_with_witness.json"))
+        self.assertEqual([w.var for w in outcome.witness], ["account", "exposure"])
+        self.assertEqual(outcome.witness[0].value, "acct_1")
+        self.assertEqual(outcome.witness[1].value, Decimal("105.50"))
+
     def test_rejected_with_and_without_explanation(self):
         bare = envelopes.parse_run_outcome(golden("rejected.json"))
         self.assertIsInstance(bare, envelopes.Rejected)
         self.assertIsNone(bare.explanation)
+        # The JSON omits `witness` entirely here - that is what keeps
+        # pre-witness envelopes byte-identical - and the parsed model
+        # presents it as an empty list, so callers never branch on absence.
+        self.assertNotIn("witness", golden("rejected.json"))
+        self.assertEqual(bare.witness, [])
         explained = envelopes.parse_run_outcome(golden("rejected_with_explanation.json"))
         self.assertIsInstance(
             explained.explanation.rejection, envelopes.InvariantRejection
         )
+        self.assertEqual(explained.witness, [])
+
+    def test_explanation_and_witness_arrive_together(self):
+        # --explain-on-reject is the path an operator diagnosing a refusal
+        # reaches for, so it must carry both: the why and the values.
+        both = envelopes.parse_run_outcome(
+            golden("rejected_with_explanation_and_witness.json")
+        )
+        self.assertIsInstance(both.explanation.rejection, envelopes.InvariantRejection)
+        self.assertEqual([w.var for w in both.witness], ["account", "exposure"])
+        self.assertEqual(both.witness[1].value, Decimal("105.50"))
 
     def test_traced_envelopes(self):
         committed = envelopes.TracedEnvelope.from_json(golden("traced_committed.json"))

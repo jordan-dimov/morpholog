@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use crate::definitions::DefinitionIndex;
 use crate::eval::{EvalContext, EvalError, eval_value, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant};
+use crate::propose::WitnessBinding;
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
@@ -37,11 +38,64 @@ pub fn eval_invariant(
     pre_state: Option<&State>,
     definitions: &[Definition],
 ) -> Result<bool, EvalError> {
+    in_invariant_context(state, pre_state, definitions, |ctx| {
+        let matches = find_matches(&inv.body, ctx)?;
+        Ok(!matches.is_empty())
+    })
+}
+
+/// The binding assignment that witnesses an invariant's failure: the
+/// values live where the drill-down stopped, sorted by variable
+/// (`Bindings` is a `HashMap`, whose iteration order is not stable and
+/// would otherwise flake the pinned envelopes).
+///
+/// Sorting fixes how one assignment renders, not **which** assignment is
+/// chosen. When several subjects violate the same rule, the witness is
+/// the first violation in state order - so the same claims in a different
+/// order can name a different subject, while the verdict is unchanged.
+/// The PostgreSQL path loads claims ordered for exactly this reason; a
+/// hand-built `State` gets whatever order it was built in.
+///
+/// Empty exactly when the failure has no binding assignment to report -
+/// which is a question about what was bound where the drill-down stopped,
+/// not about which operator failed. A comparison that fails under a
+/// quantifier or an implication witnesses the variables its antecedent
+/// bound; the same comparison as a whole invariant body witnesses nothing,
+/// because nothing was ever bound.
+/// Callers ask for this only after
+/// [`eval_invariant`] returned `false`; it is a diagnosis of a decided
+/// rejection, never part of deciding one.
+pub fn invariant_witness(
+    inv: &Invariant,
+    state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+) -> Result<Vec<WitnessBinding>, EvalError> {
+    in_invariant_context(state, pre_state, definitions, |ctx| {
+        let Some(failure) = crate::eval::find_failure(&inv.body, ctx) else {
+            return Ok(Vec::new());
+        };
+        let mut witness: Vec<WitnessBinding> = failure
+            .bindings
+            .into_iter()
+            .map(|(var, value)| WitnessBinding { var, value })
+            .collect();
+        witness.sort_by(|a, b| a.var.cmp(&b.var));
+        Ok(witness)
+    })
+}
+
+/// Invariants evaluate against admitted state with no actor in scope.
+/// `Term::Actor` inside an invariant body surfaces as
+/// `EvalError::UnboundActor`, enforcing the doctrine that authority
+/// checks live in `require`, not in invariants.
+fn in_invariant_context<T>(
+    state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+    body: impl FnOnce(&EvalContext<'_>) -> Result<T, EvalError>,
+) -> Result<T, EvalError> {
     let bindings = Bindings::new();
-    // Invariants evaluate against admitted state with no actor in
-    // scope. `Term::Actor` inside an invariant body surfaces as
-    // `EvalError::UnboundActor`, enforcing the doctrine that authority
-    // checks live in `require`, not in invariants.
     let ctx = EvalContext::new(
         state,
         pre_state,
@@ -49,8 +103,7 @@ pub fn eval_invariant(
         None,
         DefinitionIndex::new(definitions),
     );
-    let matches = find_matches(&inv.body, &ctx)?;
-    Ok(!matches.is_empty())
+    body(&ctx)
 }
 
 /// Enumerate a derived claim against current admitted state. Returns

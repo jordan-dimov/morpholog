@@ -53,7 +53,7 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     .unwrap();
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("setup rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("setup rejected: {reason}"),
     };
     let (intent_id,): (Uuid,) = sqlx::query_as(
         "SELECT intent_id FROM morpholog.outbox
@@ -113,7 +113,7 @@ async fn commit_compensation_transformation(pool: &PgPool, suffix: &str) -> Uuid
     .unwrap();
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("compensation rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("compensation rejected: {reason}"),
     }
 }
 

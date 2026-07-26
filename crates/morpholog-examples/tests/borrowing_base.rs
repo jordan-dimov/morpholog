@@ -11,7 +11,7 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
-use morpholog_core::{State, enumerate_derived};
+use morpholog_core::{EvalValue, RejectionReason, State, enumerate_derived};
 use morpholog_examples::borrowing_base;
 
 fn ex() -> &'static Example {
@@ -143,4 +143,25 @@ fn advance_rate_above_one_is_rejected() {
         vec![subj("f1"), dec_str("1.5")],
         &empty,
     );
+}
+
+/// The companion to metered billing's figures-only witness: this rule
+/// binds its subject, so the refusal can say WHICH facility breached the
+/// advance limit - the first question a credit officer asks.
+#[test]
+fn a_refusal_names_the_facility_that_breached_the_limit() {
+    let pre = facility_with_collateral(100);
+    let reason = ex().must_reject(
+        &borrowing_base::draw(),
+        vec![subj("f1"), subj("draw_1"), dec(81)],
+        &pre,
+    );
+    let RejectionReason::Invariant { witness, .. } = &reason else {
+        panic!("expected an invariant refusal, got {reason:?}");
+    };
+    let facility = witness
+        .iter()
+        .find(|w| w.var.as_str() == "facility")
+        .unwrap_or_else(|| panic!("the witness must name the facility: {witness:?}"));
+    assert_eq!(facility.value, EvalValue::Subject("f1".into()));
 }

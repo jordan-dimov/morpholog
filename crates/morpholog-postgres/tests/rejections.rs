@@ -93,7 +93,7 @@ async fn an_invariant_rejection_writes_one_structured_row() {
     )
     .await
     .expect("rejection is a lawful outcome, not an error");
-    let PgProposalOutcome::Rejected { reason } = outcome else {
+    let PgProposalOutcome::Rejected { reason, .. } = outcome else {
         panic!("a conflicting entry id must be refused");
     };
 

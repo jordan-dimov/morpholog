@@ -68,7 +68,7 @@ pub async fn reset_db_and_read_cache(pool: &PgPool) {
 pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => {
+        PgProposalOutcome::Rejected { reason, .. } => {
             panic!("expected Committed; got Rejected({reason})")
         }
     }

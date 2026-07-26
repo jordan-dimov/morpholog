@@ -61,7 +61,7 @@ pub use coverage::{
     render_coverage,
 };
 pub use definitions::resolve_defined_calls;
-pub use derive::{enumerate_derived, eval_invariant};
+pub use derive::{enumerate_derived, eval_invariant, invariant_witness};
 pub use disciplines::lower_disciplines;
 pub use eval::{EvalError, RenderedClaim};
 pub use explain::{
@@ -78,7 +78,7 @@ pub use ir::{
 pub use lint::{Lint, lints};
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, TraceEntry,
-    TracedProposal, Transition, propose, propose_with_trace,
+    TracedProposal, Transition, WitnessBinding, propose, propose_with_trace,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{
@@ -1116,16 +1116,60 @@ mod tests {
     /// entry, and rejection-log row renders the reason through Display,
     /// so these three strings are pinned byte-exactly. Changing one is
     /// a contract change, not a wording tweak.
+    /// A witness reports a binding assignment, so it is empty exactly
+    /// when there is none to report - not because of which operator
+    /// failed. Here the whole body is a top-level `not`, which the
+    /// drill-down does not enter and which binds nothing on the way.
+    ///
+    /// The complement is pinned by the worked examples: a comparison
+    /// nested under an implication DOES witness, because the antecedent
+    /// bound its variables before the comparison failed. Stating the rule
+    /// in terms of operators, as an earlier draft of the docs did, gets
+    /// that case backwards.
+    #[test]
+    fn a_failure_with_nothing_bound_has_an_empty_witness() {
+        use ir_builder::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Flag".into(),
+            args: vec![EvalValue::Subject("acct_1".into())],
+        }]);
+        let inv = invariant("no_flag_at_all", not(claim("Flag", vec![subj("acct_1")])));
+        assert!(
+            !eval_invariant(&inv, &state, None, &[]).unwrap(),
+            "the flag is admitted, so the prohibition must fail"
+        );
+        assert!(
+            invariant_witness(&inv, &state, None, &[])
+                .unwrap()
+                .is_empty(),
+            "nothing was bound anywhere in this failure"
+        );
+    }
+
     #[test]
     fn rejection_reason_display_strings_are_pinned() {
         assert_eq!(
             RejectionReason::Invariant {
                 name: "at_most_one".into(),
                 version: 3,
+                witness: Vec::new(),
             }
             .to_string(),
             "invariant `at_most_one` violated",
             "Display omits the version on purpose"
+        );
+        assert_eq!(
+            RejectionReason::Invariant {
+                name: "at_most_one".into(),
+                version: 3,
+                witness: vec![WitnessBinding {
+                    var: "account".into(),
+                    value: EvalValue::Subject("acct_42".into()),
+                }],
+            }
+            .to_string(),
+            "invariant `at_most_one` violated",
+            "a witness must not leak into the pinned string; consumers read the field"
         );
         assert_eq!(
             RejectionReason::Require {

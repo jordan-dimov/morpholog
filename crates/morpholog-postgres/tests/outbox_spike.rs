@@ -175,7 +175,7 @@ async fn process_one_pending(
                 .await?;
                 match outcome {
                     PgProposalOutcome::Committed { transition_id, .. } => Ok(Some(transition_id)),
-                    PgProposalOutcome::Rejected { reason } => {
+                    PgProposalOutcome::Rejected { reason, .. } => {
                         panic!(
                             "compensation transformation was rejected by an invariant: {reason}. \
                              In production this is the genuinely-broken state; the worker should \

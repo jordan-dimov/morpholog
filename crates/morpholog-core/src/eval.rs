@@ -1377,6 +1377,33 @@ pub(crate) fn resolve_term(
 ///   branch failed.
 /// - Leaf expressions: return `None`, already as specific as possible.
 pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option<String> {
+    find_failure(prop, ctx).map(|failure| failure.rendered)
+}
+
+/// The failing sub-expression together with the bindings that were live
+/// where it failed - the witness. One descent serves both: rendering it
+/// twice would let the string and the values disagree about which
+/// iteration was blamed.
+pub(crate) struct Failure {
+    pub(crate) rendered: String,
+    /// Bindings in scope at the failure. Inside a definition body these
+    /// are the definition's parameters, which is what the rendering names
+    /// there too.
+    pub(crate) bindings: Bindings,
+}
+
+impl Failure {
+    fn here(prop: &Prop, ctx: &EvalContext<'_>) -> Self {
+        Self {
+            rendered: crate::format::format_prop_inline(prop),
+            bindings: ctx.bindings.clone(),
+        }
+    }
+}
+
+/// Descend to the most specific failing sub-expression, carrying the
+/// binding context. `find_failing_subexpr` is the rendering-only view.
+pub(crate) fn find_failure(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Failure> {
     match prop {
         Prop::And(conjuncts) => {
             // Thread bindings through conjuncts as `find_conjunction`
@@ -1395,9 +1422,10 @@ pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option
                     // This conjunct kills the chain. Diagnose under one
                     // of the surviving binding contexts; the first is fine.
                     let failing_bindings = current.first().unwrap_or(ctx.bindings);
+                    let failing_ctx = ctx.with_bindings(failing_bindings);
                     return Some(
-                        find_failing_subexpr(c, &ctx.with_bindings(failing_bindings))
-                            .unwrap_or_else(|| crate::format::format_prop_inline(c)),
+                        find_failure(c, &failing_ctx)
+                            .unwrap_or_else(|| Failure::here(c, &failing_ctx)),
                     );
                 }
                 current = next;
@@ -1417,8 +1445,8 @@ pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option
                 let right_matches = find_matches(right, &ext_ctx).ok()?;
                 if right_matches.is_empty() {
                     return Some(
-                        find_failing_subexpr(right, &ext_ctx)
-                            .unwrap_or_else(|| crate::format::format_prop_inline(right)),
+                        find_failure(right, &ext_ctx)
+                            .unwrap_or_else(|| Failure::here(right, &ext_ctx)),
                     );
                 }
             }
@@ -1439,8 +1467,8 @@ pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option
                 let body_matches = find_matches(body, &ext_ctx).ok()?;
                 if body_matches.is_empty() {
                     return Some(
-                        find_failing_subexpr(body, &ext_ctx)
-                            .unwrap_or_else(|| crate::format::format_prop_inline(body)),
+                        find_failure(body, &ext_ctx)
+                            .unwrap_or_else(|| Failure::here(body, &ext_ctx)),
                     );
                 }
             }
@@ -1455,13 +1483,16 @@ pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option
             let def = ctx.definitions.get(name)?;
             let frame = definition_call_frame(def, args, ctx).ok()?;
             let body_ctx = ctx.enter_definition(&frame);
-            let inner = find_failing_subexpr(&def.body, &body_ctx)
-                .unwrap_or_else(|| crate::format::format_prop_inline(&def.body));
-            Some(format!(
-                "inside {}: {}",
-                crate::format::format_prop_inline(prop),
-                inner
-            ))
+            let inner = find_failure(&def.body, &body_ctx)
+                .unwrap_or_else(|| Failure::here(&def.body, &body_ctx));
+            Some(Failure {
+                rendered: format!(
+                    "inside {}: {}",
+                    crate::format::format_prop_inline(prop),
+                    inner.rendered
+                ),
+                bindings: inner.bindings,
+            })
         }
         // No useful drill-down for these:
         Prop::Not(_)

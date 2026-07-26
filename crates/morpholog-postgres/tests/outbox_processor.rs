@@ -60,7 +60,7 @@ async fn commit_post_simple_entry(pool: &PgPool, entry_id: &str) -> Uuid {
     .unwrap();
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("setup rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("setup rejected: {reason}"),
     }
 }
 

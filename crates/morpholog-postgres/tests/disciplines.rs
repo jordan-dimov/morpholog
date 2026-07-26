@@ -71,7 +71,7 @@ async fn a_generated_invariant_rejects_durably_and_signs_the_audit_row() {
     .await
     .expect("propose should not error");
     match outcome {
-        PgProposalOutcome::Rejected { reason } => {
+        PgProposalOutcome::Rejected { reason, .. } => {
             assert!(reason.contains("entry_unique_by_entry_id"), "got: {reason}")
         }
         other @ PgProposalOutcome::Committed { .. } => {

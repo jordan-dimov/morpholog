@@ -95,6 +95,25 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertIsInstance(outcome, envelopes.Rejected)
         self.assertIn("cap", outcome.reason)
 
+    def test_init_can_reach_the_destructive_reset(self):
+        # The fixture embedder-integration.md documents was reachable only
+        # from the CLI, so an embedder wanting it had to shell out around
+        # its own generated client. Both flags pass straight through: the
+        # binary owns the pairing rule, this layer does not re-implement it.
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = json.dumps({"status": "created", "schema": "morpholog"})
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(
+                lambda: self.client.init(reset=True, i_know_this_deletes_data=True)
+            )
+            self.assertIn("--reset", argv)
+            self.assertIn("--i-know-this-deletes-data", argv)
+
+            argv = argv_after(lambda: self.client.init())
+            self.assertNotIn("--reset", argv)
+            self.assertNotIn("--i-know-this-deletes-data", argv)
+
     def test_empty_stdout_raises_with_the_stderr_text(self):
         self._mode("operational_failure")
         with self.assertRaises(MorphologError) as caught:
