@@ -169,24 +169,28 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
-    /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
-    /// `value default`) received an operand of the wrong kind.
-    /// `Le(date, decimal)`, `Add(subject, decimal)`,
-    /// `For` over a Decimal value - the kernel raises these as
-    /// `EvalError::TypeMismatch` at runtime; this validator
-    /// surfaces them at authoring time.
-    /// `max`/`min` ranged over a kind with no order. Subjects are
-    /// opaque identifiers and booleans are not a scale, so neither has a
-    /// largest member - refused here rather than given an arbitrary one.
+    /// `max`/`min` ranged over a kind with no order: a subject is an
+    /// opaque identifier, a boolean is not a scale, a collection is not a
+    /// point on one. Refused here rather than given an arbitrary order.
+    ///
+    /// The message names the kinds that DO order, because the checker is
+    /// an allow-list - listing the excluded ones would go stale the next
+    /// time a kind is added, which is how it came to name only two.
     #[error(
         "{op} needs an ordered kind but received {actual} in {context}; \
-         subjects and booleans have no order"
+         only decimals, dates, timestamps, durations and quantities have an order"
     )]
     UnorderedExtremum {
         op: &'static str,
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
+    /// `value default`) received an operand of the wrong kind.
+    /// `Le(date, decimal)`, `Add(subject, decimal)`,
+    /// `For` over a Decimal value - the kernel raises these as
+    /// `EvalError::TypeMismatch` at runtime; this validator
+    /// surfaces them at authoring time.
     #[error("{operator} expects {expected} operand(s) but received {actual} in {context}")]
     OperandKindMismatch {
         operator: &'static str,
