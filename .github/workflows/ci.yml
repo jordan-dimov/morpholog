@@ -193,7 +193,7 @@ jobs:
       # newer-version idiom sneaking in (the Z-suffix fromisoformat
       # trap is the canonical example).
       - name: Install Python at the declared floor
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
