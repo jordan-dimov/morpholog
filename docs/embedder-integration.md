@@ -275,7 +275,31 @@ morpholog generate python-client <file.morph> --out <dir>
 
 emits a complete, self-contained `morpholog_client/` package: the value codecs both directions (decimals as `decimal.Decimal` end to end, aware datetimes with naive ones refused on write), the envelope models (key-set strict - an envelope field this client does not know raises instead of dropping data), the subprocess adapter over the whole surface this document pins (including `propose --batch`, `check --json`, `inspect coverage`, the `inspect audit` tail as `audit()` / `audit_named()` with the `--after` resume cursor, `as_of` on both claims reads - a transition id or RFC 3339 timestamp, threading the binary's `--as-of` - the derived reads as `derived()` / `derived_named()` with the same `as_of`, the read-model refresh as `refresh_derived()`, and the tamper-evidence surface as `verify()` / `checkpoint()` / `evidence_export()` / `evidence_export_window()` / `evidence_export_selective()` / the offline `evidence_verify()` / `evidence_verify_window()` / `evidence_verify_selective()`), a frozen request dataclass per transformation with fields in declaration order and `to_args_named()`, a read model per predicate parsing the named read's wire-true values by declared kind, and a payload model per intent with the positional arg order baked in - no runtime `schema --intent` call. `__init__.py` carries the stamps (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`) and enforces the declared Python floor (3.10) at first import.
 
+`--check` compares the would-be output against what is already at `--out` and writes nothing: it exits zero when every file agrees and non-zero otherwise, naming every file that differs or is missing (an absent package is drift, not a pass). **The exit code is the contract**; the stderr lines naming what drifted are for a human reading a failed CI log, deliberately not a machine surface - there is nothing here to parse, so nothing to drift silently. It is the regenerate-into-a-tempdir-and-diff gate both consumer repos wrote by hand, as one subprocess:
+
+```bash
+morpholog generate python-client billing.morph --out . --check   # zero, or drift
+```
+
 The properties that make it a contract rather than a convenience: **stdlib-only** (no dependency treadmill; richer types are the embedder's to build on top), **deterministic** (the same binary and programme produce byte-identical output, so the drift check is regenerate-and-diff), and **whole-run refusal** (a programme whose contract the client cannot carry - a Duration field, a parameter with no single concrete kind, a Python-keyword field name - fails generation with every finding listed and nothing written; no partial packages, no silent mangling). The worked embedder (`examples/etrm_embedder/`) runs on its committed output.
+
+## Re-provisioning a development database (`init --reset`)
+
+`init` provisions once and never drops or migrates. For a development database that wants a clean slate, `--reset` drops the `morpholog` schema and everything in it, then provisions fresh - the `DROP SCHEMA morpholog CASCADE` that two consumer repos were shelling out to `psql` for.
+
+It is destructive, so the acknowledgement is part of the contract: `--reset` alone refuses (naming the target it would have destroyed, so a mistyped production URL is visible before anything happens), and `--i-know-this-deletes-data` alone refuses too, so a stray acknowledgement left in a script cannot lie in wait for a later `--reset`. The report distinguishes dropping a schema from finding none, rather than implying it removed something that was never there.
+
+The test-fixture shape it is for, once per session:
+
+```python
+@pytest.fixture(scope="session")
+def governed_db():
+    subprocess.run(
+        ["morpholog", "init", "--reset", "--i-know-this-deletes-data",
+         "--database-url", DEV_URL],
+        check=True,
+    )
+```
 
 ## Reading governed state as SQL (`generate views`)
 

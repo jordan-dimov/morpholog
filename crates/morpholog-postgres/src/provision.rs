@@ -50,6 +50,50 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     Ok(InitOutcome::Initialised)
 }
 
+/// A connection string with any userinfo stripped, for a message an
+/// operator has to read. The host and database still identify the
+/// target - which is the whole point of echoing it before a
+/// destructive act - while a password copied into CI scrollback
+/// outlives the run that leaked it.
+pub fn redact_database_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    // Userinfo, if present, precedes the first `@`, and that `@` must
+    // come before the path - otherwise it belongs to the database name.
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+        None => url.to_string(),
+    }
+}
+
+/// Drop the `morpholog` schema and everything in it, for a
+/// development database that wants re-provisioning from scratch.
+///
+/// Destructive by definition and deliberately dumb: the caller owns
+/// the acknowledgement (see the CLI's `init --reset`), because a
+/// library function cannot tell a scratch database from production.
+/// Returns whether a schema was there to drop, so a caller can report
+/// honestly rather than implying it removed something.
+///
+/// One transaction with the re-provisioning it precedes is NOT
+/// possible here - the caller runs [`initialise_schema`] next, and a
+/// failure between the two leaves an un-provisioned database, which is
+/// the same state `init` starts from and recovers by re-running.
+pub async fn drop_schema(pool: &PgPool) -> Result<bool, PgError> {
+    let existed = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
+        .fetch_optional(pool)
+        .await
+        .map_err(classify)?
+        .is_some();
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
+        .execute(pool)
+        .await
+        .map_err(classify)?;
+    Ok(existed)
+}
+
 /// The group role holding exactly the runtime's write set. NOLOGIN and
 /// passwordless: the operator grants membership to the runtime's real
 /// login role.
@@ -188,5 +232,60 @@ mod tests {
     fn role_names_are_quoted_identifiers() {
         let sql = least_privilege_sql("odd\"name", "reader");
         assert!(sql.contains("\"odd\"\"name\""));
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::redact_database_url;
+
+    #[test]
+    fn strips_userinfo_but_keeps_the_target_identifiable() {
+        assert_eq!(
+            redact_database_url("postgres://user:secret@db.internal:5432/morpholog"),
+            "postgres://db.internal:5432/morpholog"
+        );
+        assert_eq!(
+            redact_database_url("postgres://user@host/db"),
+            "postgres://host/db"
+        );
+    }
+
+    #[test]
+    fn leaves_a_url_without_credentials_alone() {
+        // The local socket form the whole test suite uses.
+        assert_eq!(
+            redact_database_url("postgres:///morpholog_dev"),
+            "postgres:///morpholog_dev"
+        );
+        assert_eq!(
+            redact_database_url("postgres://localhost:5432/morpholog"),
+            "postgres://localhost:5432/morpholog"
+        );
+    }
+
+    #[test]
+    fn an_at_sign_in_the_path_is_not_userinfo() {
+        // Naive splitting on the first `@` would truncate the database
+        // name here and hide which target was refused.
+        assert_eq!(
+            redact_database_url("postgres://host/weird@name"),
+            "postgres://host/weird@name"
+        );
+    }
+
+    #[test]
+    fn a_password_containing_an_at_sign_is_fully_stripped() {
+        // Splitting on the FIRST `@` would leave the tail of the
+        // password in the message.
+        assert_eq!(
+            redact_database_url("postgres://user:p@ss@host/db"),
+            "postgres://host/db"
+        );
+    }
+
+    #[test]
+    fn a_malformed_string_is_returned_unchanged_rather_than_mangled() {
+        assert_eq!(redact_database_url("not-a-url"), "not-a-url");
     }
 }

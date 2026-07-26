@@ -2423,6 +2423,67 @@ async fn init_provisions_then_refuses_then_skips() {
     assert!(status.success(), "skip-if-exists exits zero");
     let v: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(v["status"], "already-initialised");
+
+    // --reset is destructive, so the acknowledgement is the contract:
+    // refused without it, and refused the other way round too, so a
+    // stray ack in a script cannot lie in wait for a later --reset.
+    let (status, _stdout, stderr) = run_cli(&["init", "--reset"]);
+    assert!(
+        !status.success(),
+        "--reset without the acknowledgement must refuse"
+    );
+    assert!(
+        stderr.contains("--i-know-this-deletes-data")
+            && stderr.contains(&morpholog_postgres::redact_database_url(&database_url())),
+        "the refusal names the flag AND the target it would have destroyed: {stderr}"
+    );
+    let (status, _stdout, stderr) = run_cli(&["init", "--i-know-this-deletes-data"]);
+    assert!(!status.success(), "the acknowledgement alone must refuse");
+    assert!(stderr.contains("only meaningful with --reset"), "{stderr}");
+
+    // Data first, so the reset is proven to have really dropped it
+    // rather than to have quietly no-oped on an empty schema.
+    post_balanced_entry("entry_before_reset", 250);
+    let (status, stdout, stderr) = run_cli(&["init", "--reset", "--i-know-this-deletes-data"]);
+    assert!(
+        status.success(),
+        "acknowledged reset provisions; stderr:\n{stderr}"
+    );
+    let v: Value = serde_json::from_str(&stdout).expect("reset output is JSON");
+    assert_eq!(
+        v["status"], "initialised",
+        "a reset re-provisions from scratch"
+    );
+    assert!(
+        stderr.contains("dropped the pre-existing"),
+        "the report distinguishes dropping from finding nothing: {stderr}"
+    );
+    // The re-provisioned schema is usable, and empty.
+    post_balanced_entry("entry_after_reset", 100);
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let entries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM morpholog.claims WHERE predicate_name = 'JournalEntry'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count claims");
+    assert_eq!(
+        entries, 1,
+        "only the post-reset entry survives - the reset really dropped the data"
+    );
+
+    // On a database with no schema, the same command reports honestly
+    // rather than implying it removed something.
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+    let (status, _stdout, stderr) = run_cli(&["init", "--reset", "--i-know-this-deletes-data"]);
+    assert!(status.success());
+    assert!(
+        stderr.contains("found no"),
+        "with nothing to drop the report says so: {stderr}"
+    );
 }
 
 // ============================================================

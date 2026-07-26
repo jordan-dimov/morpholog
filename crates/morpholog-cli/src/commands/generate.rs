@@ -66,16 +66,21 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
     // recovery either way).
     let models = render_models(program, &validated)?;
     let init = render_init(program);
-
-    let package_dir = args.out.join("morpholog_client");
-    std::fs::create_dir_all(&package_dir)?;
-    for (name, content) in [
+    let files = [
         ("__init__.py", init.as_str()),
         ("models.py", models.as_str()),
         ("values.py", VALUES_PY),
         ("envelopes.py", ENVELOPES_PY),
         ("adapter.py", ADAPTER_PY),
-    ] {
+    ];
+
+    let package_dir = args.out.join("morpholog_client");
+    if args.check {
+        return report_drift(&package_dir, &files);
+    }
+
+    std::fs::create_dir_all(&package_dir)?;
+    for (name, content) in files {
         std::fs::write(package_dir.join(name), content)?;
     }
     eprintln!(
@@ -86,6 +91,50 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
         program.intents.len(),
     );
     Ok(())
+}
+
+/// `--check`: compare the rendered package against what is on disk and
+/// write nothing.
+///
+/// The contract is the EXIT CODE - zero when every file agrees,
+/// non-zero on any difference, missing file, or unreadable directory.
+/// The prose on stderr names what drifted for a human reading a failed
+/// CI log; it is deliberately not a machine surface, so there is
+/// nothing here for an embedder to parse and nothing to drift silently
+/// (see "A consumed surface is a pinned envelope" in
+/// `docs/embedder-integration.md` - this command answers with its
+/// status, not with data).
+fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow::Result<()> {
+    let mut drifted: Vec<String> = Vec::new();
+    for (name, expected) in files {
+        let path = package_dir.join(name);
+        match std::fs::read_to_string(&path) {
+            Ok(found) if found == *expected => {}
+            Ok(_) => drifted.push(format!("{name}: differs")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                drifted.push(format!("{name}: missing"));
+            }
+            Err(e) => drifted.push(format!("{name}: unreadable ({e})")),
+        }
+    }
+    if drifted.is_empty() {
+        eprintln!(
+            "{} is current ({} files)",
+            package_dir.display(),
+            files.len()
+        );
+        return Ok(());
+    }
+    for entry in &drifted {
+        eprintln!("error: {entry}");
+    }
+    eprintln!(
+        "{} is stale: {} of {} file(s) drifted; regenerate without --check",
+        package_dir.display(),
+        drifted.len(),
+        files.len(),
+    );
+    std::process::exit(1);
 }
 
 // ============================================================

@@ -305,6 +305,13 @@ pub(crate) struct GeneratePythonClientArgs {
     /// Directory to write the `morpholog_client/` package under.
     #[arg(long)]
     pub(crate) out: PathBuf,
+
+    /// Compare the would-be output against what is already at `--out`
+    /// and write nothing: exit zero when they agree, non-zero when any
+    /// file differs or is missing, naming every one. The drift gate both
+    /// consumer repos wrote by hand as regenerate-into-a-tempdir-and-diff.
+    #[arg(long)]
+    pub(crate) check: bool,
 }
 
 /// The connection-string flag every database-backed subcommand
@@ -514,6 +521,20 @@ pub(crate) struct InitArgs {
     /// deployment entrypoints that may run more than once.
     #[arg(long)]
     pub(crate) skip_if_exists: bool,
+
+    /// DESTRUCTIVE: drop the `morpholog` schema and everything in it,
+    /// then provision it fresh. For a development database that wants
+    /// a clean slate - the `DROP SCHEMA morpholog CASCADE` two repos
+    /// were shelling out to psql for. Requires --i-know-this-deletes-data.
+    #[arg(long)]
+    pub(crate) reset: bool,
+
+    /// Acknowledge that --reset destroys every claim, audit row, and
+    /// outbox entry in the target database. Required with --reset, and
+    /// meaningless without it: a fat-fingered production URL should not
+    /// be survivable by default.
+    #[arg(long)]
+    pub(crate) i_know_this_deletes_data: bool,
 
     /// Also provision the least-privilege floor: dedicated writer and
     /// reader group roles, PUBLIC revoked from the governed tables, and
