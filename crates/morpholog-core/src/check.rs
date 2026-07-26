@@ -210,6 +210,9 @@ struct CheckCtx<'a> {
     /// out of band, so naming one anywhere a rule reads state is a
     /// modelling error rather than a rule that happens to match nothing.
     derived_heads: std::collections::BTreeSet<&'a str>,
+    /// Invariant names the discipline lowering produced, so a finding
+    /// inside one can be attributed to the declaration instead.
+    generated_invariants: std::collections::BTreeSet<String>,
     context: ValidationContext,
     errors: Vec<ValidationError>,
 }
@@ -236,6 +239,12 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             .derived_claims
             .iter()
             .map(|d| d.predicate.as_str())
+            .collect(),
+        generated_invariants: program
+            .invariants
+            .iter()
+            .filter(|i| i.origin != crate::ir::InvariantOrigin::Authored)
+            .map(|i| i.name.to_string())
             .collect(),
         predicates: program
             .predicates
@@ -367,6 +376,21 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         cx.context = ValidationContext::DerivedClaim {
             predicate: derived.predicate.to_string(),
         };
+        // Disciplines are promises about governed state - what may be
+        // retracted, which claims agree, which pointer is current. A
+        // derived output is computed and its generations are replaced
+        // wholesale on refresh, so it can keep none of them. Caught at
+        // the declaration because that is where the author wrote the
+        // clause: `unique by` lowers to a generated invariant, and
+        // refusing THAT names a rule nobody typed, while `append only`
+        // lowers to nothing and would pass unnoticed.
+        if let Some(decl) = cx.predicates.get(derived.predicate.as_str()).copied()
+            && !decl.disciplines.is_empty()
+        {
+            cx.errors.push(ValidationError::DisciplineOnDerived {
+                predicate: derived.predicate.to_string(),
+            });
+        }
         if prop_mentions_actor(&derived.domain)
             || derived.values.iter().any(|v| value_mentions_actor(&v.expr))
         {
@@ -1237,14 +1261,26 @@ impl CheckCtx<'_> {
         scope: &mut Scope,
     ) {
         // A derived predicate is computed from admitted claims and
-        // refreshed out of band; nothing ever admits one. Naming it where
-        // a rule reads state gives a rule with two possible sources - the
-        // view the runtime computes, and whatever rows an older shape of
-        // the programme left behind - so it is refused rather than left
-        // to fail against a live database.
-        if vocabulary == VocabularyKind::Predicate && self.derived_heads.contains(name) {
+        // refreshed out of band; nothing ever admits one. A rule that
+        // matches one can never fire, and a rule that WRITES one gives a
+        // single name two sources - the view the runtime computes and the
+        // rows the transformation left. Both are refused here rather than
+        // left to fail against a live database.
+        // Not inside a generated discipline invariant: that rule is
+        // machinery the author cannot see, and the discipline clause it
+        // came from is refused at the declaration instead. Reporting both
+        // would bury the actionable error under two about a rule nobody
+        // wrote - the same reason the lint tier skips them.
+        let generated_discipline_rule = matches!(
+            &self.context,
+            ValidationContext::Invariant { name } if self.generated_invariants.contains(name.as_str())
+        );
+        if vocabulary == VocabularyKind::Predicate
+            && self.derived_heads.contains(name)
+            && !generated_discipline_rule
+        {
             let context = self.context.clone();
-            self.errors.push(ValidationError::DerivedOnCommitPath {
+            self.errors.push(ValidationError::DerivedInRule {
                 predicate: name.into(),
                 context,
             });
@@ -1860,17 +1896,66 @@ mod tests {
             vec![assert_("Row", vec![var("k")])],
         )];
 
+        // Deriveds do not compose: a derived's domain is evaluated
+        // against admitted claims too, so naming another derived there
+        // is as dead as naming one from a transformation.
+        let mut derived_case = empty_program();
+        derived(&mut derived_case);
+        derived_case.derived_claims.push(crate::ir::DerivedClaim {
+            predicate: "Out".into(),
+            keys: vec!["k".into()],
+            values: vec![],
+            domain: claim("Row", vec![var("k")]),
+        });
+
         for (label, program) in [
             ("invariant", invariant_case),
             ("bind", bind_case),
             ("require", require_case),
             ("admit", admit_case),
+            ("another derived's domain", derived_case),
         ] {
             let errs = check_program(&program);
             assert!(
                 errs.iter()
-                    .any(|e| matches!(e, ValidationError::DerivedOnCommitPath { .. })),
+                    .any(|e| matches!(e, ValidationError::DerivedInRule { .. })),
                 "{label} over a derived must be refused; got {errs:?}"
+            );
+        }
+    }
+
+    /// A discipline is a promise about governed state, and a derived
+    /// output is not governed state.
+    ///
+    /// Both clause shapes matter and they fail differently: `unique by`
+    /// lowers to a generated invariant, so without this the author saw an
+    /// error naming a rule they never wrote, while `append only` lowers
+    /// to nothing at all and passed silently - publishing an
+    /// append-only promise for a view whose generations refresh replaces
+    /// wholesale.
+    #[test]
+    fn a_derived_output_cannot_carry_a_discipline() {
+        for discipline in [
+            crate::ir::Discipline::AppendOnly,
+            crate::ir::Discipline::UniqueBy {
+                fields: vec!["k".into()],
+            },
+        ] {
+            let mut p = empty_program();
+            let mut row = pdecl("Row", &[("k", PredicateArgKind::Subject)]);
+            row.disciplines = vec![discipline.clone()];
+            p.predicates = vec![pdecl("Src", &[("k", PredicateArgKind::Subject)]), row];
+            p.derived_claims = vec![crate::ir::DerivedClaim {
+                predicate: "Row".into(),
+                keys: vec!["k".into()],
+                values: vec![],
+                domain: claim("Src", vec![var("k")]),
+            }];
+            let errs = check_program(&p);
+            assert!(
+                errs.iter()
+                    .any(|e| matches!(e, ValidationError::DisciplineOnDerived { .. })),
+                "{discipline:?} on a derived head must be refused; got {errs:?}"
             );
         }
     }
@@ -1895,7 +1980,7 @@ mod tests {
         assert!(
             !errs
                 .iter()
-                .any(|e| matches!(e, ValidationError::DerivedOnCommitPath { .. })),
+                .any(|e| matches!(e, ValidationError::DerivedInRule { .. })),
             "a derived reading its own sources must pass; got {errs:?}"
         );
     }
