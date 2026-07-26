@@ -79,14 +79,20 @@ cargo test \
     -p morpholog-test-support \
     --all-targets --locked
 
+# The shell twin of `with_default_user`, shared by both scripts and
+# pinned against the Rust rule by shell_twin_agreement.rs.
+# shellcheck source=shared/sqlx_url.sh
+source "$(dirname "${BASH_SOURCE[0]}")/shared/sqlx_url.sh"
+
 step 'sqlx offline cache freshness (cargo sqlx prepare --check)'
 if [ -z "${DATABASE_URL:-}" ]; then
     echo '  DATABASE_URL not set; skipping (CI checks the cache against the schema).'
 elif ! cargo sqlx --version >/dev/null 2>&1; then
     echo '  sqlx-cli not installed; skipping. Install it with:'
-    echo '    cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls'
+    echo '    cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls'
 else
-    SQLX_OFFLINE=false cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
+    DATABASE_URL="$(sqlx_url "$DATABASE_URL")" SQLX_OFFLINE=false \
+        cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
 fi
 
 step 'async / PG-backed test suites (morpholog-cli / postgres / outbox / bench smoke)'

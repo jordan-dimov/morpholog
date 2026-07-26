@@ -111,12 +111,16 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
         crate::sql_quote::quote_ident(schema),
         crate::sql_quote::quote_ident(crate::sql_views::VIEW_DEFS_TABLE),
     );
-    let sealed: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(&sealed_sql)
-        .fetch_all(pool)
-        .await
-        .map_err(classify)?
-        .into_iter()
-        .collect();
+    // Audited for AssertSqlSafe: the only interpolated values are a
+    // caller-supplied schema name and a crate constant, both through
+    // `quote_ident`, whose escaping is pinned by its own tests.
+    let sealed: HashMap<String, String> =
+        sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sealed_sql))
+            .fetch_all(pool)
+            .await
+            .map_err(classify)?
+            .into_iter()
+            .collect();
 
     let mut missing: Vec<String> = Vec::new();
     let mut intended: Vec<String>;
@@ -127,7 +131,8 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
             crate::sql_quote::quote_ident(schema),
             crate::sql_quote::quote_ident(crate::sql_views::CATALOG_VIEW),
         );
-        intended = match sqlx::query_scalar::<_, String>(&catalog_sql)
+        // Audited: same shape as the sealed-table read above.
+        intended = match sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(catalog_sql))
             .fetch_all(pool)
             .await
         {

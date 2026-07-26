@@ -195,29 +195,35 @@ async fn session_is_superuser(pool: &PgPool) -> bool {
 /// a role with a table grant refuses a bare DROP ROLE).
 async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
     for role in roles {
-        sqlx::raw_sql(&format!(
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
             "DO $$ BEGIN
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
                     EXECUTE 'DROP OWNED BY {role}';
                     EXECUTE 'DROP ROLE {role}';
                 END IF;
             END $$"
-        ))
+        )))
         .execute(pool)
         .await
         .unwrap();
     }
     for statement in setup {
-        sqlx::raw_sql(statement).execute(pool).await.unwrap();
+        // Audited: `setup` is a literal slice each caller writes inline.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(statement.to_string()))
+            .execute(pool)
+            .await
+            .unwrap();
     }
 }
 
 async fn drop_roles(pool: &PgPool, roles: &[&str]) {
     for role in roles {
-        sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP OWNED BY {role}; DROP ROLE {role}"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
     }
 }
 

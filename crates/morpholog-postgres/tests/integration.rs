@@ -688,10 +688,12 @@ fn period() -> EvalValue {
 }
 
 async fn count(pool: &PgPool, table: &str) -> i64 {
-    sqlx::query_scalar(&format!("SELECT COUNT(*) FROM morpholog.{table}"))
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) FROM morpholog.{table}"
+    )))
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> bool {

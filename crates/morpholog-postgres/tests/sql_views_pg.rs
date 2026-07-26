@@ -35,13 +35,13 @@ const SENTINEL_HASH: &str =
 /// `analytics` schema a test renames into), so it keeps its own local
 /// reset rather than sharing `common::reset_db_and_read_cache`.
 async fn reset(pool: &PgPool) {
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "{}; TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE; \
          DROP SCHEMA IF EXISTS morpholog_views CASCADE; \
          DROP SCHEMA IF EXISTS analytics CASCADE;",
         morpholog_postgres::testing::RESET_SQL
-    ))
+    )))
     .execute(pool)
     .await
     .expect("reset");
@@ -123,7 +123,7 @@ async fn views_are_not_updatable() {
         EvalValue::Decimal(Decimal::from(42)),
     )
     .await;
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -160,7 +160,7 @@ async fn the_script_applies_atomically() {
         .await
         .expect("pre-create collides");
 
-    let result = sqlx::raw_sql(&render(&p, "morpholog_views"))
+    let result = sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await;
     assert!(result.is_err(), "the colliding name must abort the script");
@@ -188,7 +188,7 @@ async fn appending_a_field_is_a_compatible_replace() {
     )
     .unwrap();
     v1.validate().unwrap();
-    sqlx::raw_sql(&render(&v1, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&v1, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("v1 applies");
@@ -202,7 +202,7 @@ async fn appending_a_field_is_a_compatible_replace() {
     )
     .unwrap();
     v2.validate().unwrap();
-    sqlx::raw_sql(&render(&v2, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&v2, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("appending a field stays a compatible replace");
@@ -228,7 +228,7 @@ async fn renaming_a_field_is_rejected_atomically() {
     )
     .unwrap();
     v1.validate().unwrap();
-    sqlx::raw_sql(&render(&v1, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&v1, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("v1 applies");
@@ -242,7 +242,7 @@ async fn renaming_a_field_is_rejected_atomically() {
     )
     .unwrap();
     renamed.validate().unwrap();
-    let result = sqlx::raw_sql(&render(&renamed, "morpholog_views"))
+    let result = sqlx::raw_sql(sqlx::AssertSqlSafe(render(&renamed, "morpholog_views")))
         .execute(&pool)
         .await;
     assert!(result.is_err(), "renaming a column must be rejected");
@@ -253,7 +253,7 @@ async fn catalog_round_trips_the_model_hash() {
     let pool = test_pool().await;
     reset(&pool).await;
     let p = fixture_program();
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -272,7 +272,7 @@ async fn quantity_unit_survives_as_a_column_comment() {
     let pool = test_pool().await;
     reset(&pool).await;
     let p = fixture_program();
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -305,7 +305,7 @@ async fn any_column_reads_back_the_whole_tagged_object() {
         EvalValue::Decimal(Decimal::from(42)),
     )
     .await;
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -336,7 +336,7 @@ async fn duration_casts_including_negative_spans() {
         EvalValue::Decimal(Decimal::from(1)),
     )
     .await;
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -375,7 +375,7 @@ async fn temporal_precision_boundary_holds() {
         )
         .await;
     }
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -454,7 +454,7 @@ async fn derived_view_returns_kernel_rows_after_refresh() {
     refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -468,7 +468,7 @@ async fn derived_view_is_empty_before_any_refresh() {
     let p = derived_fixture();
     seed_entry(&pool, &p, "a1", 10).await;
     // Views applied, but no refresh has published a generation yet.
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -487,7 +487,7 @@ async fn derived_view_is_empty_for_a_mismatched_model_hash() {
     refresh_derived(&pool, p.validated().unwrap(), "sha256:another-model")
         .await
         .unwrap();
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -508,7 +508,7 @@ async fn derived_view_is_not_updatable() {
     refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");
@@ -532,7 +532,7 @@ async fn derived_view_reflects_a_new_generation() {
     refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
-    sqlx::raw_sql(&render(&p, "morpholog_views"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
         .execute(&pool)
         .await
         .expect("script applies");

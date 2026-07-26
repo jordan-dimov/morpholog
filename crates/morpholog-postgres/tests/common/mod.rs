@@ -25,6 +25,7 @@ pub async fn test_pool() -> PgPool {
         "DATABASE_URL must be set for morpholog-postgres integration tests \
          (e.g. postgres:///morpholog_dev)",
     );
+    let url = morpholog_postgres::with_default_user(&url);
     PgPool::connect(&url)
         .await
         .expect("failed to connect to PostgreSQL test database")
@@ -52,11 +53,11 @@ pub async fn reset_db(pool: &PgPool) {
 /// tests that exercise the derived read cache or SQL views; do not make
 /// this the default reset - everything else uses [`reset_db`].
 pub async fn reset_db_and_read_cache(pool: &PgPool) {
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "{}; TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE;",
         morpholog_postgres::testing::RESET_SQL
-    ))
+    )))
     .execute(pool)
     .await
     .expect("reset");

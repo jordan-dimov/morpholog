@@ -24,7 +24,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
-sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "rust_decimal", "json", "chrono", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "rust_decimal", "json", "chrono", "macros"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 thiserror = "2"
 sha2 = "0.10"

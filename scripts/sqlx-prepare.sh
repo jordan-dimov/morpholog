@@ -20,10 +20,16 @@
 set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL must point at a disposable Morpholog database}"
+# The shell twin of `with_default_user`, shared by both scripts and
+# pinned against the Rust rule by shell_twin_agreement.rs.
+# shellcheck source=shared/sqlx_url.sh
+source "$(dirname "${BASH_SOURCE[0]}")/shared/sqlx_url.sh"
+
+SQLX_URL="$(sqlx_url "$DATABASE_URL")"
 
 if ! cargo sqlx --version >/dev/null 2>&1; then
     echo 'sqlx-cli not installed. Install the version-matched CLI:' >&2
-    echo '  cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls' >&2
+    echo '  cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls' >&2
     exit 1
 fi
 
@@ -39,6 +45,7 @@ echo 'Preparing query cache ...'
 # otherwise make `prepare` regenerate from the stale cache instead of the
 # live schema. `--all-targets` mirrors clippy so test-target queries are
 # captured; `--locked` matches the rest of the verification loop.
-SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --all-targets --all-features --locked
+DATABASE_URL="$SQLX_URL" SQLX_OFFLINE=false \
+    cargo sqlx prepare --workspace -- --all-targets --all-features --locked
 
 echo 'Done. Review and commit the .sqlx/ changes.'
