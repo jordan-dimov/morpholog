@@ -200,7 +200,7 @@ Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [
 
 **`--named <file.morph>`** decodes each claim's positional args into a bare named object - `{"predicate": "<Name>", "args": {field: bare_value, ...}}`, the read-side mirror of `--args-named` (same exactness rules: decimals, dates, timestamps, and durations stay strings; booleans are booleans; collections recurse). With `--named` the programme becomes the authority, in both directions: a *requested* `--predicate` the file does not declare is a hard error raised before any database read (the typo the bare read tolerates), and a *returned* claim whose predicate is undeclared, or whose arity disagrees with its declaration, is a **hard error naming both sides** (programme/database skew) - never a silent skip or an empty result. Composes with `--predicate` and `--as-of`. Without `--named`, decoding by hand stays possible via `inspect predicates` and the tagged output above.
 
-Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering, and a predicate read returns zero or more claims - multiplicity is the caller's to handle, except where the programme's own invariants pin it (a singleton in-force pointer, say), which is exactly what licenses a simple lookup. Argument-level selection is deliberately left open below.
+Selection stops at predicate granularity. Picking one subject's claims out of the result is the embedder's own filtering, and a predicate read returns zero or more claims - multiplicity is the caller's to handle, except where the programme's own invariants pin it (a singleton in-force pointer, say), which is exactly what licenses a simple lookup. Argument-level selection is `--where`, pinned above.
 
 ### `morpholog inspect audit` - the projector's tail
 
@@ -229,6 +229,9 @@ What this document promises:
 - The `morpholog propose` outcome shape, traced and untraced (the `$defs` key keeps its historical `run_outcome` name).
 - The `morpholog explain --json` Explanation shape.
 - The `morpholog inspect claims --predicate` claim-object shape (predicate name plus tagged positional args).
+- `--where field=value` on `inspect claims` and `inspect derived`: repeatable, conjunctive, equality only. Field names resolve against the programme, so the claims form needs `--named <FILE>` and exactly one `--predicate`, and an undeclared field is a hard error naming the ones that exist - never an empty result that reads like "no such rows". The generated client takes it as `where={"invoice_id": "inv_1"}` on `claims_named` and `derived_named`.
+
+  Two properties worth knowing before relying on it. **The claims filter runs in the database; the derived one does not** - a derived view is computed from claims, so `inspect derived --where` narrows the answer rather than the work, and `--as-of` filters after replay for the same reason. **Decimals compare as numbers, not as text**: `--where net_gbp=13.5` finds a stored `13.50`, because they are the same number and comparing the stored strings would report no such row for a row that exists. Fields whose values have more than one spelling - quantities and collections - are refused rather than silently mismatched.
 - The `morpholog init` provisioning contract (embedded schema, day-zero only, refuse-or-skip on an existing schema, never drop or migrate).
 - The `propose --explain-on-reject` envelope (rejections gain `explanation` in the `explain --json` shape, computed against the rejecting snapshot; commits unchanged).
 - The `inspect claims --named` decoded-claim shape and its hard-error skew contract.
@@ -248,12 +251,8 @@ What this document promises:
 
 What is deliberately left open, pending the worked example that forces the shape:
 
-- **Argument-level claim selection.** `--where field=value` narrows a read by argument, so a single-subject question stops paying for the whole predicate. Repeatable and conjunctive; equality only. Field names resolve against the programme, so `inspect claims --where` needs `--named <FILE>` and exactly one `--predicate`, and an undeclared field is a hard error naming the ones that exist - never an empty result that reads like "no such rows". The generated client takes it as `where={"invoice_id": "inv_1"}` on `claims_named` and `derived_named`.
-
-  Two things worth knowing before you rely on it. **The claims filter runs in the database; the derived one does not** - a derived view is computed from claims, so `inspect derived --where` narrows the answer rather than the work, and `--as-of` filters after replay for the same reason. **Decimals compare as numbers, not as text**: `--where net_gbp=13.5` finds a stored `13.50`, because they are the same number and comparing the stored strings would report no such row for a row that exists. Fields whose values have more than one spelling - quantities and collections - are refused rather than silently mismatched.
 - **The `--trace` structure internals.** The traced envelope's shape is pinned (`{result, trace}`); the trace entries themselves are richer than the embedder minimum and reserved for the tooling that needs them.
 - **The remaining `morpholog inspect` output shapes.** The claims, audit, and derived shapes are pinned above; `rejections`, `outbox`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `propose` envelope itself is unchanged by that log's existence.)
-The discipline is the same as the rest of Morpholog: ship the contract that an example forces, leave the rest open.
 
 ## The outcome-envelope contract (`schema --result`)
 

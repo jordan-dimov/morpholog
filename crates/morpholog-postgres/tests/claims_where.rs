@@ -16,8 +16,8 @@ use common::{
 use morpholog_postgres::{PgPool, list_claims_where};
 use serde_json::json;
 
-/// Three lines across two invoices, one amount stored at a scale the
-/// caller is unlikely to type back exactly.
+/// Lines spread across more than one invoice, with an amount stored at a
+/// scale the caller is unlikely to type back exactly.
 ///
 /// Seeded through `propose` rather than by inserting rows: a claim
 /// carries the transition that admitted it, so a hand-inserted row is
@@ -132,4 +132,24 @@ async fn filters_are_conjunctive_and_a_miss_returns_nothing() {
     .await
     .unwrap();
     assert!(neither.is_empty(), "got {neither:?}");
+}
+
+#[tokio::test]
+async fn no_filters_means_every_row_not_none() {
+    // An empty conjunction is true. `bool_and` over zero rows is NULL,
+    // though, and `AND NULL` would hand a caller who asked for
+    // everything an empty set - the wrong answer, silently.
+    let pool = test_pool().await;
+    seed(&pool).await;
+    let rows = list_claims_where(&pool, "InvoiceLine", &[], &[], &[])
+        .await
+        .unwrap();
+    let all = morpholog_postgres::list_claims_for_predicates(&pool, &["InvoiceLine".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, all,
+        "an unfiltered call must agree with the unfiltered read"
+    );
+    assert!(!rows.is_empty(), "and the fixture is not empty");
 }

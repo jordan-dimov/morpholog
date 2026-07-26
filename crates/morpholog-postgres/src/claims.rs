@@ -83,6 +83,11 @@ pub async fn list_claims_for_predicates(
 /// assembled `WHERE` would have needed an `AssertSqlSafe` escape and lost
 /// that.
 ///
+/// No filters means every row of the predicate, not none: `bool_and`
+/// over zero rows is NULL, and `AND NULL` would quietly return an empty
+/// set for a caller who asked for everything. The `COALESCE` makes the
+/// empty conjunction true, which is what an empty conjunction means.
+///
 /// `numeric` marks the filters whose values must compare as numbers
 /// rather than as JSON. Decimals are stored as strings to keep them
 /// exact, so `13.5` and `13.50` are equal numbers and different strings -
@@ -101,14 +106,16 @@ pub async fn list_claims_where(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          WHERE predicate_name = $1
-           AND (SELECT bool_and(
-                  CASE WHEN f.numeric
-                       THEN (arguments -> f.position ->> 'value')::numeric
-                            = (f.value ->> 'value')::numeric
-                       ELSE arguments -> f.position = f.value
-                  END)
-                FROM unnest($2::int[], $3::jsonb[], $4::bool[])
-                  AS f(position, value, numeric))
+           AND COALESCE(
+                (SELECT bool_and(
+                   CASE WHEN f.numeric
+                        THEN (arguments -> f.position ->> 'value')::numeric
+                             = (f.value ->> 'value')::numeric
+                        ELSE arguments -> f.position = f.value
+                   END)
+                 FROM unnest($2::int[], $3::jsonb[], $4::bool[])
+                   AS f(position, value, numeric)),
+                true)
          ORDER BY asserted_at, predicate_name, arguments::text",
         predicate,
         positions,

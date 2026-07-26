@@ -116,10 +116,19 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                 // comparison happens in the database, so a single-subject
                 // question stops reading the whole predicate.
                 (None, [predicate]) if !filters.is_empty() => {
+                    // A position that does not fit is a declaration this
+                    // programme could not have parsed, so it is a broken
+                    // invariant rather than a filter that matches
+                    // nothing - saturating would probe an out-of-range
+                    // index and report an empty book.
                     let positions: Vec<i32> = filters
                         .iter()
-                        .map(|f| i32::try_from(f.position).unwrap_or(i32::MAX))
-                        .collect();
+                        .map(|f| {
+                            i32::try_from(f.position).with_context(|| {
+                                format!("argument position {} does not fit", f.position)
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
                     let values: Vec<serde_json::Value> = filters
                         .iter()
                         .map(|f| serde_json::to_value(&f.value))
