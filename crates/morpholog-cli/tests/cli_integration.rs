@@ -23,10 +23,11 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 fn database_url() -> String {
-    std::env::var("DATABASE_URL").expect(
+    let url = std::env::var("DATABASE_URL").expect(
         "DATABASE_URL must be set for morpholog-cli integration tests \
          (e.g. postgres:///morpholog_dev or postgres://postgres:postgres@localhost:5432/postgres)",
-    )
+    );
+    morpholog_postgres::with_default_user(&url)
 }
 
 async fn reset_db() {

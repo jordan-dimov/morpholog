@@ -179,15 +179,15 @@ async fn export_refuses_when_a_covered_row_is_missing() {
     // (Clear the outbox FK to that transition first.)
     let first =
         "SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id LIMIT 1";
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DELETE FROM morpholog.outbox WHERE transition_id IN ({first})"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DELETE FROM morpholog.audit WHERE transition_id = ({first})"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();

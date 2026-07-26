@@ -50,6 +50,56 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     Ok(InitOutcome::Initialised)
 }
 
+/// A connection string with a username filled in when it specifies
+/// none, restoring the behaviour `libpq`, `psql`, and sqlx 0.8 all
+/// share: an unspecified user means the operating-system user. sqlx
+/// 0.9 stopped doing this and connects as `anonymous` instead, which
+/// turns the `postgres:///mydb` form every Postgres user reaches for -
+/// and that this project's own install guide teaches - into a
+/// peer-authentication failure. Precedence follows libpq: `PGUSER`,
+/// then the OS user.
+///
+/// Applied at the connection door rather than pushed onto users as a
+/// documentation change, because the short form is not a Morpholog
+/// convention to revise - it is what Postgres tooling means.
+pub fn with_default_user(url: &str) -> String {
+    // Precedence follows libpq: PGUSER, then the OS user.
+    let user = std::env::var("PGUSER")
+        .ok()
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .filter(|u| !u.is_empty());
+    apply_default_user(url, user.as_deref())
+}
+
+/// The rule itself, with the environment lookup lifted out: the
+/// workspace forbids `unsafe`, so a test cannot mutate the environment -
+/// and the substitution is the part worth pinning regardless.
+fn apply_default_user(url: &str, user: Option<&str>) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
+    // Userinfo present, or a `user=` parameter: the caller has spoken.
+    if rest[..authority_end].contains('@') || url.contains("user=") {
+        return url.to_string();
+    }
+    // Nothing to fill in with: let the driver report its own error
+    // rather than invent a username.
+    let Some(user) = user else {
+        return url.to_string();
+    };
+    if authority_end == 0 {
+        // The hostless socket form. Injecting `user@` here would read as
+        // an empty host and be rejected, so the username goes in as the
+        // query parameter instead - the same thing, spelled the way this
+        // form accepts.
+        let separator = if url.contains('?') { '&' } else { '?' };
+        return format!("{url}{separator}user={user}");
+    }
+    format!("{scheme}://{user}@{rest}")
+}
+
 /// A connection string with any userinfo stripped, for a message an
 /// operator has to read. The host and database still identify the
 /// target - which is the whole point of echoing it before a
@@ -126,16 +176,25 @@ pub async fn provision_least_privilege(pool: &PgPool) -> Result<(), PgError> {
             .await
             .map_err(classify)?;
         if exists.is_none() {
-            sqlx::raw_sql(&format!("CREATE ROLE {} NOLOGIN", quote_ident(role)))
-                .execute(&mut *tx)
-                .await
-                .map_err(provision_error)?;
+            // Audited for AssertSqlSafe: `role` is one of this crate's two
+            // role constants, quoted - no caller input reaches this string.
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "CREATE ROLE {} NOLOGIN",
+                quote_ident(role)
+            )))
+            .execute(&mut *tx)
+            .await
+            .map_err(provision_error)?;
         }
     }
-    sqlx::raw_sql(&least_privilege_sql(WRITER_ROLE, READER_ROLE))
-        .execute(&mut *tx)
-        .await
-        .map_err(provision_error)?;
+    // Audited: built from the same two constants, quoted.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(least_privilege_sql(
+        WRITER_ROLE,
+        READER_ROLE,
+    )))
+    .execute(&mut *tx)
+    .await
+    .map_err(provision_error)?;
     tx.commit().await.map_err(classify)?;
     Ok(())
 }
@@ -287,5 +346,79 @@ mod redaction_tests {
     #[test]
     fn a_malformed_string_is_returned_unchanged_rather_than_mangled() {
         assert_eq!(redact_database_url("not-a-url"), "not-a-url");
+    }
+}
+
+#[cfg(test)]
+mod default_user_tests {
+    use super::apply_default_user;
+
+    // sqlx 0.9 connects an unspecified user as `anonymous`, where libpq,
+    // psql, and sqlx 0.8 all use the OS user. These pin the compatibility
+    // shim: the short URL form is what every Postgres tool means by "this
+    // database, as me", and what this project's install guide,
+    // CONTRIBUTING, and whole test suite use.
+
+    #[test]
+    fn a_socket_url_gains_the_supplied_user_as_a_query_parameter() {
+        // Not `postgres://alice@/morpholog_dev`: with no host, injected
+        // userinfo reads as an empty host and the driver refuses it.
+        // Caught by an end-to-end connection, not by this test - which is
+        // why the shape is pinned here now.
+        assert_eq!(
+            apply_default_user("postgres:///morpholog_dev", Some("alice")),
+            "postgres:///morpholog_dev?user=alice"
+        );
+    }
+
+    #[test]
+    fn an_existing_query_string_is_extended_not_replaced() {
+        assert_eq!(
+            apply_default_user("postgres:///db?sslmode=disable", Some("alice")),
+            "postgres:///db?sslmode=disable&user=alice"
+        );
+    }
+
+    #[test]
+    fn a_host_without_a_user_still_gains_one() {
+        assert_eq!(
+            apply_default_user("postgres://localhost:5432/db", Some("alice")),
+            "postgres://alice@localhost:5432/db"
+        );
+    }
+
+    #[test]
+    fn an_explicit_user_is_never_overridden() {
+        // Userinfo in the authority, password and all.
+        assert_eq!(
+            apply_default_user("postgres://carol:pw@host:5432/db", Some("alice")),
+            "postgres://carol:pw@host:5432/db"
+        );
+        // The query-parameter spelling, which is how this shim is
+        // side-stepped deliberately.
+        assert_eq!(
+            apply_default_user("postgres:///db?user=carol", Some("alice")),
+            "postgres:///db?user=carol"
+        );
+    }
+
+    #[test]
+    fn an_at_sign_in_the_database_name_is_not_userinfo() {
+        // The authority ends at the first `/` or `?`, so a later `@`
+        // must not be mistaken for credentials and suppress the fill-in.
+        assert_eq!(
+            apply_default_user("postgres:///weird@name", Some("alice")),
+            "postgres:///weird@name?user=alice"
+        );
+    }
+
+    #[test]
+    fn with_no_user_available_the_url_is_untouched() {
+        assert_eq!(apply_default_user("postgres:///db", None), "postgres:///db");
+    }
+
+    #[test]
+    fn a_malformed_string_is_returned_unchanged() {
+        assert_eq!(apply_default_user("not-a-url", Some("alice")), "not-a-url");
     }
 }

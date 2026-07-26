@@ -20,10 +20,23 @@
 set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL must point at a disposable Morpholog database}"
+# sqlx-cli 0.9 stopped defaulting an unspecified username to the OS user
+# the way libpq and psql do - it connects as `anonymous` instead. Our own
+# binaries compensate in code (`with_default_user`); the external CLI
+# cannot, so fill it in here for the documented `postgres:///db` form.
+sqlx_url() {
+    case "$1" in
+        *@*|*user=*) printf '%s' "$1" ;;
+        *\?*)        printf '%s&user=%s' "$1" "${PGUSER:-$USER}" ;;
+        *)           printf '%s?user=%s' "$1" "${PGUSER:-$USER}" ;;
+    esac
+}
+
+SQLX_URL="$(sqlx_url "$DATABASE_URL")"
 
 if ! cargo sqlx --version >/dev/null 2>&1; then
     echo 'sqlx-cli not installed. Install the version-matched CLI:' >&2
-    echo '  cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls' >&2
+    echo '  cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls' >&2
     exit 1
 fi
 
@@ -39,6 +52,7 @@ echo 'Preparing query cache ...'
 # otherwise make `prepare` regenerate from the stale cache instead of the
 # live schema. `--all-targets` mirrors clippy so test-target queries are
 # captured; `--locked` matches the rest of the verification loop.
-SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --all-targets --all-features --locked
+DATABASE_URL="$SQLX_URL" SQLX_OFFLINE=false \
+    cargo sqlx prepare --workspace -- --all-targets --all-features --locked
 
 echo 'Done. Review and commit the .sqlx/ changes.'

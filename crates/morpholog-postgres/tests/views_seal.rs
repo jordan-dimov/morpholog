@@ -17,10 +17,12 @@ const SCHEMA: &str = "views_seal_test";
 /// Drop and re-apply the generated view surface for the ledger example
 /// into the test schema, sealing it in the same transaction.
 async fn apply_views(pool: &PgPool) {
-    sqlx::raw_sql(&format!("DROP SCHEMA IF EXISTS {SCHEMA} CASCADE"))
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {SCHEMA} CASCADE"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
     let program = double_entry_ledger::program();
     let rendered = render_views(
         program.validated().unwrap(),
@@ -28,7 +30,10 @@ async fn apply_views(pool: &PgPool) {
         &canonical_hash(&program),
     )
     .unwrap();
-    sqlx::raw_sql(&rendered.sql).execute(pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql))
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -52,12 +57,12 @@ async fn an_in_place_redefinition_is_named_mismatched() {
 
     // Same name, same columns, different body: the catalogue inventory
     // and the model hash cannot see this - only the seal can.
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE OR REPLACE VIEW {SCHEMA}._morpholog_catalog AS \
          SELECT 'forged'::text AS programme_name, NULL::text AS model_hash, \
                 NULL::text AS predicate_name, NULL::text AS view_name, \
                 NULL::text AS kind WHERE false"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -83,10 +88,10 @@ async fn a_catalogue_redefined_with_different_columns_is_still_named() {
     // unreadable, but the verdict must still be structured tampering
     // (via the seal's own inventory and the hash comparison), never an
     // operational error.
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "DROP VIEW {SCHEMA}._morpholog_catalog; \
          CREATE VIEW {SCHEMA}._morpholog_catalog AS SELECT 'forged'::text AS not_view_name"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -107,10 +112,12 @@ async fn a_dropped_view_is_named_missing() {
     let pool = test_pool().await;
     apply_views(&pool).await;
 
-    sqlx::raw_sql(&format!("DROP VIEW {SCHEMA}.journal_entry"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP VIEW {SCHEMA}.journal_entry"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
 
     match verify_views(&pool, SCHEMA).await.unwrap() {
         ViewsVerification::Tampered { missing, .. } => {
@@ -130,9 +137,9 @@ async fn a_deleted_seal_row_is_named_missing_not_hidden() {
 
     // Deleting the seal row does not unlist the view: the catalogue
     // still intends it, so the cross-check names it.
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "DELETE FROM {SCHEMA}._morpholog_view_defs WHERE view_name = 'journal_entry'"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -151,11 +158,13 @@ async fn a_deleted_seal_row_is_named_missing_not_hidden() {
 #[tokio::test]
 async fn an_unsealed_schema_reports_not_sealed() {
     let pool = test_pool().await;
-    sqlx::raw_sql(&format!("DROP SCHEMA IF EXISTS {SCHEMA} CASCADE"))
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(&format!("CREATE SCHEMA {SCHEMA}"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {SCHEMA} CASCADE"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {SCHEMA}")))
         .execute(&pool)
         .await
         .unwrap();

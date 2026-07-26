@@ -168,7 +168,7 @@ jobs:
       - name: Install sqlx-cli
         uses: taiki-e/install-action@v2
         with:
-          tool: sqlx-cli@0.8.6
+          tool: sqlx-cli@0.9.0
 
       - name: Check sqlx offline cache against the schema
         env:

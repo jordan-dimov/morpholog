@@ -6,27 +6,57 @@
       {
         "ordinal": 0,
         "name": "tree_size",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit_checkpoints",
+            "name": "tree_size"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "root_hash",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit_checkpoints",
+            "name": "root_hash"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "prev_checkpoint_hash",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit_checkpoints",
+            "name": "prev_checkpoint_hash"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "checkpoint_hash",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit_checkpoints",
+            "name": "checkpoint_hash"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
-        "type_info": "Jsonb"
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit_checkpoints",
+            "name": "signatures"
+          }
+        }
       }
     ],
     "parameters": {

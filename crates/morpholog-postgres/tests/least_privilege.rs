@@ -22,7 +22,7 @@ async fn the_floor_provisions_idempotently_and_audit_is_append_only() {
     // One session for the whole probe, so SET ROLE governs the checks
     // and RESET ROLE runs before the connection returns to the pool.
     let mut conn = pool.acquire().await.unwrap();
-    sqlx::raw_sql(&format!("SET ROLE \"{WRITER_ROLE}\""))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("SET ROLE \"{WRITER_ROLE}\"")))
         .execute(&mut *conn)
         .await
         .expect("superuser test role assumes the writer");

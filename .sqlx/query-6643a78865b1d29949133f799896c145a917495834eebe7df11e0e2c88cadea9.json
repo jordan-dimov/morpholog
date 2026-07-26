@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "committed_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "committed_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -309,7 +309,7 @@ async fn main() -> Result<()> {
 async fn run_write(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
     require_positive_k(&args)?;
-    let pool = PgPool::connect(&args.database_url)
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
     println!(
@@ -357,7 +357,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
 async fn run_read(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
     require_positive_k(&args)?;
-    let pool = PgPool::connect(&args.database_url)
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
     println!(
@@ -481,7 +481,7 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
         args.n as i64 / retract_stride
     };
 
-    let pool = PgPool::connect(&args.database_url)
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
     println!(
@@ -557,7 +557,7 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
     // and hide the very contention this scenario means to measure.
     let pool = PgPoolOptions::new()
         .max_connections(args.workers as u32 + 2)
-        .connect(&args.database_url)
+        .connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
     println!(

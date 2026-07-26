@@ -166,7 +166,10 @@ pub(crate) fn lookup_transformation<'a>(
 /// `sqlx` error already describes what went wrong (DNS failure, refused,
 /// authentication, etc.).
 pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
-    PgPool::connect(url)
+    // `postgres:///mydb` means "the OS user" to every other Postgres
+    // tool; sqlx 0.9 alone reads it as `anonymous`.
+    let url = morpholog_postgres::with_default_user(url);
+    PgPool::connect(&url)
         .await
         .context("failed to connect to PostgreSQL")
 }
