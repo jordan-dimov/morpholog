@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-bench"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "jiff",
  "morpholog-test-support",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-examples"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "morpholog-core",
  "morpholog-surface",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-outbox"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chrono",
  "morpholog-core",
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-postgres"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-surface"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-test-support"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "jiff",
  "morpholog-core",
