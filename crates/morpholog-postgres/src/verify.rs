@@ -43,7 +43,7 @@ pub enum VerifyOutcome {
         only_in_replay: Vec<ClaimInstance>,
     },
 }
-/// The `morpholog verify` envelope: the replay verdict (claims table vs
+/// The `morpholog audit verify` envelope: the replay verdict (claims table vs
 /// audit log) beside the tamper-evidence verdict (the audit Merkle tree
 /// against its checkpoints), so one read carries both, plus - when the
 /// verifier asked for it - the generated-view-surface verdict. Field

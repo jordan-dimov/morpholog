@@ -185,7 +185,7 @@ pub fn score_candidate_against_pack(
         Ok(_) => {
             return Err(PgError::InvalidState(
                 "refusing to score: the evidence pack does not verify as intact \
-                 (run `evidence verify` for the verdict)"
+                 (run `audit verify-pack` for the verdict)"
                     .to_string(),
             ));
         }

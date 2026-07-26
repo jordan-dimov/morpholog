@@ -23,7 +23,7 @@
     {
       "pack": "case_2.json",
       "status": "failed",
-      "error": "refusing to score: the evidence pack does not verify as intact (run `evidence verify` for the verdict)"
+      "error": "refusing to score: the evidence pack does not verify as intact (run `audit verify-pack` for the verdict)"
     }
   ]
 }

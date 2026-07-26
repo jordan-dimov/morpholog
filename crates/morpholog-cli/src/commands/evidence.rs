@@ -15,16 +15,9 @@ use morpholog_postgres::{
 use anyhow::Context;
 
 use crate::commands::{connect, print_json};
-use crate::{EvidenceCmd, EvidenceExportArgs, EvidenceVerifyArgs};
+use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
-pub(crate) async fn run(cmd: EvidenceCmd) -> anyhow::Result<()> {
-    match cmd {
-        EvidenceCmd::Export(args) => export(args).await,
-        EvidenceCmd::Verify(args) => verify(args),
-    }
-}
-
-/// `evidence export`: a complete-prefix pack by default, a window between
+/// `audit export`: a complete-prefix pack by default, a window between
 /// two checkpoints with a `--from-*` start, or - with `--transition` - a
 /// selective pack disclosing only the named transitions, each proven
 /// included. Printed as JSON; redirect it to a file. Prefix and window
@@ -32,7 +25,7 @@ pub(crate) async fn run(cmd: EvidenceCmd) -> anyhow::Result<()> {
 /// intents - and may contain confidential business data; a selective pack
 /// carries only the chosen rows, and proves them authentic without
 /// proving the selection complete.
-async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
+pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
 
     if !args.transition.is_empty() {
@@ -75,13 +68,13 @@ async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `evidence verify`: check a pack offline, with no database. A prefix pack
+/// `audit verify-pack`: check a pack offline, with no database. A prefix pack
 /// recomputes its root from every row; a window pack checks a consistency
 /// proof plus per-row inclusion proofs. The pack's `pack_format_version`
 /// selects which. One JSON verdict on stdout; exit one on any tamper,
 /// divergence, or malformed pack - the same data-on-stdout,
 /// exit-code-as-verdict shape as `verify`.
-fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
+pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)
         .with_context(|| format!("reading pack file {}", args.pack_file.display()))?;
 

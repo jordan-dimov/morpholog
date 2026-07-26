@@ -250,10 +250,10 @@ class AdapterDiscrimination(unittest.TestCase):
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_created.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
         with recording_argv() as argv_after:
-            argv = argv_after(lambda: self.client.checkpoint(writer_roles=["app_rw"]))
+            argv = argv_after(lambda: self.client.audit_checkpoint(writer_roles=["app_rw"]))
             self.assertEqual(argv[argv.index("--writer-role") + 1], "app_rw")
 
-            argv = argv_after(lambda: self.client.checkpoint())
+            argv = argv_after(lambda: self.client.audit_checkpoint())
             self.assertNotIn("--writer-role", argv)
 
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
@@ -266,7 +266,7 @@ class AdapterDiscrimination(unittest.TestCase):
         with recording_argv() as argv_after:
 
             argv = argv_after(
-                lambda: self.client.verify(
+                lambda: self.client.audit_verify(
                     anchor_file="head.json",
                     require_signatures=True,
                     views_schema="morpholog_views",
@@ -276,7 +276,7 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertIn("--require-signatures", argv)
             self.assertEqual(argv[argv.index("--views-schema") + 1], "morpholog_views")
 
-            argv = argv_after(lambda: self.client.verify())
+            argv = argv_after(lambda: self.client.audit_verify())
             self.assertNotIn("--anchor-file", argv)
             self.assertNotIn("--require-signatures", argv)
             self.assertNotIn("--views-schema", argv)
@@ -286,13 +286,13 @@ class AdapterDiscrimination(unittest.TestCase):
             # method, replying with its own kind's signature-required
             # verdict golden.
             for method, verdict_golden in [
-                (self.client.evidence_verify, "tree_verification_signature_required.json"),
+                (self.client.audit_verify_pack, "tree_verification_signature_required.json"),
                 (
-                    self.client.evidence_verify_window,
+                    self.client.audit_verify_pack_window,
                     "window_verification_signature_required.json",
                 ),
                 (
-                    self.client.evidence_verify_selective,
+                    self.client.audit_verify_pack_selective,
                     "selective_verification_signature_required.json",
                 ),
             ]:
@@ -354,7 +354,7 @@ class AdapterDiscrimination(unittest.TestCase):
         secret = "postgres://user:hunter2@db.internal/ledger"
         bounded = Morpholog("model.morph", secret, binary=str(self.stub), timeout=0.2)
         with self.assertRaises(MorphologError) as caught:
-            bounded.verify()
+            bounded.audit_verify()
         msg = str(caught.exception)
         self.assertNotIn("hunter2", msg)
         self.assertNotIn(secret, msg)
@@ -366,7 +366,7 @@ class AdapterDiscrimination(unittest.TestCase):
         secret = "postgres://user:hunter2@db.internal/ledger"
         client = Morpholog("model.morph", secret, binary=str(self.stub))
         with self.assertRaises(MorphologError) as caught:
-            client.verify()
+            client.audit_verify()
         msg = str(caught.exception)
         self.assertNotIn("hunter2", msg)
         self.assertIn("--database-url <redacted>", msg)
@@ -378,7 +378,7 @@ class AdapterDiscrimination(unittest.TestCase):
         secret = "postgres://user:hunter2@db.internal/ledger"
         client = Morpholog("model.morph", secret, binary=str(self.stub))
         with self.assertRaises(MorphologError) as caught:
-            client.verify()
+            client.audit_verify()
         msg = str(caught.exception)
         self.assertNotIn("hunter2", msg)
         self.assertNotIn(secret, msg)
@@ -462,9 +462,9 @@ class AdapterDiscrimination(unittest.TestCase):
     def test_checkpoint_signing_key_and_key_id_must_be_given_together(self):
         # The guard raises before any subprocess, so the stub never runs.
         with self.assertRaises(ValueError):
-            self.client.checkpoint(signing_key="k.pem")
+            self.client.audit_checkpoint(signing_key="k.pem")
         with self.assertRaises(ValueError):
-            self.client.checkpoint(key_id="k1")
+            self.client.audit_checkpoint(key_id="k1")
 
 
 class BinaryDiscovery(unittest.TestCase):

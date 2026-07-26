@@ -44,7 +44,7 @@ by something holding raw write privilege would go around it. You close that the
 ordinary way - grant write on the `morpholog` schema to the runtime's role
 alone - and, unlike a `CHECK` constraint that is simply gone once dropped, a
 write that does slip around the gate is not silent: the claims table and the
-audit log are two records of one history, and `morpholog verify` catches any
+audit log are two records of one history, and `morpholog audit verify` catches any
 edit that leaves them disagreeing. ("Can someone bypass the rules with raw
 SQL?" in the README has the full answer.)
 

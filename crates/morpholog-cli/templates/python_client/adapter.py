@@ -391,7 +391,7 @@ class Morpholog:
     # Tamper-evidence: replay, checkpoints, evidence packs.
     # ------------------------------------------------------------
 
-    def verify(
+    def audit_verify(
         self,
         anchor_file: str | None = None,
         require_signatures: bool = False,
@@ -405,7 +405,7 @@ class Morpholog:
         in that schema against its recorded seals, adding the ``views``
         verdict to the report. A divergence or tamper is a decided
         verdict on stdout, not an operational error."""
-        args = ["verify", "--database-url", self.database_url]
+        args = ["audit", "verify", "--database-url", self.database_url]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         if require_signatures:
@@ -414,7 +414,7 @@ class Morpholog:
             args.extend(["--views-schema", views_schema])
         return envelopes.VerifyReport.from_json(self._json(*args))
 
-    def checkpoint(
+    def audit_checkpoint(
         self,
         signing_key: str | None = None,
         key_id: str | None = None,
@@ -429,23 +429,23 @@ class Morpholog:
         resume horizon."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
-        args = ["checkpoint", "--database-url", self.database_url]
+        args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--writer-role", writer_roles)
         return envelopes.parse_checkpoint_outcome(self._json(*args))
 
-    def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
+    def audit_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
         """Export a complete-prefix evidence pack covering the latest
         checkpoint, or the one at ``tree_size``. The pack carries the
         full audit prefix - confidential data, not selective
         disclosure."""
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
         return envelopes.EvidencePack.from_json(self._json(*args))
 
-    def evidence_verify(
+    def audit_verify_pack(
         self,
         pack_file: str,
         anchor_file: str | None = None,
@@ -456,10 +456,10 @@ class Morpholog:
         verdict on stdout. ``require_signatures`` is compliance mode: an
         unsigned checkpoint becomes a failing verdict."""
         return envelopes.parse_tree_verification(
-            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
         )
 
-    def evidence_export_window(
+    def audit_export_window(
         self,
         from_tree_size: int | None = None,
         to_tree_size: int | None = None,
@@ -474,7 +474,7 @@ class Morpholog:
         confidential data, not selective disclosure."""
         if (from_anchor is None) == (from_tree_size is None):
             raise ValueError("give exactly one of from_anchor or from_tree_size")
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         if from_anchor is not None:
             args.extend(["--from-anchor", str(from_anchor)])
         else:
@@ -483,7 +483,7 @@ class Morpholog:
             args.extend(["--tree-size", str(to_tree_size)])
         return envelopes.WindowEvidencePack.from_json(self._json(*args))
 
-    def evidence_verify_window(
+    def audit_verify_pack_window(
         self,
         pack_file: str,
         anchor_file: str | None = None,
@@ -492,12 +492,12 @@ class Morpholog:
         """Verify a window pack offline - no database. Returns the window
         verdict; a tamper, inconsistent extension, or malformed pack is a
         decided verdict on stdout. ``require_signatures`` is compliance
-        mode, as on ``evidence_verify``."""
+        mode, as on ``audit_verify_pack``."""
         return envelopes.parse_window_verification(
-            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
         )
 
-    def evidence_export_selective(
+    def audit_export_selective(
         self,
         transitions: list[str],
         tree_size: int | None = None,
@@ -510,14 +510,14 @@ class Morpholog:
         themselves visible."""
         if not transitions:
             raise ValueError("a selective pack must disclose at least one transition")
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         for transition in transitions:
             args.extend(["--transition", str(transition)])
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
         return envelopes.SelectiveEvidencePack.from_json(self._json(*args))
 
-    def evidence_verify_selective(
+    def audit_verify_pack_selective(
         self,
         pack_file: str,
         anchor_file: str | None = None,
@@ -529,14 +529,14 @@ class Morpholog:
         ``require_signatures`` is compliance mode, as on
         ``evidence_verify``."""
         return envelopes.parse_selective_verification(
-            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
         )
 
     @staticmethod
-    def _evidence_verify_args(
+    def _verify_pack_args(
         pack_file: str, anchor_file: str | None, require_signatures: bool
     ) -> list[str]:
-        args = ["evidence", "verify", str(pack_file)]
+        args = ["audit", "verify-pack", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         if require_signatures:
