@@ -50,9 +50,12 @@ pub fn eval_invariant(
 /// whose iteration order is not stable and would flake the pinned
 /// envelopes).
 ///
-/// Empty when the kernel cannot single out an iteration: `or`, `not`,
-/// `exists` and a bare comparison have no one branch or member to blame,
-/// and an invariant with no quantifier has no assignment to report.
+/// Empty exactly when the failure has no binding assignment to report -
+/// which is a question about what was bound where the drill-down stopped,
+/// not about which operator failed. A comparison that fails under a
+/// quantifier or an implication witnesses the variables its antecedent
+/// bound; the same comparison as a whole invariant body witnesses nothing,
+/// because nothing was ever bound.
 /// Callers ask for this only after
 /// [`eval_invariant`] returned `false`; it is a diagnosis of a decided
 /// rejection, never part of deciding one.

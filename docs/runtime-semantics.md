@@ -247,10 +247,16 @@ string is unchanged by its presence.
 A witness names exactly what the rule binds. `ChargeLine(_, _, rate,
 volume, net, _, _)` wildcards the line id, so its refusal reports the
 figures but cannot say which row carried them; bind the subject and the
-refusal can name it. Some shapes admit no witness at all - the ones the
-drill-down declines to enter (`or`, `not`, `exists`, a bare comparison),
-where no single iteration is to blame - and there the field is absent
-rather than empty, so those envelopes are byte-identical to what they were
+refusal can name it.
+
+A witness is empty when the failure has no binding assignment to report,
+which depends on what was bound where the drill-down stopped rather than
+on which operator failed. A comparison failing under a quantifier or an
+implication witnesses the variables its antecedent bound - that is the
+metered-billing case above. The same comparison as an entire invariant
+body witnesses nothing, because nothing was ever bound; a prohibition like
+`not Flag(acct_1)` is the same. In that case the field is absent rather
+than empty, so those envelopes stay byte-identical to what they were
 before witnesses existed.
 
 ## Statements: the require / bind_one / let / for quartet

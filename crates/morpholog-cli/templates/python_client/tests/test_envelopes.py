@@ -49,7 +49,10 @@ class RunOutcomes(unittest.TestCase):
         bare = envelopes.parse_run_outcome(golden("rejected.json"))
         self.assertIsInstance(bare, envelopes.Rejected)
         self.assertIsNone(bare.explanation)
-        # A witness-less refusal keeps an empty witness, not a missing one.
+        # The JSON omits `witness` entirely here - that is what keeps
+        # pre-witness envelopes byte-identical - and the parsed model
+        # presents it as an empty list, so callers never branch on absence.
+        self.assertNotIn("witness", golden("rejected.json"))
         self.assertEqual(bare.witness, [])
         explained = envelopes.parse_run_outcome(golden("rejected_with_explanation.json"))
         self.assertIsInstance(
