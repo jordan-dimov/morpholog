@@ -1140,6 +1140,7 @@ version = "0.0.3"
 dependencies = [
  "jiff",
  "morpholog-test-support",
+ "num-bigint",
  "proptest",
  "rust_decimal",
  "serde",
@@ -1216,6 +1217,16 @@ dependencies = [
  "jiff",
  "morpholog-core",
  "rust_decimal",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]

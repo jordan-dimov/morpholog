@@ -25,10 +25,13 @@
 //!
 //! Range extremes: numeric witnesses include the decimal maximum, so
 //! recompute invariants multiply values past the exact range. The
-//! contract there is refined, not waived: the named out-of-range
-//! refusals (`ArithOutOfRange`, `RoundOutOfRange`) are lawful at
-//! extremes - they are the checked-arithmetic contract working - and
-//! every OTHER kernel error, and any panic, still fails the suite.
+//! contract there is refined, not waived: on the vectors that CARRY
+//! the extreme witness - and only those - the named out-of-range
+//! refusals (`ArithOutOfRange`, `RoundOutOfRange`) are the expected
+//! outcome, the checked-arithmetic contract working. They remain
+//! kernel evaluation errors, not business rejections; on baseline and
+//! ordinary boundary vectors they fail the suite like any other
+//! kernel error, and a panic fails it everywhere.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -81,15 +84,33 @@ fn baseline_concrete(kind: &PredicateArgKind, name: &str) -> EvalValue {
     }
 }
 
+/// One boundary witness: the value, and whether it is the RANGE
+/// EXTREME - the only witness for which the named out-of-range
+/// refusals are an expected outcome.
+struct Witness {
+    value: EvalValue,
+    extreme: bool,
+}
+
+fn ordinary(value: EvalValue) -> Witness {
+    Witness {
+        value,
+        extreme: false,
+    }
+}
+
 /// The boundary witnesses for one parameter, beyond its baseline.
 /// Zero and negative numerics reach division/remainder and band
 /// checks; the shared subject reaches equality joins; the empty
-/// collection reaches loops over nothing.
-fn boundary_witnesses(kind: &ParamKind, name: &str) -> Vec<EvalValue> {
+/// collection reaches loops over nothing; the decimal maximum reaches
+/// recompute arithmetic past the exact range.
+fn boundary_witnesses(kind: &ParamKind, name: &str) -> Vec<Witness> {
     match kind {
         ParamKind::Concrete(k) => boundary_concrete(k, name),
-        ParamKind::Collection(_) => vec![coll(vec![])],
-        ParamKind::Polymorphic | ParamKind::Unconstrained => vec![subj(SHARED_SUBJECT)],
+        ParamKind::Collection(_) => vec![ordinary(coll(vec![]))],
+        ParamKind::Polymorphic | ParamKind::Unconstrained => {
+            vec![ordinary(subj(SHARED_SUBJECT))]
+        }
         ParamKind::Ambiguous(kinds) => kinds
             .first()
             .map(|k| boundary_concrete(k, name))
@@ -97,19 +118,29 @@ fn boundary_witnesses(kind: &ParamKind, name: &str) -> Vec<EvalValue> {
     }
 }
 
-fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<EvalValue> {
+fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
     match kind {
-        PredicateArgKind::Subject | PredicateArgKind::Any => vec![subj(SHARED_SUBJECT)],
-        PredicateArgKind::Decimal => vec![dec(0), dec(-1), dec_str(DECIMAL_MAX)],
+        PredicateArgKind::Subject | PredicateArgKind::Any => vec![ordinary(subj(SHARED_SUBJECT))],
+        PredicateArgKind::Decimal => vec![
+            ordinary(dec(0)),
+            ordinary(dec(-1)),
+            Witness {
+                value: dec_str(DECIMAL_MAX),
+                extreme: true,
+            },
+        ],
         PredicateArgKind::Quantity(unit) => {
             vec![
-                qty("0", unit.as_str()),
-                qty("-1", unit.as_str()),
-                qty(DECIMAL_MAX, unit.as_str()),
+                ordinary(qty("0", unit.as_str())),
+                ordinary(qty("-1", unit.as_str())),
+                Witness {
+                    value: qty(DECIMAL_MAX, unit.as_str()),
+                    extreme: true,
+                },
             ]
         }
-        PredicateArgKind::Bool => vec![bool_(false)],
-        PredicateArgKind::Collection => vec![coll(vec![])],
+        PredicateArgKind::Bool => vec![ordinary(bool_(false))],
+        PredicateArgKind::Collection => vec![ordinary(coll(vec![]))],
         // A single fixed instant per time kind: time arithmetic has no
         // zero-like boundary an argument can supply on its own.
         PredicateArgKind::Date | PredicateArgKind::Timestamp | PredicateArgKind::Duration => {
@@ -129,16 +160,31 @@ fn param_kinds(
         .collect()
 }
 
+/// One generated proposal: the argument vector, and whether it
+/// carries the range-extreme witness - the only case in which the
+/// named out-of-range refusals are lawful. Baseline and ordinary
+/// boundary vectors keep the strict contract: any kernel error fails.
+struct ArgumentCase {
+    args: Vec<EvalValue>,
+    permits_range_refusal: bool,
+}
+
 /// Baseline vector, then every one-parameter variation across the
 /// boundary witnesses.
-fn argument_vectors(kinds: &[(String, ParamKind)]) -> Vec<Vec<EvalValue>> {
+fn argument_vectors(kinds: &[(String, ParamKind)]) -> Vec<ArgumentCase> {
     let base: Vec<EvalValue> = kinds.iter().map(|(n, k)| baseline(k, n)).collect();
-    let mut vectors = vec![base.clone()];
+    let mut vectors = vec![ArgumentCase {
+        args: base.clone(),
+        permits_range_refusal: false,
+    }];
     for (i, (name, kind)) in kinds.iter().enumerate() {
         for witness in boundary_witnesses(kind, name) {
             let mut varied = base.clone();
-            varied[i] = witness;
-            vectors.push(varied);
+            varied[i] = witness.value;
+            vectors.push(ArgumentCase {
+                args: varied,
+                permits_range_refusal: witness.extreme,
+            });
         }
     }
     vectors
@@ -158,7 +204,8 @@ fn propose_all(
     let mut successors = Vec::new();
     for t in &program.transformations {
         let kinds = param_kinds(validated, &t.name);
-        for (v, args) in argument_vectors(&kinds).into_iter().enumerate() {
+        for (v, case) in argument_vectors(&kinds).into_iter().enumerate() {
+            let args = case.args;
             match ex.propose(t, args.clone(), pre) {
                 Ok(morpholog_core::Outcome::Accepted {
                     candidate_state, ..
@@ -168,14 +215,16 @@ fn propose_all(
                     }
                 }
                 Ok(morpholog_core::Outcome::Rejected { .. }) => {}
-                // The named out-of-range family is lawful at range
-                // extremes - checked arithmetic refusing an
-                // unrepresentable result IS the contract. Everything
-                // else stays a failure.
+                // On a vector carrying the range-extreme witness, the
+                // named out-of-range refusals are the expected outcome
+                // - checked arithmetic refusing an unrepresentable
+                // result. On every other vector they are failures like
+                // any kernel error, so a regression producing them for
+                // ordinary inputs still reddens the suite.
                 Err(
                     morpholog_core::EvalError::ArithOutOfRange(_)
                     | morpholog_core::EvalError::RoundOutOfRange { .. },
-                ) => {}
+                ) if case.permits_range_refusal => {}
                 Err(e) => panic!(
                     "`{}::{}` with kind-lawful args {args:?} raised a kernel error \
                      instead of a lawful outcome: {e:?}",
@@ -192,6 +241,12 @@ fn no_declared_transformation_raises_a_kernel_error_over_boundary_witnesses() {
     for program in all_programs() {
         let validated = program.validated().expect("gallery programme validates");
         let ex = Example::new(&program);
+        // No frontier non-emptiness assert: an empty ring can be
+        // legitimate (chess accepts no baseline move over an empty
+        // board), and the vacuity it would guard against - a swallowed
+        // baseline range refusal silently emptying the ring - is
+        // already impossible: on non-extreme vectors every kernel
+        // error, range refusals included, panics the suite.
         let mut frontier = vec![State::default()];
         for _ in 0..REACHABILITY_DEPTH {
             let mut next = Vec::new();
