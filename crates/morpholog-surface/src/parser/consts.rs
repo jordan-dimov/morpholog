@@ -531,11 +531,21 @@ fn refuse_open_initialiser(
                 walk(value, c, const_names, errors);
                 walk(quantum, c, const_names, errors);
             }
+            // Named individually: a diagnostic that lists constructs the
+            // author did not write sends them looking for the wrong line.
             ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } | ValueExpr::ValueOf { .. } => {
+                let construct = match expr {
+                    ValueExpr::Sum { .. } => "`sum`",
+                    ValueExpr::Extremum { op, .. } => match op {
+                        morpholog_core::ExtremumOp::Max => "`max(.. | ..)`",
+                        morpholog_core::ExtremumOp::Min => "`min(.. | ..)`",
+                    },
+                    _ => "`value`",
+                };
                 errors.push((
                     c.span.clone(),
                     format!(
-                        "const `{}` reads state (`sum`/`value`) - a figure that \
+                        "const `{}` reads state ({construct}) - a figure that \
                      changes with the ledger belongs in a rule, not a const",
                         c.name
                     ),

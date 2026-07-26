@@ -1744,6 +1744,92 @@ mod tests {
     };
     use crate::state::{ClaimInstance, State};
 
+    /// The extremum picks from a set, so match order must not decide it,
+    /// and the answer must be the member itself rather than a position.
+    ///
+    /// Table-driven over both ends and both orderings of the same claims:
+    /// a max that depended on iteration would pass one row and fail its
+    /// mirror.
+    #[test]
+    fn an_extremum_picks_the_same_member_whatever_the_match_order() {
+        use crate::ir::ExtremumOp;
+        let rows = [("2025-01-01", 10), ("2026-01-01", 12), ("2024-06-01", 9)];
+        let build = |order: &[usize]| {
+            State::from_claims(
+                order
+                    .iter()
+                    .map(|&i| ClaimInstance {
+                        predicate: "Rate".into(),
+                        args: vec![
+                            EvalValue::Date(rows[i].0.parse().expect("date")),
+                            EvalValue::Decimal(rust_decimal::Decimal::from(rows[i].1)),
+                        ],
+                    })
+                    .collect(),
+            )
+        };
+        let aggregate = |op| ValueExpr::Extremum {
+            op,
+            value: Term::Var(Var::from("d")),
+            body: Box::new(crate::ir_builder::claim(
+                "Rate",
+                vec![Term::Var(Var::from("d")), Term::Wildcard],
+            )),
+        };
+        for order in [[0usize, 1, 2], [2, 1, 0], [1, 0, 2]] {
+            let state = build(&order);
+            let bindings = Bindings::new();
+            let ctx = EvalContext::new(
+                &state,
+                None,
+                &bindings,
+                None,
+                crate::definitions::DefinitionIndex::new(&[]),
+            );
+            assert_eq!(
+                eval_value(&aggregate(ExtremumOp::Max), &ctx).expect("max"),
+                EvalValue::Date("2026-01-01".parse().expect("date")),
+                "max over {order:?}"
+            );
+            assert_eq!(
+                eval_value(&aggregate(ExtremumOp::Min), &ctx).expect("min"),
+                EvalValue::Date("2024-06-01".parse().expect("date")),
+                "min over {order:?}"
+            );
+        }
+    }
+
+    /// An empty sum has a typed zero to fall back on; an empty extremum
+    /// has no answer, and inventing one would let a rule price against a
+    /// version that does not exist. It names the body so the author can
+    /// see which selection came up empty.
+    #[test]
+    fn an_extremum_over_nothing_refuses_by_name() {
+        use crate::ir::ExtremumOp;
+        let state = State::from_claims(vec![]);
+        let bindings = Bindings::new();
+        let ctx = EvalContext::new(
+            &state,
+            None,
+            &bindings,
+            None,
+            crate::definitions::DefinitionIndex::new(&[]),
+        );
+        let expr = ValueExpr::Extremum {
+            op: ExtremumOp::Max,
+            value: Term::Var(Var::from("d")),
+            body: Box::new(crate::ir_builder::claim(
+                "Rate",
+                vec![Term::Var(Var::from("d"))],
+            )),
+        };
+        let err = eval_value(&expr, &ctx).expect_err("an empty max has no value");
+        let text = err.to_string();
+        assert!(text.contains("matched nothing"), "got: {text}");
+        assert!(text.contains("Rate"), "must name the body: {text}");
+        assert!(text.contains("require"), "must name the remedy: {text}");
+    }
+
     /// `claim_matches` and `unify_args` share `match_args`, so they must
     /// agree on every verdict; `unify_args` must additionally extend the
     /// base with exactly the new bindings. Pins that the boolean path
