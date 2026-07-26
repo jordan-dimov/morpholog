@@ -35,7 +35,7 @@ async fn commit(pool: &PgPool, t: &morpholog_core::Transformation, args: Vec<Eva
             .expect("propose_against_pg should not error");
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => {
+        PgProposalOutcome::Rejected { reason, .. } => {
             panic!(
                 "expected Committed from `{}`, got Rejected: {reason}",
                 t.name

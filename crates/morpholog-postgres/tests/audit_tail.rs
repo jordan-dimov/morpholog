@@ -47,7 +47,7 @@ async fn post(pool: &PgPool, p: &Program, entry: &str) -> Uuid {
     .expect("post commits");
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("unexpected rejection: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("unexpected rejection: {reason}"),
     }
 }
 

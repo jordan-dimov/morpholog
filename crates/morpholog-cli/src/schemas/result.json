@@ -94,6 +94,15 @@
         { "type": "array", "items": { "$ref": "#/$defs/bare_value" } }
       ]
     },
+    "witness_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["var", "value"],
+      "properties": {
+        "var": { "type": "string" },
+        "value": { "$ref": "#/$defs/tagged_value" }
+      }
+    },
     "claim_instance": {
       "type": "object",
       "additionalProperties": false,
@@ -159,6 +168,7 @@
       "properties": {
         "status": { "const": "rejected" },
         "reason": { "type": "string" },
+        "witness": { "type": "array", "items": { "$ref": "#/$defs/witness_binding" } },
         "explanation": { "$ref": "#/$defs/explanation" }
       }
     },
@@ -295,6 +305,7 @@
             "row": { "type": "integer", "minimum": 1 },
             "status": { "const": "rejected" },
             "reason": { "type": "string" },
+            "witness": { "type": "array", "items": { "$ref": "#/$defs/witness_binding" } },
             "explanation": { "$ref": "#/$defs/explanation" }
           }
         },

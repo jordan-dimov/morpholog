@@ -87,7 +87,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     result: &outcome,
                     trace: &trace,
                 })?;
-                if let PgProposalOutcome::Rejected { reason } = &outcome {
+                if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
                     exit_rejected(reason, &parsed);
                 }
             }
@@ -116,7 +116,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         .await
         .context("the proposal could not be decided")?;
         match (&outcome, rejection_state) {
-            (PgProposalOutcome::Rejected { reason }, Some(state)) => {
+            (PgProposalOutcome::Rejected { reason, .. }, Some(state)) => {
                 let explanation = explain(compiled.program(), &transition, &state);
                 print_json(&envelopes::RejectedWithExplanation::new(
                     reason,
@@ -131,7 +131,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             .await
             .context("the proposal could not be decided")?;
         print_json(&outcome)?;
-        if let PgProposalOutcome::Rejected { reason } = &outcome {
+        if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
             exit_rejected(reason, &parsed);
         }
     }
@@ -334,7 +334,9 @@ async fn batch_row_outcome(
         )
         .await
         .map_err(classify_pg_error)?;
-        if let (PgProposalOutcome::Rejected { reason }, Some(state)) = (&outcome, rejection_state) {
+        if let (PgProposalOutcome::Rejected { reason, .. }, Some(state)) =
+            (&outcome, rejection_state)
+        {
             let explanation = explain(compiled.program(), &transition, &state);
             return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,

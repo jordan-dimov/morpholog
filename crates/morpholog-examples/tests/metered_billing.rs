@@ -277,3 +277,49 @@ fn a_sealed_invoice_takes_no_further_lines() {
         "a sealed invoice is closed to new lines: {outcome:?}"
     );
 }
+
+/// A refusal names the offending values, not only the rule.
+///
+/// The operator's question after "line_net_is_the_rounded_recompute
+/// violated" is "which figures?" - so the witness carries them: the
+/// engine's tampered net alongside the tariff and volume it should have
+/// been computed from. Enough to see 13.5 * 431.7 / 100 rounds to 58.28,
+/// not the submitted 58.29, without opening the database.
+///
+/// The line id is deliberately absent: this rule matches
+/// `ChargeLine(_, _, ...)`, and a witness can only name what the rule
+/// binds. Wildcard the subject and the refusal cannot tell you which row
+/// it was - a real cost of writing the rule that way, and the reason
+/// `borrowing_base` carries the companion test for a rule that does bind
+/// its subject.
+#[test]
+fn a_refusal_names_the_offending_figures() {
+    let outcome = add_line(
+        "line_a",
+        "13.5",
+        "431.7",
+        "58.29",
+        "vat_reduced",
+        "2.91",
+        &with_vat_rate(),
+    );
+    let Ok(Outcome::Rejected {
+        reason: RejectionReason::Invariant { witness, .. },
+    }) = &outcome
+    else {
+        panic!("expected an invariant refusal, got {outcome:?}");
+    };
+    let named: Vec<(&str, String)> = witness
+        .iter()
+        .map(|w| (w.var.as_str(), format!("{:?}", w.value)))
+        .collect();
+    assert_eq!(
+        named,
+        vec![
+            ("net_gbp", "Decimal(58.29)".to_string()),
+            ("rate_p_per_kwh", "Decimal(13.5)".to_string()),
+            ("volume_kwh", "Decimal(431.7)".to_string()),
+        ],
+        "sorted by variable, so the same refusal always reads the same way"
+    );
+}

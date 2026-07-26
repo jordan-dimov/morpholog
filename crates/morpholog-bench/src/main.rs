@@ -1061,7 +1061,7 @@ fn outcome_summary(outcome: &PgProposalOutcome) -> String {
             retracted_claims.len(),
             emitted_intents.len()
         ),
-        PgProposalOutcome::Rejected { reason } => format!("Rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => format!("Rejected: {reason}"),
     }
 }
 

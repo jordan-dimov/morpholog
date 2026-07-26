@@ -1,0 +1,20 @@
+{
+  "reason": "invariant `no_flagged_accounts` violated",
+  "status": "rejected",
+  "witness": [
+    {
+      "value": {
+        "type": "subject",
+        "value": "acct_1"
+      },
+      "var": "account"
+    },
+    {
+      "value": {
+        "type": "decimal",
+        "value": "105.50"
+      },
+      "var": "exposure"
+    }
+  ]
+}

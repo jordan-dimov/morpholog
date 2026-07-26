@@ -48,7 +48,7 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     .unwrap();
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("setup rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("setup rejected: {reason}"),
     };
     // post_simple_entry emits one intent per call, so its intent_id
     // is the latest pending row for this transition.

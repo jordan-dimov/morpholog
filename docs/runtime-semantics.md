@@ -234,6 +234,25 @@ proposal records like any other, under the system actor. Consumers:
 `inspect rejections` lists the rows; `inspect coverage` counts them
 into the `constrained` verdict.
 
+**A refusal names the offending values.** "invariant `x` violated" tells a
+reader which rule stopped them and nothing about why, so an invariant
+refusal also carries a *witness*: the variables and values that were live
+where the rule failed, sorted by variable so one failure always reads the
+same way. It is diagnosed only after the refusal is decided - the
+accepting path never pays for it - and it is structured rather than
+rendered into the reason, because the reason string is a pinned wire
+format and an embedder should read a value, not parse prose. The `Display`
+string is unchanged by its presence.
+
+A witness names exactly what the rule binds. `ChargeLine(_, _, rate,
+volume, net, _, _)` wildcards the line id, so its refusal reports the
+figures but cannot say which row carried them; bind the subject and the
+refusal can name it. Some shapes admit no witness at all - the ones the
+drill-down declines to enter (`or`, `not`, `exists`, a bare comparison),
+where no single iteration is to blame - and there the field is absent
+rather than empty, so those envelopes are byte-identical to what they were
+before witnesses existed.
+
 ## Statements: the require / bind_one / let / for quartet
 
 Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation.

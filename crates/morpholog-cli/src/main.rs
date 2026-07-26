@@ -1806,8 +1806,14 @@ mod tests {
 
         let rejected = PgProposalOutcome::Rejected {
             reason: "require failed".to_string(),
+            witness: Vec::new(),
         };
         let json = serde_json::to_string(&rejected).unwrap();
+        assert!(
+            !json.contains("witness"),
+            "an empty witness must be absent, not `[]` - otherwise every \
+             pre-witness envelope changes shape: {json}"
+        );
         assert!(
             json.contains(r#""status":"rejected""#),
             "rejected outcome must carry status=rejected, got: {json}"

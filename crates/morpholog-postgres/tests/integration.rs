@@ -257,7 +257,7 @@ async fn require_failure_writes_nothing() {
     .await
     .expect("propose_against_pg should not error");
 
-    let PgProposalOutcome::Rejected { reason } = outcome else {
+    let PgProposalOutcome::Rejected { reason, .. } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(reason.contains("require"), "got reason: {reason}");
@@ -475,7 +475,7 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
     .await
     .expect("propose_against_pg should not error");
 
-    let PgProposalOutcome::Rejected { reason } = outcome else {
+    let PgProposalOutcome::Rejected { reason, .. } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(reason.contains("no_double_netting"), "got reason: {reason}");
@@ -1228,7 +1228,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     .await
     .expect("propose_against_pg should not error");
 
-    let PgProposalOutcome::Rejected { reason } = outcome else {
+    let PgProposalOutcome::Rejected { reason, .. } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
     assert!(reason.contains("require"), "got reason: {reason}");

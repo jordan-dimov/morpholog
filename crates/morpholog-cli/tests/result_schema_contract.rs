@@ -31,7 +31,8 @@ use morpholog_core::ir_builder::{
 };
 use morpholog_core::{
     BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, CoverageTracker,
-    EvalValue, IntentInstance, SplitBoundaryReport, State, Subject, Transition, explain,
+    EvalValue, IntentInstance, SplitBoundaryReport, State, Subject, Transition, WitnessBinding,
+    explain,
 };
 use morpholog_postgres::{
     AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
@@ -141,6 +142,27 @@ fn committed_outcome() -> PgProposalOutcome {
 fn rejected_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Rejected {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
+        witness: Vec::new(),
+    }
+}
+
+/// The same rejection, carrying the values the rule was reading. Pinned
+/// separately from the witness-less shape so both stay covered: a refusal
+/// the kernel cannot pin to one iteration still emits the original
+/// envelope, byte for byte.
+fn rejected_with_witness_outcome() -> PgProposalOutcome {
+    PgProposalOutcome::Rejected {
+        reason: "invariant `no_flagged_accounts` violated".to_string(),
+        witness: vec![
+            WitnessBinding {
+                var: "account".into(),
+                value: EvalValue::Subject(Subject::from("acct_1")),
+            },
+            WitnessBinding {
+                var: "exposure".into(),
+                value: EvalValue::Decimal(rust_decimal::Decimal::new(10550, 2)),
+            },
+        ],
     }
 }
 
@@ -203,6 +225,10 @@ fn flagged_state() -> State {
 fn run_outcomes_serialize_as_pinned() {
     assert_golden("committed.json", &to_value(&committed_outcome()));
     assert_golden("rejected.json", &to_value(&rejected_outcome()));
+    assert_golden(
+        "rejected_with_witness.json",
+        &to_value(&rejected_with_witness_outcome()),
+    );
 }
 
 #[test]

@@ -37,10 +37,20 @@ class RunOutcomes(unittest.TestCase):
         )
         self.assertEqual(outcome.emitted_intents[0].name, "AccountOpened")
 
+    def test_a_refusal_carries_the_values_the_rule_was_reading(self):
+        # The point of a structured witness: read the offending value,
+        # never parse it out of the reason string.
+        outcome = envelopes.parse_run_outcome(golden("rejected_with_witness.json"))
+        self.assertEqual([w.var for w in outcome.witness], ["account", "exposure"])
+        self.assertEqual(outcome.witness[0].value, "acct_1")
+        self.assertEqual(outcome.witness[1].value, Decimal("105.50"))
+
     def test_rejected_with_and_without_explanation(self):
         bare = envelopes.parse_run_outcome(golden("rejected.json"))
         self.assertIsInstance(bare, envelopes.Rejected)
         self.assertIsNone(bare.explanation)
+        # A witness-less refusal keeps an empty witness, not a missing one.
+        self.assertEqual(bare.witness, [])
         explained = envelopes.parse_run_outcome(golden("rejected_with_explanation.json"))
         self.assertIsInstance(
             explained.explanation.rejection, envelopes.InvariantRejection

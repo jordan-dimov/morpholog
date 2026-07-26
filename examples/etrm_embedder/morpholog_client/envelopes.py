@@ -139,17 +139,36 @@ class Committed:
 
 
 @dataclass(frozen=True)
+class WitnessBinding:
+    """A variable and the value it held where the refused rule failed."""
+
+    var: str
+    value: object
+
+    @classmethod
+    def from_json(cls, payload: object) -> WitnessBinding:
+        data = _strict("witness binding", payload, {"var", "value"})
+        return cls(var=data["var"], value=values.decode_tagged(data["value"]))
+
+
+@dataclass(frozen=True)
 class Rejected:
     reason: str
     explanation: Explanation | None = None
+    # Empty when the runtime could not attribute the refusal to one
+    # iteration; the key is then absent from the envelope entirely.
+    witness: list[WitnessBinding] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> Rejected:
-        data = _strict("rejected outcome", payload, {"status", "reason"}, {"explanation"})
+        data = _strict(
+            "rejected outcome", payload, {"status", "reason"}, {"explanation", "witness"}
+        )
         explanation = data.get("explanation")
         return cls(
             reason=data["reason"],
             explanation=None if explanation is None else Explanation.from_json(explanation),
+            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
         )
 
 

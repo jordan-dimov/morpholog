@@ -4,7 +4,8 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
     InvariantName, Outcome, PredicateName, RejectionReason, State, Subject, TraceEntry,
-    TracedProposal, Transformation, TransformationName, Transition, propose, propose_with_trace,
+    TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, propose,
+    propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -38,6 +39,12 @@ pub enum PgProposalOutcome {
     },
     Rejected {
         reason: String,
+        /// The values the refused rule was reading where it failed. Absent
+        /// rather than empty when the kernel could not single out an
+        /// iteration, so an envelope without a witness is byte-identical
+        /// to one from before witnesses existed.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        witness: Vec<WitnessBinding>,
     },
 }
 
@@ -288,8 +295,13 @@ pub(crate) async fn finalise_outcome(
         Outcome::Rejected { reason } => {
             tx.rollback().await.map_err(classify)?;
             write_rejection(pool, transformation, transition, &reason).await?;
+            let witness = match &reason {
+                RejectionReason::Invariant { witness, .. } => witness.clone(),
+                RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
+            };
             Ok(PgProposalOutcome::Rejected {
                 reason: reason.to_string(),
+                witness,
             })
         }
         Outcome::Accepted {
@@ -433,7 +445,10 @@ pub(crate) async fn write_rejection(
     reason: &RejectionReason,
 ) -> Result<(), PgError> {
     let (kind, rule, invariant_version): (&str, &str, Option<i64>) = match reason {
-        RejectionReason::Invariant { name, version } => (
+        // The witness is diagnostic, not part of this row: the rejection
+        // log is a floor for operations, and audit stays the only
+        // legitimacy-grade record.
+        RejectionReason::Invariant { name, version, .. } => (
             REJECTION_KIND_INVARIANT,
             name.as_str(),
             Some(i64::from(*version)),

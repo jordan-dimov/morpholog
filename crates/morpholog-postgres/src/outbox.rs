@@ -923,7 +923,7 @@ where
                         OutboxUpdate::LeaseLost => Ok(ProcessOutcome::LeaseLost { intent_id }),
                     }
                 }
-                PgProposalOutcome::Rejected { reason } => {
+                PgProposalOutcome::Rejected { reason, .. } => {
                     match mark_compensation_failed(pool, intent_id, worker_id, &reason).await? {
                         OutboxUpdate::Applied => {
                             Ok(ProcessOutcome::CompensationFailed { intent_id, reason })

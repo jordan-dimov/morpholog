@@ -46,7 +46,7 @@ async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
     .unwrap();
     let _tid = match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("setup rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("setup rejected: {reason}"),
     };
     list_pending_outbox(pool).await.unwrap()[0].intent_id
 }
@@ -244,7 +244,7 @@ async fn record_compensation_links_compensation_to_failed_row() {
     .unwrap();
     let compensation_tid = match compensation_outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
-        PgProposalOutcome::Rejected { reason } => panic!("compensation rejected: {reason}"),
+        PgProposalOutcome::Rejected { reason, .. } => panic!("compensation rejected: {reason}"),
     };
 
     record_compensation(&pool, intent_id, compensation_tid)
