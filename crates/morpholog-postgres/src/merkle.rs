@@ -94,11 +94,7 @@ pub(crate) fn merkle_root(leaves: &[Hash]) -> Hash {
 /// hash convention (matches the CLI model hash), so the algorithm is
 /// legible if it ever has to change.
 pub(crate) fn render_hash(hash: &Hash) -> String {
-    let mut s = String::from("sha256:");
-    for b in hash {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    format!("sha256:{}", crate::hex::encode(hash))
 }
 
 /// Parse a `sha256:<hex>` string back into a digest - the inverse of

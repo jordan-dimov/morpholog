@@ -133,7 +133,7 @@ pub fn signing_key_from_pem(pem: &str) -> Result<SigningKey, SigningError> {
 
 /// `ed25519-pub:<hex>`.
 pub fn render_public_key(key: &VerifyingKey) -> String {
-    format!("{PUBLIC_KEY_PREFIX}{}", to_hex(&key.to_bytes()))
+    format!("{PUBLIC_KEY_PREFIX}{}", crate::hex::encode(&key.to_bytes()))
 }
 
 /// Parse an `ed25519-pub:<hex>` public key.
@@ -153,7 +153,7 @@ pub fn parse_public_key(text: &str) -> Result<VerifyingKey, SigningError> {
 
 /// `ed25519-sig:<hex>`.
 pub fn render_signature(sig: &Signature) -> String {
-    format!("{SIGNATURE_PREFIX}{}", to_hex(&sig.to_bytes()))
+    format!("{SIGNATURE_PREFIX}{}", crate::hex::encode(&sig.to_bytes()))
 }
 
 /// Parse an `ed25519-sig:<hex>` signature.
@@ -166,14 +166,6 @@ pub fn parse_signature(text: &str) -> Result<Signature, SigningError> {
         })?;
     let arr = from_hex::<64>(hex, "signature")?;
     Ok(Signature::from_bytes(&arr))
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 fn from_hex<const N: usize>(s: &str, what: &'static str) -> Result<[u8; N], SigningError> {
@@ -231,7 +223,7 @@ mod tests {
     #[test]
     fn frozen_signing_input_pins_the_payload_encoding() {
         let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &sample_head());
-        let rendered: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let rendered = crate::hex::encode(&bytes);
         assert_eq!(
             rendered,
             "26000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642e7631130000000000000061756469745f636865636b706f696e745f763102000000000000006b3108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310047000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232"

@@ -685,11 +685,7 @@ pub fn compute_idempotency_key(
     hasher.update(intent.name.as_str().as_bytes());
     hasher.update(b"\0");
     hasher.update(&args_bytes);
-    let mut out = String::new();
-    for b in hasher.finalize() {
-        out.push_str(&format!("{b:02x}"));
-    }
-    Ok(out)
+    Ok(crate::hex::encode(&hasher.finalize()))
 }
 
 // ===========================================================================
