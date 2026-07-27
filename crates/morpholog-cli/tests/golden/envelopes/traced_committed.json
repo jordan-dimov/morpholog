@@ -76,5 +76,115 @@
     "status": "committed",
     "transition_id": "01900000-0000-7000-8000-000000000001"
   },
-  "trace": []
+  "trace": [
+    {
+      "expression": "Account(account)",
+      "kind": "bind_one",
+      "name": "the_account",
+      "outcome": {
+        "bindings": [
+          {
+            "value": {
+              "type": "subject",
+              "value": "acct_1"
+            },
+            "var": "account"
+          },
+          {
+            "value": {
+              "type": "subject",
+              "value": "batch_1"
+            },
+            "var": "batch"
+          },
+          {
+            "value": {
+              "type": "collection",
+              "value": [
+                {
+                  "type": "subject",
+                  "value": "item_1"
+                }
+              ]
+            },
+            "var": "items"
+          }
+        ],
+        "status": "bound"
+      }
+    },
+    {
+      "expression": "not Approved(account)",
+      "kind": "require",
+      "name": "not_yet_approved",
+      "outcome": {
+        "match_count": 1,
+        "status": "held"
+      }
+    },
+    {
+      "kind": "let",
+      "name": "copy",
+      "value": {
+        "type": "subject",
+        "value": "acct_1"
+      }
+    },
+    {
+      "claim": {
+        "args": [
+          {
+            "type": "subject",
+            "value": "acct_1"
+          }
+        ],
+        "predicate": "Approved"
+      },
+      "kind": "assert"
+    },
+    {
+      "binding": "item",
+      "iterations": [
+        {
+          "item": {
+            "type": "subject",
+            "value": "item_1"
+          },
+          "trace": [
+            {
+              "claim": {
+                "args": [
+                  {
+                    "type": "subject",
+                    "value": "item_1"
+                  }
+                ],
+                "predicate": "Seen"
+              },
+              "kind": "assert"
+            }
+          ]
+        }
+      ],
+      "kind": "for"
+    },
+    {
+      "intent": {
+        "args": [
+          {
+            "type": "subject",
+            "value": "acct_1"
+          }
+        ],
+        "name": "Notified"
+      },
+      "kind": "emit"
+    },
+    {
+      "expression": "Seen(item) implies Seen(item)",
+      "held": true,
+      "kind": "invariant_check",
+      "name": "seen_accounts_are_known"
+    }
+  ]
 }

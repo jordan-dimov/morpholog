@@ -193,8 +193,183 @@
         "result": {
           "oneOf": [{ "$ref": "#/$defs/run_outcome" }, { "$ref": "#/$defs/errored" }]
         },
-        "trace": { "type": "array" }
+        "trace": { "type": "array", "items": { "$ref": "#/$defs/trace_entry" } }
       }
+    },
+    "rendered_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "rendered"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "rendered": { "type": "string" }
+      }
+    },
+    "require_outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "match_count"],
+          "properties": {
+            "status": { "const": "held" },
+            "match_count": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "const": "rejected" },
+            "reason": { "type": "string" },
+            "failing_sub_expression": { "type": "string" },
+            "directly_missing_claims": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/rendered_claim" }
+            }
+          }
+        }
+      ]
+    },
+    "bind_one_outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "bindings"],
+          "properties": {
+            "status": { "const": "bound" },
+            "bindings": { "type": "array", "items": { "$ref": "#/$defs/witness_binding" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "const": "no_match" },
+            "failing_sub_expression": { "type": "string" },
+            "directly_missing_claims": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/rendered_claim" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "count"],
+          "properties": {
+            "status": { "const": "multiple_matches" },
+            "count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "for_iteration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "trace"],
+      "properties": {
+        "item": { "$ref": "#/$defs/tagged_value" },
+        "trace": { "type": "array", "items": { "$ref": "#/$defs/trace_entry" } }
+      }
+    },
+    "trace_entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "expression", "outcome"],
+          "properties": {
+            "kind": { "const": "require" },
+            "expression": { "type": "string" },
+            "name": { "type": "string" },
+            "outcome": { "$ref": "#/$defs/require_outcome" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "expression", "outcome"],
+          "properties": {
+            "kind": { "const": "bind_one" },
+            "expression": { "type": "string" },
+            "name": { "type": "string" },
+            "outcome": { "$ref": "#/$defs/bind_one_outcome" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "value"],
+          "properties": {
+            "kind": { "const": "let" },
+            "name": { "type": "string" },
+            "value": { "$ref": "#/$defs/tagged_value" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "subject"],
+          "properties": {
+            "kind": { "const": "let_new_subject" },
+            "name": { "type": "string" },
+            "subject": { "$ref": "#/$defs/tagged_value" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "claim"],
+          "properties": {
+            "kind": { "const": "assert" },
+            "claim": { "$ref": "#/$defs/claim_instance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "predicate", "retracted"],
+          "properties": {
+            "kind": { "const": "retract" },
+            "predicate": { "type": "string" },
+            "retracted": { "$ref": "#/$defs/claim_instance_array" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "intent"],
+          "properties": {
+            "kind": { "const": "emit" },
+            "intent": { "$ref": "#/$defs/intent_instance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "binding", "iterations"],
+          "properties": {
+            "kind": { "const": "for" },
+            "binding": { "type": "string" },
+            "iterations": { "type": "array", "items": { "$ref": "#/$defs/for_iteration" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "expression", "held"],
+          "properties": {
+            "kind": { "const": "invariant_check" },
+            "name": { "type": "string" },
+            "expression": { "type": "string" },
+            "held": { "type": "boolean" }
+          }
+        }
+      ]
     },
     "explanation": {
       "type": "object",

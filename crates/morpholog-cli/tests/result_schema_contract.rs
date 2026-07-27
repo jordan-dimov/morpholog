@@ -251,6 +251,118 @@ fn named_gate_program() -> morpholog_core::Program {
     p
 }
 
+/// A programme whose trace covers the entry kinds a `--trace` consumer can
+/// actually meet: a named `bind` that binds, a named `require` that holds,
+/// `let`, `admit`, `emit`, a `for` with per-item sub-traces, and the
+/// invariant check at the end.
+///
+/// The goldens built from it are the first to contain a trace at all. The
+/// traced envelope has been pinned since traces existed, but with
+/// `trace: []` - so the wrapper was pinned and the payload never was, and
+/// a shape change inside an entry reddened nothing.
+fn traced_program() -> morpholog_core::Program {
+    use morpholog_core::ir_builder::{bind_one_named, emit, for_, let_, require_named, term};
+    program("traced")
+        .predicates(vec![
+            predicate("Account").subject("account").build(),
+            predicate("Approved").subject("account").build(),
+            predicate("Batch")
+                .subject("batch")
+                .collection("items")
+                .build(),
+            predicate("Seen").subject("item").build(),
+        ])
+        .intents(vec![morpholog_core::IntentDecl {
+            name: "Notified".into(),
+            args: vec![morpholog_core::ArgDecl {
+                name: "account".into(),
+                kind: morpholog_core::PredicateArgKind::Subject,
+            }],
+        }])
+        .invariants(vec![invariant(
+            "seen_accounts_are_known",
+            implies(
+                claim("Seen", vec![var("item")]),
+                claim("Seen", vec![var("item")]),
+            ),
+        )])
+        .transformations(vec![transformation(
+            "walk",
+            params(&["account", "batch", "items"]),
+            vec![
+                bind_one_named("the_account", claim("Account", vec![var("account")])),
+                require_named(
+                    "not_yet_approved",
+                    not(claim("Approved", vec![var("account")])),
+                ),
+                let_("copy", term(var("account"))),
+                assert_("Approved", vec![var("account")]),
+                for_(
+                    "item",
+                    term(var("items")),
+                    vec![assert_("Seen", vec![var("item")])],
+                ),
+                emit("Notified", vec![var("account")]),
+            ],
+        )])
+        .build()
+}
+
+/// The trace from a real `propose_with_trace` run over [`traced_program`],
+/// so the golden is byte-equal to what the runtime emits rather than to a
+/// hand-built approximation.
+fn real_trace() -> Vec<morpholog_core::TraceEntry> {
+    use morpholog_core::{TracedProposal, propose_with_trace};
+    let p = traced_program();
+    let t = p.transformations.iter().find(|t| t.name == "walk").unwrap();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
+            EvalValue::Subject(Subject::from("acct_1")),
+            EvalValue::Subject(Subject::from("batch_1")),
+            EvalValue::Collection(vec![EvalValue::Subject(Subject::from("item_1"))]),
+        ],
+        actor: Subject::from("alex"),
+    };
+    let pre = State::from_claims(vec![ClaimInstance {
+        predicate: "Account".into(),
+        args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+    }]);
+    match propose_with_trace(t, &transition, &pre, &p.invariants, &p.definitions) {
+        TracedProposal::Completed { trace, .. } => trace,
+        TracedProposal::Errored { error, .. } => panic!("fixture must not error: {error:?}"),
+    }
+}
+
+/// The same programme against empty state, so the trace records a refusing
+/// lookup. The rejecting arms need a golden of their own or the schema
+/// would be describing shapes nothing produced - the failure mode this
+/// whole pin exists to close.
+fn real_rejected_trace() -> Vec<morpholog_core::TraceEntry> {
+    use morpholog_core::{TracedProposal, propose_with_trace};
+    let p = traced_program();
+    let t = p.transformations.iter().find(|t| t.name == "walk").unwrap();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
+            EvalValue::Subject(Subject::from("acct_1")),
+            EvalValue::Subject(Subject::from("batch_1")),
+            EvalValue::Collection(vec![]),
+        ],
+        actor: Subject::from("alex"),
+    };
+    match propose_with_trace(
+        t,
+        &transition,
+        &State::from_claims(vec![]),
+        &p.invariants,
+        &p.definitions,
+    ) {
+        TracedProposal::Completed { trace, .. } => trace,
+        TracedProposal::Errored { error, .. } => panic!("fixture must not error: {error:?}"),
+    }
+}
+
 #[test]
 fn explanations_serialize_as_pinned() {
     let p = explanation_program();
@@ -401,7 +513,14 @@ fn composite_envelopes_serialize_as_pinned() {
         "traced_committed.json",
         &to_value(&morpholog_cli::envelopes::Traced {
             result: &committed_outcome(),
-            trace: [0u8; 0],
+            trace: real_trace(),
+        }),
+    );
+    assert_golden(
+        "traced_rejected.json",
+        &to_value(&morpholog_cli::envelopes::Traced {
+            result: &rejected_outcome(),
+            trace: real_rejected_trace(),
         }),
     );
     assert_golden(
@@ -1135,6 +1254,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("rejected.json", "rejected"),
         ("rejected_with_explanation.json", "rejected"),
         ("traced_committed.json", "traced_envelope"),
+        ("traced_rejected.json", "traced_envelope"),
         ("traced_errored.json", "traced_envelope"),
         ("batch_committed_receipt.json", "batch_receipt"),
         ("batch_rejected_receipt.json", "batch_receipt"),

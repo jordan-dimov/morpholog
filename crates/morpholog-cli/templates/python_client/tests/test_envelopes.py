@@ -83,6 +83,46 @@ class RunOutcomes(unittest.TestCase):
         errored = envelopes.TracedEnvelope.from_json(golden("traced_errored.json"))
         self.assertIsInstance(errored.result, envelopes.Errored)
 
+    def test_a_trace_is_typed_steps_not_raw_dicts(self):
+        # The trace used to arrive as list[object] - a pinned wrapper around
+        # an unpinned payload, so an embedder reading a step was parsing
+        # ad-hoc JSON with no floor under it.
+        traced = envelopes.TracedEnvelope.from_json(golden("traced_committed.json"))
+        kinds = [type(step).__name__ for step in traced.trace]
+        self.assertIn("RequireStep", kinds)
+        self.assertIn("ForStep", kinds)
+
+        gate = next(s for s in traced.trace if isinstance(s, envelopes.RequireStep))
+        # The stable identifier and the outcome, both read as attributes.
+        self.assertEqual(gate.name, "not_yet_approved")
+        self.assertIsInstance(gate.outcome, envelopes.RequireHeld)
+
+        lookup = next(s for s in traced.trace if isinstance(s, envelopes.BindStep))
+        self.assertIsInstance(lookup.outcome, envelopes.BindBound)
+        # Bindings decode to values, and share the witness shape rather
+        # than being positional pairs.
+        self.assertEqual(lookup.outcome.bindings[0].var, "account")
+        self.assertEqual(lookup.outcome.bindings[0].value, "acct_1")
+
+        # A `for` carries a sub-trace per item, recursively typed.
+        loop = next(s for s in traced.trace if isinstance(s, envelopes.ForStep))
+        self.assertEqual(loop.binding, "item")
+        self.assertIsInstance(loop.iterations[0].trace[0], envelopes.AssertStep)
+
+    def test_a_refusing_trace_names_the_lookup_that_failed(self):
+        traced = envelopes.TracedEnvelope.from_json(golden("traced_rejected.json"))
+        step = traced.trace[-1]
+        self.assertIsInstance(step, envelopes.BindStep)
+        self.assertEqual(step.name, "the_account")
+        self.assertIsInstance(step.outcome, envelopes.BindNoMatch)
+        self.assertEqual(step.outcome.directly_missing_claims[0].predicate, "Account")
+
+    def test_an_unknown_trace_step_kind_is_drift(self):
+        payload = golden("traced_committed.json")
+        payload["trace"][0]["kind"] = "teleport"
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.TracedEnvelope.from_json(payload)
+
 
 class Explanations(unittest.TestCase):
     def test_all_four_verdicts(self):

@@ -69,7 +69,7 @@ pub enum Outcome {
 /// rather than rendered into the reason string: the reason string is a
 /// pinned wire format, and an embedder that wants to show the account it
 /// refused should read a value, not parse prose.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WitnessBinding {
     pub var: Var,
     pub value: EvalValue,
@@ -286,7 +286,10 @@ pub enum BindOneOutcome {
     /// `BindOne` replaces the current context with the returned set, so
     /// the trace records the full set, not a delta.
     Bound {
-        bindings: Vec<(Var, EvalValue)>,
+        /// The binding set the lookup produced, sorted by variable. Shaped
+        /// like a refusal's witness because it is the same idea - a
+        /// variable and the value it took - and one vocabulary beats two.
+        bindings: Vec<WitnessBinding>,
     },
     NoMatch {
         /// The most specific sub-expression responsible for the
@@ -578,11 +581,14 @@ pub(crate) fn execute_stmt(
                 1 => {
                     let new_bindings = matches.swap_remove(0);
                     if trace.is_on() {
-                        let mut sorted: Vec<(Var, EvalValue)> = new_bindings
+                        let mut sorted: Vec<WitnessBinding> = new_bindings
                             .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .map(|(k, v)| WitnessBinding {
+                                var: k.clone(),
+                                value: v.clone(),
+                            })
                             .collect();
-                        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                        sorted.sort_by(|a, b| a.var.cmp(&b.var));
                         trace.push(TraceEntry::BindOne {
                             expression: format::format_prop_inline(expr),
                             name: name.as_ref().map(ToString::to_string),

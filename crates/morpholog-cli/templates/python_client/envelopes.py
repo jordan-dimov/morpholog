@@ -202,9 +202,277 @@ def parse_run_outcome(payload: object) -> Committed | Rejected:
 
 
 @dataclass(frozen=True)
+class RenderedClaim:
+    predicate: str
+    rendered: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> RenderedClaim:
+        data = _strict("rendered claim", payload, {"predicate", "rendered"})
+        return cls(predicate=data["predicate"], rendered=data["rendered"])
+
+
+@dataclass(frozen=True)
+class RequireHeld:
+    match_count: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequireHeld:
+        data = _strict("require held", payload, {"status", "match_count"})
+        return cls(match_count=data["match_count"])
+
+
+@dataclass(frozen=True)
+class RequireRejected:
+    reason: str
+    failing_sub_expression: str | None = None
+    directly_missing_claims: list[RenderedClaim] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequireRejected:
+        data = _strict(
+            "require rejected",
+            payload,
+            {"status", "reason"},
+            {"failing_sub_expression", "directly_missing_claims"},
+        )
+        return cls(
+            reason=data["reason"],
+            failing_sub_expression=data.get("failing_sub_expression"),
+            directly_missing_claims=[
+                RenderedClaim.from_json(c) for c in data.get("directly_missing_claims", [])
+            ],
+        )
+
+
+@dataclass(frozen=True)
+class BindBound:
+    bindings: list[WitnessBinding]
+
+    @classmethod
+    def from_json(cls, payload: object) -> BindBound:
+        data = _strict("bind bound", payload, {"status", "bindings"})
+        return cls(bindings=[WitnessBinding.from_json(b) for b in data["bindings"]])
+
+
+@dataclass(frozen=True)
+class BindNoMatch:
+    failing_sub_expression: str | None = None
+    directly_missing_claims: list[RenderedClaim] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> BindNoMatch:
+        data = _strict(
+            "bind no match",
+            payload,
+            {"status"},
+            {"failing_sub_expression", "directly_missing_claims"},
+        )
+        return cls(
+            failing_sub_expression=data.get("failing_sub_expression"),
+            directly_missing_claims=[
+                RenderedClaim.from_json(c) for c in data.get("directly_missing_claims", [])
+            ],
+        )
+
+
+@dataclass(frozen=True)
+class BindMultipleMatches:
+    count: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> BindMultipleMatches:
+        data = _strict("bind multiple matches", payload, {"status", "count"})
+        return cls(count=data["count"])
+
+
+def _parse_require_outcome(payload: object) -> RequireHeld | RequireRejected:
+    return _by_status(
+        payload,
+        "a require outcome",
+        {"held": RequireHeld.from_json, "rejected": RequireRejected.from_json},
+    )
+
+
+def _parse_bind_outcome(payload: object) -> BindBound | BindNoMatch | BindMultipleMatches:
+    return _by_status(
+        payload,
+        "a bind outcome",
+        {
+            "bound": BindBound.from_json,
+            "no_match": BindNoMatch.from_json,
+            "multiple_matches": BindMultipleMatches.from_json,
+        },
+    )
+
+
+@dataclass(frozen=True)
+class RequireStep:
+    expression: str
+    outcome: RequireHeld | RequireRejected
+    # The gate's stable identifier, when its author gave it one. Hold this
+    # rather than `expression`, which any rewording changes.
+    name: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequireStep:
+        data = _strict("require step", payload, {"kind", "expression", "outcome"}, {"name"})
+        return cls(
+            expression=data["expression"],
+            outcome=_parse_require_outcome(data["outcome"]),
+            name=data.get("name"),
+        )
+
+
+@dataclass(frozen=True)
+class BindStep:
+    expression: str
+    outcome: BindBound | BindNoMatch | BindMultipleMatches
+    name: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> BindStep:
+        data = _strict("bind step", payload, {"kind", "expression", "outcome"}, {"name"})
+        return cls(
+            expression=data["expression"],
+            outcome=_parse_bind_outcome(data["outcome"]),
+            name=data.get("name"),
+        )
+
+
+@dataclass(frozen=True)
+class LetStep:
+    name: str
+    value: object
+
+    @classmethod
+    def from_json(cls, payload: object) -> LetStep:
+        data = _strict("let step", payload, {"kind", "name", "value"})
+        return cls(name=data["name"], value=values.decode_tagged(data["value"]))
+
+
+@dataclass(frozen=True)
+class LetNewSubjectStep:
+    name: str
+    subject: object
+
+    @classmethod
+    def from_json(cls, payload: object) -> LetNewSubjectStep:
+        data = _strict("let new subject step", payload, {"kind", "name", "subject"})
+        return cls(name=data["name"], subject=values.decode_tagged(data["subject"]))
+
+
+@dataclass(frozen=True)
+class AssertStep:
+    claim: ClaimInstance
+
+    @classmethod
+    def from_json(cls, payload: object) -> AssertStep:
+        data = _strict("assert step", payload, {"kind", "claim"})
+        return cls(claim=ClaimInstance.from_json(data["claim"]))
+
+
+@dataclass(frozen=True)
+class RetractStep:
+    predicate: str
+    retracted: list[ClaimInstance]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RetractStep:
+        data = _strict("retract step", payload, {"kind", "predicate", "retracted"})
+        return cls(
+            predicate=data["predicate"],
+            retracted=[ClaimInstance.from_json(c) for c in data["retracted"]],
+        )
+
+
+@dataclass(frozen=True)
+class EmitStep:
+    intent: IntentInstance
+
+    @classmethod
+    def from_json(cls, payload: object) -> EmitStep:
+        data = _strict("emit step", payload, {"kind", "intent"})
+        return cls(intent=IntentInstance.from_json(data["intent"]))
+
+
+@dataclass(frozen=True)
+class ForIteration:
+    item: object
+    trace: list[TraceStep]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ForIteration:
+        data = _strict("for iteration", payload, {"item", "trace"})
+        return cls(
+            item=values.decode_tagged(data["item"]),
+            trace=[parse_trace_step(e) for e in data["trace"]],
+        )
+
+
+@dataclass(frozen=True)
+class ForStep:
+    binding: str
+    iterations: list[ForIteration]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ForStep:
+        data = _strict("for step", payload, {"kind", "binding", "iterations"})
+        return cls(
+            binding=data["binding"],
+            iterations=[ForIteration.from_json(i) for i in data["iterations"]],
+        )
+
+
+@dataclass(frozen=True)
+class InvariantCheckStep:
+    name: str
+    expression: str
+    held: bool
+
+    @classmethod
+    def from_json(cls, payload: object) -> InvariantCheckStep:
+        data = _strict("invariant check step", payload, {"kind", "name", "expression", "held"})
+        return cls(name=data["name"], expression=data["expression"], held=data["held"])
+
+
+TraceStep = (
+    RequireStep
+    | BindStep
+    | LetStep
+    | LetNewSubjectStep
+    | AssertStep
+    | RetractStep
+    | EmitStep
+    | ForStep
+    | InvariantCheckStep
+)
+
+
+def parse_trace_step(payload: object) -> TraceStep:
+    """One `--trace` step, by declared kind."""
+    kind = payload.get("kind") if isinstance(payload, dict) else None
+    by_kind = {
+        "require": RequireStep.from_json,
+        "bind_one": BindStep.from_json,
+        "let": LetStep.from_json,
+        "let_new_subject": LetNewSubjectStep.from_json,
+        "assert": AssertStep.from_json,
+        "retract": RetractStep.from_json,
+        "emit": EmitStep.from_json,
+        "for": ForStep.from_json,
+        "invariant_check": InvariantCheckStep.from_json,
+    }
+    parse = by_kind.get(kind) if isinstance(kind, str) else None
+    if parse is None:
+        raise EnvelopeError(f"unknown trace step kind in {payload!r}")
+    return parse(payload)
+
+
+@dataclass(frozen=True)
 class TracedEnvelope:
     result: Committed | Rejected | Errored
-    trace: list[object]
+    trace: list[TraceStep]
 
     @classmethod
     def from_json(cls, payload: object) -> TracedEnvelope:
@@ -216,8 +484,7 @@ class TracedEnvelope:
             parsed = Errored.from_json(result)
         else:
             parsed = parse_run_outcome(result)
-        # Trace entries are reserved internals; carried verbatim.
-        return cls(result=parsed, trace=list(data["trace"]))
+        return cls(result=parsed, trace=[parse_trace_step(e) for e in data["trace"]])
 
 
 @dataclass(frozen=True)
