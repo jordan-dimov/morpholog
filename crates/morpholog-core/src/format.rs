@@ -80,7 +80,11 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
 pub fn canonical_hash(p: &Program) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(format_program(p).as_bytes());
-    format!("sha256:{digest:x}")
+    let mut out = String::from("sha256:");
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 /// Top-level entry. Returns a multi-line string terminated by a
