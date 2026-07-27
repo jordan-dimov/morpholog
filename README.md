@@ -127,6 +127,8 @@ The list below is by domain. If you arrived with a question rather than a domain
 - [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes: exact instants, computed deadlines, cargo in tonnes, delay priced in dollars.
 - [**Biometric identification oversight**](examples/13_biometric_identification_oversight/) - an EU AI Act statute enforced as admission rules: the AI's output has no standing until verified by two distinct, currently-authorised people.
 - [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one.
+- [**Metered billing**](examples/15_metered_billing/) - a bill correct to the penny: each line recomputed and rounded, the sealed total refusing the rival convention by name.
+- [**Worked embedder**](examples/etrm_embedder/) - the same trade lifecycle driven from Python through the generated client, including post-commit delivery.
 
 ## Try it yourself
 

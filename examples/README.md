@@ -21,6 +21,7 @@ if you want to read one end to end.
 | stop a record ever being retracted | [04_approval_controls](04_approval_controls/) | `append only` |
 | require that the person acting holds the authority | [04_approval_controls](04_approval_controls/) | `actor` in a `require` |
 | name a gate, so a refusal says which rule said no | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `require some_name: ...` |
+| find out what evidence a refusal is missing, and which act could supply it | [09_carbon_credit_provenance](09_carbon_credit_provenance/) | `explain` |
 | cap a running total exactly, at the moment of admission | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `sum(... ) + amount <= limit` |
 | bound a figure from both sides | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `min(a, b)` and `max(a, b)` |
 | write a rule about the state before a change and after it | [07_chess_transition_invariants](07_chess_transition_invariants/) | `pre(...)` |
