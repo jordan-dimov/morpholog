@@ -1,0 +1,23 @@
+{
+  "result": {
+    "reason": "bind `the_account` failed: Account(account) matched no candidates",
+    "rule": "the_account",
+    "status": "rejected"
+  },
+  "trace": [
+    {
+      "expression": "Account(account)",
+      "kind": "bind_one",
+      "name": "the_account",
+      "outcome": {
+        "directly_missing_claims": [
+          {
+            "predicate": "Account",
+            "rendered": "Account(acct_1)"
+          }
+        ],
+        "status": "no_match"
+      }
+    }
+  ]
+}

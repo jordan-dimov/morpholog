@@ -1,0 +1,47 @@
+{
+  "result": {
+    "reason": "require `not_yet_approved` failed: not Approved(account) did not hold over pre-state",
+    "rule": "not_yet_approved",
+    "status": "rejected"
+  },
+  "trace": [
+    {
+      "expression": "Account(account)",
+      "kind": "bind_one",
+      "name": "the_account",
+      "outcome": {
+        "bindings": [
+          {
+            "value": {
+              "type": "subject",
+              "value": "acct_1"
+            },
+            "var": "account"
+          },
+          {
+            "value": {
+              "type": "collection",
+              "value": [
+                {
+                  "type": "subject",
+                  "value": "item_1"
+                }
+              ]
+            },
+            "var": "items"
+          }
+        ],
+        "status": "bound"
+      }
+    },
+    {
+      "expression": "not Approved(account)",
+      "kind": "require",
+      "name": "not_yet_approved",
+      "outcome": {
+        "reason": "require `not_yet_approved` failed: not Approved(account) did not hold over pre-state",
+        "status": "rejected"
+      }
+    }
+  ]
+}

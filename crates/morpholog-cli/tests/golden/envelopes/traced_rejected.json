@@ -1,0 +1,36 @@
+{
+  "result": {
+    "reason": "invariant `approved_accounts_are_known` violated",
+    "rule": "approved_accounts_are_known",
+    "status": "rejected",
+    "witness": [
+      {
+        "value": {
+          "type": "subject",
+          "value": "acct_1"
+        },
+        "var": "account"
+      }
+    ]
+  },
+  "trace": [
+    {
+      "claim": {
+        "args": [
+          {
+            "type": "subject",
+            "value": "acct_1"
+          }
+        ],
+        "predicate": "Approved"
+      },
+      "kind": "assert"
+    },
+    {
+      "expression": "Approved(account) implies Account(account)",
+      "held": false,
+      "kind": "invariant_check",
+      "name": "approved_accounts_are_known"
+    }
+  ]
+}

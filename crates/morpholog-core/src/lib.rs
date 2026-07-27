@@ -1833,8 +1833,8 @@ mod tests {
         };
         // Sorted by variable name: limit, pid.
         assert_eq!(bindings.len(), 2);
-        assert_eq!(bindings[0].0.as_str(), "limit");
-        assert_eq!(bindings[1].0.as_str(), "pid");
+        assert_eq!(bindings[0].var.as_str(), "limit");
+        assert_eq!(bindings[1].var.as_str(), "pid");
     }
 
     /// BindOne multi-match is a kernel error. The trace MUST still

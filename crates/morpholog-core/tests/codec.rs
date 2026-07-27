@@ -8,7 +8,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Subject, Transition};
+use morpholog_core::{
+    ClaimInstance, EvalValue, IntentInstance, Subject, Transition, WitnessBinding,
+};
 use morpholog_test_support::{claim_instance, dec, intent_instance, subj};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -334,7 +336,16 @@ fn trace_entry_bind_one_bound_round_trips_with_sorted_bindings() {
         expression: "Policy(pid, limit)".to_string(),
         name: None,
         outcome: BindOneOutcome::Bound {
-            bindings: vec![("limit".into(), dec(100)), ("pid".into(), subj("p1"))],
+            bindings: vec![
+                WitnessBinding {
+                    var: "limit".into(),
+                    value: dec(100),
+                },
+                WitnessBinding {
+                    var: "pid".into(),
+                    value: subj("p1"),
+                },
+            ],
         },
     };
     let json = serde_json::to_string(&entry).unwrap();
