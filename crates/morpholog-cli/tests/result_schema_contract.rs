@@ -491,6 +491,41 @@ fn explanations_serialize_as_pinned() {
     assert_golden("explanation_error.json", &to_value(&error));
 }
 
+/// The rejection log's row shape, both with and without a witness.
+///
+/// Pinned now because it carries structured evidence: an embedder reading
+/// `inspect rejections` programmatically was reaching an ad-hoc surface, and
+/// the moment a surface is consumed it has to be an envelope with a floor
+/// under it rather than a shape that can drift silently.
+#[test]
+fn rejection_rows_serialize_as_pinned() {
+    let base = morpholog_postgres::RejectionRow {
+        rejection_id: sample_uuid(),
+        transformation_name: "issue_invoice".into(),
+        arguments: vec![EvalValue::Subject(Subject::from("inv_1"))],
+        actor: Subject::from("alex"),
+        kind: "invariant".to_string(),
+        rule: "line_net_is_the_rounded_recompute".to_string(),
+        invariant_version: Some(1),
+        reason: "invariant `line_net_is_the_rounded_recompute` violated".to_string(),
+        witness: Some(witness_sample()),
+        rejected_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+    };
+    assert_golden("rejection_row.json", &to_value(&base));
+    // A gate refusal, which has no witness and no version: the key is
+    // absent rather than null, so a row from before the column existed
+    // reads identically to one the kernel could not pin.
+    let gate = morpholog_postgres::RejectionRow {
+        kind: "require".to_string(),
+        rule: "actor_has_authority_for_amount".to_string(),
+        invariant_version: None,
+        reason: "require `actor_has_authority_for_amount` failed: MayApprove(actor, doc) did not hold over pre-state".to_string(),
+        witness: None,
+        ..base
+    };
+    assert_golden("rejection_row_gate.json", &to_value(&gate));
+}
+
 #[test]
 fn outbox_row_serializes_as_pinned() {
     let row = OutboxRow {
@@ -1501,6 +1536,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("explanation_invariant.json", "explanation"),
         ("explanation_error.json", "explanation"),
         ("outbox_row.json", "outbox_row"),
+        ("rejection_row.json", "rejection_row"),
+        ("rejection_row_gate.json", "rejection_row"),
         ("outbox_claim.json", "outbox_claim"),
         ("outbox_claim_null.json", "outbox_claim"),
         ("outbox_update_applied.json", "outbox_update"),

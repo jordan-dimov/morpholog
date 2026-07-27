@@ -303,6 +303,19 @@ class Morpholog:
         payload = self._json(*argv, "--database-url", self.database_url)
         return [cls.from_json(c) for c in payload]
 
+    def rejections(self) -> list[envelopes.RejectionRow]:
+        """Refused proposals, oldest first, with the values the refused rule
+        was reading where the kernel could pin them.
+
+        **An operational floor, not a ledger.** Writes are at-most-once and
+        happen after rollback, so a storm or an insert failure can leave a
+        refusal unrecorded; audit remains the only legitimacy-grade record.
+        Read a row as a lead to follow, and never as proof of what did or
+        did not happen.
+        """
+        payload = self._json("inspect", "rejections", "--database-url", self.database_url)
+        return [envelopes.RejectionRow.from_json(r) for r in payload]
+
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view (a derived claim) directly from the
         admitted claims - the authoritative, always-live read; it never

@@ -145,6 +145,13 @@ CREATE TABLE rejections (
     rule                 text         NOT NULL,
     invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
+    -- The values the refused rule was reading, same codec as the
+    -- envelope's witness. NULL when the kernel could not pin the failure
+    -- to one iteration, and for every row written before this column
+    -- existed. Diagnostic only: it inherits this table's at-most-once,
+    -- operational standing, so it is a lead to follow and never proof of
+    -- what a refusal saw.
+    witness              jsonb                 CHECK (witness IS NULL OR jsonb_typeof(witness) = 'array'),
     rejected_at          timestamptz  NOT NULL DEFAULT now(),
     -- The writer never emits a versioned gate or an unversioned
     -- invariant; the constraint keeps hand-edits from corrupting

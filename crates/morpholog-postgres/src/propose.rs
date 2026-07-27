@@ -475,9 +475,6 @@ pub(crate) async fn write_rejection(
     reason: &RejectionReason,
 ) -> Result<(), PgError> {
     let (kind, rule, invariant_version): (&str, &str, Option<i64>) = match reason {
-        // The witness is diagnostic, not part of this row: the rejection
-        // log is a floor for operations, and audit stays the only
-        // legitimacy-grade record.
         RejectionReason::Invariant { name, version, .. } => (
             REJECTION_KIND_INVARIANT,
             name.as_str(),
@@ -498,6 +495,14 @@ pub(crate) async fn write_rejection(
             None,
         ),
     };
+    // NULL rather than `[]` when there is nothing to record, so a row with
+    // no witness reads as "none captured" and not as "captured, empty".
+    let witness_json: Option<serde_json::Value> = match reason {
+        RejectionReason::Invariant { witness, .. } if !witness.is_empty() => {
+            Some(serde_json::to_value(witness).map_err(PgError::Encoding)?)
+        }
+        _ => None,
+    };
     let args_json: serde_json::Value =
         serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;
     let actor_json: serde_json::Value =
@@ -506,8 +511,8 @@ pub(crate) async fn write_rejection(
     sqlx::query!(
         "INSERT INTO morpholog.rejections (
             rejection_id, transformation_name, arguments, actor,
-            kind, rule, invariant_version, reason
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            kind, rule, invariant_version, reason, witness
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         Uuid::now_v7(),
         transformation.name.as_str(),
         args_json,
@@ -516,6 +521,7 @@ pub(crate) async fn write_rejection(
         rule,
         invariant_version,
         reason.to_string(),
+        witness_json,
     )
     .execute(pool)
     .await

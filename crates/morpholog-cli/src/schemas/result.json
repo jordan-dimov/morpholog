@@ -399,6 +399,26 @@
         }
       }
     },
+    "rejection_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rejection_id", "transformation_name", "arguments", "actor",
+        "kind", "rule", "reason", "rejected_at"
+      ],
+      "properties": {
+        "rejection_id": { "type": "string", "format": "uuid" },
+        "transformation_name": { "type": "string" },
+        "arguments": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } },
+        "actor": { "$ref": "#/$defs/tagged_value" },
+        "kind": { "enum": ["invariant", "require", "bind"] },
+        "rule": { "type": "string" },
+        "invariant_version": { "type": "integer" },
+        "reason": { "type": "string" },
+        "witness": { "type": "array", "items": { "$ref": "#/$defs/witness_binding" } },
+        "rejected_at": { "type": "string" }
+      }
+    },
     "rejection": {
       "oneOf": [
         {

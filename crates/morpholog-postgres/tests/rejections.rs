@@ -362,3 +362,83 @@ async fn the_table_refuses_kind_version_disagreement() {
         );
     }
 }
+
+/// The witness survives the process that saw it.
+///
+/// This is the whole point of persisting it: before, an operator could
+/// diagnose a refusal live and had nothing to review afterwards, because the
+/// row carried only the reason string. The values come back through
+/// `list_rejection_rows`, decoded, not as raw JSON an embedder has to parse.
+#[tokio::test]
+async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let p = fixture();
+    let post = p.transformation("post").unwrap();
+
+    let first = common::propose_pg_with_test_actor(
+        &pool,
+        &common::compiled(p.clone()),
+        post,
+        vec![subj("e1"), dec(100)],
+    )
+    .await
+    .expect("first post commits");
+    assert!(
+        matches!(first, PgProposalOutcome::Committed { .. }),
+        "the setup must actually commit, or the refusal below proves nothing"
+    );
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &common::compiled(p.clone()),
+        post,
+        vec![subj("e1"), dec(999)],
+    )
+    .await
+    .expect("rejection is a lawful outcome");
+    let PgProposalOutcome::Rejected { witness, .. } = &outcome else {
+        panic!("expected a refusal");
+    };
+    assert!(!witness.is_empty(), "the live envelope carries a witness");
+
+    let rows = morpholog_postgres::list_rejection_rows(&pool)
+        .await
+        .expect("reading the log back");
+    assert_eq!(rows.len(), 1);
+    let persisted = rows[0]
+        .witness
+        .as_ref()
+        .expect("an invariant refusal with a live witness persists it");
+    assert_eq!(
+        persisted, witness,
+        "the persisted witness is the one the refusal reported, not a re-derivation"
+    );
+}
+
+/// A gate refusal has no witness, and the column stays NULL rather than
+/// holding an empty array - so absence reads as "nothing was captured"
+/// rather than "the rule was reading nothing".
+#[tokio::test]
+async fn a_gate_rejection_persists_no_witness() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let p = fixture();
+    let gated = p.transformation("post_approved").unwrap();
+
+    // Nothing approved, so the gate refuses before anything is staged.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &common::compiled(p.clone()),
+        gated,
+        vec![subj("e9"), dec(10)],
+    )
+    .await
+    .expect("rejection is a lawful outcome");
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+
+    let rows = morpholog_postgres::list_rejection_rows(&pool)
+        .await
+        .expect("reading the log back");
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].witness.is_none(), "got {:?}", rows[0].witness);
+}
