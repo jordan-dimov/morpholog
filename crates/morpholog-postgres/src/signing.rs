@@ -216,6 +216,54 @@ mod tests {
         }
     }
 
+    /// A signing key from a fixed seed. Deterministic on purpose: the frozen
+    /// tests below are meaningless with a random key.
+    fn fixed_key() -> SigningKey {
+        SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    /// The exact bytes a tree-head signature commits to, frozen.
+    ///
+    /// Every other test here round-trips - sign then verify, with both sides
+    /// moving together - so a change to this encoding would leave all of them
+    /// green while every signature already stored stopped verifying. This is
+    /// the test that would notice.
+    #[test]
+    fn frozen_signing_input_pins_the_payload_encoding() {
+        let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &sample_head());
+        let rendered: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            rendered,
+            "26000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642e7631130000000000000061756469745f636865636b706f696e745f763102000000000000006b3108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310047000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232"
+        );
+    }
+
+    /// The signature itself, frozen against a fixed key and head.
+    ///
+    /// Ed25519 is deterministic (RFC 8032), so this value is stable across
+    /// any correct implementation - which is what makes it the right pin for
+    /// a dependency bump. If it moves, signatures in existing databases have
+    /// stopped verifying.
+    #[test]
+    fn frozen_signature_pins_ed25519_over_the_payload() {
+        let sig = sign_tree_head(&fixed_key(), "audit_checkpoint_v1", "k1", &sample_head());
+        assert_eq!(
+            render_signature(&sig),
+            "ed25519-sig:1322b926f5a5f75159599bf3060a52bca152123b80d4dbdfdcbc37eb2733912edc573934b96f34cd0ec26a820e6a1e8ec48300e760b6a5fcaad6437a89196f08"
+        );
+    }
+
+    /// The public key that seed yields, so a change in key derivation is
+    /// caught as well - the signature pin alone would move for either reason
+    /// and could not tell them apart.
+    #[test]
+    fn frozen_public_key_pins_the_seed_derivation() {
+        assert_eq!(
+            render_public_key(&fixed_key().verifying_key()),
+            "ed25519-pub:ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
+        );
+    }
+
     #[test]
     fn sign_then_verify_round_trips() {
         let key = generate_signing_key();
