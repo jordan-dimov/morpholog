@@ -76,8 +76,16 @@ pub struct MigrationRef {
 /// What `migrate` found and did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigrationReport {
-    /// The version the database was at before this run.
-    pub database_version: i32,
+    /// The newest version the database recorded before this run, or `None`
+    /// when it recorded nothing - a database predating the record.
+    ///
+    /// `None` rather than `0`, because "no record exists" and "recorded
+    /// version zero" are different claims and only one of them is true. A
+    /// database with no record may well have migrations 1..10 applied; what
+    /// is absent is the knowledge, not the schema.
+    pub recorded_version_before: Option<i32>,
+    /// The newest version recorded after this run. Unchanged by `--check`.
+    pub recorded_version_after: Option<i32>,
     /// The newest migration this binary carries.
     pub binary_version: i32,
     /// Applied by this run, in order. Empty when checking, and empty when
@@ -86,6 +94,22 @@ pub struct MigrationReport {
     /// Still outstanding. Empty after a successful run; populated when
     /// checking a database that is behind.
     pub pending: Vec<MigrationRef>,
+    /// Recorded by the database and unknown to this binary - the database
+    /// is AHEAD, which is what a rollback to an older binary looks like.
+    ///
+    /// Reported and refused rather than ignored. A binary cannot know
+    /// whether a migration it has never seen removed or reinterpreted
+    /// something it depends on, and that is exactly the moment a green
+    /// readiness check is most dangerous.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown: Vec<MigrationRef>,
+}
+
+impl MigrationReport {
+    /// Nothing outstanding and nothing unrecognised. What a deploy gate asks.
+    pub fn is_current(&self) -> bool {
+        self.pending.is_empty() && self.unknown.is_empty()
+    }
 }
 
 /// Which versions the database records as applied.
@@ -93,7 +117,7 @@ pub struct MigrationReport {
 /// `None` when the record itself does not exist - a database older than the
 /// migration that introduces it. That is different from "recorded nothing",
 /// and the caller treats it as "everything is pending".
-async fn recorded_versions(pool: &PgPool) -> Result<Option<Vec<i32>>, PgError> {
+async fn recorded_versions(pool: &PgPool) -> Result<Option<Vec<MigrationRef>>, PgError> {
     let present = sqlx::query!(
         "SELECT 1 AS one FROM pg_tables
          WHERE schemaname = 'morpholog' AND tablename = 'schema_migrations'"
@@ -104,11 +128,19 @@ async fn recorded_versions(pool: &PgPool) -> Result<Option<Vec<i32>>, PgError> {
     if present.is_none() {
         return Ok(None);
     }
-    let rows = sqlx::query!("SELECT version FROM morpholog.schema_migrations ORDER BY version")
-        .fetch_all(pool)
-        .await
-        .map_err(classify_checked_query)?;
-    Ok(Some(rows.into_iter().map(|r| r.version).collect()))
+    let rows =
+        sqlx::query!("SELECT version, name FROM morpholog.schema_migrations ORDER BY version")
+            .fetch_all(pool)
+            .await
+            .map_err(classify_checked_query)?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|r| MigrationRef {
+                version: r.version,
+                name: r.name,
+            })
+            .collect(),
+    ))
 }
 
 /// Record every migration this build carries as applied, without running
@@ -153,20 +185,31 @@ async fn ensure_schema_present(pool: &PgPool) -> Result<(), PgError> {
 pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError> {
     ensure_schema_present(pool).await?;
     let recorded = recorded_versions(pool).await?;
-    let applied_versions = recorded.clone().unwrap_or_default();
+    let rows = recorded.clone().unwrap_or_default();
     let pending: Vec<MigrationRef> = MIGRATIONS
         .iter()
-        .filter(|m| !applied_versions.contains(&m.version))
+        .filter(|m| !rows.iter().any(|r| r.version == m.version))
         .map(|m| MigrationRef {
             version: m.version,
             name: m.name.to_string(),
         })
         .collect();
+    // Recorded here, unknown to this build: the database is ahead.
+    let unknown: Vec<MigrationRef> = rows
+        .iter()
+        .filter(|r| !MIGRATIONS.iter().any(|m| m.version == r.version))
+        .cloned()
+        .collect();
+    let newest = recorded
+        .as_ref()
+        .and_then(|rows| rows.iter().map(|r| r.version).max());
     Ok(MigrationReport {
-        database_version: applied_versions.iter().copied().max().unwrap_or(0),
+        recorded_version_before: newest,
+        recorded_version_after: newest,
         binary_version: head_version(),
         applied: Vec::new(),
         pending,
+        unknown,
     })
 }
 
@@ -178,6 +221,24 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
 pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError> {
     ensure_schema_present(pool).await?;
     let before = migration_status(pool).await?;
+    if !before.unknown.is_empty() {
+        // Migrating a database that is ahead would apply nothing and report
+        // success, which is the worst answer available: the binary cannot
+        // know whether a migration it has never seen changed something it
+        // depends on.
+        let names: Vec<String> = before
+            .unknown
+            .iter()
+            .map(|m| format!("{} ({})", m.version, m.name))
+            .collect();
+        return Err(PgError::InvalidState(format!(
+            "this database records migrations this binary does not know: {}. \
+             It was migrated by a newer Morpholog, so this build cannot tell \
+             whether its schema is still compatible - upgrade the binary rather \
+             than migrating the database.",
+            names.join(", ")
+        )));
+    }
     // The record has to exist before the first migration can record itself:
     // the migration that introduces it is number 11, and 001 would otherwise
     // insert into a table ten steps in its future. Idempotent, and it
@@ -218,10 +279,21 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
             name: m.name.to_string(),
         });
     }
+    // A migration that creates a table leaves the least-privilege roles
+    // without access to it: the floor grants per table, and GRANT does not
+    // reach forward in time. Re-applying it is idempotent and is the only
+    // way an existing locked-down installation gets privileges on anything
+    // a migration added.
+    if !applied.is_empty() && crate::least_privilege_roles_exist(pool).await? {
+        crate::provision_least_privilege(pool).await?;
+    }
+    let after = migration_status(pool).await?;
     Ok(MigrationReport {
-        database_version: before.database_version,
+        recorded_version_before: before.recorded_version_before,
+        recorded_version_after: after.recorded_version_after,
         binary_version: head_version(),
         applied,
-        pending: Vec::new(),
+        pending: after.pending,
+        unknown: after.unknown,
     })
 }

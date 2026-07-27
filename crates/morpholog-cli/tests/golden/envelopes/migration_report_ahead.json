@@ -1,0 +1,13 @@
+{
+  "applied": [],
+  "binary_version": 11,
+  "pending": [],
+  "recorded_version_after": 12,
+  "recorded_version_before": 12,
+  "unknown": [
+    {
+      "name": "something_this_build_never_saw",
+      "version": 12
+    }
+  ]
+}

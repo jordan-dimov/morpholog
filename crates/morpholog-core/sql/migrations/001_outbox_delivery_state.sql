@@ -24,9 +24,12 @@
 -- docs/outbox-sketch.md. Subsequent PRs build the helpers, the
 -- single-row processor, the polling worker, and the supervisor.
 
+-- No BEGIN/COMMIT here: the runner owns the transaction, and applies each
+-- migration together with its version record so the two cannot disagree. A
+-- COMMIT in the script would end the runner's transaction and leave the
+-- record outside it.
 SET search_path TO morpholog, public;
 
-BEGIN;
 
 -- Drop the old status CHECK so we can re-add it with the expanded
 -- enumeration. There is no IF EXISTS for ADD CONSTRAINT, but DROP
@@ -55,4 +58,3 @@ ALTER TABLE outbox ADD COLUMN IF NOT EXISTS lock_expires_at            timestamp
 CREATE INDEX IF NOT EXISTS outbox_due_pending ON outbox (next_attempt_at)
     WHERE status = 'pending';
 
-COMMIT;

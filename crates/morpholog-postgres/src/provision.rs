@@ -3,7 +3,7 @@
 //! door" true on a fresh database by default rather than by operator
 //! convention.
 
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::sql_quote::quote_ident;
 use sqlx::PgPool;
 use std::fmt::Write as _;
@@ -220,6 +220,21 @@ pub const READER_ROLE: &str = "morpholog_reader";
 /// reader) are deliberately left to the operator - printed by the CLI,
 /// never applied here - so no secret or cluster-wide policy decision
 /// hides inside provisioning.
+/// Whether this database has the least-privilege floor provisioned.
+///
+/// Asked after migrating: the floor grants per table, so a migration that
+/// adds one leaves the roles without access until the floor is re-applied.
+pub(crate) async fn least_privilege_roles_exist(pool: &PgPool) -> Result<bool, PgError> {
+    let found = sqlx::query!(
+        "SELECT 1 AS one FROM pg_roles WHERE rolname = $1",
+        WRITER_ROLE
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(found.is_some())
+}
+
 pub async fn provision_least_privilege(pool: &PgPool) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     for role in [WRITER_ROLE, READER_ROLE] {
@@ -296,6 +311,13 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
     let _ = writeln!(
         out,
         "GRANT SELECT, INSERT, DELETE ON morpholog.claims TO {w};"
+    );
+    // Readable by both, written by neither: `migrate --check` is a
+    // readiness question a deployment role should be able to ask without
+    // holding the privileges to answer it by migrating.
+    let _ = writeln!(
+        out,
+        "GRANT SELECT ON morpholog.schema_migrations TO {w}, {r};"
     );
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.audit TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.rejections TO {w};");

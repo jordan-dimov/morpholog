@@ -163,6 +163,12 @@ class Morpholog:
         nothing fetched from a source tree. Applies whatever the database
         has not recorded, in order, and leaves a current one alone.
 
+        **Needs a connection that owns the schema.** Under
+        `--least-privilege` the runtime writer role cannot run DDL, so pass
+        an administrative URL for this call rather than the one your
+        proposals use. `check` only reads, and both roles are granted
+        `SELECT` on the record, so a readiness probe can run as either.
+
         `check` reports and changes nothing. The binary exits non-zero when
         the database is behind, but this client reads stdout rather than the
         exit code, so you get the report either way - which is the more

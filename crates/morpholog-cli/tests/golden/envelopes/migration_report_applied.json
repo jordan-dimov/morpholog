@@ -10,6 +10,7 @@
     }
   ],
   "binary_version": 11,
-  "database_version": 9,
-  "pending": []
+  "pending": [],
+  "recorded_version_after": 11,
+  "recorded_version_before": 9
 }

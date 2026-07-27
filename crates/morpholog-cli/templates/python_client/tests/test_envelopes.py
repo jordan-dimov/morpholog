@@ -211,7 +211,7 @@ class Migrations(unittest.TestCase):
     def test_a_database_behind_lists_what_is_outstanding(self):
         report = envelopes.MigrationReport.from_json(golden("migration_report_behind.json"))
         self.assertFalse(report.is_current)
-        self.assertEqual(report.database_version, 9)
+        self.assertEqual(report.recorded_version_before, 9)
         self.assertEqual(report.binary_version, 11)
         self.assertEqual([m.name for m in report.pending], ["rejections_witness", "schema_migrations"])
         self.assertEqual(report.applied, [])
@@ -220,6 +220,19 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
         self.assertTrue(report.is_current)
         self.assertEqual([m.version for m in report.applied], [10, 11])
+        # The version AFTER, not the one it started at - a report saying
+        # "current" and "version 9" at once would be two answers to one
+        # question.
+        self.assertEqual(report.recorded_version_before, 9)
+        self.assertEqual(report.recorded_version_after, 11)
+
+    def test_a_database_ahead_of_the_binary_is_not_current(self):
+        # Nothing pending, and emphatically not ready: this build cannot know
+        # whether a migration it has never seen still fits.
+        report = envelopes.MigrationReport.from_json(golden("migration_report_ahead.json"))
+        self.assertEqual(report.pending, [])
+        self.assertFalse(report.is_current)
+        self.assertEqual([m.version for m in report.unknown], [12])
 
 
 class Explanations(unittest.TestCase):

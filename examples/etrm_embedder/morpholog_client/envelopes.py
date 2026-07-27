@@ -1121,28 +1121,41 @@ class MigrationRef:
 class MigrationReport:
     """What `migrate` found, and what it did about it."""
 
-    database_version: int
+    # None when the database recorded nothing - one older than the record
+    # itself. Not 0: "no record exists" and "at version zero" are different
+    # claims, and such a database may well have migrations applied.
+    recorded_version_before: int | None
+    recorded_version_after: int | None
     binary_version: int
     applied: list[MigrationRef]
     pending: list[MigrationRef]
+    # Recorded by the database and unknown to this binary: the database is
+    # AHEAD, which is what a rollback to an older binary looks like.
+    unknown: list[MigrationRef] = field(default_factory=list)
 
     @property
     def is_current(self) -> bool:
-        """Nothing outstanding. What a deploy gate asks."""
-        return not self.pending
+        """Nothing outstanding and nothing unrecognised. What a deploy gate
+        asks - and it is false for a database AHEAD of this binary too,
+        which is when a green light would be most dangerous."""
+        return not self.pending and not self.unknown
 
     @classmethod
     def from_json(cls, payload: object) -> MigrationReport:
         data = _strict(
             "migration report",
             payload,
-            {"database_version", "binary_version", "applied", "pending"},
+            {"recorded_version_before", "recorded_version_after", "binary_version",
+             "applied", "pending"},
+            {"unknown"},
         )
         return cls(
-            database_version=data["database_version"],
+            recorded_version_before=data["recorded_version_before"],
+            recorded_version_after=data["recorded_version_after"],
             binary_version=data["binary_version"],
             applied=[MigrationRef.from_json(m) for m in data["applied"]],
             pending=[MigrationRef.from_json(m) for m in data["pending"]],
+            unknown=[MigrationRef.from_json(m) for m in data.get("unknown", [])],
         )
 
 

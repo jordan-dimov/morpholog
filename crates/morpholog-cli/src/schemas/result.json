@@ -906,12 +906,17 @@
     "migration_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["database_version", "binary_version", "applied", "pending"],
+      "required": [
+        "recorded_version_before", "recorded_version_after", "binary_version",
+        "applied", "pending"
+      ],
       "properties": {
-        "database_version": { "type": "integer" },
+        "recorded_version_before": { "type": ["integer", "null"] },
+        "recorded_version_after": { "type": ["integer", "null"] },
         "binary_version": { "type": "integer" },
         "applied": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
-        "pending": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } }
+        "pending": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
+        "unknown": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } }
       }
     },
     "init_report": {

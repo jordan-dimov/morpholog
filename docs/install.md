@@ -130,6 +130,20 @@ Before a deployment runs a workload, it can ask instead of finding out:
 morpholog migrate --check --database-url "$DATABASE_URL"   # exit 1 if behind
 ```
 
+`--check` also refuses a database that is **ahead** - one migrated by a
+newer Morpholog than the binary asking. Nothing is pending there, so a
+naive check would report success at exactly the moment this build cannot
+know whether the schema is still compatible.
+
+**Migrating needs ownership of the schema, not the runtime login.** If you
+provisioned with `--least-privilege`, the writer role deliberately cannot
+run DDL, so `migrate` connects as the role that owns the tables - the one
+that ran `init`. `--check` only reads, and both roles are granted `SELECT`
+on the record, so a readiness step can ask without holding the privileges
+to act. Migrations re-apply the privilege floor when they have changed
+anything, since a `GRANT` cannot reach a table that did not exist when it
+ran.
+
 If an unapplied migration leaves a **column** this binary expects absent, its
 queries report the database as out of date and tell you to run `migrate`,
 rather than surfacing a raw database error. That is the shape this release's
