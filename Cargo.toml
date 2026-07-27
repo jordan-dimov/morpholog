@@ -35,8 +35,8 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 rand = "0.10"
-chumsky = "0.10"
-ariadne = "0.5"
+chumsky = "0.13"
+ariadne = "0.6"
 
 [profile.dev]
 # Line tables instead of full debug info. The parser's combinator types
