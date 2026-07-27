@@ -164,9 +164,13 @@ class Morpholog:
         has not recorded, in order, and leaves a current one alone.
 
         `check` reports and changes nothing. The binary exits non-zero when
-        the database is behind, so that call raises `MorphologError` - catch
-        it, or read `report.pending` from a successful call to distinguish
-        "current" from "behind" without an exception.
+        the database is behind, but this client reads stdout rather than the
+        exit code, so you get the report either way - which is the more
+        useful outcome, because a raise would throw away what is pending.
+        Gate on the report:
+
+            if not client.migrate(check=True).is_current:
+                ...
         """
         args = ["migrate", "--database-url", self.database_url]
         if check:

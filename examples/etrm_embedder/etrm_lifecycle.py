@@ -82,6 +82,14 @@ def reset_schema(morph: Morpholog) -> None:
         check=True,
     )
     morph.init()
+    # The deploy-gate shape, on the path a real embedder uses. A freshly
+    # provisioned database is at the head, so nothing is pending - and this
+    # asserts the client hands the report back rather than raising, which is
+    # what lets a caller read WHAT is outstanding instead of only that
+    # something is.
+    state = morph.migrate(check=True)
+    if not state.is_current:
+        raise MorphologError(f"a freshly provisioned database should be current: {state.pending}")
 
 
 def main() -> None:
