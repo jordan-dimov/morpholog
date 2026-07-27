@@ -251,26 +251,20 @@ fn named_gate_program() -> morpholog_core::Program {
     p
 }
 
-/// A programme whose trace covers the entry kinds a `--trace` consumer can
-/// actually meet, named as the wire names them: `bind_one` binding,
-/// `require` holding, `let`, `assert` (what the surface spells `admit`),
-/// `emit`, `for` with per-item sub-traces, and `invariant_check`.
-///
-/// The goldens built from it are the first to contain a trace at all. The
-/// traced envelope has been pinned since traces existed, but with
-/// `trace: []` - so the wrapper was pinned and the payload never was, and
-/// a shape change inside an entry reddened nothing.
+/// A programme whose statements reach every trace step kind, so the
+/// goldens below can cover each arm of the union rather than the arms one
+/// happy path happens to hit.
 fn traced_program() -> morpholog_core::Program {
-    use morpholog_core::ir_builder::{bind_one_named, emit, for_, let_, require_named, term};
+    use morpholog_core::ir_builder::{
+        bind_one_named, emit, for_, let_, let_new_subject, require_named, retract, term,
+    };
     program("traced")
         .predicates(vec![
             predicate("Account").subject("account").build(),
             predicate("Approved").subject("account").build(),
-            predicate("Batch")
-                .subject("batch")
-                .collection("items")
-                .build(),
+            predicate("Draft").subject("account").build(),
             predicate("Seen").subject("item").build(),
+            predicate("Note").subject("note").build(),
         ])
         .intents(vec![morpholog_core::IntentDecl {
             name: "Notified".into(),
@@ -280,87 +274,198 @@ fn traced_program() -> morpholog_core::Program {
             }],
         }])
         .invariants(vec![invariant(
-            "seen_accounts_are_known",
+            "approved_accounts_are_known",
             implies(
-                claim("Seen", vec![var("item")]),
-                claim("Seen", vec![var("item")]),
+                claim("Approved", vec![var("account")]),
+                claim("Account", vec![var("account")]),
             ),
         )])
-        .transformations(vec![transformation(
-            "walk",
-            params(&["account", "batch", "items"]),
-            vec![
-                bind_one_named("the_account", claim("Account", vec![var("account")])),
-                require_named(
-                    "not_yet_approved",
-                    not(claim("Approved", vec![var("account")])),
-                ),
-                let_("copy", term(var("account"))),
-                assert_("Approved", vec![var("account")]),
-                for_(
-                    "item",
-                    term(var("items")),
-                    vec![assert_("Seen", vec![var("item")])],
-                ),
-                emit("Notified", vec![var("account")]),
-            ],
-        )])
+        .transformations(vec![
+            transformation(
+                "walk",
+                params(&["account", "items"]),
+                vec![
+                    bind_one_named("the_account", claim("Account", vec![var("account")])),
+                    require_named(
+                        "not_yet_approved",
+                        not(claim("Approved", vec![var("account")])),
+                    ),
+                    let_("copy", term(var("account"))),
+                    let_new_subject("receipt"),
+                    retract("Draft", vec![var("account")]),
+                    assert_("Approved", vec![var("account")]),
+                    for_(
+                        "item",
+                        term(var("items")),
+                        vec![assert_("Seen", vec![var("item")])],
+                    ),
+                    emit("Notified", vec![var("account")]),
+                ],
+            ),
+            // Admits standing with no account behind it, so the invariant
+            // check fails and the trace records held: false.
+            transformation(
+                "orphan",
+                params(&["account"]),
+                vec![assert_("Approved", vec![var("account")])],
+            ),
+            // An unbound lookup over ambiguous state: a kernel error, and
+            // the only way to reach BindOneOutcome::MultipleMatches.
+            transformation(
+                "pick_note",
+                params(&[]),
+                vec![
+                    bind_one_named("any_note", claim("Note", vec![var("note")])),
+                    assert_("Seen", vec![var("note")]),
+                ],
+            ),
+        ])
         .build()
 }
 
-/// The trace from a real `propose_with_trace` run over [`traced_program`],
-/// so the golden is byte-equal to what the runtime emits rather than to a
-/// hand-built approximation.
-fn real_trace() -> Vec<morpholog_core::TraceEntry> {
-    use morpholog_core::{TracedProposal, propose_with_trace};
+/// One real `propose_with_trace` run: the outcome AND the trace from the
+/// same invocation.
+///
+/// Taking them from different runs is how the first cut of these goldens
+/// went wrong - a trace that stopped at a failed lookup was pinned beside
+/// an invariant-violation reason, a pairing the runtime cannot produce. The
+/// point of a cross-layer golden is that it holds the runtime, the schema
+/// and the client to one sample; a self-contradicting sample holds them to
+/// nothing.
+fn traced_run(
+    name: &str,
+    args: Vec<EvalValue>,
+    pre: &State,
+) -> (PgProposalOutcome, Vec<morpholog_core::TraceEntry>) {
+    use morpholog_core::{Outcome, RejectionReason, TracedProposal, propose_with_trace};
     let p = traced_program();
-    let t = p.transformations.iter().find(|t| t.name == "walk").unwrap();
+    let t = p.transformations.iter().find(|t| t.name == *name).unwrap();
     let transition = Transition {
         transformation_name: t.name.clone(),
-        args: vec![
-            EvalValue::Subject(Subject::from("acct_1")),
-            EvalValue::Subject(Subject::from("batch_1")),
-            EvalValue::Collection(vec![EvalValue::Subject(Subject::from("item_1"))]),
-        ],
+        args,
         actor: Subject::from("alex"),
     };
-    let pre = State::from_claims(vec![ClaimInstance {
-        predicate: "Account".into(),
-        args: vec![EvalValue::Subject(Subject::from("acct_1"))],
-    }]);
-    match propose_with_trace(t, &transition, &pre, &p.invariants, &p.definitions) {
-        TracedProposal::Completed { trace, .. } => trace,
-        TracedProposal::Errored { error, .. } => panic!("fixture must not error: {error:?}"),
+    match propose_with_trace(t, &transition, pre, &p.invariants, &p.definitions) {
+        TracedProposal::Completed { outcome, trace } => {
+            let envelope = match outcome {
+                Outcome::Accepted {
+                    asserted_claims,
+                    retracted_claims,
+                    emitted_intents,
+                    ..
+                } => PgProposalOutcome::Committed {
+                    transition_id: sample_uuid(),
+                    actor: transition.actor.clone(),
+                    asserted_claims,
+                    retracted_claims,
+                    emitted_intents,
+                },
+                Outcome::Rejected { reason } => PgProposalOutcome::Rejected {
+                    reason: reason.to_string(),
+                    // Matched off the variant, the way the adapter does it.
+                    rule: match &reason {
+                        RejectionReason::Invariant { name, .. } => Some(name.to_string()),
+                        RejectionReason::Require { name, .. }
+                        | RejectionReason::BindNone { name, .. } => {
+                            name.as_ref().map(ToString::to_string)
+                        }
+                    },
+                    witness: match &reason {
+                        RejectionReason::Invariant { witness, .. } => witness.clone(),
+                        _ => Vec::new(),
+                    },
+                },
+            };
+            let mut trace = trace;
+            pin_fresh_subjects(&mut trace);
+            (envelope, trace)
+        }
+        TracedProposal::Errored { error, .. } => panic!("expected a decision, got {error:?}"),
     }
 }
 
-/// The same programme against empty state, so the trace records a refusing
-/// lookup. The rejecting arms need a golden of their own or the schema
-/// would be describing shapes nothing produced - the failure mode this
-/// whole pin exists to close.
-fn real_rejected_trace() -> Vec<morpholog_core::TraceEntry> {
+/// The kernel-error path, which carries a trace of its own: the statements
+/// that ran before the error, ending in the ambiguous lookup.
+fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
     use morpholog_core::{TracedProposal, propose_with_trace};
     let p = traced_program();
-    let t = p.transformations.iter().find(|t| t.name == "walk").unwrap();
+    let t = p
+        .transformations
+        .iter()
+        .find(|t| t.name == "pick_note")
+        .unwrap();
     let transition = Transition {
         transformation_name: t.name.clone(),
-        args: vec![
-            EvalValue::Subject(Subject::from("acct_1")),
-            EvalValue::Subject(Subject::from("batch_1")),
-            EvalValue::Collection(vec![]),
-        ],
+        args: vec![],
         actor: Subject::from("alex"),
     };
-    match propose_with_trace(
-        t,
-        &transition,
-        &State::from_claims(vec![]),
-        &p.invariants,
-        &p.definitions,
-    ) {
-        TracedProposal::Completed { trace, .. } => trace,
-        TracedProposal::Errored { error, .. } => panic!("fixture must not error: {error:?}"),
+    let pre = State::from_claims(vec![
+        ClaimInstance {
+            predicate: "Note".into(),
+            args: vec![EvalValue::Subject(Subject::from("note_1"))],
+        },
+        ClaimInstance {
+            predicate: "Note".into(),
+            args: vec![EvalValue::Subject(Subject::from("note_2"))],
+        },
+    ]);
+    match propose_with_trace(t, &transition, &pre, &p.invariants, &p.definitions) {
+        TracedProposal::Errored { error, trace } => (error.to_string(), trace),
+        TracedProposal::Completed { outcome, .. } => {
+            panic!("expected a kernel error, got {outcome:?}")
+        }
     }
+}
+
+/// A `let x = new Subject()` step mints a fresh UUIDv7 on every run, so its
+/// entry is the one thing a byte-equal golden cannot take verbatim. That
+/// subject - and only that subject - is replaced with a fixed one; every
+/// other byte in these goldens is what the runtime produced. Without this
+/// the step could not be pinned at all, and the schema would go on
+/// describing an arm no cross-layer sample covers.
+fn pin_fresh_subjects(trace: &mut [morpholog_core::TraceEntry]) {
+    use morpholog_core::TraceEntry;
+    for entry in trace.iter_mut() {
+        match entry {
+            TraceEntry::LetNewSubject { subject, .. } => {
+                *subject =
+                    EvalValue::Subject(Subject::from("01900000-0000-7000-8000-00000000000f"));
+            }
+            TraceEntry::For { iterations, .. } => {
+                for it in iterations.iter_mut() {
+                    pin_fresh_subjects(&mut it.trace);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn account_state(extra: &[&str]) -> State {
+    let mut claims = vec![
+        ClaimInstance {
+            predicate: "Account".into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        },
+        ClaimInstance {
+            predicate: "Draft".into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        },
+    ];
+    for p in extra {
+        claims.push(ClaimInstance {
+            predicate: (*p).into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        });
+    }
+    State::from_claims(claims)
+}
+
+fn walk_args() -> Vec<EvalValue> {
+    vec![
+        EvalValue::Subject(Subject::from("acct_1")),
+        EvalValue::Collection(vec![EvalValue::Subject(Subject::from("item_1"))]),
+    ]
 }
 
 #[test]
@@ -509,25 +614,55 @@ fn composite_envelopes_serialize_as_pinned() {
             explanation,
         )),
     );
+    // Every traced golden below is one real run: outcome and trace from the
+    // same `propose_with_trace` call, so the pair is one the runtime can
+    // actually produce. Between them they reach each arm of the trace union.
+    let (committed, trace) = traced_run("walk", walk_args(), &account_state(&[]));
     assert_golden(
         "traced_committed.json",
         &to_value(&morpholog_cli::envelopes::Traced {
-            result: &committed_outcome(),
-            trace: real_trace(),
+            result: &committed,
+            trace,
         }),
+    );
+    // Refused by the invariant, so the trace ends in a failed check.
+    let (rejected, trace) = traced_run(
+        "orphan",
+        vec![EvalValue::Subject(Subject::from("acct_1"))],
+        &State::from_claims(vec![]),
     );
     assert_golden(
         "traced_rejected.json",
         &to_value(&morpholog_cli::envelopes::Traced {
-            result: &rejected_outcome(),
-            trace: real_rejected_trace(),
+            result: &rejected,
+            trace,
         }),
     );
+    // Refused at the gate: the lookup binds, then the require fails.
+    let (gated, trace) = traced_run("walk", walk_args(), &account_state(&["Approved"]));
+    assert_golden(
+        "traced_rejected_at_gate.json",
+        &to_value(&morpholog_cli::envelopes::Traced {
+            result: &gated,
+            trace,
+        }),
+    );
+    // Refused at the lookup, before any gate runs.
+    let (unbound, trace) = traced_run("walk", walk_args(), &State::from_claims(vec![]));
+    assert_golden(
+        "traced_rejected_at_bind.json",
+        &to_value(&morpholog_cli::envelopes::Traced {
+            result: &unbound,
+            trace,
+        }),
+    );
+    // The kernel-error path, and the only way to reach a multi-match trace.
+    let (error, trace) = errored_run();
     assert_golden(
         "traced_errored.json",
         &to_value(&morpholog_cli::envelopes::Traced {
-            result: morpholog_cli::envelopes::TracedError::new("bind matched 2 claims".to_string()),
-            trace: [0u8; 0],
+            result: morpholog_cli::envelopes::TracedError::new(error),
+            trace,
         }),
     );
 
@@ -1245,6 +1380,105 @@ fn validate(
     Ok(())
 }
 
+/// Every arm of the trace union appears in some traced golden.
+///
+/// The arms are read out of the schema rather than listed here, so adding
+/// one without a sample reddens this test instead of quietly shipping a
+/// branch no golden exercises - which is how four arms came to be described
+/// by the schema and produced by nothing.
+#[test]
+fn every_trace_arm_appears_in_a_golden() {
+    let schema = result_schema();
+    let defs = schema.get("$defs").expect("$defs");
+
+    // The discriminant values the schema declares, per union.
+    let consts = |def: &str, key: &str| -> Vec<String> {
+        defs.get(def)
+            .and_then(|d| d.get("oneOf"))
+            .and_then(|o| o.as_array())
+            .expect("a discriminated union")
+            .iter()
+            .map(|arm| {
+                arm.get("properties")
+                    .and_then(|p| p.get(key))
+                    .and_then(|k| k.get("const"))
+                    .and_then(|c| c.as_str())
+                    .expect("each arm pins its discriminant")
+                    .to_string()
+            })
+            .collect()
+    };
+    let kinds = consts("trace_entry", "kind");
+    let require_arms = consts("require_outcome", "status");
+    let bind_arms = consts("bind_one_outcome", "status");
+    assert!(
+        kinds.len() > 5 && require_arms.len() == 2 && bind_arms.len() == 3,
+        "anti-vacuity: the arms must be read, not silently empty"
+    );
+
+    // What the goldens actually contain, descending through `for` bodies.
+    let mut seen_kinds = std::collections::BTreeSet::new();
+    let mut seen_statuses = std::collections::BTreeSet::new();
+    fn walk(
+        entries: &[serde_json::Value],
+        kinds: &mut std::collections::BTreeSet<String>,
+        statuses: &mut std::collections::BTreeSet<String>,
+    ) {
+        for e in entries {
+            if let Some(k) = e.get("kind").and_then(|k| k.as_str()) {
+                kinds.insert(k.to_string());
+            }
+            if let Some(st) = e
+                .get("outcome")
+                .and_then(|o| o.get("status"))
+                .and_then(|s| s.as_str())
+            {
+                statuses.insert(st.to_string());
+            }
+            if let Some(iters) = e.get("iterations").and_then(|i| i.as_array()) {
+                for it in iters {
+                    if let Some(sub) = it.get("trace").and_then(|t| t.as_array()) {
+                        walk(sub, kinds, statuses);
+                    }
+                }
+            }
+        }
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/envelopes");
+    let mut traced_goldens = 0;
+    for entry in std::fs::read_dir(&dir).expect("golden dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !name.starts_with("traced_") {
+            continue;
+        }
+        traced_goldens += 1;
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
+        if let Some(trace) = value.get("trace").and_then(|t| t.as_array()) {
+            walk(trace, &mut seen_kinds, &mut seen_statuses);
+        }
+    }
+    assert!(
+        traced_goldens > 1,
+        "anti-vacuity: traced goldens must exist"
+    );
+
+    for kind in kinds {
+        assert!(
+            seen_kinds.contains(&kind),
+            "no traced golden contains a `{kind}` step; the schema describes an arm \
+             nothing produced. Add a real run that reaches it."
+        );
+    }
+    for status in require_arms.into_iter().chain(bind_arms) {
+        assert!(
+            seen_statuses.contains(&status),
+            "no traced golden contains a `{status}` outcome; add a real run that reaches it."
+        );
+    }
+}
+
 #[test]
 fn every_golden_validates_against_its_defs_entry() {
     let schema = result_schema();
@@ -1255,6 +1489,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("rejected_with_explanation.json", "rejected"),
         ("traced_committed.json", "traced_envelope"),
         ("traced_rejected.json", "traced_envelope"),
+        ("traced_rejected_at_gate.json", "traced_envelope"),
+        ("traced_rejected_at_bind.json", "traced_envelope"),
         ("traced_errored.json", "traced_envelope"),
         ("batch_committed_receipt.json", "batch_receipt"),
         ("batch_rejected_receipt.json", "batch_receipt"),

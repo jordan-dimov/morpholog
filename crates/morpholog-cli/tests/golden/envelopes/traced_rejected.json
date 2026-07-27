@@ -1,23 +1,36 @@
 {
   "result": {
-    "reason": "invariant `no_flagged_accounts` violated",
-    "rule": "no_flagged_accounts",
-    "status": "rejected"
+    "reason": "invariant `approved_accounts_are_known` violated",
+    "rule": "approved_accounts_are_known",
+    "status": "rejected",
+    "witness": [
+      {
+        "value": {
+          "type": "subject",
+          "value": "acct_1"
+        },
+        "var": "account"
+      }
+    ]
   },
   "trace": [
     {
-      "expression": "Account(account)",
-      "kind": "bind_one",
-      "name": "the_account",
-      "outcome": {
-        "directly_missing_claims": [
+      "claim": {
+        "args": [
           {
-            "predicate": "Account",
-            "rendered": "Account(acct_1)"
+            "type": "subject",
+            "value": "acct_1"
           }
         ],
-        "status": "no_match"
-      }
+        "predicate": "Approved"
+      },
+      "kind": "assert"
+    },
+    {
+      "expression": "Approved(account) implies Account(account)",
+      "held": false,
+      "kind": "invariant_check",
+      "name": "approved_accounts_are_known"
     }
   ]
 }

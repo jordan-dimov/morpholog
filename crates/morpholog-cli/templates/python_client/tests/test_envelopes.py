@@ -109,13 +109,67 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(loop.binding, "item")
         self.assertIsInstance(loop.iterations[0].trace[0], envelopes.AssertStep)
 
+    def test_every_traced_golden_parses_and_covers_every_arm(self):
+        # The client-side mirror of the binary's arm-coverage gate. Parsing
+        # only the happy-path trace would leave the parsers for the other
+        # arms unproven, which is how four of them shipped unexercised.
+        from _support import GOLDEN_DIR
+
+        step_types, outcome_types = set(), set()
+        for path in sorted(GOLDEN_DIR.glob("traced_*.json")):
+            with path.open() as fh:
+                traced = envelopes.TracedEnvelope.from_json(json.load(fh))
+
+            def walk(steps):
+                for step in steps:
+                    step_types.add(type(step).__name__)
+                    outcome = getattr(step, "outcome", None)
+                    if outcome is not None:
+                        outcome_types.add(type(outcome).__name__)
+                    for it in getattr(step, "iterations", []):
+                        walk(it.trace)
+
+            walk(traced.trace)
+
+        self.assertEqual(
+            step_types,
+            {
+                "RequireStep",
+                "BindStep",
+                "LetStep",
+                "LetNewSubjectStep",
+                "AssertStep",
+                "RetractStep",
+                "EmitStep",
+                "ForStep",
+                "InvariantCheckStep",
+            },
+        )
+        self.assertEqual(
+            outcome_types,
+            {"RequireHeld", "RequireRejected", "BindBound", "BindNoMatch", "BindMultipleMatches"},
+        )
+
     def test_a_refusing_trace_names_the_lookup_that_failed(self):
-        traced = envelopes.TracedEnvelope.from_json(golden("traced_rejected.json"))
+        traced = envelopes.TracedEnvelope.from_json(golden("traced_rejected_at_bind.json"))
         step = traced.trace[-1]
         self.assertIsInstance(step, envelopes.BindStep)
         self.assertEqual(step.name, "the_account")
         self.assertIsInstance(step.outcome, envelopes.BindNoMatch)
         self.assertEqual(step.outcome.directly_missing_claims[0].predicate, "Account")
+
+    def test_a_refused_gate_carries_its_reason_and_name(self):
+        traced = envelopes.TracedEnvelope.from_json(golden("traced_rejected_at_gate.json"))
+        gate = next(s for s in traced.trace if isinstance(s, envelopes.RequireStep))
+        self.assertEqual(gate.name, "not_yet_approved")
+        self.assertIsInstance(gate.outcome, envelopes.RequireRejected)
+        self.assertIn("not_yet_approved", gate.outcome.reason)
+
+    def test_a_failed_invariant_check_is_visible_in_the_trace(self):
+        traced = envelopes.TracedEnvelope.from_json(golden("traced_rejected.json"))
+        check = next(s for s in traced.trace if isinstance(s, envelopes.InvariantCheckStep))
+        self.assertFalse(check.held)
+        self.assertEqual(check.name, "approved_accounts_are_known")
 
     def test_an_unknown_trace_step_kind_is_drift(self):
         payload = golden("traced_committed.json")

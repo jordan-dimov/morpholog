@@ -10,45 +10,18 @@
           {
             "type": "subject",
             "value": "acct_1"
-          },
-          {
-            "type": "decimal",
-            "value": "100.50"
-          },
-          {
-            "type": "bool",
-            "value": true
-          },
-          {
-            "type": "date",
-            "value": "2026-06-01"
-          },
-          {
-            "type": "timestamp",
-            "value": "2026-06-01T12:00:00Z"
-          },
-          {
-            "type": "duration",
-            "value": "PT6H"
-          },
-          {
-            "type": "quantity",
-            "value": {
-              "amount": "25000",
-              "unit": "USD"
-            }
-          },
-          {
-            "type": "collection",
-            "value": [
-              {
-                "type": "subject",
-                "value": "nested"
-              }
-            ]
           }
         ],
-        "predicate": "EveryKind"
+        "predicate": "Approved"
+      },
+      {
+        "args": [
+          {
+            "type": "subject",
+            "value": "item_1"
+          }
+        ],
+        "predicate": "Seen"
       }
     ],
     "emitted_intents": [
@@ -59,7 +32,7 @@
             "value": "acct_1"
           }
         ],
-        "name": "AccountOpened"
+        "name": "Notified"
       }
     ],
     "retracted_claims": [
@@ -70,7 +43,7 @@
             "value": "acct_1"
           }
         ],
-        "predicate": "Flag"
+        "predicate": "Draft"
       }
     ],
     "status": "committed",
@@ -89,13 +62,6 @@
               "value": "acct_1"
             },
             "var": "account"
-          },
-          {
-            "value": {
-              "type": "subject",
-              "value": "batch_1"
-            },
-            "var": "batch"
           },
           {
             "value": {
@@ -129,6 +95,29 @@
         "type": "subject",
         "value": "acct_1"
       }
+    },
+    {
+      "kind": "let_new_subject",
+      "name": "receipt",
+      "subject": {
+        "type": "subject",
+        "value": "01900000-0000-7000-8000-00000000000f"
+      }
+    },
+    {
+      "kind": "retract",
+      "predicate": "Draft",
+      "retracted": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "acct_1"
+            }
+          ],
+          "predicate": "Draft"
+        }
+      ]
     },
     {
       "claim": {
@@ -181,10 +170,10 @@
       "kind": "emit"
     },
     {
-      "expression": "Seen(item) implies Seen(item)",
+      "expression": "Approved(account) implies Account(account)",
       "held": true,
       "kind": "invariant_check",
-      "name": "seen_accounts_are_known"
+      "name": "approved_accounts_are_known"
     }
   ]
 }

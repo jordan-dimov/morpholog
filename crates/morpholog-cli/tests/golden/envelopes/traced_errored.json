@@ -1,7 +1,17 @@
 {
   "result": {
-    "error": "bind matched 2 claims",
+    "error": "type mismatch: bind_one matched 2 candidates; expected exactly one: Note(note)",
     "status": "errored"
   },
-  "trace": []
+  "trace": [
+    {
+      "expression": "Note(note)",
+      "kind": "bind_one",
+      "name": "any_note",
+      "outcome": {
+        "count": 2,
+        "status": "multiple_matches"
+      }
+    }
+  ]
 }
