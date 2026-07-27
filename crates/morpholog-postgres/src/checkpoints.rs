@@ -39,7 +39,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify_checked_query};
 use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
 use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -223,7 +223,7 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
     )
     .fetch_optional(&mut *conn)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(row.map(|r| Checkpoint {
         tree_size: r.tree_size,
         root_hash: r.root_hash,
@@ -272,7 +272,7 @@ pub async fn create_checkpoint(
         Some(_) => Some(load_audit_rows(&mut read_tx, tree_size).await?),
         None => None,
     };
-    read_tx.commit().await.map_err(classify)?;
+    read_tx.commit().await.map_err(classify_checked_query)?;
 
     let root_hash = render_hash(&merkle_root(&leaves));
 
@@ -294,11 +294,11 @@ pub async fn create_checkpoint(
         }
     }
 
-    let mut tx = pool.begin().await.map_err(classify)?;
+    let mut tx = pool.begin().await.map_err(classify_checked_query)?;
     sqlx::query!("SELECT pg_advisory_xact_lock($1)", CHECKPOINT_LOCK_KEY)
         .execute(&mut *tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
 
     let prev = latest_checkpoint(&mut tx).await?;
     if let Some(p) = &prev
@@ -333,16 +333,16 @@ pub async fn create_checkpoint(
                     )
                     .execute(&mut *tx)
                     .await
-                    .map_err(classify)?;
+                    .map_err(classify_checked_query)?;
                 }
-                tx.commit().await.map_err(classify)?;
+                tx.commit().await.map_err(classify_checked_query)?;
                 Checkpoint {
                     signatures,
                     ..p.clone()
                 }
             }
             None => {
-                tx.rollback().await.map_err(classify)?;
+                tx.rollback().await.map_err(classify_checked_query)?;
                 p.clone()
             }
         };
@@ -390,8 +390,8 @@ pub async fn create_checkpoint(
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
-    tx.commit().await.map_err(classify)?;
+    .map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify_checked_query)?;
 
     Ok(CheckpointOutcome::Created(Checkpoint {
         tree_size,
@@ -421,7 +421,7 @@ pub(crate) async fn load_checkpoint_chain(
     )
     .fetch_all(conn)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(stored
         .into_iter()
         .map(|r| Checkpoint {
@@ -476,7 +476,7 @@ pub async fn first_unsigned_checkpoint_size(pool: &PgPool) -> Result<Option<i64>
     )
     .fetch_one(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(row.size)
 }
 

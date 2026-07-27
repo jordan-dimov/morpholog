@@ -2,7 +2,7 @@ use crate::as_of::{ReplaySet, reconstruct_inner};
 use crate::audit::REPLAY_CHUNK;
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::REJECTION_KIND_INVARIANT;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
@@ -98,7 +98,7 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
     )
     .fetch_one(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     if !sealed_exists {
         return Ok(ViewsVerification::NotSealed);
     }
@@ -118,7 +118,7 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
         sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sealed_sql))
             .fetch_all(pool)
             .await
-            .map_err(classify)?
+            .map_err(classify_checked_query)?
             .into_iter()
             .collect();
 
@@ -203,7 +203,7 @@ async fn live_view_hash(
     )
     .fetch_optional(pool)
     .await
-    .map_err(classify)
+    .map_err(classify_checked_query)
 }
 /// Replay the audit log through a [`CoverageTracker`], then count
 /// the rejection log into it, and report, per invariant of
@@ -278,7 +278,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                 .await
             }
         }
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
         let Some(last) = rows.last() else {
             break;
         };
@@ -385,7 +385,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                 .await
             }
         }
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
         let Some(last) = rows.last() else {
             break;
         };
@@ -403,7 +403,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
             break;
         }
     }
-    tx.commit().await.map_err(classify)?;
+    tx.commit().await.map_err(classify_checked_query)?;
     Ok(tracker.into_report())
 }
 /// Replay the audit log to its latest transition and compare the
@@ -431,12 +431,12 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
     )
     .fetch_optional(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     // count(*) is never null, but Postgres cannot prove it.
     let transitions = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
         .fetch_one(&mut *tx)
         .await
-        .map_err(classify)?
+        .map_err(classify_checked_query)?
         .count;
     let replayed = match latest {
         Some(row) => reconstruct_inner(&mut tx, row.transition_id, None)
@@ -486,7 +486,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
                 .await
             }
         }
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
         let Some(last) = page.last() else {
             break;
         };
@@ -497,7 +497,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
             break;
         }
     }
-    tx.commit().await.map_err(classify)?;
+    tx.commit().await.map_err(classify_checked_query)?;
     let current = decode_claim_rows(rows)?;
     // Multiset diff: +1 per current claim, -1 per replayed claim.
     // Positive residue exists only in the claims table, negative only

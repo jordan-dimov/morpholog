@@ -10,7 +10,7 @@
 use crate::as_of::{ReplaySet, resolve_transition_at_or_before};
 use crate::audit::{AuditRow, REPLAY_CHUNK, audit_cursor_for, list_audit_rows_page};
 use crate::checkpoints::{Checkpoint, TreeVerification};
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify_checked_query};
 use crate::pack::{EvidencePack, verify_pack};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
@@ -157,7 +157,7 @@ pub async fn score_candidate(
             break;
         }
     }
-    tx.commit().await.map_err(classify)?;
+    tx.commit().await.map_err(classify_checked_query)?;
     // A boundary at or past the end of history: an empty test slice.
     if let Some(p) = pending.take() {
         scorer.mark_split(p.report);

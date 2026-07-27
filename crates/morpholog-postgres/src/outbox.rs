@@ -1,4 +1,4 @@
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify_checked_query};
 use crate::propose::{PgProposalOutcome, propose_against_pg_inner};
 use chrono::{DateTime, Utc};
 use morpholog_core::{Definition, EvalValue, Invariant, Subject, Transformation, Transition};
@@ -84,7 +84,7 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
     )
     .fetch_all(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     rows.into_iter().map(decode_outbox_row).collect()
 }
 /// Return outbox rows filtered by status and/or intent type. Both
@@ -118,7 +118,7 @@ pub async fn list_outbox_rows(
     )
     .fetch_all(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     rows.into_iter().map(decode_outbox_row).collect()
 }
 /// One raw `morpholog.outbox` row as `query_as!` decodes it (DB shape
@@ -204,7 +204,7 @@ pub async fn mark_outbox_delivered(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(if rows.rows_affected() == 1 {
         OutboxUpdate::Applied
     } else {
@@ -254,7 +254,7 @@ pub async fn mark_outbox_transient_attempt(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(if rows.rows_affected() == 1 {
         OutboxUpdate::Applied
     } else {
@@ -293,7 +293,7 @@ pub async fn mark_outbox_failed(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(if rows.rows_affected() == 1 {
         OutboxUpdate::Applied
     } else {
@@ -349,7 +349,7 @@ pub async fn record_compensation(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     if rows.rows_affected() == 1 {
         Ok(())
     } else {
@@ -447,7 +447,7 @@ pub async fn claim_pending_outbox_row(
     )
     .fetch_optional(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     row_opt.map(decode_outbox_row).transpose()
 }
 /// Release a held lease without resolving the row to a terminal
@@ -480,7 +480,7 @@ pub async fn release_outbox_claim(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(if rows.rows_affected() == 1 {
         OutboxUpdate::Applied
     } else {
@@ -513,7 +513,7 @@ pub async fn earliest_pending_retry(
     )
     .fetch_optional(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(row.and_then(|r| r.earliest))
 }
 pub(crate) fn lease_duration_to_secs(lease_duration: std::time::Duration) -> Result<i64, PgError> {
@@ -593,7 +593,7 @@ pub async fn begin_compensation(
     )
     .fetch_optional(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     row_opt.map(decode_outbox_row).transpose()
 }
 /// Resolve a compensation_in_progress row on success: transitions it
@@ -631,7 +631,7 @@ pub async fn complete_compensation(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(if rows.rows_affected() == 1 {
         OutboxUpdate::Applied
     } else {
@@ -681,7 +681,7 @@ pub async fn mark_compensation_failed(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(if rows.rows_affected() == 1 {
         OutboxUpdate::Applied
     } else {

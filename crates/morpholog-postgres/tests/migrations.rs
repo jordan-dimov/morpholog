@@ -160,53 +160,144 @@ async fn the_witness_migration_brings_an_old_table_to_the_head_shape() {
         .unwrap();
 }
 
-/// An un-migrated database says so, and says what to do about it.
+/// An un-migrated database says so, on the path that actually breaks.
 ///
-/// This is the failure an operator actually meets on upgrade, and its shape
-/// is what makes it worth catching: commits keep working, so nothing looks
-/// wrong until the first *refusal*, which then surfaces as an operational
-/// database error rather than the lawful rejection it is. For an embedder
-/// that means an exception where a decided outcome belongs.
+/// The damaging scenario is not a read: it is the post-rollback INSERT in
+/// `write_rejection`, which turns a lawful refusal into an operational error
+/// when the column is absent. Commits keep working, so nothing looks wrong
+/// until the first refusal - and for an embedder that arrives as an
+/// exception where a decided outcome belongs.
 ///
-/// Unlike the migration test above, this one needs the real `morpholog`
-/// schema, because the point is what the production query does. It removes
-/// the column and puts it back through the shipped migration - the same file
-/// an operator would run - so the suite is left as it was found.
+/// **On its own database.** An earlier version dropped the column from the
+/// shared `morpholog` schema and restored it afterwards, which is a
+/// contamination risk this module's own doctrine forbids: a panic, a kill,
+/// or a future refactor between the two leaves every later test facing a
+/// table missing a column. A database created and dropped here cannot reach
+/// anything else, whatever happens in between.
 #[tokio::test]
-async fn an_unmigrated_database_names_the_remedy() {
-    let pool = test_pool().await;
-    common::reset_db(&pool).await;
+async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = "morpholog_drift_probe";
+    let admin = morpholog_postgres::with_default_user(
+        &base.replace(base.rsplit('/').next().unwrap_or_default(), "postgres"),
+    );
+    let admin_pool = sqlx::PgPool::connect(&admin)
+        .await
+        .expect("connect to the maintenance database");
+    ddl(&admin_pool, format!("DROP DATABASE IF EXISTS {name}"))
+        .await
+        .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .expect("create the throwaway database");
 
+    let probe_url = morpholog_postgres::with_default_user(
+        &base.replace(base.rsplit('/').next().unwrap_or_default(), name),
+    );
+    let outcome = drift_probe(&probe_url).await;
+
+    // Drop the database before asserting, so a failed assertion cannot leave
+    // it behind for the next run to trip over.
+    let pools_closed = sqlx::PgPool::connect(&probe_url).await;
+    drop(pools_closed);
     ddl(
-        &pool,
-        "ALTER TABLE morpholog.rejections DROP COLUMN witness".to_string(),
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
     )
     .await
-    .expect("dropping the column simulates a database from the previous release");
+    .unwrap();
 
-    // Capture, then restore UNCONDITIONALLY, then assert. `expect_err` is
-    // itself an assertion, so running it first would panic past the restore
-    // on the one path where the query unexpectedly succeeds - leaving the
-    // shared schema broken for every later test in the run.
-    let result = morpholog_postgres::list_rejection_rows(&pool, 10).await;
-
-    ddl(&pool, WITNESS_MIGRATION.to_string())
-        .await
-        .expect("the shipped migration restores the column");
-
-    let err = result.expect_err("a query naming the absent column must fail");
+    let err = outcome.expect_err("a refusal against a stale schema must fail operationally");
     let rendered = err.to_string();
     assert!(
         matches!(err, morpholog_postgres::PgError::SchemaBehind { .. }),
-        "an absent column must classify as a stale schema, got {err:?}"
+        "the refusal path must diagnose a stale schema, got {err:?}"
     );
     assert!(
         rendered.contains("sql/migrations/"),
         "the message must name where the remedy lives, got: {rendered}"
     );
-
-    // And the restore worked, so the suite is as it was.
-    morpholog_postgres::list_rejection_rows(&pool, 10)
-        .await
-        .expect("the column is back");
 }
+
+/// Provision a database at the PREVIOUS release's shape, commit once, then
+/// refuse once. Returns what the refusal produced.
+async fn drift_probe(
+    url: &str,
+) -> Result<morpholog_postgres::PgProposalOutcome, morpholog_postgres::PgError> {
+    use morpholog_test_support::{dec, subj};
+
+    let pool = sqlx::PgPool::connect(url)
+        .await
+        .expect("connect to the probe");
+    morpholog_postgres::initialise_schema(&pool)
+        .await
+        .expect("provision the head schema");
+    // Wind it back to the previous release: the column this binary writes.
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.rejections DROP COLUMN witness".to_string(),
+    )
+    .await
+    .expect("simulate a database from before the migration");
+
+    let program = morpholog_surface::parse_program(DRIFT_FIXTURE).expect("fixture parses");
+    program.validate().expect("fixture validates");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("fixture compiles");
+    let post = compiled
+        .program()
+        .transformations
+        .iter()
+        .find(|t| t.name == "post")
+        .expect("fixture declares post")
+        .clone();
+
+    let propose = |args: Vec<morpholog_core::EvalValue>| {
+        let compiled = &compiled;
+        let post = &post;
+        let pool = &pool;
+        async move {
+            let transition = morpholog_core::Transition {
+                transformation_name: post.name.clone(),
+                args,
+                actor: morpholog_core::Subject::from("alex"),
+            };
+            morpholog_postgres::propose_against_pg(
+                pool,
+                compiled,
+                &morpholog_postgres::Proposal::gateway(&transition),
+            )
+            .await
+        }
+    };
+
+    // A commit still works against the stale schema - which is exactly why
+    // the failure hides until something is refused. Asserted, not ignored:
+    // if this one were refused instead, the refusal below would prove
+    // nothing about the path under test.
+    let accepted = propose(vec![subj("e1"), dec(100)])
+        .await
+        .expect("an accepted proposal touches no rejection row");
+    assert!(
+        matches!(
+            accepted,
+            morpholog_postgres::PgProposalOutcome::Committed { .. }
+        ),
+        "the stale schema must not affect the commit path, got {accepted:?}"
+    );
+
+    // The same entry id again: refused by the uniqueness discipline, and the
+    // refusal is what tries to write the missing column.
+    propose(vec![subj("e1"), dec(999)]).await
+}
+
+const DRIFT_FIXTURE: &str = r#"
+program drift_probe
+
+predicate Entry(entry_id: Subject, amount: Decimal)
+    unique by (entry_id)
+
+transformation post(entry_id, amount):
+    admit Entry(entry_id, amount)
+"#;

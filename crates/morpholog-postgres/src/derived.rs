@@ -1,6 +1,6 @@
 use crate::as_of::reconstruct_state_at_for_predicates;
 use crate::claims::{decode_claim_rows, list_claims_for_predicates};
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
 use morpholog_core::{
@@ -133,7 +133,7 @@ pub async fn refresh_derived(
     )
     .fetch_optional(&mut *read_tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     let claim_rows: Vec<(String, serde_json::Value)> = if footprint.is_empty() {
         Vec::new()
     } else {
@@ -144,12 +144,12 @@ pub async fn refresh_derived(
         )
         .fetch_all(&mut *read_tx)
         .await
-        .map_err(classify)?
+        .map_err(classify_checked_query)?
         .into_iter()
         .map(|r| (r.predicate_name, r.arguments))
         .collect()
     };
-    read_tx.commit().await.map_err(classify)?;
+    read_tx.commit().await.map_err(classify_checked_query)?;
     let snapshot_tid = latest_visible.as_ref().map(|r| r.transition_id);
     let snapshot_at = latest_visible.map(|r| r.committed_at);
     let source_claim_count = claim_rows.len();
@@ -167,7 +167,7 @@ pub async fn refresh_derived(
     // the old generation - one short transaction, no kernel work.
     let write_start = Instant::now();
     let refresh_id = Uuid::now_v7();
-    let mut tx = pool.begin().await.map_err(classify)?;
+    let mut tx = pool.begin().await.map_err(classify_checked_query)?;
     sqlx::query!(
         "INSERT INTO morpholog_read.derived_refreshes
             (refresh_id, model_hash, refreshed_at,
@@ -182,7 +182,7 @@ pub async fn refresh_derived(
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     // Bulk insert in one statement (UNNEST of parallel arrays) rather than
     // a round-trip per row. COPY is the next step if a profile demands it.
     if !rows.is_empty() {
@@ -200,7 +200,7 @@ pub async fn refresh_derived(
         )
         .execute(&mut *tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
     }
     // Flip the single-row active pointer, then drop every other generation
     // (cascading its rows). The just-published generation is now the only
@@ -214,15 +214,15 @@ pub async fn refresh_derived(
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     sqlx::query!(
         "DELETE FROM morpholog_read.derived_refreshes WHERE refresh_id <> $1",
         refresh_id,
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
-    tx.commit().await.map_err(classify)?;
+    .map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify_checked_query)?;
     let write = write_start.elapsed();
     Ok(RefreshSummary {
         refresh_id,
