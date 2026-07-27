@@ -1514,6 +1514,55 @@ fn every_trace_arm_appears_in_a_golden() {
     }
 }
 
+/// No golden carries an empty `witness`, because absence and emptiness must
+/// not both be sayable.
+///
+/// The prose promises "absent, never `[]`" - absence means nothing was
+/// captured, while `[]` would claim the rule was reading nothing, which is
+/// never true of a refusal. `skip_serializing_if` is what delivers that and
+/// the schema's `minItems` states it, but the walker here ignores `minItems`
+/// deliberately, so without this check the promise would rest on a keyword
+/// nothing in the repo enforces.
+#[test]
+fn no_golden_carries_an_empty_witness() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/envelopes");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("golden dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let text = std::fs::read_to_string(&path).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("json");
+        fn scan(v: &serde_json::Value, name: &str, checked: &mut usize) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    if let Some(w) = map.get("witness") {
+                        *checked += 1;
+                        assert_ne!(
+                            w.as_array().map(std::vec::Vec::len),
+                            Some(0),
+                            "{name} carries an empty witness; it should be absent instead"
+                        );
+                    }
+                    for v in map.values() {
+                        scan(v, name, checked);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for v in items {
+                        scan(v, name, checked);
+                    }
+                }
+                _ => {}
+            }
+        }
+        scan(&value, &name, &mut checked);
+    }
+    assert!(
+        checked > 1,
+        "anti-vacuity: goldens carrying a witness must exist, found {checked}"
+    );
+}
+
 #[test]
 fn every_golden_validates_against_its_defs_entry() {
     let schema = result_schema();

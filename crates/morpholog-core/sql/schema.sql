@@ -151,7 +151,13 @@ CREATE TABLE rejections (
     -- existed. Diagnostic only: it inherits this table's at-most-once,
     -- operational standing, so it is a lead to follow and never proof of
     -- what a refusal saw.
-    witness              jsonb                 CHECK (witness IS NULL OR jsonb_typeof(witness) = 'array'),
+    -- Non-empty or absent, never `[]`: absence means "nothing was
+    -- captured", and an empty array would say "the rule was reading
+    -- nothing", which is never true of a refusal.
+    witness              jsonb                 CHECK (
+                             witness IS NULL
+                             OR (jsonb_typeof(witness) = 'array' AND jsonb_array_length(witness) > 0)
+                         ),
     rejected_at          timestamptz  NOT NULL DEFAULT now(),
     -- The writer never emits a versioned gate or an unversioned
     -- invariant; the constraint keeps hand-edits from corrupting
