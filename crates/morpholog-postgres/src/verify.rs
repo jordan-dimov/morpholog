@@ -118,7 +118,7 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
         sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sealed_sql))
             .fetch_all(pool)
             .await
-            .map_err(classify_checked_query)?
+            .map_err(classify)?
             .into_iter()
             .collect();
 
@@ -278,7 +278,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                 .await
             }
         }
-        .map_err(classify_checked_query)?;
+        .map_err(classify)?;
         let Some(last) = rows.last() else {
             break;
         };
@@ -385,7 +385,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                 .await
             }
         }
-        .map_err(classify_checked_query)?;
+        .map_err(classify)?;
         let Some(last) = rows.last() else {
             break;
         };
@@ -403,7 +403,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
             break;
         }
     }
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
     Ok(tracker.into_report())
 }
 /// Replay the audit log to its latest transition and compare the
@@ -486,7 +486,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
                 .await
             }
         }
-        .map_err(classify_checked_query)?;
+        .map_err(classify)?;
         let Some(last) = page.last() else {
             break;
         };
@@ -497,7 +497,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
             break;
         }
     }
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
     let current = decode_claim_rows(rows)?;
     // Multiset diff: +1 per current claim, -1 per replayed claim.
     // Positive residue exists only in the claims table, negative only

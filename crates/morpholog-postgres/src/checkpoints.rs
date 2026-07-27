@@ -39,7 +39,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
-use crate::error::{PgError, classify_checked_query};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
 use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -272,7 +272,7 @@ pub async fn create_checkpoint(
         Some(_) => Some(load_audit_rows(&mut read_tx, tree_size).await?),
         None => None,
     };
-    read_tx.commit().await.map_err(classify_checked_query)?;
+    read_tx.commit().await.map_err(classify)?;
 
     let root_hash = render_hash(&merkle_root(&leaves));
 
@@ -294,7 +294,7 @@ pub async fn create_checkpoint(
         }
     }
 
-    let mut tx = pool.begin().await.map_err(classify_checked_query)?;
+    let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query!("SELECT pg_advisory_xact_lock($1)", CHECKPOINT_LOCK_KEY)
         .execute(&mut *tx)
         .await
@@ -335,14 +335,14 @@ pub async fn create_checkpoint(
                     .await
                     .map_err(classify_checked_query)?;
                 }
-                tx.commit().await.map_err(classify_checked_query)?;
+                tx.commit().await.map_err(classify)?;
                 Checkpoint {
                     signatures,
                     ..p.clone()
                 }
             }
             None => {
-                tx.rollback().await.map_err(classify_checked_query)?;
+                tx.rollback().await.map_err(classify)?;
                 p.clone()
             }
         };
@@ -391,7 +391,7 @@ pub async fn create_checkpoint(
     .execute(&mut *tx)
     .await
     .map_err(classify_checked_query)?;
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
 
     Ok(CheckpointOutcome::Created(Checkpoint {
         tree_size,

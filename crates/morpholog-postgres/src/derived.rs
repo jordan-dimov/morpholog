@@ -1,6 +1,6 @@
 use crate::as_of::reconstruct_state_at_for_predicates;
 use crate::claims::{decode_claim_rows, list_claims_for_predicates};
-use crate::error::{PgError, classify_checked_query};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
 use morpholog_core::{
@@ -149,7 +149,7 @@ pub async fn refresh_derived(
         .map(|r| (r.predicate_name, r.arguments))
         .collect()
     };
-    read_tx.commit().await.map_err(classify_checked_query)?;
+    read_tx.commit().await.map_err(classify)?;
     let snapshot_tid = latest_visible.as_ref().map(|r| r.transition_id);
     let snapshot_at = latest_visible.map(|r| r.committed_at);
     let source_claim_count = claim_rows.len();
@@ -167,7 +167,7 @@ pub async fn refresh_derived(
     // the old generation - one short transaction, no kernel work.
     let write_start = Instant::now();
     let refresh_id = Uuid::now_v7();
-    let mut tx = pool.begin().await.map_err(classify_checked_query)?;
+    let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query!(
         "INSERT INTO morpholog_read.derived_refreshes
             (refresh_id, model_hash, refreshed_at,
@@ -222,7 +222,7 @@ pub async fn refresh_derived(
     .execute(&mut *tx)
     .await
     .map_err(classify_checked_query)?;
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
     let write = write_start.elapsed();
     Ok(RefreshSummary {
         refresh_id,

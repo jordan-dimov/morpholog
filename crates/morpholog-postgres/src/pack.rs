@@ -24,7 +24,7 @@ use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, load_checkpoint_chain, same_tree_head,
     signature_crypto_violation, verify_tree,
 };
-use crate::error::{PgError, classify_checked_query};
+use crate::error::{PgError, classify};
 use crate::merkle::{
     Hash, ProofError, audit_leaf_hash, consistency_proof, inclusion_proof, parse_hash, render_hash,
     verify_consistency_proof, verify_inclusion_proof,
@@ -106,7 +106,7 @@ pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<Eviden
             rows.len()
         )));
     }
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
 
     Ok(EvidencePack {
         manifest: PackManifest {
@@ -443,7 +443,7 @@ pub async fn export_window(
             rows.len()
         )));
     }
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
 
     assemble_window_pack(&rows, from_checkpoint, to_checkpoint)
         .map_err(|e| PgError::InvalidState(format!("could not encode an audit row: {e}")))
@@ -921,7 +921,7 @@ pub async fn export_selective(
             rows.len()
         )));
     }
-    tx.commit().await.map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
 
     assemble_selective_pack(&rows, covering, transitions).map_err(|e| match e {
         AssembleSelectiveError::UnknownTransition(id) => PgError::TransitionNotCovered {

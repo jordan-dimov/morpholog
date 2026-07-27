@@ -1,5 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
-use crate::error::{PgError, classify_checked_query};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
@@ -269,7 +269,7 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
             // Explicit rollback (rather than relying on drop) frees
             // the connection sooner and surfaces any rollback-time DB
             // failure as a distinct `PgError::Database`.
-            tx.rollback().await.map_err(classify_checked_query)?;
+            tx.rollback().await.map_err(classify)?;
             Ok(PgTracedOutcome::KernelErrored { error, trace })
         }
     }
@@ -299,7 +299,7 @@ pub(crate) async fn finalise_outcome(
 ) -> Result<PgProposalOutcome, PgError> {
     match outcome {
         Outcome::Rejected { reason } => {
-            tx.rollback().await.map_err(classify_checked_query)?;
+            tx.rollback().await.map_err(classify)?;
             write_rejection(pool, transformation, transition, &reason).await?;
             let witness = match &reason {
                 RejectionReason::Invariant { witness, .. } => witness.clone(),
@@ -329,7 +329,7 @@ pub(crate) async fn finalise_outcome(
                 &emitted_intents,
             )
             .await?;
-            tx.commit().await.map_err(classify_checked_query)?;
+            tx.commit().await.map_err(classify)?;
             Ok(PgProposalOutcome::Committed {
                 transition_id,
                 actor: transition.actor.clone(),

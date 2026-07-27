@@ -1,5 +1,5 @@
 use crate::attestation::AuditAttestation;
-use crate::error::{PgError, classify_checked_query};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
@@ -107,7 +107,7 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
 /// [`list_audit_rows_page`] under [`audit_resume_watermark`], which
 /// is what `inspect audit` streams.
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
-    let mut conn = pool.acquire().await.map_err(classify_checked_query)?;
+    let mut conn = pool.acquire().await.map_err(classify)?;
     list_audit_rows_page(&mut conn, None, None, i64::MAX).await
 }
 /// One keyset page of audit rows in `(committed_at, transition_id)`
@@ -198,7 +198,7 @@ pub async fn list_audit_rows_page(
             .await
         }
     }
-    .map_err(classify_checked_query)?;
+    .map_err(classify)?;
     rows.into_iter().map(decode_audit_row).collect()
 }
 /// A streaming audit tail: the lossless-resume recipe with its
@@ -226,7 +226,7 @@ pub async fn begin_audit_tail<'p>(
 ) -> Result<AuditTail<'p>, PgError> {
     let cursor = match after {
         Some(tid) => {
-            let mut conn = pool.acquire().await.map_err(classify_checked_query)?;
+            let mut conn = pool.acquire().await.map_err(classify)?;
             Some(audit_cursor_for(&mut conn, tid).await?)
         }
         None => None,

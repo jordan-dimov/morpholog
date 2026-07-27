@@ -179,7 +179,10 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let name = "morpholog_drift_probe";
+    // Unique per process: two runs against one server (a developer and CI on
+    // the same box, or two jobs) must not drop each other's database.
+    let name = format!("morpholog_drift_probe_{}", std::process::id());
+    let name = name.as_str();
     let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
     let admin_pool = sqlx::PgPool::connect(&admin)
         .await
@@ -226,9 +229,18 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
 /// local URL whose database name does not collide with the scheme hides
 /// that completely.
 fn with_database(url: &str, name: &str) -> String {
-    match url.rsplit_once('/') {
+    // Any query string is carried across untouched: `?sslmode=require` has
+    // to survive, and it is not part of the database name.
+    let (base, query) = url
+        .split_once('?')
+        .map_or((url, None), |(b, q)| (b, Some(q)));
+    let swapped = match base.rsplit_once('/') {
         Some((prefix, _)) => format!("{prefix}/{name}"),
-        None => url.to_string(),
+        None => base.to_string(),
+    };
+    match query {
+        Some(q) => format!("{swapped}?{q}"),
+        None => swapped,
     }
 }
 
@@ -334,5 +346,10 @@ fn with_database_only_moves_the_last_segment() {
     assert_eq!(
         with_database("postgres://postgres@localhost/postgres", "probe"),
         "postgres://postgres@localhost/probe"
+    );
+    // A query string is not part of the name and must survive.
+    assert_eq!(
+        with_database("postgres://u@h:5432/postgres?sslmode=require", "probe"),
+        "postgres://u@h:5432/probe?sslmode=require"
     );
 }

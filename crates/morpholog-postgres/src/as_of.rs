@@ -1,5 +1,5 @@
 use crate::audit::{REPLAY_CHUNK, audit_cursor_for};
-use crate::error::{PgError, classify_checked_query};
+use crate::error::{PgError, classify, classify_checked_query};
 use chrono::{DateTime, Utc};
 use morpholog_core::{ClaimInstance, State};
 use sqlx::PgPool;
@@ -28,7 +28,7 @@ use uuid::Uuid;
 ///
 /// Replay cost is O(transitions up to T).
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
-    let mut conn = pool.acquire().await.map_err(classify_checked_query)?;
+    let mut conn = pool.acquire().await.map_err(classify)?;
     reconstruct_inner(&mut conn, transition_id, None).await
 }
 /// Like [`reconstruct_state_at`] but only retains claims whose
@@ -64,7 +64,7 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
         return Ok(State::default());
     }
-    let mut conn = pool.acquire().await.map_err(classify_checked_query)?;
+    let mut conn = pool.acquire().await.map_err(classify)?;
     reconstruct_inner(&mut conn, transition_id, Some(predicates)).await
 }
 /// Returns the claims admitted as of `transition_id`, in causal
@@ -202,7 +202,7 @@ pub(crate) async fn reconstruct_inner(
                 .await
             }
         }
-        .map_err(classify_checked_query)?;
+        .map_err(classify)?;
         let Some(last) = rows.last() else {
             break;
         };
