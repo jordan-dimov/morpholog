@@ -401,7 +401,7 @@ async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
     };
     assert!(!witness.is_empty(), "the live envelope carries a witness");
 
-    let rows = morpholog_postgres::list_rejection_rows(&pool)
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 100)
         .await
         .expect("reading the log back");
     assert_eq!(rows.len(), 1);
@@ -436,7 +436,7 @@ async fn a_gate_rejection_persists_no_witness() {
     .expect("rejection is a lawful outcome");
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
 
-    let rows = morpholog_postgres::list_rejection_rows(&pool)
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 100)
         .await
         .expect("reading the log back");
     assert_eq!(rows.len(), 1);

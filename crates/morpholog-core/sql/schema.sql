@@ -139,9 +139,9 @@ CREATE TABLE rejections (
     -- Which kind of rule refused: an invariant over the candidate
     -- state, a `require` gate, or a `bind` with no candidates.
     kind                 text         NOT NULL CHECK (kind IN ('invariant', 'require', 'bind')),
-    -- The invariant's name for kind = 'invariant'; the rendered gate
-    -- expression for the gate kinds. Structured at the source, never
-    -- parsed back out of `reason`.
+    -- The invariant's name for kind = 'invariant'. For a gate: its own
+    -- name where the author gave it one, else the rendered expression.
+    -- Structured at the source, never parsed back out of `reason`.
     rule                 text         NOT NULL,
     invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
@@ -164,6 +164,12 @@ CREATE TABLE rejections (
     -- the operational evidence either way.
     CONSTRAINT rejections_kind_version_agree CHECK (
         (kind = 'invariant') = (invariant_version IS NOT NULL)
+    ),
+    -- Only an invariant refusal has values to report: a gate refusal fails
+    -- over the pre-state with no iteration to blame, so a witness on one
+    -- would be evidence from nowhere.
+    CONSTRAINT rejections_witness_is_invariant_only CHECK (
+        witness IS NULL OR kind = 'invariant'
     )
 );
 

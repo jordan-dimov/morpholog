@@ -303,9 +303,13 @@ class Morpholog:
         payload = self._json(*argv, "--database-url", self.database_url)
         return [cls.from_json(c) for c in payload]
 
-    def rejections(self) -> list[envelopes.RejectionRow]:
-        """Refused proposals, oldest first, with the values the refused rule
-        was reading where the kernel could pin them.
+    def rejections(self, *, limit: int = 100) -> list[envelopes.RejectionRow]:
+        """The most recent refusals, newest first, with the values the refused
+        rule was reading where the kernel could pin them.
+
+        Bounded: the log grows with every refusal, so raise `limit` to reach
+        further back rather than expecting the whole history. A witness runs
+        to a few hundred bytes, so a large limit is a large response.
 
         **An operational floor, not a ledger.** Writes are at-most-once and
         happen after rollback, so a storm or an insert failure can leave a
@@ -313,7 +317,14 @@ class Morpholog:
         Read a row as a lead to follow, and never as proof of what did or
         did not happen.
         """
-        payload = self._json("inspect", "rejections", "--database-url", self.database_url)
+        payload = self._json(
+            "inspect",
+            "rejections",
+            "--limit",
+            str(limit),
+            "--database-url",
+            self.database_url,
+        )
         return [envelopes.RejectionRow.from_json(r) for r in payload]
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:

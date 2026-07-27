@@ -178,6 +178,35 @@ class RunOutcomes(unittest.TestCase):
             envelopes.TracedEnvelope.from_json(payload)
 
 
+class RejectionLog(unittest.TestCase):
+    def test_an_invariant_row_carries_its_witness_decoded(self):
+        row = envelopes.RejectionRow.from_json(golden("rejection_row.json"))
+        self.assertEqual(row.kind, "invariant")
+        self.assertEqual(row.rule, "line_net_is_the_rounded_recompute")
+        self.assertEqual(row.invariant_version, 1)
+        # Values arrive decoded, not as tagged dicts an embedder must unpack.
+        self.assertEqual([w.var for w in row.witness], ["account", "exposure"])
+        self.assertEqual(row.witness[1].value, Decimal("105.50"))
+
+    def test_a_gate_row_has_no_witness_and_no_version(self):
+        row = envelopes.RejectionRow.from_json(golden("rejection_row_gate.json"))
+        self.assertEqual(row.kind, "require")
+        # None, not [] - absence means nothing was captured, and an empty
+        # list would say the rule was reading nothing.
+        self.assertIsNone(row.witness)
+        self.assertIsNone(row.invariant_version)
+
+    def test_invariant_only_fields_on_a_gate_row_are_drift(self):
+        # A serializer regression that attached invariant evidence to a gate
+        # refusal used to parse happily; the row is impossible, so it raises.
+        for extra in ({"witness": [{"var": "x", "value": {"type": "subject", "value": "a"}}]},
+                      {"invariant_version": 4}):
+            payload = golden("rejection_row_gate.json")
+            payload.update(extra)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.RejectionRow.from_json(payload)
+
+
 class Explanations(unittest.TestCase):
     def test_all_four_verdicts(self):
         admissible = envelopes.Explanation.from_json(golden("explanation_admissible.json"))

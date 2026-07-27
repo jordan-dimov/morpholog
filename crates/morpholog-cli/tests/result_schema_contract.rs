@@ -1523,6 +1523,43 @@ fn every_trace_arm_appears_in_a_golden() {
 /// the schema's `minItems` states it, but the walker here ignores `minItems`
 /// deliberately, so without this check the promise would rest on a keyword
 /// nothing in the repo enforces.
+/// A gate refusal carrying an invariant version, or a witness, is not a row
+/// the writer can produce - and the pin must say so.
+///
+/// A flat object with both fields independently optional validated those
+/// combinations happily, which left the pinned client unable to notice a
+/// serializer regression that attached invariant-only evidence to a gate.
+#[test]
+fn a_gate_row_cannot_carry_invariant_only_fields() {
+    let schema = result_schema();
+    let defs = schema.get("$defs").expect("$defs");
+    let def = defs.get("rejection_row").expect("rejection_row");
+    let mut gate: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(golden_dir().join("rejection_row_gate.json")).unwrap(),
+    )
+    .unwrap();
+    // Sanity: the untampered gate row validates, or the refusals below prove
+    // nothing about the fields and everything about a broken fixture.
+    validate(&gate, def, defs, "rejection_row").expect("the gate golden validates as it stands");
+
+    gate["invariant_version"] = serde_json::json!(4);
+    assert!(
+        validate(&gate, def, defs, "rejection_row").is_err(),
+        "a gate refusal with an invariant version must not validate"
+    );
+
+    let mut gate: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(golden_dir().join("rejection_row_gate.json")).unwrap(),
+    )
+    .unwrap();
+    gate["witness"] =
+        serde_json::json!([{ "var": "x", "value": { "type": "subject", "value": "a" } }]);
+    assert!(
+        validate(&gate, def, defs, "rejection_row").is_err(),
+        "a gate refusal with a witness must not validate"
+    );
+}
+
 #[test]
 fn no_golden_carries_an_empty_witness() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/envelopes");

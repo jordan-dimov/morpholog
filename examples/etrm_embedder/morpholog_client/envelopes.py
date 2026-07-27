@@ -675,6 +675,16 @@ class RejectionRow:
             {"invariant_version", "witness"},
         )
         witness = data.get("witness")
+        # Only an invariant refusal reports values or a version. A gate
+        # refusal carrying either is a serializer regression, not a row -
+        # so it raises here rather than becoming a model nobody can trust.
+        if data["kind"] != "invariant" and (
+            witness is not None or data.get("invariant_version") is not None
+        ):
+            raise EnvelopeError(
+                f"rejection row: kind {data['kind']!r} cannot carry a witness or an "
+                f"invariant version, got {payload!r}"
+            )
         return cls(
             rejection_id=data["rejection_id"],
             transformation_name=data["transformation_name"],
