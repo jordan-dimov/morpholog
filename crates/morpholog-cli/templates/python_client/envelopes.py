@@ -364,6 +364,9 @@ class LetNewSubjectStep:
 
 @dataclass(frozen=True)
 class AssertStep:
+    """A claim admitted. The wire kind is `assert`, which is what the
+    surface language spells `admit`."""
+
     claim: ClaimInstance
 
     @classmethod

@@ -252,9 +252,9 @@ fn named_gate_program() -> morpholog_core::Program {
 }
 
 /// A programme whose trace covers the entry kinds a `--trace` consumer can
-/// actually meet: a named `bind` that binds, a named `require` that holds,
-/// `let`, `admit`, `emit`, a `for` with per-item sub-traces, and the
-/// invariant check at the end.
+/// actually meet, named as the wire names them: `bind_one` binding,
+/// `require` holding, `let`, `assert` (what the surface spells `admit`),
+/// `emit`, `for` with per-item sub-traces, and `invariant_check`.
 ///
 /// The goldens built from it are the first to contain a trace at all. The
 /// traced envelope has been pinned since traces existed, but with
