@@ -282,3 +282,63 @@ transformation approve(doc):
     );
     assert_eq!(unnamed.rule, None);
 }
+
+/// A `bind` through a definition call formats back to something that reads.
+///
+/// The language supports it on purpose - the body finds the record and the
+/// call's arguments project the binding out - but the formatter asserted a
+/// claim pattern, so a valid programme validated and then PANICKED in
+/// `hash` and `generate`. The parser restricts `bind` to a claim shape and
+/// `resolve_defined_calls` rewrites the call afterwards, which is how the
+/// two disagreed.
+#[test]
+fn a_bind_through_a_definition_round_trips() {
+    let source = "program binddef
+
+predicate Trade(t: Subject)
+predicate Captured(t: Subject)
+
+define is_captured(t):
+    Trade(t)
+
+transformation confirm(t):
+    bind the_trade: is_captured(t)
+    admit Captured(t)
+";
+    let program = parsed(source);
+    // Formatting is what used to panic.
+    let formatted = morpholog_core::format::format_program(&program);
+    assert!(
+        formatted.contains("bind the_trade: is_captured(t)"),
+        "the call must render as a call: {formatted}"
+    );
+    // And what it emits has to read back as the same programme, or `hash`
+    // would be stable over source nobody can reparse.
+    let reparsed = parse_program(&formatted).expect("formatted output must reparse");
+    assert_eq!(program, reparsed);
+    assert_eq!(
+        morpholog_core::format::canonical_hash(&program),
+        morpholog_core::format::canonical_hash(&reparsed)
+    );
+}
+
+/// The acceptance side: binding an ordinary claim is unchanged.
+#[test]
+fn binding_a_claim_is_unaffected() {
+    let source = "program bindok
+
+predicate Trade(t: Subject)
+predicate Captured(t: Subject)
+
+transformation confirm(t):
+    bind the_trade: Trade(t)
+    admit Captured(t)
+";
+    let program = parsed(source);
+    let formatted = morpholog_core::format::format_program(&program);
+    assert!(
+        formatted.contains("bind the_trade: Trade(t)"),
+        "{formatted}"
+    );
+    assert_eq!(program, parse_program(&formatted).expect("round-trips"));
+}
