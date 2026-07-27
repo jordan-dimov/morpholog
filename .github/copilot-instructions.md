@@ -32,6 +32,12 @@ over inferring intent from surrounding code.
 - **Don't pin counts that change** ("the four examples," "the three
   invariants") in docs or doc comments. List the names, or omit the
   count. Test assertions on counts are fine; prose is not.
+  **A measurement is not such a count.** "~734 bytes per witness",
+  "890 ns against 414 ns", "three of the first four asks dissolved" are
+  records of something observed at a moment; they do not drift as the
+  project grows, and they are usually the load-bearing part of the
+  sentence. Softening one to avoid a numeral removes the evidence. The
+  rule is about the size of a set that grows, not about facts.
 - **`unsafe_code = "forbid"`** at the workspace level - any
   introduction is a structural change requiring justification.
 
