@@ -108,6 +108,27 @@ createdb morpholog_scratch
 DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_lifecycle.py
 ```
 
+## Upgrading an existing database
+
+`morpholog init` provisions a schema; it never migrates one. On an existing
+database it reports `already-initialised` and changes nothing, so a release
+that adds a column needs that column applied by hand:
+
+```bash
+psql "$DATABASE_URL" -f crates/morpholog-core/sql/migrations/010_rejections_witness.sql
+```
+
+Apply every numbered file in `crates/morpholog-core/sql/migrations/` that
+postdates your database, in order. They are idempotent, so re-running one is
+safe, and a fresh `morpholog init` needs none of them - `schema.sql` is
+always at the head.
+
+If you skip a migration, the binary tells you. A query naming a column your
+database lacks is reported as a stale schema with a pointer to that
+directory, not as a raw database error. Worth knowing the shape it takes:
+**accepted proposals keep working**, and the first thing to break is a
+*refusal*, because that is the path writing the new column.
+
 From here: the [developer introduction](developer-intro.md) builds a
 governed model from scratch; [`embedder-integration.md`](embedder-integration.md)
 is the integration contract.

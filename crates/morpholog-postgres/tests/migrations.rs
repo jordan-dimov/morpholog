@@ -153,3 +153,53 @@ async fn the_witness_migration_brings_an_old_table_to_the_head_shape() {
         .await
         .unwrap();
 }
+
+/// An un-migrated database says so, and says what to do about it.
+///
+/// This is the failure an operator actually meets on upgrade, and its shape
+/// is what makes it worth catching: commits keep working, so nothing looks
+/// wrong until the first *refusal*, which then surfaces as an operational
+/// database error rather than the lawful rejection it is. For an embedder
+/// that means an exception where a decided outcome belongs.
+///
+/// Unlike the migration test above, this one needs the real `morpholog`
+/// schema, because the point is what the production query does. It removes
+/// the column and puts it back through the shipped migration - the same file
+/// an operator would run - so the suite is left as it was found.
+#[tokio::test]
+async fn an_unmigrated_database_names_the_remedy() {
+    let pool = test_pool().await;
+    common::reset_db(&pool).await;
+
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.rejections DROP COLUMN witness".to_string(),
+    )
+    .await
+    .expect("dropping the column simulates a database from the previous release");
+
+    let err = morpholog_postgres::list_rejection_rows(&pool, 10)
+        .await
+        .expect_err("a query naming the absent column must fail");
+
+    // Restore before asserting, so a failed assertion cannot leave the
+    // shared schema broken for every later test in the run.
+    ddl(&pool, WITNESS_MIGRATION.to_string())
+        .await
+        .expect("the shipped migration restores the column");
+
+    let rendered = err.to_string();
+    assert!(
+        matches!(err, morpholog_postgres::PgError::SchemaBehind { .. }),
+        "an absent column must classify as a stale schema, got {err:?}"
+    );
+    assert!(
+        rendered.contains("sql/migrations/"),
+        "the message must name where the remedy lives, got: {rendered}"
+    );
+
+    // And the restore worked, so the suite is as it was.
+    morpholog_postgres::list_rejection_rows(&pool, 10)
+        .await
+        .expect("the column is back");
+}

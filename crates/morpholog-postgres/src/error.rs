@@ -27,6 +27,25 @@ pub enum PgError {
     /// matched zero rows when exactly one was expected).
     #[error("invalid persistent state: {0}")]
     InvalidState(String),
+
+    /// The database schema is older than this binary: a query named a
+    /// column the table does not have.
+    ///
+    /// Every query in this crate is verified against `sql/schema.sql` at
+    /// build time through the committed `.sqlx/` cache, so this cannot be a
+    /// query bug at runtime - it means the database has not had this
+    /// release's migrations applied. Worth its own variant because the raw
+    /// error names an internal query position and no remedy, and because
+    /// the failure hides: commits keep working, and the first refusal is
+    /// what breaks.
+    #[error(
+        "the database schema is behind this binary ({detail}). \
+         Apply the migrations in crates/morpholog-core/sql/migrations/ that \
+         postdate your database - `morpholog init` never migrates - then retry. \
+         Every query here is checked against the schema at build time, so a \
+         missing column means the database is out of date, not the query."
+    )]
+    SchemaBehind { detail: String },
     /// A supplied `transition_id` does not name an existing audit row.
     /// Returned by the as-of helpers when the caller asks for state at
     /// a coordinate that does not correspond to any committed
@@ -145,6 +164,10 @@ pub(crate) fn is_serialization_failure_code(code: Option<&str>) -> bool {
 pub(crate) fn is_unique_violation_code(code: Option<&str>) -> bool {
     code == Some("23505")
 }
+/// Is this SQLSTATE the PostgreSQL `undefined_column` code (`42703`)?
+pub(crate) fn is_undefined_column_code(code: Option<&str>) -> bool {
+    code == Some("42703")
+}
 /// Maps a `sqlx::Error` to a [`PgError`], recognising SQLSTATE 40001
 /// (PostgreSQL SSI serialization failure) as the distinct retryable
 /// variant and a 23505 on the outbox idempotency-key constraint as
@@ -163,11 +186,16 @@ pub(crate) fn classify(err: sqlx::Error) -> PgError {
     {
         return PgError::DuplicateIntent;
     }
+    if is_undefined_column_code(code.as_deref()) {
+        return PgError::SchemaBehind {
+            detail: db.map_or_else(|| err.to_string(), ToString::to_string),
+        };
+    }
     PgError::Database(err)
 }
 #[cfg(test)]
 mod tests {
-    use super::is_serialization_failure_code;
+    use super::{is_serialization_failure_code, is_undefined_column_code};
     /// Pins the `"40001"` magic string so the retry contract cannot
     /// regress silently.
     #[test]
@@ -182,5 +210,14 @@ mod tests {
         assert!(!is_serialization_failure_code(Some("40000")));
         assert!(!is_serialization_failure_code(Some("23505"))); // unique_violation
         assert!(!is_serialization_failure_code(Some("40P01"))); // deadlock_detected
+    }
+
+    /// Pins `"42703"` the same way, so the upgrade diagnosis cannot regress
+    /// into a raw database error nobody can act on.
+    #[test]
+    fn undefined_column_code_is_42703() {
+        assert!(is_undefined_column_code(Some("42703")));
+        assert!(!is_undefined_column_code(Some("42P01")));
+        assert!(!is_undefined_column_code(None));
     }
 }
