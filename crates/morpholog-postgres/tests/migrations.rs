@@ -12,8 +12,14 @@
 //! **Isolation matters here.** `reset_db` only truncates, so DDL against the
 //! shared `morpholog` schema would leave every later test in the run against
 //! a shape nobody intended - the failure mode this repo has already been
-//! bitten by once. So these tests build their own scratch schema and drop it
-//! again, and never touch `morpholog`.
+//! bitten by once.
+//!
+//! The migration test therefore works in a scratch schema it creates and
+//! drops. The drift test cannot: its whole point is what the production
+//! query does against the real table, so it removes a column from
+//! `morpholog` and puts it back through the shipped migration. That restore
+//! runs unconditionally, before any assertion, because an assertion that
+//! panics past it would break the rest of the run.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -178,16 +184,17 @@ async fn an_unmigrated_database_names_the_remedy() {
     .await
     .expect("dropping the column simulates a database from the previous release");
 
-    let err = morpholog_postgres::list_rejection_rows(&pool, 10)
-        .await
-        .expect_err("a query naming the absent column must fail");
-
-    // Restore before asserting, so a failed assertion cannot leave the
+    // Capture, then restore UNCONDITIONALLY, then assert. `expect_err` is
+    // itself an assertion, so running it first would panic past the restore
+    // on the one path where the query unexpectedly succeeds - leaving the
     // shared schema broken for every later test in the run.
+    let result = morpholog_postgres::list_rejection_rows(&pool, 10).await;
+
     ddl(&pool, WITNESS_MIGRATION.to_string())
         .await
         .expect("the shipped migration restores the column");
 
+    let err = result.expect_err("a query naming the absent column must fail");
     let rendered = err.to_string();
     assert!(
         matches!(err, morpholog_postgres::PgError::SchemaBehind { .. }),
