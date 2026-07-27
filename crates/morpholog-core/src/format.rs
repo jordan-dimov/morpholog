@@ -166,8 +166,9 @@ pub(crate) fn format_predicate_decl(decl: &PredicateDecl) -> String {
         out.push_str(&match discipline {
             Discipline::UniqueBy { fields } => format!("unique by ({})", fields.join(", ")),
             Discipline::AppendOnly => "append only".to_string(),
-            Discipline::EffectiveBy { keys, on } => {
-                format!("effective by ({}) on ({on})", keys.join(", "))
+            Discipline::EffectiveBy { keys, on, partial } => {
+                let gap = if *partial { " partial" } else { "" };
+                format!("effective by ({}) on ({on}){gap}", keys.join(", "))
             }
             Discipline::CurrentPointerBy { fields } => {
                 format!("current pointer by ({})", fields.join(", "))

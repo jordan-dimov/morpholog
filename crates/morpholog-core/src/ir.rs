@@ -981,7 +981,25 @@ pub enum Discipline {
     /// selector is something the author calls, not a rule the runtime
     /// enforces. `current pointer by` governs corrections *within* a
     /// version; this governs time *across* versions, and the two compose.
-    EffectiveBy { keys: Vec<String>, on: String },
+    EffectiveBy {
+        keys: Vec<String>,
+        on: String,
+        /// `partial`: coverage gaps are intended.
+        ///
+        /// An effective-dated rule passes vacuously where no version is in
+        /// force, so a predicate with no totality companion earns a hint.
+        /// That hint is right for the usual case and wrong for a model
+        /// where a rule genuinely should not apply before the first version
+        /// exists - and under `--strict` there was no way to say so, which
+        /// left an author choosing between a companion that is not true and
+        /// abandoning strict checking entirely.
+        ///
+        /// A declaration, not a suppression: it states what the author
+        /// believes about the model, and contradicting it by also declaring
+        /// `total over` this predicate is an error rather than a
+        /// preference.
+        partial: bool,
+    },
     /// `append only`: no transformation may `retract` this predicate.
     /// Enforced statically (retraction only happens through a
     /// `retract` statement, so the authoring-time ban is complete and

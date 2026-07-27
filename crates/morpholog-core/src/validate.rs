@@ -423,6 +423,24 @@ pub enum ValidationError {
         .names.join(", ")
     )]
     DefinitionCycle { names: Vec<String> },
+    /// A predicate declared `partial` that some invariant also declares
+    /// `total over`.
+    ///
+    /// The two say opposite things about the same model: one that coverage
+    /// gaps are intended, the other that a rule guarantees there are none.
+    /// Refused rather than resolved by precedence, because whichever way it
+    /// were resolved the author would have written something they did not
+    /// mean and nothing would say so.
+    #[error(
+        "`{predicate}` is declared `partial`, but invariant `{invariant}` declares \
+         `total over {predicate}`. Those contradict: one says coverage gaps are \
+         intended, the other that a rule guarantees none. Drop whichever is not true."
+    )]
+    PartialContradictsTotality {
+        predicate: String,
+        invariant: String,
+    },
+
     /// A reference names a definition where a predicate is required:
     /// a hand-built `Prop::Claim` that skipped resolution, or an
     /// `admit` / `retract` / `value` target. A definition names a
@@ -1041,7 +1059,7 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                         });
                     }
                 }
-                Discipline::EffectiveBy { keys, on } => {
+                Discipline::EffectiveBy { keys, on, .. } => {
                     for field in keys.iter().chain(std::iter::once(on)) {
                         if !decl.args.iter().any(|a| a.name == *field) {
                             errors.push(ValidationError::DisciplineUnknownField {

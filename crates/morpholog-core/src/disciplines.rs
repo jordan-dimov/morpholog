@@ -50,7 +50,7 @@ pub fn lower_discipline_definitions(program: &mut Program) {
     let mut generated: Vec<Definition> = Vec::new();
     for decl in &program.predicates {
         for discipline in &decl.disciplines {
-            if let Discipline::EffectiveBy { keys, on } = discipline
+            if let Discipline::EffectiveBy { keys, on, .. } = discipline
                 && let Some(def) = in_force_define(decl, keys, on)
                 // Idempotent on PROVENANCE, not on the name: an
                 // authored definition of that name is a collision the
@@ -85,7 +85,7 @@ pub fn lower_disciplines(program: &mut Program) {
                 // two contradictory prices each satisfying "priced at the
                 // rate in force", which is what the discipline exists to
                 // prevent.
-                Discipline::EffectiveBy { keys, on } => {
+                Discipline::EffectiveBy { keys, on, .. } => {
                     let mut fields = keys.clone();
                     fields.push(on.clone());
                     if let Some(inv) = unique_invariant(decl, &fields) {
@@ -355,7 +355,7 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
                         out.push((decl.name.clone(), unique_invariant_name(&decl.name, fields)));
                     }
                 }
-                Discipline::EffectiveBy { keys, on } => {
+                Discipline::EffectiveBy { keys, on, .. } => {
                     let mut fields = keys.clone();
                     fields.push(on.clone());
                     if unique_invariant(decl, &fields).is_some() {

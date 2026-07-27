@@ -111,6 +111,10 @@ impl SourceMap {
             // The clause is on the invariant's own declaration line, which
             // is what the author can act on - the unknown predicate has no
             // declaration to point at, that being the complaint.
+            // On the predicate, which is where `partial` is written.
+            ValidationError::PartialContradictsTotality { predicate, .. } => {
+                self.decl_span(DeclKind::Predicate, predicate)
+            }
             ValidationError::UnknownTotalityTarget { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }

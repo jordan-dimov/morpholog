@@ -105,9 +105,9 @@ impl std::fmt::Display for Lint {
                 "`{predicate}` is effective-dated but no invariant declares `total over \
                  {predicate}`: where no version is in force the generated selector matches \
                  nothing, so every rule reading it passes vacuously. Mark the invariant that \
-                 guarantees a version exists with `total over {predicate}`; if the gap is \
-                 intended, leaving this hint unaddressed is how you say so - it only refuses \
-                 under `--strict`"
+                 guarantees a version exists with `total over {predicate}`, or - if the \
+                 gaps are intended, and rules reading it are meant not to apply there - say \
+                 so on the declaration with `effective by (...) on (...) partial`"
             ),
             Lint::GateVsInvariant {
                 invariant,
@@ -237,10 +237,14 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     // `--strict` turns it into the refusal an author who wants the pairing
     // guaranteed is asking for.
     for decl in &program.predicates {
+        // `partial` is the author saying the gaps are intended. A
+        // declaration, not a suppression: it is checkable, and contradicting
+        // it with a `total over` is a validation error rather than a silent
+        // preference.
         let effective = decl
             .disciplines
             .iter()
-            .any(|d| matches!(d, crate::ir::Discipline::EffectiveBy { .. }));
+            .any(|d| matches!(d, crate::ir::Discipline::EffectiveBy { partial: false, .. }));
         let declared = declared_totality.iter().flatten().any(|p| *p == decl.name);
         if effective && !declared {
             out.push(Lint::EffectiveWithoutDeclaredTotality {
