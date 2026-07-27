@@ -96,8 +96,9 @@ impl SourceMap {
             | ValidationError::UnresolvedDefinitionCall { context, .. }
             | ValidationError::PreNotAvailable { context }
             | ValidationError::RetractsAppendOnly { context, .. }
-            // Carries the duplicate's own statement index, so the span lands
-            // on the second occurrence - the one to rename.
+            // Anchored on the top-level statement the later duplicate sits
+            // in, which for one inside a `for` is the `for` itself - the
+            // statement index never reaches into a nested body.
             | ValidationError::DuplicateRuleName { context, .. } => self.context_span(context),
             ValidationError::DuplicateDecl { vocabulary, name } => {
                 let kind = match vocabulary {

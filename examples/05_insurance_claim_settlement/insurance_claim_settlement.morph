@@ -195,10 +195,10 @@ transformation set_coverage_terms(policy_id, deductible, per_claim_limit):
 -- what and what was paid, and ask downstream to move the money. The
 -- conservation invariant above checks the headroom move was honest.
 --
--- Notice the names in front of the colons. Five things here can refuse a
--- settlement - three lookups that must find their record, two conditions
--- that must hold - and without names a refusal could only quote back the
--- expression that failed. Quoted text reads well and identifies nothing:
+-- Notice the names in front of the colons. Several things here can refuse
+-- a settlement - each lookup must find its record, and each condition must
+-- hold - and without names a refusal could only quote back the expression
+-- that failed. Quoted text reads well and identifies nothing:
 -- reword the condition and anything relying on it breaks. A name is the
 -- author's own label, and it survives any rewording of the rule beneath
 -- it, so a test, a runbook, or a report grouping refusals by cause can
