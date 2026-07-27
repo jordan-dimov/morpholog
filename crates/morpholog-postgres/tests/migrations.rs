@@ -214,9 +214,13 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         matches!(err, morpholog_postgres::PgError::SchemaBehind { .. }),
         "the refusal path must diagnose a stale schema, got {err:?}"
     );
+    // The remedy must be something the reader can run. It used to name a
+    // directory inside the source tree, which a release consumer does not
+    // have - the binary knew the answer and pointed at the fix somewhere
+    // else.
     assert!(
-        rendered.contains("sql/migrations/"),
-        "the message must name where the remedy lives, got: {rendered}"
+        rendered.contains("morpholog migrate"),
+        "the message must name the command that fixes it, got: {rendered}"
     );
 }
 
@@ -352,4 +356,134 @@ fn with_database_only_moves_the_last_segment() {
         with_database("postgres://u@h:5432/postgres?sslmode=require", "probe"),
         "postgres://u@h:5432/probe?sslmode=require"
     );
+}
+
+/// The upgrade an operator actually performs, with only the binary.
+///
+/// This is the gap that forced the command: the release artifact is the
+/// binary and a licence, and the upgrade instruction named a path inside the
+/// source tree, so a consumer following the versioning policy had to fetch
+/// SQL out of a git tag. Nothing here reads the repository - the migrations
+/// come from the ones compiled in.
+#[tokio::test]
+async fn a_legacy_database_upgrades_from_the_binary_alone() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = format!("morpholog_upgrade_probe_{}", std::process::id());
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+
+    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
+    let outcome = upgrade_probe(&probe_url).await;
+
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    outcome.expect("the upgrade path must work end to end");
+}
+
+async fn upgrade_probe(url: &str) -> Result<(), String> {
+    let pool = sqlx::PgPool::connect(url).await.expect("probe");
+    morpholog_postgres::initialise_schema(&pool)
+        .await
+        .expect("provision");
+
+    // A genuinely fresh database is at the head by construction: `init`
+    // records the migrations rather than running them. Asserted here, on a
+    // database this test created, because asserting it against a long-lived
+    // dev database proves only that someone migrated it once.
+    let fresh = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| format!("status on a fresh database failed: {e}"))?;
+    if !fresh.pending.is_empty() {
+        return Err(format!(
+            "init must leave nothing pending, got {:?}",
+            fresh.pending
+        ));
+    }
+    if fresh.database_version != morpholog_postgres::head_version() {
+        return Err(format!(
+            "a fresh database is at the head, got {}",
+            fresh.database_version
+        ));
+    }
+
+    // Wind back to a release before either the column or the record existed.
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.rejections DROP COLUMN witness".to_string(),
+    )
+    .await
+    .expect("simulate the older shape");
+    ddl(&pool, "DROP TABLE morpholog.schema_migrations".to_string())
+        .await
+        .expect("simulate a database from before the record existed");
+
+    // A deploy gate can ask before a workload finds out.
+    let before = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| format!("status failed: {e}"))?;
+    if before.database_version != 0 {
+        return Err(format!(
+            "a database with no record reads as 0, got {}",
+            before.database_version
+        ));
+    }
+    if before.pending.len() != usize::try_from(morpholog_postgres::head_version()).unwrap() {
+        return Err(format!(
+            "everything should be pending, got {}",
+            before.pending.len()
+        ));
+    }
+
+    let report = morpholog_postgres::apply_migrations(&pool)
+        .await
+        .map_err(|e| format!("migrate failed: {e}"))?;
+    if report.applied.len() != before.pending.len() {
+        return Err(format!(
+            "applied {} of {}",
+            report.applied.len(),
+            before.pending.len()
+        ));
+    }
+
+    // Current, and re-running changes nothing.
+    let after = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| format!("status failed: {e}"))?;
+    if !after.pending.is_empty() {
+        return Err(format!(
+            "still pending after migrating: {:?}",
+            after.pending
+        ));
+    }
+    let again = morpholog_postgres::apply_migrations(&pool)
+        .await
+        .map_err(|e| format!("second migrate failed: {e}"))?;
+    if !again.applied.is_empty() {
+        return Err(format!(
+            "re-running applied {} migrations",
+            again.applied.len()
+        ));
+    }
+
+    // And the column the whole thing was about is usable: a lawful refusal
+    // now writes its witness instead of failing operationally.
+    morpholog_postgres::list_rejection_rows(&pool, 10)
+        .await
+        .map_err(|e| format!("the rejection log is still unreadable: {e}"))?;
+    Ok(())
 }

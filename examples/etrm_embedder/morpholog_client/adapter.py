@@ -156,6 +156,23 @@ class Morpholog:
             args.append("--i-know-this-deletes-data")
         return envelopes.InitReport.from_json(self._json(*args))
 
+    def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:
+        """Bring the database up to the schema this binary expects.
+
+        The migrations are embedded in the binary, so an upgrade needs
+        nothing fetched from a source tree. Applies whatever the database
+        has not recorded, in order, and leaves a current one alone.
+
+        `check` reports and changes nothing. The binary exits non-zero when
+        the database is behind, so that call raises `MorphologError` - catch
+        it, or read `report.pending` from a successful call to distinguish
+        "current" from "behind" without an exception.
+        """
+        args = ["migrate", "--database-url", self.database_url]
+        if check:
+            args.append("--check")
+        return envelopes.MigrationReport.from_json(self._json(*args))
+
     def hash(self) -> envelopes.HashReport:
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 

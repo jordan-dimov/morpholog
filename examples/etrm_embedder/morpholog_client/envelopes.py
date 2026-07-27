@@ -1107,6 +1107,46 @@ class LeastPrivilege:
 
 
 @dataclass(frozen=True)
+class MigrationRef:
+    version: int
+    name: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> MigrationRef:
+        data = _strict("migration ref", payload, {"version", "name"})
+        return cls(version=data["version"], name=data["name"])
+
+
+@dataclass(frozen=True)
+class MigrationReport:
+    """What `migrate` found, and what it did about it."""
+
+    database_version: int
+    binary_version: int
+    applied: list[MigrationRef]
+    pending: list[MigrationRef]
+
+    @property
+    def is_current(self) -> bool:
+        """Nothing outstanding. What a deploy gate asks."""
+        return not self.pending
+
+    @classmethod
+    def from_json(cls, payload: object) -> MigrationReport:
+        data = _strict(
+            "migration report",
+            payload,
+            {"database_version", "binary_version", "applied", "pending"},
+        )
+        return cls(
+            database_version=data["database_version"],
+            binary_version=data["binary_version"],
+            applied=[MigrationRef.from_json(m) for m in data["applied"]],
+            pending=[MigrationRef.from_json(m) for m in data["pending"]],
+        )
+
+
+@dataclass(frozen=True)
 class InitReport:
     status: str
     schema: str

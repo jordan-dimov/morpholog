@@ -894,6 +894,26 @@
         "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       }
     },
+    "migration_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "name"],
+      "properties": {
+        "version": { "type": "integer" },
+        "name": { "type": "string" }
+      }
+    },
+    "migration_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["database_version", "binary_version", "applied", "pending"],
+      "properties": {
+        "database_version": { "type": "integer" },
+        "binary_version": { "type": "integer" },
+        "applied": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
+        "pending": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } }
+      }
+    },
     "init_report": {
       "type": "object",
       "additionalProperties": false,

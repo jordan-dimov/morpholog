@@ -26,7 +26,8 @@ pub enum InitOutcome {
 /// embedded `SCHEMA_SQL`. Day-zero only: if the schema already
 /// exists this returns [`InitOutcome::AlreadyInitialised`] without
 /// touching anything - it never drops and never migrates. Schema
-/// *evolution* is the deferred migrations story, not this function.
+/// *evolution* is [`crate::apply_migrations`], which is a separate verb
+/// precisely so this one stays safe to run against a live database.
 ///
 /// Provisioning is atomic: the existence check and the whole schema
 /// script run in one transaction (the script is plain DDL, which
@@ -46,6 +47,11 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
         .execute(&mut *tx)
         .await
         .map_err(classify)?;
+    // A database built from SCHEMA_SQL is at the head by construction, so
+    // every migration is recorded as applied without running one. Otherwise
+    // `migrate` would find a fresh database entirely "pending" and re-run
+    // eleven no-ops to reach where it already was.
+    crate::migrations::record_all_applied(&mut tx).await?;
     tx.commit().await.map_err(classify)?;
     Ok(InitOutcome::Initialised)
 }

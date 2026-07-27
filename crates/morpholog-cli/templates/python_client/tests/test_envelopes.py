@@ -207,6 +207,21 @@ class RejectionLog(unittest.TestCase):
                 envelopes.RejectionRow.from_json(payload)
 
 
+class Migrations(unittest.TestCase):
+    def test_a_database_behind_lists_what_is_outstanding(self):
+        report = envelopes.MigrationReport.from_json(golden("migration_report_behind.json"))
+        self.assertFalse(report.is_current)
+        self.assertEqual(report.database_version, 9)
+        self.assertEqual(report.binary_version, 11)
+        self.assertEqual([m.name for m in report.pending], ["rejections_witness", "schema_migrations"])
+        self.assertEqual(report.applied, [])
+
+    def test_a_migrated_database_reports_what_it_applied(self):
+        report = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
+        self.assertTrue(report.is_current)
+        self.assertEqual([m.version for m in report.applied], [10, 11])
+
+
 class Explanations(unittest.TestCase):
     def test_all_four_verdicts(self):
         admissible = envelopes.Explanation.from_json(golden("explanation_admissible.json"))

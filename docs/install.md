@@ -110,21 +110,28 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
-`morpholog init` provisions a schema; it never migrates one. On an existing
-database it reports `already-initialised` and changes nothing, so a release
-that adds a column needs that column applied by hand:
+`morpholog init` provisions a schema; it never migrates one. That is
+deliberate - it means running `init` against a live database cannot alter
+it. Upgrading is its own verb:
 
 ```bash
-psql "$DATABASE_URL" -f crates/morpholog-core/sql/migrations/010_rejections_witness.sql
+morpholog migrate --database-url "$DATABASE_URL"
 ```
 
-Apply every numbered file in `crates/morpholog-core/sql/migrations/` that
-postdates your database, in order. They are idempotent, so re-running one is
-safe, and a fresh `morpholog init` needs none of them - `schema.sql` is
-always at the head.
+The migrations are compiled into the binary, like the schema itself, so the
+released artifact is all you need. `migrate` applies whatever your database
+has not recorded, in order, and leaves an already-current one alone. A fresh
+`morpholog init` needs none of them: it provisions at the head and records
+them as applied.
+
+Before a deployment runs a workload, it can ask instead of finding out:
+
+```bash
+morpholog migrate --check --database-url "$DATABASE_URL"   # exit 1 if behind
+```
 
 If an unapplied migration leaves a **column** this binary expects absent, its
-queries report the database as out of date and point at that directory,
+queries report the database as out of date and tell you to run `migrate`,
 rather than surfacing a raw database error. That is the shape this release's
 migration takes; it is not general schema-version detection, so a migration
 adding a table or an index would fail differently.

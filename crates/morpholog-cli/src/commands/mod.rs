@@ -33,6 +33,7 @@ pub(crate) mod hash;
 pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod keygen;
+pub(crate) mod migrate;
 pub(crate) mod outbox;
 pub(crate) mod propose;
 pub(crate) mod refresh;

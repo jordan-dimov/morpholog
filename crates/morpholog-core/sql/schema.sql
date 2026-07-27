@@ -18,6 +18,23 @@ SET search_path TO morpholog, public;
 -- Admitted state. Each row is one admitted claim.
 -- The primary key enforces set semantics: assert C where C is
 -- already present is a no-op; retract C where C is missing fails.
+-- Which numbered migrations this database has had applied. A fresh
+-- database created from this file is at the head by construction, so
+-- `morpholog init` records every migration as applied without running
+-- any of them.
+--
+-- Deliberately plain substrate state rather than an admitted claim: the
+-- claims table is itself created by this file, so the first migrations
+-- could not be claims about a table that does not exist yet - and audit's
+-- integrity should not rest on rows describing the substrate that stores
+-- audit.
+CREATE TABLE schema_migrations (
+    version     integer      PRIMARY KEY,
+    name        text         NOT NULL,
+    applied_at  timestamptz  NOT NULL DEFAULT now()
+);
+
+
 CREATE TABLE claims (
     predicate_name  text        NOT NULL,
     arguments       jsonb       NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
