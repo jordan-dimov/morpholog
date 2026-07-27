@@ -292,6 +292,21 @@ pub(crate) struct GeneratePythonClientArgs {
 /// The connection-string flag every database-backed subcommand
 /// shares, declared once and `#[command(flatten)]`ed in. Subcommands
 /// whose only input is the connection take this struct directly.
+/// `inspect rejections`: the log, newest first, bounded.
+///
+/// Newest-first because the question is always "what just refused", and
+/// bounded because this table grows with every refusal - an unbounded read
+/// is the one query that fails when it is most needed, during a storm.
+#[derive(clap::Args, Debug)]
+pub(crate) struct RejectionsArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+    /// How many refusals to return, newest first. Raise it to reach further
+    /// back; there is no cursor yet, so depth comes from raising this.
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..))]
+    pub(crate) limit: u32,
+}
+
 #[derive(clap::Args, Debug)]
 pub(crate) struct DatabaseArgs {
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
@@ -722,7 +737,7 @@ pub(crate) enum Inspect {
     /// Operational evidence, written after each rollback
     /// at-most-once - the audit table remains the legitimacy-grade
     /// record of what was admitted.
-    Rejections(DatabaseArgs),
+    Rejections(RejectionsArgs),
     /// Report which rules have actually done work over the history.
     ///
     /// Replays the audit log and reports, per invariant, whether its
@@ -1269,7 +1284,7 @@ mod tests {
         match what {
             Inspect::Claims(args) => args.db.database_url,
             Inspect::Audit(args) => args.db.database_url,
-            Inspect::Rejections(args) => args.database_url,
+            Inspect::Rejections(args) => args.db.database_url,
             Inspect::Outbox(args) => args.db.database_url,
             Inspect::Coverage(args) => args.db.database_url,
             Inspect::Derived(_) => {

@@ -634,6 +634,72 @@ class BatchReceipt:
 
 
 @dataclass(frozen=True)
+class RejectionRow:
+    """One refused proposal, from `inspect rejections`.
+
+    An operational floor, not a ledger: this log is at-most-once and audit
+    is the only legitimacy-grade record, so treat a row as a lead to follow
+    rather than proof a refusal happened exactly this way.
+    """
+
+    rejection_id: str
+    transformation_name: str
+    arguments: list[object]
+    actor: object
+    kind: str
+    rule: str
+    reason: str
+    rejected_at: datetime
+    invariant_version: int | None = None
+    # The values the refused rule was reading. None when the kernel could
+    # not pin the failure to one iteration, and for rows written before the
+    # column existed - so absence means "not captured", never "captured
+    # nothing".
+    witness: list[WitnessBinding] | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RejectionRow:
+        data = _strict(
+            "rejection row",
+            payload,
+            {
+                "rejection_id",
+                "transformation_name",
+                "arguments",
+                "actor",
+                "kind",
+                "rule",
+                "reason",
+                "rejected_at",
+            },
+            {"invariant_version", "witness"},
+        )
+        witness = data.get("witness")
+        # Only an invariant refusal reports values or a version. A gate
+        # refusal carrying either is a serializer regression, not a row -
+        # so it raises here rather than becoming a model nobody can trust.
+        if data["kind"] != "invariant" and (
+            witness is not None or data.get("invariant_version") is not None
+        ):
+            raise EnvelopeError(
+                f"rejection row: kind {data['kind']!r} cannot carry a witness or an "
+                f"invariant version, got {payload!r}"
+            )
+        return cls(
+            rejection_id=data["rejection_id"],
+            transformation_name=data["transformation_name"],
+            arguments=[values.decode_tagged(a) for a in data["arguments"]],
+            actor=values.decode_tagged(data["actor"]),
+            kind=data["kind"],
+            rule=data["rule"],
+            reason=data["reason"],
+            rejected_at=values.parse_timestamp(data["rejected_at"]),
+            invariant_version=data.get("invariant_version"),
+            witness=None if witness is None else [WitnessBinding.from_json(w) for w in witness],
+        )
+
+
+@dataclass(frozen=True)
 class OutboxRow:
     intent_id: str
     transition_id: str

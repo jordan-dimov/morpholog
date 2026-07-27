@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "type": "subject",
+    "value": "alex"
+  },
+  "arguments": [
+    {
+      "type": "subject",
+      "value": "inv_1"
+    }
+  ],
+  "kind": "require",
+  "reason": "require `actor_has_authority_for_amount` failed: MayApprove(actor, doc) did not hold over pre-state",
+  "rejected_at": "2026-06-01T12:00:00Z",
+  "rejection_id": "01900000-0000-7000-8000-000000000001",
+  "rule": "actor_has_authority_for_amount",
+  "transformation_name": "issue_invoice"
+}

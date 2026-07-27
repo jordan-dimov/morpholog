@@ -491,6 +491,41 @@ fn explanations_serialize_as_pinned() {
     assert_golden("explanation_error.json", &to_value(&error));
 }
 
+/// The rejection log's row shape, both with and without a witness.
+///
+/// Pinned now because it carries structured evidence: an embedder reading
+/// `inspect rejections` programmatically was reaching an ad-hoc surface, and
+/// the moment a surface is consumed it has to be an envelope with a floor
+/// under it rather than a shape that can drift silently.
+#[test]
+fn rejection_rows_serialize_as_pinned() {
+    let base = morpholog_postgres::RejectionRow {
+        rejection_id: sample_uuid(),
+        transformation_name: "issue_invoice".into(),
+        arguments: vec![EvalValue::Subject(Subject::from("inv_1"))],
+        actor: Subject::from("alex"),
+        kind: "invariant".to_string(),
+        rule: "line_net_is_the_rounded_recompute".to_string(),
+        invariant_version: Some(1),
+        reason: "invariant `line_net_is_the_rounded_recompute` violated".to_string(),
+        witness: Some(witness_sample()),
+        rejected_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+    };
+    assert_golden("rejection_row.json", &to_value(&base));
+    // A gate refusal, which has no witness and no version: the key is
+    // absent rather than null, so a row from before the column existed
+    // reads identically to one the kernel could not pin.
+    let gate = morpholog_postgres::RejectionRow {
+        kind: "require".to_string(),
+        rule: "actor_has_authority_for_amount".to_string(),
+        invariant_version: None,
+        reason: "require `actor_has_authority_for_amount` failed: MayApprove(actor, doc) did not hold over pre-state".to_string(),
+        witness: None,
+        ..base
+    };
+    assert_golden("rejection_row_gate.json", &to_value(&gate));
+}
+
 #[test]
 fn outbox_row_serializes_as_pinned() {
     let row = OutboxRow {
@@ -1479,6 +1514,92 @@ fn every_trace_arm_appears_in_a_golden() {
     }
 }
 
+/// No golden carries an empty `witness`, because absence and emptiness must
+/// not both be sayable.
+///
+/// The prose promises "absent, never `[]`" - absence means nothing was
+/// captured, while `[]` would claim the rule was reading nothing, which is
+/// never true of a refusal. `skip_serializing_if` is what delivers that and
+/// the schema's `minItems` states it, but the walker here ignores `minItems`
+/// deliberately, so without this check the promise would rest on a keyword
+/// nothing in the repo enforces.
+/// A gate refusal carrying an invariant version, or a witness, is not a row
+/// the writer can produce - and the pin must say so.
+///
+/// A flat object with both fields independently optional validated those
+/// combinations happily, which left the pinned client unable to notice a
+/// serializer regression that attached invariant-only evidence to a gate.
+#[test]
+fn a_gate_row_cannot_carry_invariant_only_fields() {
+    let schema = result_schema();
+    let defs = schema.get("$defs").expect("$defs");
+    let def = defs.get("rejection_row").expect("rejection_row");
+    let mut gate: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(golden_dir().join("rejection_row_gate.json")).unwrap(),
+    )
+    .unwrap();
+    // Sanity: the untampered gate row validates, or the refusals below prove
+    // nothing about the fields and everything about a broken fixture.
+    validate(&gate, def, defs, "rejection_row").expect("the gate golden validates as it stands");
+
+    gate["invariant_version"] = serde_json::json!(4);
+    assert!(
+        validate(&gate, def, defs, "rejection_row").is_err(),
+        "a gate refusal with an invariant version must not validate"
+    );
+
+    let mut gate: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(golden_dir().join("rejection_row_gate.json")).unwrap(),
+    )
+    .unwrap();
+    gate["witness"] =
+        serde_json::json!([{ "var": "x", "value": { "type": "subject", "value": "a" } }]);
+    assert!(
+        validate(&gate, def, defs, "rejection_row").is_err(),
+        "a gate refusal with a witness must not validate"
+    );
+}
+
+#[test]
+fn no_golden_carries_an_empty_witness() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/envelopes");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("golden dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let text = std::fs::read_to_string(&path).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("json");
+        fn scan(v: &serde_json::Value, name: &str, checked: &mut usize) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    if let Some(w) = map.get("witness") {
+                        *checked += 1;
+                        assert_ne!(
+                            w.as_array().map(std::vec::Vec::len),
+                            Some(0),
+                            "{name} carries an empty witness; it should be absent instead"
+                        );
+                    }
+                    for v in map.values() {
+                        scan(v, name, checked);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for v in items {
+                        scan(v, name, checked);
+                    }
+                }
+                _ => {}
+            }
+        }
+        scan(&value, &name, &mut checked);
+    }
+    assert!(
+        checked > 1,
+        "anti-vacuity: goldens carrying a witness must exist, found {checked}"
+    );
+}
+
 #[test]
 fn every_golden_validates_against_its_defs_entry() {
     let schema = result_schema();
@@ -1501,6 +1622,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("explanation_invariant.json", "explanation"),
         ("explanation_error.json", "explanation"),
         ("outbox_row.json", "outbox_row"),
+        ("rejection_row.json", "rejection_row"),
+        ("rejection_row_gate.json", "rejection_row"),
         ("outbox_claim.json", "outbox_claim"),
         ("outbox_claim_null.json", "outbox_claim"),
         ("outbox_update_applied.json", "outbox_update"),

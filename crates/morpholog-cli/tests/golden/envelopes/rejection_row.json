@@ -1,0 +1,35 @@
+{
+  "actor": {
+    "type": "subject",
+    "value": "alex"
+  },
+  "arguments": [
+    {
+      "type": "subject",
+      "value": "inv_1"
+    }
+  ],
+  "invariant_version": 1,
+  "kind": "invariant",
+  "reason": "invariant `line_net_is_the_rounded_recompute` violated",
+  "rejected_at": "2026-06-01T12:00:00Z",
+  "rejection_id": "01900000-0000-7000-8000-000000000001",
+  "rule": "line_net_is_the_rounded_recompute",
+  "transformation_name": "issue_invoice",
+  "witness": [
+    {
+      "value": {
+        "type": "subject",
+        "value": "acct_1"
+      },
+      "var": "account"
+    },
+    {
+      "value": {
+        "type": "decimal",
+        "value": "105.50"
+      },
+      "var": "exposure"
+    }
+  ]
+}

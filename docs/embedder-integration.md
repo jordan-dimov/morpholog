@@ -152,6 +152,16 @@ A rejected envelope carries `rule`: the refused rule's stable identifier - an in
 
 On a single-proposal rejection whose reason names an invariant declared in the source, stderr carries a courtesy line locating the rule (`rule at <file>:<line>:<col> (<name>)`). It is for the human at the terminal, not the integration: parse stdout only. Batch mode never prints it - receipts are the whole contract there.
 
+### `morpholog inspect rejections`
+
+Refused proposals, oldest first, as `rejection_row` objects: the transformation and its arguments, the actor, the refusing rule (`kind` + `rule` + `invariant_version`), the reason string, and `witness` - the values the refused rule was reading.
+
+`witness` is **absent** rather than empty when the kernel could not pin the failure to one iteration, and for rows written before the column existed; absence means "not captured", never "captured nothing". `invariant_version` is absent for the gate kinds.
+
+**This is an operational floor, not a ledger.** Writes happen after the rollback, on the pool, at-most-once - a storm or a failed insert can leave a refusal unrecorded, and nothing repairs it. Audit remains the only legitimacy-grade record. Read a row as a lead to follow, never as proof of what did or did not happen; a persisted witness inherits exactly the same standing as the row carrying it.
+
+Sizing, measured on a five-argument claim: a witness is roughly 700 bytes and about two thirds of a row's variable payload, so a hundred thousand refusals carry on the order of 70 MB of witness data. Default-on, with no flag - the whole value is being able to review a refusal after the process that saw it has gone.
+
 ### `morpholog explain --json`
 
 Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate that failed, the directly-missing claims, or the violated invariant. Without `--json` the same structure renders as claim-shaped prose.
@@ -254,7 +264,7 @@ What this document promises:
 What is deliberately left open, pending the worked example that forces the shape:
 
 - **Nothing about `--trace` any more.** It used to be listed here: the envelope was pinned and its entries were not, so a consumer reading a step was parsing ad-hoc JSON. The entries are now `$defs` entries, golden-pinned against real runtime output, and typed on the generated client.
-- **The remaining `morpholog inspect` output shapes.** The claims, audit, and derived shapes are pinned above; `rejections`, `outbox`, and `guarantees` vary and earn their own contract entries when an embedder leans on them. (`inspect rejections` lists the operational rejection log - refusals recorded after rollback, at-most-once; the `propose` envelope itself is unchanged by that log's existence.)
+- **The remaining `morpholog inspect` output shapes.** The claims, audit, derived and rejection shapes are pinned; `outbox` and `guarantees` vary and earn their own contract entries when an embedder leans on them.
 
 ## The outcome-envelope contract (`schema --result`)
 

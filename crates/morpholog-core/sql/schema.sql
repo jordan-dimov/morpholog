@@ -139,18 +139,37 @@ CREATE TABLE rejections (
     -- Which kind of rule refused: an invariant over the candidate
     -- state, a `require` gate, or a `bind` with no candidates.
     kind                 text         NOT NULL CHECK (kind IN ('invariant', 'require', 'bind')),
-    -- The invariant's name for kind = 'invariant'; the rendered gate
-    -- expression for the gate kinds. Structured at the source, never
-    -- parsed back out of `reason`.
+    -- The invariant's name for kind = 'invariant'. For a gate: its own
+    -- name where the author gave it one, else the rendered expression.
+    -- Structured at the source, never parsed back out of `reason`.
     rule                 text         NOT NULL,
     invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
+    -- The values the refused rule was reading, same codec as the
+    -- envelope's witness. NULL when the kernel could not pin the failure
+    -- to one iteration, and for every row written before this column
+    -- existed. Diagnostic only: it inherits this table's at-most-once,
+    -- operational standing, so it is a lead to follow and never proof of
+    -- what a refusal saw.
+    -- Non-empty or absent, never `[]`: absence means "nothing was
+    -- captured", and an empty array would say "the rule was reading
+    -- nothing", which is never true of a refusal.
+    witness              jsonb                 CHECK (
+                             witness IS NULL
+                             OR (jsonb_typeof(witness) = 'array' AND jsonb_array_length(witness) > 0)
+                         ),
     rejected_at          timestamptz  NOT NULL DEFAULT now(),
     -- The writer never emits a versioned gate or an unversioned
     -- invariant; the constraint keeps hand-edits from corrupting
     -- the operational evidence either way.
     CONSTRAINT rejections_kind_version_agree CHECK (
         (kind = 'invariant') = (invariant_version IS NOT NULL)
+    ),
+    -- Only an invariant refusal has values to report: a gate refusal fails
+    -- over the pre-state with no iteration to blame, so a witness on one
+    -- would be evidence from nowhere.
+    CONSTRAINT rejections_witness_is_invariant_only CHECK (
+        witness IS NULL OR kind = 'invariant'
     )
 );
 

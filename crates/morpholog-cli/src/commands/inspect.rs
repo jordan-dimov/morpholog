@@ -156,8 +156,8 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         }
         Inspect::Audit(args) => inspect_audit(args).await,
         Inspect::Rejections(args) => {
-            let pool = connect(&args.database_url).await?;
-            let rows = list_rejection_rows(&pool)
+            let pool = connect(&args.db.database_url).await?;
+            let rows = list_rejection_rows(&pool, args.limit)
                 .await
                 .context("list_rejection_rows failed")?;
             print_json(&rows)
