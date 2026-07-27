@@ -27,10 +27,10 @@ jiff = { version = "0.2", default-features = false, features = ["std", "serde"] 
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "rust_decimal", "json", "chrono", "macros"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 thiserror = "2"
-sha2 = "0.10"
+sha2 = "0.11"
 num-bigint = "0.5"
-ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
-pkcs8 = { version = "0.10", features = ["pem", "alloc"] }
+ed25519-dalek = { version = "3", features = ["pkcs8", "pem"] }
+pkcs8 = { version = "0.11", features = ["pem", "alloc"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"

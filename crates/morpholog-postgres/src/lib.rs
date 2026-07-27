@@ -20,6 +20,7 @@ mod checkpoints;
 mod claims;
 mod derived;
 mod error;
+mod hex;
 mod keys;
 mod merkle;
 mod outbox;

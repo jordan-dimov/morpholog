@@ -133,7 +133,7 @@ pub fn signing_key_from_pem(pem: &str) -> Result<SigningKey, SigningError> {
 
 /// `ed25519-pub:<hex>`.
 pub fn render_public_key(key: &VerifyingKey) -> String {
-    format!("{PUBLIC_KEY_PREFIX}{}", to_hex(&key.to_bytes()))
+    format!("{PUBLIC_KEY_PREFIX}{}", crate::hex::encode(&key.to_bytes()))
 }
 
 /// Parse an `ed25519-pub:<hex>` public key.
@@ -153,7 +153,7 @@ pub fn parse_public_key(text: &str) -> Result<VerifyingKey, SigningError> {
 
 /// `ed25519-sig:<hex>`.
 pub fn render_signature(sig: &Signature) -> String {
-    format!("{SIGNATURE_PREFIX}{}", to_hex(&sig.to_bytes()))
+    format!("{SIGNATURE_PREFIX}{}", crate::hex::encode(&sig.to_bytes()))
 }
 
 /// Parse an `ed25519-sig:<hex>` signature.
@@ -166,14 +166,6 @@ pub fn parse_signature(text: &str) -> Result<Signature, SigningError> {
         })?;
     let arr = from_hex::<64>(hex, "signature")?;
     Ok(Signature::from_bytes(&arr))
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 fn from_hex<const N: usize>(s: &str, what: &'static str) -> Result<[u8; N], SigningError> {
@@ -214,6 +206,159 @@ mod tests {
             prev_checkpoint_hash: None,
             checkpoint_hash: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         }
+    }
+
+    /// A signing key from a fixed seed. Deterministic on purpose: the frozen
+    /// tests below are meaningless with a random key.
+    fn fixed_key() -> SigningKey {
+        SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    /// The exact bytes a tree-head signature commits to, frozen.
+    ///
+    /// Every other test here round-trips - sign then verify, with both sides
+    /// moving together - so a change to this encoding would leave all of them
+    /// green while every signature already stored stopped verifying. This is
+    /// the test that would notice.
+    #[test]
+    fn frozen_signing_input_pins_the_payload_encoding() {
+        let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &sample_head());
+        let rendered = crate::hex::encode(&bytes);
+        assert_eq!(
+            rendered,
+            "26000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642e7631130000000000000061756469745f636865636b706f696e745f763102000000000000006b3108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310047000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232"
+        );
+    }
+
+    /// The signature itself, frozen against a fixed key and head.
+    ///
+    /// Ed25519 is deterministic (RFC 8032), so this value is stable across
+    /// any correct implementation - which is what makes it the right pin for
+    /// a dependency bump. If it moves, signatures in existing databases have
+    /// stopped verifying.
+    #[test]
+    fn frozen_signature_pins_ed25519_over_the_payload() {
+        let sig = sign_tree_head(&fixed_key(), "audit_checkpoint_v1", "k1", &sample_head());
+        assert_eq!(
+            render_signature(&sig),
+            "ed25519-sig:1322b926f5a5f75159599bf3060a52bca152123b80d4dbdfdcbc37eb2733912edc573934b96f34cd0ec26a820e6a1e8ec48300e760b6a5fcaad6437a89196f08"
+        );
+    }
+
+    /// The public key that seed yields, so a change in key derivation is
+    /// caught as well - the signature pin alone would move for either reason
+    /// and could not tell them apart.
+    #[test]
+    fn frozen_public_key_pins_the_seed_derivation() {
+        assert_eq!(
+            render_public_key(&fixed_key().verifying_key()),
+            "ed25519-pub:ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
+        );
+    }
+
+    // Artefacts produced by the PREVIOUS release - ed25519-dalek 2, pkcs8
+    // 0.10 - captured by running the emitter against that code, not by
+    // rendering them here. A same-version round trip cannot tell you that a
+    // parser still accepts what an older writer left on disk, which is the
+    // only question an upgrade actually asks.
+    const PRE_UPGRADE_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
+        MFECAQEwBQYDK2VwBCIEIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH\n\
+        gSEA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=\n\
+        -----END PRIVATE KEY-----\n";
+    const PRE_UPGRADE_PUBLIC_KEY: &str =
+        "ed25519-pub:ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c";
+    const PRE_UPGRADE_SIGNATURE: &str = "ed25519-sig:1322b926f5a5f75159599bf3060a52bca152123b80d4dbdfdcbc37eb2733912edc573934b96f34cd0ec26a820e6a1e8ec48300e760b6a5fcaad6437a89196f08";
+    /// The chained form: every checkpoint after the first signs over the
+    /// previous checkpoint's hash, which is a different encoding branch.
+    const PRE_UPGRADE_SIGNATURE_CHAINED: &str = "ed25519-sig:99f8cb383dc5ed60192b284f3df8d5eeca05edb0660cb636a107a60ad94f68a7e5054f0ea6106b47cd35fc58aa8cdd8abe90ff2d6740970f1595e8b11e0cea09";
+    const PRE_UPGRADE_INPUT_CHAINED: &str = "26000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642e7631130000000000000061756469745f636865636b706f696e745f763102000000000000006b3108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310147000000000000007368613235363a3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333347000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232";
+
+    /// The head every checkpoint after the first signs: the previous
+    /// checkpoint's hash is present, which is the other branch of the
+    /// payload encoding and the one an enduring chain actually uses.
+    fn chained_head() -> TreeHead<'static> {
+        TreeHead {
+            prev_checkpoint_hash: Some(
+                "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            ),
+            ..sample_head()
+        }
+    }
+
+    /// A signing key written by the previous release still loads, and is the
+    /// same key.
+    ///
+    /// PKCS#8 is a third of this upgrade and had nothing pinned: every key
+    /// test wrote and read with the same version, so a parser regression
+    /// would have rejected an operator's existing key file while every test
+    /// stayed green.
+    #[test]
+    fn a_pre_upgrade_pem_still_loads_as_the_same_key() {
+        let key = signing_key_from_pem(PRE_UPGRADE_PRIVATE_KEY_PEM)
+            .expect("a key file from the previous release must still load");
+        assert_eq!(
+            render_public_key(&key.verifying_key()),
+            PRE_UPGRADE_PUBLIC_KEY
+        );
+        // And writing it back out yields what the old release wrote, so a
+        // key round-tripped through this version stays readable by both.
+        assert_eq!(
+            signing_key_to_pem(&key).unwrap(),
+            PRE_UPGRADE_PRIVATE_KEY_PEM
+        );
+    }
+
+    /// Signatures already stored in checkpoints still verify - both the
+    /// first-checkpoint form and the chained form.
+    #[test]
+    fn pre_upgrade_signatures_still_verify() {
+        let public_key = parse_public_key(PRE_UPGRADE_PUBLIC_KEY).expect("stored key parses");
+        for (label, sig_text, head) in [
+            ("unchained", PRE_UPGRADE_SIGNATURE, sample_head()),
+            ("chained", PRE_UPGRADE_SIGNATURE_CHAINED, chained_head()),
+        ] {
+            let signature = parse_signature(sig_text).expect("stored signature parses");
+            assert!(
+                verify_tree_head(&public_key, &signature, "audit_checkpoint_v1", "k1", &head),
+                "a {label} signature from the previous release must still verify"
+            );
+        }
+    }
+
+    /// And this version reproduces them byte for byte, so a checkpoint
+    /// re-signed after the upgrade is indistinguishable from one signed
+    /// before it.
+    #[test]
+    fn this_version_reproduces_the_pre_upgrade_signatures() {
+        let key = signing_key_from_pem(PRE_UPGRADE_PRIVATE_KEY_PEM).unwrap();
+        assert_eq!(
+            render_signature(&sign_tree_head(
+                &key,
+                "audit_checkpoint_v1",
+                "k1",
+                &sample_head()
+            )),
+            PRE_UPGRADE_SIGNATURE
+        );
+        assert_eq!(
+            render_signature(&sign_tree_head(
+                &key,
+                "audit_checkpoint_v1",
+                "k1",
+                &chained_head()
+            )),
+            PRE_UPGRADE_SIGNATURE_CHAINED
+        );
+    }
+
+    /// The chained payload encoding, frozen. `sample_head` leaves the
+    /// previous hash absent, so the frozen vector above covers only the
+    /// `None` marker - this one covers the `Some` branch: its presence byte,
+    /// length prefix and position.
+    #[test]
+    fn frozen_chained_signing_input_pins_the_other_branch() {
+        let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &chained_head());
+        assert_eq!(crate::hex::encode(&bytes), PRE_UPGRADE_INPUT_CHAINED);
     }
 
     #[test]

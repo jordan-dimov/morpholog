@@ -79,8 +79,15 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
 /// `sha256:` prefix keeps it self-describing if the algorithm changes.
 pub fn canonical_hash(p: &Program) -> String {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write;
     let digest = Sha256::digest(format_program(p).as_bytes());
-    format!("sha256:{digest:x}")
+    let mut out = String::with_capacity(7 + digest.len() * 2);
+    out.push_str("sha256:");
+    for b in digest {
+        // Writing into a String cannot fail.
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 /// Top-level entry. Returns a multi-line string terminated by a
