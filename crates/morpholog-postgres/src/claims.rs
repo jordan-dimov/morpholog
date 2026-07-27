@@ -1,4 +1,4 @@
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify_checked_query};
 use crate::propose::compute_load_scope;
 use morpholog_core::{ClaimInstance, CompiledProgram, PredicateName, State, Transformation};
 use sqlx::PgPool;
@@ -18,7 +18,7 @@ pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
     )
     .fetch_all(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     decode_claim_rows(
         rows.into_iter()
             .map(|r| (r.predicate_name, r.arguments))
@@ -64,7 +64,7 @@ pub async fn list_claims_for_predicates(
     )
     .fetch_all(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     decode_claim_rows(
         rows.into_iter()
             .map(|r| (r.predicate_name, r.arguments))
@@ -158,7 +158,7 @@ pub async fn list_claims_where(
     )
     .fetch_all(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     decode_claim_rows(
         rows.into_iter()
             .map(|r| (r.predicate_name, r.arguments))

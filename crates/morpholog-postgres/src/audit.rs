@@ -1,5 +1,5 @@
 use crate::attestation::AuditAttestation;
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
@@ -278,7 +278,7 @@ pub async fn audit_cursor_for(
     )
     .fetch_optional(&mut *conn)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     match row {
         Some(row) => Ok((row.committed_at, transition_id)),
         None => Err(PgError::TransitionNotFound(transition_id)),
@@ -384,7 +384,7 @@ pub async fn audit_resume_watermark(
     )
     .fetch_one(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     if row.hidden > 0 {
         return Err(PgError::StatVisibility { hidden: row.hidden });
     }
@@ -446,7 +446,7 @@ async fn audit_resume_watermark_asserted(
     )
     .fetch_one(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     if let Some(unknown) = row.unknown.filter(|u| !u.is_empty()) {
         return Err(PgError::WriterRoleUnknown { roles: unknown });
     }

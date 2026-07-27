@@ -1,4 +1,4 @@
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify_checked_query};
 use chrono::{DateTime, Utc};
 use morpholog_core::{EvalValue, Subject, TransformationName, WitnessBinding};
 use serde::Serialize;
@@ -57,7 +57,7 @@ pub async fn list_rejection_rows(pool: &PgPool, limit: u32) -> Result<Vec<Reject
     )
     .fetch_all(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
 
     rows.into_iter()
         .map(|row| {

@@ -1,5 +1,5 @@
 use crate::audit::{REPLAY_CHUNK, audit_cursor_for};
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use chrono::{DateTime, Utc};
 use morpholog_core::{ClaimInstance, State};
 use sqlx::PgPool;
@@ -60,7 +60,7 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
         )
         .fetch_optional(pool)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
         target.ok_or(PgError::TransitionNotFound(transition_id))?;
         return Ok(State::default());
     }
@@ -126,7 +126,7 @@ where
     )
     .fetch_optional(executor)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     row.map(|r| r.transition_id)
         .ok_or(PgError::NoTransitionAtOrBefore(at))
 }

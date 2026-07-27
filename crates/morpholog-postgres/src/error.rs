@@ -27,6 +27,25 @@ pub enum PgError {
     /// matched zero rows when exactly one was expected).
     #[error("invalid persistent state: {0}")]
     InvalidState(String),
+
+    /// The database schema is older than this binary: a query named a
+    /// column the table does not have.
+    ///
+    /// Every query in this crate is verified against `sql/schema.sql` at
+    /// build time through the committed `.sqlx/` cache, so this cannot be a
+    /// query bug at runtime - it means the database has not had this
+    /// release's migrations applied. Worth its own variant because the raw
+    /// error names an internal query position and no remedy, and because
+    /// the failure hides: commits keep working, and the first refusal is
+    /// what breaks.
+    #[error(
+        "the database schema is behind this binary ({detail}). \
+         Apply the migrations in crates/morpholog-core/sql/migrations/ that \
+         postdate your database - `morpholog init` never migrates - then retry. \
+         Every query here is checked against the schema at build time, so a \
+         missing column means the database is out of date, not the query."
+    )]
+    SchemaBehind { detail: String },
     /// A supplied `transition_id` does not name an existing audit row.
     /// Returned by the as-of helpers when the caller asks for state at
     /// a coordinate that does not correspond to any committed
@@ -145,6 +164,10 @@ pub(crate) fn is_serialization_failure_code(code: Option<&str>) -> bool {
 pub(crate) fn is_unique_violation_code(code: Option<&str>) -> bool {
     code == Some("23505")
 }
+/// Is this SQLSTATE the PostgreSQL `undefined_column` code (`42703`)?
+pub(crate) fn is_undefined_column_code(code: Option<&str>) -> bool {
+    code == Some("42703")
+}
 /// Maps a `sqlx::Error` to a [`PgError`], recognising SQLSTATE 40001
 /// (PostgreSQL SSI serialization failure) as the distinct retryable
 /// variant and a 23505 on the outbox idempotency-key constraint as
@@ -165,9 +188,38 @@ pub(crate) fn classify(err: sqlx::Error) -> PgError {
     }
     PgError::Database(err)
 }
+
+/// As [`classify`], plus: a missing column means the database is behind.
+///
+/// Only for queries written with `sqlx::query!` / `query_as!` /
+/// `query_scalar!`, which the committed `.sqlx/` cache verifies against
+/// `sql/schema.sql` at build time. There the inference holds - the query
+/// cannot name a column the head schema lacks, so the database must be the
+/// out-of-date one.
+///
+/// It does NOT hold for raw or generated SQL. The `raw_sql(SCHEMA_SQL)`
+/// bootstrap and the `SET TRANSACTION` statements go through [`classify`]
+/// instead: a typo in `schema.sql` would otherwise tell an operator
+/// provisioning a FRESH database to go and apply migrations, which is
+/// confidently wrong. New raw-SQL sites get [`classify`] by default and are
+/// right to.
+pub(crate) fn classify_checked_query(err: sqlx::Error) -> PgError {
+    let code = err
+        .as_database_error()
+        .and_then(sqlx::error::DatabaseError::code);
+    if is_undefined_column_code(code.as_deref()) {
+        return PgError::SchemaBehind {
+            detail: err
+                .as_database_error()
+                .map_or_else(|| err.to_string(), ToString::to_string),
+        };
+    }
+    classify(err)
+}
 #[cfg(test)]
 mod tests {
-    use super::is_serialization_failure_code;
+    use super::{is_serialization_failure_code, is_undefined_column_code};
+    use sqlx::error::DatabaseError;
     /// Pins the `"40001"` magic string so the retry contract cannot
     /// regress silently.
     #[test]
@@ -182,5 +234,61 @@ mod tests {
         assert!(!is_serialization_failure_code(Some("40000")));
         assert!(!is_serialization_failure_code(Some("23505"))); // unique_violation
         assert!(!is_serialization_failure_code(Some("40P01"))); // deadlock_detected
+    }
+
+    /// Pins `"42703"` the same way, so the upgrade diagnosis cannot regress
+    /// into a raw database error nobody can act on.
+    #[test]
+    fn undefined_column_code_is_42703() {
+        assert!(is_undefined_column_code(Some("42703")));
+        assert!(!is_undefined_column_code(Some("42P01")));
+        assert!(!is_undefined_column_code(None));
+    }
+
+    /// The two classifiers disagree about a real `undefined_column`, which
+    /// is the whole point of splitting them.
+    ///
+    /// A checked query cannot name a column the head schema lacks - the
+    /// build fails first - so at runtime the database must be behind. Raw
+    /// SQL carries no such guarantee: the `raw_sql(SCHEMA_SQL)` bootstrap
+    /// could name a bad column on a FRESH database, and telling that
+    /// operator to apply migrations would be confidently wrong.
+    ///
+    /// Skipped without a database, like the rest of the PG-gated suites.
+    #[tokio::test]
+    async fn raw_sql_is_not_diagnosed_as_a_stale_schema() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let url = crate::with_default_user(&url);
+        let pool = sqlx::PgPool::connect(&url).await.expect("connect");
+        // A genuine 42703 that touches nothing: no DDL, no shared state.
+        let err = sqlx::query("SELECT no_such_column FROM (SELECT 1) AS t")
+            .execute(&pool)
+            .await
+            .expect_err("selecting an absent column must fail");
+        assert_eq!(
+            err.as_database_error()
+                .and_then(DatabaseError::code)
+                .as_deref(),
+            Some("42703"),
+            "the fixture must actually produce the code under test"
+        );
+
+        let raw = super::classify(err);
+        assert!(
+            matches!(raw, super::PgError::Database(_)),
+            "raw SQL must not be diagnosed as a stale schema, got {raw:?}"
+        );
+
+        let err = sqlx::query("SELECT no_such_column FROM (SELECT 1) AS t")
+            .execute(&pool)
+            .await
+            .expect_err("selecting an absent column must fail");
+        let checked = super::classify_checked_query(err);
+        assert!(
+            matches!(checked, super::PgError::SchemaBehind { .. }),
+            "a checked query's missing column IS a stale schema, got {checked:?}"
+        );
     }
 }

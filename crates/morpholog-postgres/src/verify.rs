@@ -2,7 +2,7 @@ use crate::as_of::{ReplaySet, reconstruct_inner};
 use crate::audit::REPLAY_CHUNK;
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::REJECTION_KIND_INVARIANT;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
@@ -98,7 +98,7 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
     )
     .fetch_one(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     if !sealed_exists {
         return Ok(ViewsVerification::NotSealed);
     }
@@ -203,7 +203,7 @@ async fn live_view_hash(
     )
     .fetch_optional(pool)
     .await
-    .map_err(classify)
+    .map_err(classify_checked_query)
 }
 /// Replay the audit log through a [`CoverageTracker`], then count
 /// the rejection log into it, and report, per invariant of
@@ -431,12 +431,12 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
     )
     .fetch_optional(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     // count(*) is never null, but Postgres cannot prove it.
     let transitions = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
         .fetch_one(&mut *tx)
         .await
-        .map_err(classify)?
+        .map_err(classify_checked_query)?
         .count;
     let replayed = match latest {
         Some(row) => reconstruct_inner(&mut tx, row.transition_id, None)

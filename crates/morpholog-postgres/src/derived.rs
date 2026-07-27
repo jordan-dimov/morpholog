@@ -1,6 +1,6 @@
 use crate::as_of::reconstruct_state_at_for_predicates;
 use crate::claims::{decode_claim_rows, list_claims_for_predicates};
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
 use morpholog_core::{
@@ -133,7 +133,7 @@ pub async fn refresh_derived(
     )
     .fetch_optional(&mut *read_tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     let claim_rows: Vec<(String, serde_json::Value)> = if footprint.is_empty() {
         Vec::new()
     } else {
@@ -144,7 +144,7 @@ pub async fn refresh_derived(
         )
         .fetch_all(&mut *read_tx)
         .await
-        .map_err(classify)?
+        .map_err(classify_checked_query)?
         .into_iter()
         .map(|r| (r.predicate_name, r.arguments))
         .collect()
@@ -182,7 +182,7 @@ pub async fn refresh_derived(
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     // Bulk insert in one statement (UNNEST of parallel arrays) rather than
     // a round-trip per row. COPY is the next step if a profile demands it.
     if !rows.is_empty() {
@@ -200,7 +200,7 @@ pub async fn refresh_derived(
         )
         .execute(&mut *tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
     }
     // Flip the single-row active pointer, then drop every other generation
     // (cascading its rows). The just-published generation is now the only
@@ -214,14 +214,14 @@ pub async fn refresh_derived(
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     sqlx::query!(
         "DELETE FROM morpholog_read.derived_refreshes WHERE refresh_id <> $1",
         refresh_id,
     )
     .execute(&mut *tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     tx.commit().await.map_err(classify)?;
     let write = write_start.elapsed();
     Ok(RefreshSummary {

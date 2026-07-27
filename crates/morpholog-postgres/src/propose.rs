@@ -1,5 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
@@ -385,7 +385,7 @@ pub(crate) async fn load_state(
     )
     .fetch_all(&mut **tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
 
     let mut claims = Vec::with_capacity(rows.len());
     for row in rows {
@@ -525,7 +525,7 @@ pub(crate) async fn write_rejection(
     )
     .execute(pool)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
     Ok(())
 }
 
@@ -560,7 +560,7 @@ pub(crate) async fn write_accepted(
         )
         .execute(&mut **tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
         if result.rows_affected() != 1 {
             return Err(PgError::InvalidState(format!(
                 "expected exactly 1 row deleted for retraction of `{}`, got {}",
@@ -585,7 +585,7 @@ pub(crate) async fn write_accepted(
         )
         .execute(&mut **tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
     }
 
     // Audit row.
@@ -605,7 +605,7 @@ pub(crate) async fn write_accepted(
     let authenticated_by = sqlx::query_scalar!(r#"SELECT session_user AS "session_user!""#)
         .fetch_one(&mut **tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
     let attestation = AuditAttestation::Gateway { authenticated_by };
     // Serialise the actor via the tagged `EvalValue::Subject` so the
     // `actor` column keeps its v0 shape (`#[serde(with = "actor_repr")]`
@@ -630,7 +630,7 @@ pub(crate) async fn write_accepted(
     )
     .execute(&mut **tx)
     .await
-    .map_err(classify)?;
+    .map_err(classify_checked_query)?;
 
     // Outbox rows, one per emitted intent.
     for intent in emitted_intents {
@@ -649,7 +649,7 @@ pub(crate) async fn write_accepted(
         )
         .execute(&mut **tx)
         .await
-        .map_err(classify)?;
+        .map_err(classify_checked_query)?;
     }
 
     Ok(())
