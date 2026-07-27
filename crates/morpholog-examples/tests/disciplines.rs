@@ -1223,3 +1223,85 @@ transformation settle(trade, settled_on, settled):
         .validate()
         .expect("a totality declaration over an undated predicate is legal");
 }
+
+/// `partial` declares that coverage gaps are intended, and `--strict` stops
+/// refusing.
+///
+/// The hole it closes: the totality hint is right for the usual case and
+/// wrong for a model where a rule genuinely should not apply before the
+/// first version exists. Under `--strict` - which the consumer who hit this
+/// runs - there was no way to say so, leaving a choice between declaring a
+/// companion that is not true and abandoning strict checking entirely.
+#[test]
+fn partial_declares_an_intended_totality_gap() {
+    let source = TOTALITY.replace(" total over ChargeRate", "").replace(
+        "effective by (charge) on (effective_from)",
+        "effective by (charge) on (effective_from) partial",
+    );
+    let program = parse_program(&source).expect("parses");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let hints = morpholog_core::lints(&compiled);
+    assert!(
+        !hints.iter().any(|l| matches!(
+            l,
+            morpholog_core::Lint::EffectiveWithoutDeclaredTotality { .. }
+        )),
+        "declaring the gap intended must settle it, got {hints:?}"
+    );
+}
+
+/// Saying both things is refused rather than resolved by precedence.
+///
+/// Whichever way a precedence rule went, the author would have written
+/// something they did not mean and nothing would tell them.
+#[test]
+fn partial_and_total_over_cannot_both_be_declared() {
+    let source = TOTALITY.replace(
+        "effective by (charge) on (effective_from)",
+        "effective by (charge) on (effective_from) partial",
+    );
+    let program = parse_program(&source).expect("parses");
+    let errs = program.validate().expect_err("must not validate");
+    assert!(
+        errs.iter().any(|e| matches!(
+            e,
+            ValidationError::PartialContradictsTotality { predicate, .. } if predicate == "ChargeRate"
+        )),
+        "got {errs:?}"
+    );
+}
+
+/// `partial` survives format-and-reparse.
+///
+/// A formatter that dropped it would turn a checked declaration back into a
+/// programme the hint fires on - the same class of silent downgrade that
+/// makes the `total over` round-trip worth pinning.
+#[test]
+fn partial_survives_format_and_reparse() {
+    let source = TOTALITY.replace(" total over ChargeRate", "").replace(
+        "effective by (charge) on (effective_from)",
+        "effective by (charge) on (effective_from) partial",
+    );
+    let once = parse_program(&source).expect("parses");
+    let formatted = morpholog_core::format::format_program(&once);
+    assert!(
+        formatted.contains("effective by (charge) on (effective_from) partial"),
+        "{formatted}"
+    );
+    let twice = parse_program(&formatted).expect("reparses");
+    assert_eq!(once, twice);
+}
+
+/// `partial` stays an ordinary identifier everywhere else.
+#[test]
+fn partial_is_contextual_not_reserved() {
+    let source = "program contextual
+
+predicate Reading(meter: Subject, partial: Decimal)
+
+transformation record(meter, partial):
+    admit Reading(meter, partial)
+";
+    let program = parse_program(source).expect("`partial` must remain usable as a name");
+    program.validate().expect("validates");
+}

@@ -166,8 +166,9 @@ pub(crate) fn format_predicate_decl(decl: &PredicateDecl) -> String {
         out.push_str(&match discipline {
             Discipline::UniqueBy { fields } => format!("unique by ({})", fields.join(", ")),
             Discipline::AppendOnly => "append only".to_string(),
-            Discipline::EffectiveBy { keys, on } => {
-                format!("effective by ({}) on ({on})", keys.join(", "))
+            Discipline::EffectiveBy { keys, on, partial } => {
+                let gap = if *partial { " partial" } else { "" };
+                format!("effective by ({}) on ({on}){gap}", keys.join(", "))
             }
             Discipline::CurrentPointerBy { fields } => {
                 format!("current pointer by ({})", fields.join(", "))
@@ -286,12 +287,17 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
             format!("{pad}require {}{}", rule_label(name), format_prop_inline(p))
         }
         Stmt::BindOne { prop: p, name } => {
-            // The surface grammar restricts `bind` to a claim pattern,
-            // though the IR's `BindOne` prop is broader. Panic on
-            // non-Claim shapes rather than emit text the parser refuses.
+            // A claim pattern, or a call to a definition - which is what a
+            // claim-shaped reference becomes once `resolve_defined_calls`
+            // has run, and which `bind` supports on purpose (the body finds
+            // the record, the call's arguments project the binding out).
+            // Both render as `Name(args)` and reparse to themselves.
+            //
+            // Anything else the parser cannot produce, so emitting it would
+            // write source that will not read back.
             assert!(
-                matches!(p, Prop::Claim { .. }),
-                "format_stmt: bind requires a claim pattern; got {p:?}",
+                matches!(p, Prop::Claim { .. } | Prop::Defined { .. }),
+                "format_stmt: bind takes a claim or a defined call; got {p:?}",
             );
             format!("{pad}bind {}{}", rule_label(name), format_prop_inline(p))
         }

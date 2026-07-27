@@ -1,0 +1,16 @@
+{
+  "applied": [],
+  "binary_version": 11,
+  "pending": [
+    {
+      "name": "rejections_witness",
+      "version": 10
+    },
+    {
+      "name": "schema_migrations",
+      "version": 11
+    }
+  ],
+  "recorded_version_after": 9,
+  "recorded_version_before": 9
+}

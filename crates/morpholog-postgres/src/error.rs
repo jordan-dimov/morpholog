@@ -40,10 +40,11 @@ pub enum PgError {
     /// what breaks.
     #[error(
         "the database schema is behind this binary ({detail}). \
-         Apply the migrations in crates/morpholog-core/sql/migrations/ that \
-         postdate your database - `morpholog init` never migrates - then retry. \
-         Every query here is checked against the schema at build time, so a \
-         missing column means the database is out of date, not the query."
+         Run `morpholog migrate` to bring it up to date - the migrations are \
+         embedded in this binary, so nothing needs fetching, and \
+         `morpholog init` deliberately never migrates. Every query here is \
+         checked against the schema at build time, so a missing column means \
+         the database is out of date, not the query."
     )]
     SchemaBehind { detail: String },
     /// A supplied `transition_id` does not name an existing audit row.

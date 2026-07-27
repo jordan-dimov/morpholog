@@ -526,6 +526,60 @@ fn rejection_rows_serialize_as_pinned() {
     assert_golden("rejection_row_gate.json", &to_value(&gate));
 }
 
+/// The `migrate` report, in both shapes an operator meets: a database that
+/// is behind, and one that has just been brought current.
+///
+/// Pinned because a deploy step reads it - `--check` exits non-zero and the
+/// report says what is outstanding, which is a contract the moment anyone
+/// gates on it.
+#[test]
+fn migration_reports_serialize_as_pinned() {
+    let behind = morpholog_postgres::MigrationReport {
+        recorded_version_before: Some(9),
+        recorded_version_after: Some(9),
+        binary_version: 11,
+        applied: Vec::new(),
+        unknown: Vec::new(),
+        pending: vec![
+            morpholog_postgres::MigrationRef {
+                version: 10,
+                name: "rejections_witness".to_string(),
+            },
+            morpholog_postgres::MigrationRef {
+                version: 11,
+                name: "schema_migrations".to_string(),
+            },
+        ],
+    };
+    assert_golden("migration_report_behind.json", &to_value(&behind));
+
+    let applied = morpholog_postgres::MigrationReport {
+        recorded_version_before: Some(9),
+        recorded_version_after: Some(11),
+        binary_version: 11,
+        applied: behind.pending.clone(),
+        pending: Vec::new(),
+        unknown: Vec::new(),
+    };
+    assert_golden("migration_report_applied.json", &to_value(&applied));
+
+    // A database migrated by a NEWER binary. The dangerous shape: nothing
+    // is pending, and it is emphatically not current.
+    let ahead = morpholog_postgres::MigrationReport {
+        recorded_version_before: Some(12),
+        recorded_version_after: Some(12),
+        binary_version: 11,
+        applied: Vec::new(),
+        pending: Vec::new(),
+        unknown: vec![morpholog_postgres::MigrationRef {
+            version: 12,
+            name: "something_this_build_never_saw".to_string(),
+        }],
+    };
+    assert!(!ahead.is_current(), "an ahead database is not current");
+    assert_golden("migration_report_ahead.json", &to_value(&ahead));
+}
+
 #[test]
 fn outbox_row_serializes_as_pinned() {
     let row = OutboxRow {
@@ -1622,6 +1676,9 @@ fn every_golden_validates_against_its_defs_entry() {
         ("explanation_invariant.json", "explanation"),
         ("explanation_error.json", "explanation"),
         ("outbox_row.json", "outbox_row"),
+        ("migration_report_behind.json", "migration_report"),
+        ("migration_report_applied.json", "migration_report"),
+        ("migration_report_ahead.json", "migration_report"),
         ("rejection_row.json", "rejection_row"),
         ("rejection_row_gate.json", "rejection_row"),
         ("outbox_claim.json", "outbox_claim"),

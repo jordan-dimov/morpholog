@@ -25,9 +25,12 @@
 -- given failed row, eliminating the duplicate-compensation race in
 -- the normal-operation case. See docs/outbox-sketch.md.
 
+-- No BEGIN/COMMIT here: the runner owns the transaction, and applies each
+-- migration together with its version record so the two cannot disagree. A
+-- COMMIT in the script would end the runner's transaction and leave the
+-- record outside it.
 SET search_path TO morpholog, public;
 
-BEGIN;
 
 ALTER TABLE outbox DROP CONSTRAINT IF EXISTS outbox_status_check;
 ALTER TABLE outbox ADD CONSTRAINT outbox_status_check
@@ -40,4 +43,3 @@ ALTER TABLE outbox ADD CONSTRAINT outbox_status_check
         'compensation_failed'
     ));
 
-COMMIT;

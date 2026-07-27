@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT 1 AS one FROM pg_tables\n         WHERE schemaname = 'morpholog' AND tablename = 'schema_migrations'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "one",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "96214b4896d59c2d20b8f7a0c6b27afc330da90503a9bc7e380c63020ee06b46"
+}

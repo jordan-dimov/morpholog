@@ -23,6 +23,7 @@ mod error;
 mod hex;
 mod keys;
 mod merkle;
+mod migrations;
 mod outbox;
 mod pack;
 mod propose;
@@ -53,6 +54,9 @@ pub use claims::{
 };
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
+pub use migrations::{
+    MigrationRef, MigrationReport, apply_migrations, head_version, migration_status,
+};
 pub use outbox::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxUpdate, ProcessOutcome,
     begin_compensation, claim_pending_outbox_row, complete_compensation, earliest_pending_retry,
@@ -71,6 +75,7 @@ pub use propose::{
     compute_idempotency_key, propose_against_pg, propose_against_pg_with_rejection_state,
     propose_against_pg_with_trace,
 };
+pub(crate) use provision::least_privilege_roles_exist;
 pub use provision::{
     InitOutcome, READER_ROLE, WRITER_ROLE, drop_schema, initialise_schema,
     provision_least_privilege, redact_database_url, with_default_user, with_user,

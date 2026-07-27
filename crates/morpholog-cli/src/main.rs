@@ -86,6 +86,21 @@ enum Command {
     /// roles, so the governed path is the only way in by default.
     Init(InitArgs),
 
+    /// Bring an existing database up to the schema this binary expects.
+    ///
+    /// The numbered migrations are embedded here, like the schema itself,
+    /// so upgrading needs only the released artifact - there is no SQL to
+    /// fetch from a source tree. Applies every migration the database has
+    /// not recorded, in order, each in its own transaction with its record
+    /// written alongside; already-current databases are left alone.
+    ///
+    /// `--check` reports and changes nothing, exiting non-zero when the
+    /// database is behind - a deploy gate can ask before a workload does.
+    ///
+    /// Companion to `init`, not part of it: `init` provisions and is safe
+    /// to run against a live database precisely because it never alters one.
+    Migrate(MigrateArgs),
+
     /// Propose a change: it commits only if every rule holds.
     ///
     /// Parses and validates the `.morph` source, then proposes the
@@ -292,6 +307,17 @@ pub(crate) struct GeneratePythonClientArgs {
 /// The connection-string flag every database-backed subcommand
 /// shares, declared once and `#[command(flatten)]`ed in. Subcommands
 /// whose only input is the connection take this struct directly.
+/// `migrate`: apply the migrations this binary carries.
+#[derive(clap::Args, Debug)]
+pub(crate) struct MigrateArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+    /// Report what is pending and change nothing. Exits non-zero when the
+    /// database is behind, so a deploy step can gate on it.
+    #[arg(long)]
+    pub(crate) check: bool,
+}
+
 /// `inspect rejections`: the log, newest first, bounded.
 ///
 /// Newest-first because the question is always "what just refused", and
@@ -1256,6 +1282,7 @@ async fn main() -> anyhow::Result<()> {
         } => commands::refresh::run(&args).await,
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
+        Command::Migrate(args) => commands::migrate::run(args).await,
     }
 }
 

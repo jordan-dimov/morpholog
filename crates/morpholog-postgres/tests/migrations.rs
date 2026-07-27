@@ -214,9 +214,13 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         matches!(err, morpholog_postgres::PgError::SchemaBehind { .. }),
         "the refusal path must diagnose a stale schema, got {err:?}"
     );
+    // The remedy must be something the reader can run. It used to name a
+    // directory inside the source tree, which a release consumer does not
+    // have - the binary knew the answer and pointed at the fix somewhere
+    // else.
     assert!(
-        rendered.contains("sql/migrations/"),
-        "the message must name where the remedy lives, got: {rendered}"
+        rendered.contains("morpholog migrate"),
+        "the message must name the command that fixes it, got: {rendered}"
     );
 }
 
@@ -351,5 +355,236 @@ fn with_database_only_moves_the_last_segment() {
     assert_eq!(
         with_database("postgres://u@h:5432/postgres?sslmode=require", "probe"),
         "postgres://u@h:5432/probe?sslmode=require"
+    );
+}
+
+/// The upgrade an operator actually performs, with only the binary.
+///
+/// This is the gap that forced the command: the release artifact is the
+/// binary and a licence, and the upgrade instruction named a path inside the
+/// source tree, so a consumer following the versioning policy had to fetch
+/// SQL out of a git tag. Nothing here reads the repository - the migrations
+/// come from the ones compiled in.
+#[tokio::test]
+async fn a_legacy_database_upgrades_from_the_binary_alone() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = format!("morpholog_upgrade_probe_{}", std::process::id());
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+
+    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
+    let outcome = upgrade_probe(&probe_url).await;
+
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    outcome.expect("the upgrade path must work end to end");
+}
+
+async fn upgrade_probe(url: &str) -> Result<(), String> {
+    let pool = sqlx::PgPool::connect(url).await.expect("probe");
+    morpholog_postgres::initialise_schema(&pool)
+        .await
+        .expect("provision");
+
+    // A genuinely fresh database is at the head by construction: `init`
+    // records the migrations rather than running them. Asserted here, on a
+    // database this test created, because asserting it against a long-lived
+    // dev database proves only that someone migrated it once.
+    let fresh = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| format!("status on a fresh database failed: {e}"))?;
+    if !fresh.pending.is_empty() {
+        return Err(format!(
+            "init must leave nothing pending, got {:?}",
+            fresh.pending
+        ));
+    }
+    if fresh.recorded_version_after != Some(morpholog_postgres::head_version()) {
+        return Err(format!(
+            "a fresh database is at the head, got {:?}",
+            fresh.recorded_version_after
+        ));
+    }
+
+    // Wind back to a release before either the column or the record existed.
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.rejections DROP COLUMN witness".to_string(),
+    )
+    .await
+    .expect("simulate the older shape");
+    ddl(&pool, "DROP TABLE morpholog.schema_migrations".to_string())
+        .await
+        .expect("simulate a database from before the record existed");
+
+    // A deploy gate can ask before a workload finds out.
+    let before = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| format!("status failed: {e}"))?;
+    if before.recorded_version_before.is_some() {
+        return Err(format!(
+            "a database with no record has no version, got {:?}",
+            before.recorded_version_before
+        ));
+    }
+    if before.pending.len() != usize::try_from(morpholog_postgres::head_version()).unwrap() {
+        return Err(format!(
+            "everything should be pending, got {}",
+            before.pending.len()
+        ));
+    }
+
+    let report = morpholog_postgres::apply_migrations(&pool)
+        .await
+        .map_err(|e| format!("migrate failed: {e}"))?;
+    if report.applied.len() != before.pending.len() {
+        return Err(format!(
+            "applied {} of {}",
+            report.applied.len(),
+            before.pending.len()
+        ));
+    }
+
+    // Current, and re-running changes nothing.
+    let after = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| format!("status failed: {e}"))?;
+    if !after.pending.is_empty() {
+        return Err(format!(
+            "still pending after migrating: {:?}",
+            after.pending
+        ));
+    }
+    let again = morpholog_postgres::apply_migrations(&pool)
+        .await
+        .map_err(|e| format!("second migrate failed: {e}"))?;
+    if !again.applied.is_empty() {
+        return Err(format!(
+            "re-running applied {} migrations",
+            again.applied.len()
+        ));
+    }
+
+    // And the column the whole thing was about is usable: a lawful refusal
+    // now writes its witness instead of failing operationally.
+    morpholog_postgres::list_rejection_rows(&pool, 10)
+        .await
+        .map_err(|e| format!("the rejection log is still unreadable: {e}"))?;
+    Ok(())
+}
+
+/// No embedded migration may control transactions.
+///
+/// The runner opens one transaction per migration and writes the version
+/// record inside it, so the two cannot disagree. PostgreSQL does not nest,
+/// so a `COMMIT` in a script ENDS the runner's transaction - the schema
+/// change commits and the record lands outside it. Two migrations shipped
+/// with `BEGIN`/`COMMIT` and the guarantee in the runner's own doc comment
+/// was false for them.
+///
+/// A rule the compiler cannot express, over a set that grows.
+#[test]
+fn no_migration_controls_its_own_transaction() {
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../morpholog-core/sql/migrations");
+    let mut checked = 0;
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("migrations directory") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_none_or(|e| e != "sql") {
+            continue;
+        }
+        checked += 1;
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let sql = std::fs::read_to_string(&path).expect("read migration");
+        for (n, line) in sql.lines().enumerate() {
+            let bare = line
+                .split("--")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_uppercase();
+            if matches!(bare.as_str(), "BEGIN;" | "COMMIT;" | "ROLLBACK;" | "END;") {
+                offenders.push(format!("{name}:{}", n + 1));
+            }
+        }
+    }
+    assert!(
+        checked > 5,
+        "anti-vacuity: found only {checked} migrations to scan"
+    );
+    assert!(
+        offenders.is_empty(),
+        "migrations must not open or close transactions - the runner owns them, \
+         and a COMMIT here would separate the schema change from its version \
+         record. Found at: {}",
+        offenders.join(", ")
+    );
+}
+
+/// A database recording a migration this binary has never seen is not
+/// current, and migrating it is refused.
+///
+/// The dangerous shape: nothing is PENDING, so a naive check reports a green
+/// light at exactly the moment the binary cannot know whether the schema is
+/// still compatible - a rollback to an older binary.
+#[tokio::test]
+async fn a_database_ahead_of_the_binary_is_not_current() {
+    let pool = test_pool().await;
+    let head = morpholog_postgres::head_version();
+    let future = head + 1;
+
+    ddl(
+        &pool,
+        format!(
+            "INSERT INTO morpholog.schema_migrations (version, name)
+             VALUES ({future}, 'from_a_newer_morpholog') ON CONFLICT DO NOTHING"
+        ),
+    )
+    .await
+    .expect("record a version from the future");
+
+    let status = morpholog_postgres::migration_status(&pool).await;
+    let applied = morpholog_postgres::apply_migrations(&pool).await;
+
+    // Clean up before asserting, so a failure cannot leave the shared
+    // database claiming to be from the future.
+    ddl(
+        &pool,
+        format!("DELETE FROM morpholog.schema_migrations WHERE version = {future}"),
+    )
+    .await
+    .expect("remove it again");
+
+    let status = status.expect("status still reads");
+    assert!(
+        status.pending.is_empty(),
+        "the trap is that nothing is pending: {:?}",
+        status.pending
+    );
+    assert_eq!(
+        status.unknown.iter().map(|m| m.version).collect::<Vec<_>>(),
+        vec![future],
+        "the unknown version must be named"
+    );
+    assert!(!status.is_current(), "an ahead database is not current");
+    assert!(
+        matches!(applied, Err(morpholog_postgres::PgError::InvalidState(_))),
+        "migrating an ahead database must be refused, got {applied:?}"
     );
 }

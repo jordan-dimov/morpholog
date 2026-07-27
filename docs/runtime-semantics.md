@@ -168,7 +168,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 | `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
 | `require name: expr` / `bind name: X(args)` | `name` on `Stmt::{Require, BindOne}` | An optional stable identifier for a refusing statement. A refusal otherwise quotes the rendered expression, which reads well and identifies nothing - reword the rule and anything holding that text breaks. Optional because a transformation with one gate is already unambiguous, and most gates are one self-evident line; the name earns its place where several rules could each be the one that said no. Unique per transformation, not per programme: two acts legitimately carry the same gate verbatim. The name is contextual, not reserved - `ident :` cannot open a proposition, so no keyword is spent. |
-| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date)` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" above). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
+| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date) [partial]` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" above). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
 | `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" above). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
 | `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
 | `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. The decimal domain admits two flavours: bare decimals, and unit-tagged quantities of the SAME unit (a `Decimal[U]` IS a decimal, under a contract label the comparison must respect - `Decimal[USD]` against `Decimal[t]` is refused by name). The domain is carried explicitly, so there is no operator overloading by operand kind. |
@@ -494,6 +494,15 @@ templates. The discipline clauses:
   already in force, so it cannot be the reason one exists. That declaration
   is dropped outright (following definition calls, so the reference cannot
   hide one level down).
+
+  **When the gaps are intended**, say so on the declaration:
+  `effective by (keys) on (date) partial`. That is what an author reaches for
+  when a rule genuinely should not apply before the first version exists -
+  under `--strict` the hint is a refusal, so without this there was no way to
+  express a correct partial model except by abandoning strict checking.
+  Declaring both `partial` and a `total over` for the same predicate is a
+  validation error: they say opposite things, and resolving it by precedence
+  would leave an author having written something they did not mean.
 
   `total over P` for an undeclared `P` is a validation error, not inert
   metadata: the declaration is what tells the lints which rule is the

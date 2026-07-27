@@ -156,6 +156,33 @@ class Morpholog:
             args.append("--i-know-this-deletes-data")
         return envelopes.InitReport.from_json(self._json(*args))
 
+    def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:
+        """Bring the database up to the schema this binary expects.
+
+        The migrations are embedded in the binary, so an upgrade needs
+        nothing fetched from a source tree. Applies whatever the database
+        has not recorded, in order, and leaves a current one alone.
+
+        **Needs a connection that owns the schema.** Under
+        `--least-privilege` the runtime writer role cannot run DDL, so pass
+        an administrative URL for this call rather than the one your
+        proposals use. `check` only reads, and both roles are granted
+        `SELECT` on the record, so a readiness probe can run as either.
+
+        `check` reports and changes nothing. The binary exits non-zero when
+        the database is behind, but this client reads stdout rather than the
+        exit code, so you get the report either way - which is the more
+        useful outcome, because a raise would throw away what is pending.
+        Gate on the report:
+
+            if not client.migrate(check=True).is_current:
+                ...
+        """
+        args = ["migrate", "--database-url", self.database_url]
+        if check:
+            args.append("--check")
+        return envelopes.MigrationReport.from_json(self._json(*args))
+
     def hash(self) -> envelopes.HashReport:
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 

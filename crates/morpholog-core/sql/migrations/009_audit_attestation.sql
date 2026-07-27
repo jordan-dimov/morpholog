@@ -23,9 +23,21 @@ ALTER TABLE morpholog.audit
     ADD COLUMN IF NOT EXISTS attestation jsonb
         CHECK (attestation IS NULL OR jsonb_typeof(attestation) = 'object');
 
-ALTER TABLE morpholog.audit
-    DROP CONSTRAINT IF EXISTS audit_attestation_required;
-ALTER TABLE morpholog.audit
-    ADD CONSTRAINT audit_attestation_required
-    CHECK (attestation IS NOT NULL)
-    NOT VALID;
+-- Added only when absent. Dropping and re-adding unconditionally would
+-- downgrade an already-VALIDATED constraint to NOT VALID on a database
+-- that is at the head - harmless for new rows, but it means re-applying
+-- the migrations is not the no-op `morpholog migrate` needs it to be.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'audit_attestation_required'
+          AND conrelid = 'morpholog.audit'::regclass
+    ) THEN
+        ALTER TABLE morpholog.audit
+            ADD CONSTRAINT audit_attestation_required
+            CHECK (attestation IS NOT NULL)
+            NOT VALID;
+    END IF;
+END
+$$;

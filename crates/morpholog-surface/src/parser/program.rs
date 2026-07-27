@@ -389,7 +389,7 @@ where
     //                      | "append" "only"
     //                      | "current" "pointer" "by" "(" ident,+ ")"
     //                      | "superseded" "via" Ident
-    //                      | "effective" "by" "(" ident,+ ")" "on" "(" ident ")"
+    //                      | "effective" "by" "(" ident,+ ")" "on" "(" ident ")" "partial"?
     //
     // Every clause word is a contextual identifier (the `before` /
     // `duration` precedent), so none is reserved and all stay usable
@@ -404,6 +404,9 @@ where
     let kw_current = select! { Token::Ident(s) if s == "current" => () };
     let kw_pointer = select! { Token::Ident(s) if s == "pointer" => () };
     let kw_effective = select! { Token::Ident(s) if s == "effective" => () };
+    // Contextual, like every other clause word: `partial` stays usable as a
+    // variable name, and only means this after an `effective by` clause.
+    let kw_partial = select! { Token::Ident(s) if s == "partial" => () };
     let kw_on = select! { Token::Ident(s) if s == "on" => () };
     let kw_superseded = select! { Token::Ident(s) if s == "superseded" => () };
     let kw_via = select! { Token::Ident(s) if s == "via" => () };
@@ -422,7 +425,12 @@ where
             .ignore_then(field_list.clone())
             .then_ignore(kw_on)
             .then(single_field)
-            .map(|(keys, on)| Discipline::EffectiveBy { keys, on }),
+            .then(kw_partial.or_not())
+            .map(|((keys, on), partial)| Discipline::EffectiveBy {
+                keys,
+                on,
+                partial: partial.is_some(),
+            }),
         kw_unique
             .ignore_then(kw_by)
             .ignore_then(field_list.clone())

@@ -3,7 +3,7 @@
 //! door" true on a fresh database by default rather than by operator
 //! convention.
 
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
 use crate::sql_quote::quote_ident;
 use sqlx::PgPool;
 use std::fmt::Write as _;
@@ -26,7 +26,8 @@ pub enum InitOutcome {
 /// embedded `SCHEMA_SQL`. Day-zero only: if the schema already
 /// exists this returns [`InitOutcome::AlreadyInitialised`] without
 /// touching anything - it never drops and never migrates. Schema
-/// *evolution* is the deferred migrations story, not this function.
+/// *evolution* is [`crate::apply_migrations`], which is a separate verb
+/// precisely so this one stays safe to run against a live database.
 ///
 /// Provisioning is atomic: the existence check and the whole schema
 /// script run in one transaction (the script is plain DDL, which
@@ -46,6 +47,11 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
         .execute(&mut *tx)
         .await
         .map_err(classify)?;
+    // A database built from SCHEMA_SQL is at the head by construction, so
+    // every migration is recorded as applied without running one. Otherwise
+    // `migrate` would find a fresh database entirely "pending" and re-run
+    // the whole set as no-ops to reach where it already was.
+    crate::migrations::record_all_applied(&mut tx).await?;
     tx.commit().await.map_err(classify)?;
     Ok(InitOutcome::Initialised)
 }
@@ -214,6 +220,21 @@ pub const READER_ROLE: &str = "morpholog_reader";
 /// reader) are deliberately left to the operator - printed by the CLI,
 /// never applied here - so no secret or cluster-wide policy decision
 /// hides inside provisioning.
+/// Whether this database has the least-privilege floor provisioned.
+///
+/// Asked after migrating: the floor grants per table, so a migration that
+/// adds one leaves the roles without access until the floor is re-applied.
+pub(crate) async fn least_privilege_roles_exist(pool: &PgPool) -> Result<bool, PgError> {
+    let found = sqlx::query!(
+        "SELECT 1 AS one FROM pg_roles WHERE rolname = $1",
+        WRITER_ROLE
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(found.is_some())
+}
+
 pub async fn provision_least_privilege(pool: &PgPool) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     for role in [WRITER_ROLE, READER_ROLE] {
@@ -290,6 +311,13 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
     let _ = writeln!(
         out,
         "GRANT SELECT, INSERT, DELETE ON morpholog.claims TO {w};"
+    );
+    // Readable by both, written by neither: `migrate --check` is a
+    // readiness question a deployment role should be able to ask without
+    // holding the privileges to answer it by migrating.
+    let _ = writeln!(
+        out,
+        "GRANT SELECT ON morpholog.schema_migrations TO {w}, {r};"
     );
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.audit TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.rejections TO {w};");
