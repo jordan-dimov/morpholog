@@ -180,9 +180,7 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         return;
     };
     let name = "morpholog_drift_probe";
-    let admin = morpholog_postgres::with_default_user(
-        &base.replace(base.rsplit('/').next().unwrap_or_default(), "postgres"),
-    );
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
     let admin_pool = sqlx::PgPool::connect(&admin)
         .await
         .expect("connect to the maintenance database");
@@ -193,9 +191,7 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         .await
         .expect("create the throwaway database");
 
-    let probe_url = morpholog_postgres::with_default_user(
-        &base.replace(base.rsplit('/').next().unwrap_or_default(), name),
-    );
+    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, name));
     let outcome = drift_probe(&probe_url).await;
 
     // Drop the database before asserting, so a failed assertion cannot leave
@@ -219,6 +215,21 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         rendered.contains("sql/migrations/"),
         "the message must name where the remedy lives, got: {rendered}"
     );
+}
+
+/// The same connection URL, pointing at a different database.
+///
+/// Only the last path segment moves. An earlier version used
+/// `str::replace` on the database name, which rewrites EVERY occurrence -
+/// and CI's URL ends in `/postgres`, so it renamed the scheme too and the
+/// connection failed with something that looked nothing like the cause. A
+/// local URL whose database name does not collide with the scheme hides
+/// that completely.
+fn with_database(url: &str, name: &str) -> String {
+    match url.rsplit_once('/') {
+        Some((prefix, _)) => format!("{prefix}/{name}"),
+        None => url.to_string(),
+    }
 }
 
 /// Provision a database at the PREVIOUS release's shape, commit once, then
@@ -301,3 +312,27 @@ predicate Entry(entry_id: Subject, amount: Decimal)
 transformation post(entry_id, amount):
     admit Entry(entry_id, amount)
 "#;
+
+/// The URL rewrite, pinned against the shape that broke CI.
+///
+/// Runs without a database, so the trap stays covered even where the PG
+/// suites are skipped.
+#[test]
+fn with_database_only_moves_the_last_segment() {
+    // The CI shape: the database is itself named `postgres`, so a
+    // replace-the-name approach corrupts the scheme.
+    assert_eq!(
+        with_database("postgres://u:p@localhost:5432/postgres", "probe"),
+        "postgres://u:p@localhost:5432/probe"
+    );
+    // The local shape, where that bug is invisible.
+    assert_eq!(
+        with_database("postgres:///morpholog_dev", "probe"),
+        "postgres:///probe"
+    );
+    // And a name colliding with the user as well as the scheme.
+    assert_eq!(
+        with_database("postgres://postgres@localhost/postgres", "probe"),
+        "postgres://postgres@localhost/probe"
+    );
+}
