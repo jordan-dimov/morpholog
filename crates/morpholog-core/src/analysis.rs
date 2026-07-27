@@ -209,7 +209,9 @@ pub fn predicates_read_by_stmt(
     out: &mut BTreeSet<PredicateName>,
 ) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => predicates_referenced_by_prop(p, definitions, out),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
+            predicates_referenced_by_prop(p, definitions, out)
+        }
         Stmt::Let { value, .. } => predicates_referenced_by_value(value, definitions, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(_) => {
@@ -267,8 +269,8 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
     match stmt {
         Stmt::Assert(claim) => claim.predicate.as_str() == predicate,
         Stmt::For { body, .. } => body.iter().any(|s| stmt_asserts(s, predicate)),
-        Stmt::Require(_)
-        | Stmt::BindOne(_)
+        Stmt::Require { .. }
+        | Stmt::BindOne { .. }
         | Stmt::Let { .. }
         | Stmt::LetNewSubject { .. }
         | Stmt::Retract { .. }
@@ -319,8 +321,8 @@ fn collect_asserted(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
                 collect_asserted(s, out);
             }
         }
-        Stmt::Require(_)
-        | Stmt::BindOne(_)
+        Stmt::Require { .. }
+        | Stmt::BindOne { .. }
         | Stmt::Let { .. }
         | Stmt::LetNewSubject { .. }
         | Stmt::Retract { .. }
@@ -1132,7 +1134,7 @@ impl<'a> ParamCollector<'a> {
     /// can carry a variable observation must declare itself here.
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Require(prop) | Stmt::BindOne(prop) => self.walk_prop(prop),
+            Stmt::Require { prop, .. } | Stmt::BindOne { prop, .. } => self.walk_prop(prop),
             Stmt::Let { name, value } => {
                 // Flow-sensitive: clear any prior alias relations
                 // for `name` first, since the rebinding creates a

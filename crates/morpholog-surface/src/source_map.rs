@@ -95,7 +95,11 @@ impl SourceMap {
             | ValidationError::UnboundVariable { context, .. }
             | ValidationError::UnresolvedDefinitionCall { context, .. }
             | ValidationError::PreNotAvailable { context }
-            | ValidationError::RetractsAppendOnly { context, .. } => self.context_span(context),
+            | ValidationError::RetractsAppendOnly { context, .. }
+            // Anchored on the top-level statement the later duplicate sits
+            // in, which for one inside a `for` is the `for` itself - the
+            // statement index never reaches into a nested body.
+            | ValidationError::DuplicateRuleName { context, .. } => self.context_span(context),
             ValidationError::DuplicateDecl { vocabulary, name } => {
                 let kind = match vocabulary {
                     VocabularyKind::Predicate => DeclKind::Predicate,

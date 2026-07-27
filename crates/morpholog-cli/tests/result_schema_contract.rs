@@ -142,6 +142,7 @@ fn committed_outcome() -> PgProposalOutcome {
 fn rejected_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Rejected {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
+        rule: Some("no_flagged_accounts".to_string()),
         witness: Vec::new(),
     }
 }
@@ -153,6 +154,7 @@ fn rejected_outcome() -> PgProposalOutcome {
 fn rejected_with_witness_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Rejected {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
+        rule: Some("no_flagged_accounts".to_string()),
         witness: witness_sample(),
     }
 }
@@ -236,6 +238,19 @@ fn run_outcomes_serialize_as_pinned() {
     );
 }
 
+/// `explanation_program` with its gate named, and nothing else changed.
+fn named_gate_program() -> morpholog_core::Program {
+    let mut p = explanation_program();
+    for t in &mut p.transformations {
+        for stmt in &mut t.body {
+            if let morpholog_core::Stmt::Require { name, .. } = stmt {
+                *name = Some("account_is_not_flagged".into());
+            }
+        }
+    }
+    p
+}
+
 #[test]
 fn explanations_serialize_as_pinned() {
     let p = explanation_program();
@@ -245,6 +260,16 @@ fn explanations_serialize_as_pinned() {
     let error = explain(&p, &transition("no_such_transformation"), &flagged_state());
     assert_golden("explanation_admissible.json", &to_value(&admissible));
     assert_golden("explanation_gate.json", &to_value(&gate));
+    // Two goldens, so both shapes stay covered: an unnamed gate omits
+    // `rule` entirely (above, byte-identical to before names existed) and
+    // a named one carries it. `explain` is a command in its own right, so
+    // this is the only place a dry run can report which rule would refuse.
+    let named = explain(
+        &named_gate_program(),
+        &transition("open_account"),
+        &State::from_claims(vec![]),
+    );
+    assert_golden("explanation_gate_named.json", &to_value(&named));
     assert_golden("explanation_invariant.json", &to_value(&invariant_violated));
     assert_golden("explanation_error.json", &to_value(&error));
 }
@@ -354,6 +379,7 @@ fn composite_envelopes_serialize_as_pinned() {
         "rejected_with_explanation.json",
         &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(
             "invariant `no_flagged_accounts` violated",
+            Some("no_flagged_accounts"),
             &[],
             explanation,
         )),
@@ -366,6 +392,7 @@ fn composite_envelopes_serialize_as_pinned() {
         "rejected_with_explanation_and_witness.json",
         &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(
             "invariant `no_flagged_accounts` violated",
+            Some("no_flagged_accounts"),
             &witness_sample(),
             explanation,
         )),
@@ -1114,6 +1141,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_error_receipt.json", "batch_receipt"),
         ("explanation_admissible.json", "explanation"),
         ("explanation_gate.json", "explanation"),
+        ("explanation_gate_named.json", "explanation"),
         ("explanation_invariant.json", "explanation"),
         ("explanation_error.json", "explanation"),
         ("outbox_row.json", "outbox_row"),

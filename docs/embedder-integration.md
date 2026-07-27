@@ -148,6 +148,8 @@ The traced and untraced envelopes are intentionally asymmetric; the embedder sho
 
 Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, database error).
 
+A rejected envelope carries `rule`: the refused rule's stable identifier - an invariant's name, or a named gate's. Hold that, not `reason`. The reason string is prose for a human and includes rendered expression text, so anything asserting on it breaks the moment a rule is reworded; `rule` is the author's own name and does not move. The key is **absent** for a gate with no name, never filled with the expression, so a value read from `rule` is always safe to compare.
+
 On a single-proposal rejection whose reason names an invariant declared in the source, stderr carries a courtesy line locating the rule (`rule at <file>:<line>:<col> (<name>)`). It is for the human at the terminal, not the integration: parse stdout only. Batch mode never prints it - receipts are the whole contract there.
 
 ### `morpholog explain --json`

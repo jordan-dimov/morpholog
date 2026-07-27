@@ -121,7 +121,7 @@ fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
 
 fn resolve_in_stmt(stmt: &mut Stmt, names: &BTreeSet<String>) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => resolve_in_prop(p, names),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => resolve_in_prop(p, names),
         Stmt::Let { value, .. } => resolve_in_value(value, names),
         // State changes and emissions target predicates and intents,
         // never definitions.

@@ -95,6 +95,12 @@ pub struct GateFrontLoad {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GateControl {
+    /// The author's stable identifier for this gate, absent when it has
+    /// none. The name a refusal reports, and what reads best here: a
+    /// reviewer scanning the control matrix wants the rule's name, not its
+    /// expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// `"require"` or `"bind"` - the statement form the precondition
     /// takes. A `require` is a yes/no condition; a `bind` demands
     /// exactly one matching claim and refuses on zero (or several).
@@ -111,7 +117,8 @@ pub struct GateControl {
     pub front_loads: Vec<GateFrontLoad>,
 }
 
-/// Every precondition of one transformation, in body order.
+/// One transformation's admission preconditions, in body order. Gates
+/// inside a `for` body are not among them - see `collect_gates`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TransformationControls {
@@ -128,6 +135,10 @@ pub struct GateRef {
     pub transformation: String,
     /// `"require"` or `"bind"`.
     pub form: String,
+    /// The gate's stable identifier, when it has one - so this view and
+    /// the transformation-side view name the same rule the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The gate condition, rendered in surface syntax.
     pub condition: String,
     /// The predicates this transformation admits that put the invariant
@@ -189,18 +200,15 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
         .map(|t| {
             let mut asserted = BTreeSet::new();
             predicates_asserted_by(t, &mut asserted);
-            let gates = t
-                .body
-                .iter()
-                .filter_map(|stmt| match stmt {
-                    Stmt::Require(prop) => Some(("require", prop)),
-                    Stmt::BindOne(prop) => Some(("bind", prop)),
-                    _ => None,
-                })
-                .map(|(form, prop)| {
+            let mut collected = Vec::new();
+            collect_gates(&t.body, &mut collected);
+            let gates = collected
+                .into_iter()
+                .map(|(form, prop, name)| {
                     gate(
                         form,
                         prop,
+                        name.as_ref().map(ToString::to_string),
                         &program.definitions,
                         defs,
                         &asserted,
@@ -230,6 +238,7 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
                     .push(GateRef {
                         transformation: t.transformation.clone(),
                         form: g.form.clone(),
+                        name: g.name.clone(),
                         condition: g.condition.clone(),
                         triggered_by: link.triggered_by.clone(),
                         shared: link.shared.clone(),
@@ -334,9 +343,34 @@ fn authored_implications(program: &Program, defs: DefinitionIndex<'_>) -> Vec<In
     out
 }
 
+/// The transformation's admission preconditions: top-level `require` and
+/// `bind` statements, in body order. A gate inside a `for` is deliberately
+/// NOT lifted here - it is an iteration condition, and rendering it flat
+/// would show a per-item condition as though it gated the whole
+/// transformation. `controls.rs`'s doctrine pin holds that line.
+fn collect_gates<'s>(body: &'s [Stmt], out: &mut Vec<(&'static str, &'s Prop, Option<String>)>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Require { prop, name } => {
+                out.push(("require", prop, name.as_ref().map(ToString::to_string)));
+            }
+            Stmt::BindOne { prop, name } => {
+                out.push(("bind", prop, name.as_ref().map(ToString::to_string)));
+            }
+            Stmt::For { .. }
+            | Stmt::Let { .. }
+            | Stmt::LetNewSubject { .. }
+            | Stmt::Assert(_)
+            | Stmt::Retract { .. }
+            | Stmt::Emit(_) => {}
+        }
+    }
+}
+
 fn gate(
     form: &str,
     prop: &Prop,
+    name: Option<String>,
     definitions: &[crate::ir::Definition],
     defs: DefinitionIndex<'_>,
     asserted: &BTreeSet<PredicateName>,
@@ -384,6 +418,7 @@ fn gate(
 
     GateControl {
         form: form.to_string(),
+        name,
         condition: format::format_prop_inline(prop),
         consults: consults.into_iter().map(|p| p.to_string()).collect(),
         front_loads,

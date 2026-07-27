@@ -103,7 +103,7 @@ fn create_net_settlement_has_expected_shape() {
     assert_eq!(t.name, "create_net_settlement");
     assert_eq!(t.parameters, vec!["party_a", "party_b", "lines"]);
     assert_eq!(t.body.len(), 6);
-    assert!(matches!(t.body[0], Stmt::Require(_)));
+    assert!(matches!(t.body[0], Stmt::Require { .. }));
     assert!(matches!(t.body[1], Stmt::LetNewSubject { .. }));
     assert!(matches!(t.body[2], Stmt::Let { .. }));
     assert!(matches!(t.body[3], Stmt::Assert(_)));
@@ -118,7 +118,7 @@ fn for_body_contains_bind_one_and_two_asserts() {
         panic!("body[4] should be Stmt::For");
     };
     assert_eq!(body.len(), 3);
-    assert!(matches!(body[0], Stmt::BindOne(_)));
+    assert!(matches!(body[0], Stmt::BindOne { .. }));
     assert!(matches!(body[1], Stmt::Assert(_)));
     assert!(matches!(body[2], Stmt::Assert(_)));
 }

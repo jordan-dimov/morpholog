@@ -73,7 +73,8 @@ pub use ir::{
     ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin, DerivedClaim,
     DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant, InvariantName,
     InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop,
-    Stmt, Subject, SumSeed, Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
+    RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName, Unit, Value,
+    ValueExpr, Var,
 };
 pub use lint::{Lint, lints};
 pub use propose::{
@@ -1173,17 +1174,38 @@ mod tests {
         );
         assert_eq!(
             RejectionReason::Require {
+                name: None,
                 rendered: "Approved(doc)".into(),
             }
             .to_string(),
             "require failed: Approved(doc) did not hold over pre-state"
         );
+        // A named gate says which rule refused, mirroring the invariant
+        // form. Unnamed stays byte-identical above, so every programme
+        // written before names existed reports exactly as it did.
+        assert_eq!(
+            RejectionReason::Require {
+                name: Some("approval_on_file".into()),
+                rendered: "Approved(doc)".into(),
+            }
+            .to_string(),
+            "require `approval_on_file` failed: Approved(doc) did not hold over pre-state"
+        );
         assert_eq!(
             RejectionReason::BindNone {
+                name: None,
                 rendered: "Policy(policy_id, limit)".into(),
             }
             .to_string(),
             "bind_one failed: Policy(policy_id, limit) matched no candidates"
+        );
+        assert_eq!(
+            RejectionReason::BindNone {
+                name: Some("governing_policy".into()),
+                rendered: "Policy(policy_id, limit)".into(),
+            }
+            .to_string(),
+            "bind `governing_policy` failed: Policy(policy_id, limit) matched no candidates"
         );
     }
 
@@ -1741,6 +1763,7 @@ mod tests {
         let TraceEntry::Require {
             expression,
             outcome: RequireOutcome::Rejected { .. },
+            ..
         } = &trace[0]
         else {
             panic!("expected require Rejected, got {:?}", trace[0]);

@@ -148,6 +148,14 @@ opaque_id! {
 }
 
 opaque_id! {
+    /// An opaque rule name - the optional identifier an author gives a `require`
+    /// gate or a `bind` lookup, so a refusal names the rule rather than quoting
+    /// the expression that failed. Unique within one transformation, not across
+    /// the programme: two acts legitimately carry the same gate verbatim.
+    RuleName
+}
+
+opaque_id! {
     /// An opaque definition name - the identifier of a declared
     /// [`Definition`] (a named, parameterised proposition), and the name a
     /// [`Prop::Defined`] call resolves against. Distinct at the type level
@@ -679,7 +687,15 @@ pub struct Intent {
 /// below and in full in `docs/runtime-semantics.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Require(Prop),
+    /// A yes/no gate over the pre-state. `name` is the author's optional
+    /// stable identifier: a refusal quotes the rendered expression, which
+    /// any rewording changes, so anything that must name the rule that
+    /// refused - a test, a runbook, refusals grouped by cause - needs
+    /// something the prose cannot invalidate.
+    Require {
+        prop: Prop,
+        name: Option<RuleName>,
+    },
     /// Deterministic unique-lookup binding statement. Evaluates a
     /// predicate-shaped proposition against current state and bindings:
     /// - Zero matches: transformation rejected (lawful: the expected
@@ -689,7 +705,10 @@ pub enum Stmt {
     /// - Multiple matches: `EvalError::TypeMismatch` (the programme
     ///   expected unique state but admitted ambiguous state - a missing
     ///   structural-uniqueness invariant, or corruption).
-    BindOne(Prop),
+    BindOne {
+        prop: Prop,
+        name: Option<RuleName>,
+    },
     Let {
         name: Var,
         value: ValueExpr,

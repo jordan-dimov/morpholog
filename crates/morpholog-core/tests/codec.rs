@@ -230,6 +230,7 @@ use morpholog_core::{
 fn trace_entry_require_held_round_trips_with_tagged_shape() {
     let entry = TraceEntry::Require {
         expression: "Foo(x)".to_string(),
+        name: None,
         outcome: RequireOutcome::Held { match_count: 1 },
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -260,6 +261,7 @@ fn trace_entry_require_held_round_trips_with_tagged_shape() {
 fn trace_entry_require_rejected_round_trips() {
     let entry = TraceEntry::Require {
         expression: "Bar(y)".to_string(),
+        name: None,
         outcome: RequireOutcome::Rejected {
             reason: "require failed: Bar(y) did not hold over pre-state".to_string(),
             failing_sub_expression: None,
@@ -286,6 +288,7 @@ fn trace_entry_require_rejected_round_trips() {
 fn trace_entry_require_rejected_round_trips_with_failing_sub_expression() {
     let entry = TraceEntry::Require {
         expression: "and(Foo(x), Bar(y))".to_string(),
+        name: None,
         outcome: RequireOutcome::Rejected {
             reason: "require failed: and(Foo(x), Bar(y)) did not hold over pre-state".to_string(),
             failing_sub_expression: Some("Bar(y)".to_string()),
@@ -307,6 +310,7 @@ fn trace_entry_require_rejected_round_trips_with_failing_sub_expression() {
 fn trace_entry_require_rejected_round_trips_with_directly_missing_claims() {
     let entry = TraceEntry::Require {
         expression: "MayApprove(actor, doc_type)".to_string(),
+        name: None,
         outcome: RequireOutcome::Rejected {
             reason: "require failed: MayApprove(actor, doc_type) did not hold over pre-state"
                 .to_string(),
@@ -328,6 +332,7 @@ fn trace_entry_require_rejected_round_trips_with_directly_missing_claims() {
 fn trace_entry_bind_one_bound_round_trips_with_sorted_bindings() {
     let entry = TraceEntry::BindOne {
         expression: "Policy(pid, limit)".to_string(),
+        name: None,
         outcome: BindOneOutcome::Bound {
             bindings: vec![("limit".into(), dec(100)), ("pid".into(), subj("p1"))],
         },
@@ -343,6 +348,7 @@ fn trace_entry_bind_one_bound_round_trips_with_sorted_bindings() {
 fn trace_entry_bind_one_no_match_round_trips() {
     let entry = TraceEntry::BindOne {
         expression: "Policy(pid, limit)".to_string(),
+        name: None,
         outcome: BindOneOutcome::NoMatch {
             failing_sub_expression: None,
             directly_missing_claims: vec![],
@@ -362,6 +368,7 @@ fn trace_entry_bind_one_no_match_round_trips() {
 fn trace_entry_bind_one_multiple_matches_round_trips() {
     let entry = TraceEntry::BindOne {
         expression: "Policy(pid, limit)".to_string(),
+        name: None,
         outcome: BindOneOutcome::MultipleMatches { count: 3 },
     };
     let json = serde_json::to_string(&entry).unwrap();

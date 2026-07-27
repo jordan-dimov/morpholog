@@ -194,13 +194,23 @@ transformation set_coverage_terms(policy_id, deductible, per_claim_limit):
 -- then does it lower the headroom by the amount, record who authorised
 -- what and what was paid, and ask downstream to move the money. The
 -- conservation invariant above checks the headroom move was honest.
+--
+-- Notice the names in front of the colons. Several things here can refuse
+-- a settlement - each lookup must find its record, and each condition must
+-- hold - and without names a refusal could only quote back the expression
+-- that failed. Quoted text reads well and identifies nothing:
+-- reword the condition and anything relying on it breaks. A name is the
+-- author's own label, and it survives any rewording of the rule beneath
+-- it, so a test, a runbook, or a report grouping refusals by cause can
+-- hold on to it. Naming is optional, and worth it exactly here, where
+-- several rules could each be the one that said no.
 transformation authorise_settlement(claim_id, settlement_id, amount):
-    bind ClaimReported(claim_id, policy_id, _)
-    bind Policy(policy_id, aggregate_limit)
-    bind PolicyHeadroom(policy_id, current_headroom)
+    bind the_claim: ClaimReported(claim_id, policy_id, _)
+    bind the_policy: Policy(policy_id, aggregate_limit)
+    bind the_headroom: PolicyHeadroom(policy_id, current_headroom)
 
-    require SettlementAuthority(actor, actor_limit) and amount <= actor_limit
-    require sum(paid | SettlementPaid(policy_id, _, _, paid)) + amount <= aggregate_limit
+    require actor_has_authority_for_amount: SettlementAuthority(actor, actor_limit) and amount <= actor_limit
+    require cumulative_spend_within_aggregate_cap: sum(paid | SettlementPaid(policy_id, _, _, paid)) + amount <= aggregate_limit
 
     let new_headroom = current_headroom - amount
     retract PolicyHeadroom(policy_id, current_headroom)

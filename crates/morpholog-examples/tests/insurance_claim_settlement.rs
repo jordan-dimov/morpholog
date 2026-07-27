@@ -28,7 +28,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
-use morpholog_core::{ClaimInstance, Outcome, State, enumerate_derived, eval_invariant};
+use morpholog_core::{
+    ClaimInstance, Outcome, RejectionReason, State, enumerate_derived, eval_invariant,
+};
 use morpholog_examples::insurance_claim_settlement;
 
 fn ex() -> &'static Example {
@@ -247,19 +249,23 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         "expected all three bind_ones (ClaimReported, Policy, PolicyHeadroom) to succeed before the require fails; trace: {trace:#?}"
     );
 
-    // Step 2: the require that rejected has SettlementAuthority in
-    // its rendered expression.
+    // Step 2: WHICH gate rejected, held by name. The earlier version of
+    // this assertion searched the rendered expression for
+    // "SettlementAuthority" - true today, and false the moment anyone
+    // rewords the gate. The name is the author's, and rewording the
+    // condition beneath it does not move it.
     let failing = trace.iter().find_map(|e| match e {
         TraceEntry::Require {
-            expression,
+            name,
             outcome: RequireOutcome::Rejected { .. },
-        } => Some(expression),
+            ..
+        } => Some(name.clone()),
         _ => None,
     });
-    let expr = failing.expect("expected exactly one failing require entry");
-    assert!(
-        expr.contains("SettlementAuthority"),
-        "failing require should be the authority gate; got: {expr}"
+    assert_eq!(
+        failing.expect("expected exactly one failing require entry"),
+        Some("actor_has_authority_for_amount".to_string()),
+        "trace: {trace:#?}"
     );
 }
 
@@ -272,9 +278,15 @@ fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
         "alex",
         &pre,
     );
+    // "a require failed" is all this could say before gates had names,
+    // and it cannot tell an authority refusal from any of the four other
+    // ways this transformation can refuse.
     assert!(
-        reason.to_string().contains("require"),
-        "got reason: {reason}"
+        matches!(
+            &reason,
+            RejectionReason::Require { name: Some(n), .. } if n == "actor_has_authority_for_amount"
+        ),
+        "got reason: {reason:?}"
     );
 }
 
@@ -402,37 +414,35 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
         "expected Rejected, got {outcome:?}"
     );
 
-    let require_outcomes: Vec<(&str, &RequireOutcome)> = trace
+    let require_outcomes: Vec<(Option<&str>, &RequireOutcome)> = trace
         .iter()
         .filter_map(|e| match e {
-            TraceEntry::Require {
-                expression,
-                outcome,
-            } => Some((expression.as_str(), outcome)),
+            TraceEntry::Require { name, outcome, .. } => Some((name.as_deref(), outcome)),
             _ => None,
         })
         .collect();
-    // The first require (actor authority + amount-vs-limit) holds;
-    // the second (cumulative cap) rejects.
-    let held_authority = require_outcomes
-        .iter()
-        .find(|(expr, out)| {
-            expr.contains("SettlementAuthority") && matches!(out, RequireOutcome::Held { .. })
-        })
-        .is_some();
-    let rejected_aggregate = require_outcomes
-        .iter()
-        .find(|(expr, out)| {
-            expr.contains("aggregate_limit") && matches!(out, RequireOutcome::Rejected { .. })
-        })
-        .is_some();
+    // Two gates, told apart by name: the authority gate holds and the
+    // cumulative cap rejects. Matching rendered substrings said the same
+    // thing until someone renamed a variable inside either one.
+    let outcome_of = |rule: &str| {
+        require_outcomes
+            .iter()
+            .find(|(name, _)| *name == Some(rule))
+            .map(|(_, out)| *out)
+    };
     assert!(
-        held_authority,
-        "expected the SettlementAuthority gate to hold; trace: {trace:#?}"
+        matches!(
+            outcome_of("actor_has_authority_for_amount"),
+            Some(RequireOutcome::Held { .. })
+        ),
+        "expected the authority gate to hold; trace: {trace:#?}"
     );
     assert!(
-        rejected_aggregate,
-        "expected the aggregate_limit gate to reject; trace: {trace:#?}"
+        matches!(
+            outcome_of("cumulative_spend_within_aggregate_cap"),
+            Some(RequireOutcome::Rejected { .. })
+        ),
+        "expected the aggregate cap to reject; trace: {trace:#?}"
     );
 }
 

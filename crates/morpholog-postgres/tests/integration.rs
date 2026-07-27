@@ -442,6 +442,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
         TraceEntry::Require {
             expression,
             outcome: RequireOutcome::Rejected { .. },
+            ..
         } => Some(expression),
         _ => None,
     });

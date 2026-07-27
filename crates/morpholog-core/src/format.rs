@@ -266,19 +266,27 @@ pub(crate) fn format_derived_claim(d: &DerivedClaim) -> String {
 // Statement formatting
 // ============================================================
 
+/// `name: ` when a gate carries an identifier, empty otherwise - so an
+/// unnamed statement formats exactly as it always did.
+fn rule_label(name: &Option<crate::ir::RuleName>) -> String {
+    name.as_ref().map_or_else(String::new, |n| format!("{n}: "))
+}
+
 pub fn format_stmt(s: &Stmt, depth: usize) -> String {
     let pad = indent(depth);
     match s {
-        Stmt::Require(p) => format!("{pad}require {}", format_prop_inline(p)),
-        Stmt::BindOne(p) => {
+        Stmt::Require { prop: p, name } => {
+            format!("{pad}require {}{}", rule_label(name), format_prop_inline(p))
+        }
+        Stmt::BindOne { prop: p, name } => {
             // The surface grammar restricts `bind` to a claim pattern,
-            // though the IR's `Stmt::BindOne(Prop)` is broader. Panic on
+            // though the IR's `BindOne` prop is broader. Panic on
             // non-Claim shapes rather than emit text the parser refuses.
             assert!(
                 matches!(p, Prop::Claim { .. }),
                 "format_stmt: bind requires a claim pattern; got {p:?}",
             );
-            format!("{pad}bind {}", format_prop_inline(p))
+            format!("{pad}bind {}{}", rule_label(name), format_prop_inline(p))
         }
         Stmt::Let { name, value } => {
             format!("{pad}let {name} = {}", format_value_inline(value))

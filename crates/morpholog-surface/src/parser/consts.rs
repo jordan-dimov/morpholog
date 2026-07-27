@@ -376,7 +376,7 @@ fn substitute_stmt(
     errors: &mut Vec<(Span, String)>,
 ) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => substitute_prop(p, errors),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => substitute_prop(p, errors),
         Stmt::Let { value, .. } => substitute_value(value, errors),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(c) => {
@@ -420,7 +420,9 @@ fn collect_binders_named(prop: &morpholog_core::Prop, out: &mut Vec<(String, &'s
 /// plus quantifier binders inside statement propositions and values.
 fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => collect_binders_named(p, out),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
+            collect_binders_named(p, out)
+        }
         Stmt::Let { name, value } => {
             out.push((name.to_string(), "statement binding"));
             let mut set = BTreeSet::new();
@@ -449,7 +451,7 @@ fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
 /// behind const liveness.
 fn stmt_vars(stmt: &Stmt, out: &mut BTreeSet<String>) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => vars_in_prop(p, out),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => vars_in_prop(p, out),
         Stmt::Let { value, .. } => vars_in_value(value, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(c) => {
@@ -669,7 +671,7 @@ fn refuse_pattern_positions_in_stmt(
 ) {
     match stmt {
         // `bind` patterns bind; require's props carry claim patterns.
-        Stmt::Require(p) | Stmt::BindOne(p) => {
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
             refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
         }
         Stmt::Let { value, .. } => {

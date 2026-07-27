@@ -34,8 +34,8 @@ use std::collections::{HashMap, HashSet};
 use crate::fold;
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
-    ArithOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, Stmt, Term, Value,
-    ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
+    ArithOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, RuleName, Stmt, Term,
+    Value, ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -368,6 +368,28 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             scope.bound.bind(param);
             let _ = scope.kinds.observe(param, InferredKind::UnknownOrAny);
         }
+        // A name identifies one rule, so two rules answering to the same
+        // name inside one transformation would make a refusal ambiguous -
+        // which is the whole thing a name is for. Scoped to the
+        // transformation, not the programme: two acts legitimately carry
+        // the same gate verbatim.
+        let mut seen: HashSet<&RuleName> = HashSet::new();
+        for (index, stmt) in transformation.body.iter().enumerate() {
+            let mut names = Vec::new();
+            collect_rule_names(stmt, &mut names);
+            for name in names {
+                if !seen.insert(name) {
+                    cx.errors.push(ValidationError::DuplicateRuleName {
+                        context: ValidationContext::Transformation {
+                            name: transformation.name.to_string(),
+                            statement: Some(index),
+                        },
+                        name: name.to_string(),
+                    });
+                }
+            }
+        }
+
         // The context carries the statement index, so a finding lands
         // on the statement it was made in, not just the body. A
         // finding inside a nested `for` keeps the top-level index.
@@ -660,11 +682,11 @@ impl CheckCtx<'_> {
     ///   in a scoped clone.
     fn walk_stmt(&mut self, stmt: &Stmt, scope: &mut Scope) {
         match stmt {
-            Stmt::Require(prop) => {
+            Stmt::Require { prop, .. } => {
                 let mut scoped = scope.clone();
                 self.walk_prop(prop, &mut scoped);
             }
-            Stmt::BindOne(prop) => {
+            Stmt::BindOne { prop, .. } => {
                 self.walk_prop(prop, scope);
             }
             Stmt::Let { name, value } => {
@@ -1503,6 +1525,25 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
 /// Used to ban `pre(...)` inside definition bodies (bodies are
 /// context-free; a call wrapped in `pre(...)` at the use site covers
 /// the legitimate cases).
+/// Every rule name a statement carries, descending into `for` bodies - a
+/// named gate inside a loop is as identifiable as one at the top level, so
+/// it competes for the same names.
+fn collect_rule_names<'s>(stmt: &'s Stmt, out: &mut Vec<&'s RuleName>) {
+    match stmt {
+        Stmt::Require { name, .. } | Stmt::BindOne { name, .. } => out.extend(name.as_ref()),
+        Stmt::For { body, .. } => {
+            for inner in body {
+                collect_rule_names(inner, out);
+            }
+        }
+        Stmt::Let { .. }
+        | Stmt::LetNewSubject { .. }
+        | Stmt::Assert(_)
+        | Stmt::Retract { .. }
+        | Stmt::Emit(_) => {}
+    }
+}
+
 fn prop_mentions_pre(prop: &Prop) -> bool {
     fold::mentions_pre(prop)
 }

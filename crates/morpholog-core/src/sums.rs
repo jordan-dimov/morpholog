@@ -135,7 +135,7 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
 
 fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
     match stmt {
-        Stmt::Require(p) | Stmt::BindOne(p) => lower_in_prop(p, ctx),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => lower_in_prop(p, ctx),
         Stmt::Let { value, .. } => lower_in_value(value, ctx),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {}
         Stmt::For {

@@ -327,7 +327,16 @@ pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: ValueExp
 // ============================================================
 
 pub fn require(prop: Prop) -> Stmt {
-    Stmt::Require(prop)
+    Stmt::Require { prop, name: None }
+}
+
+/// A `require` carrying the author's stable identifier, so a refusal names
+/// the rule instead of quoting the expression.
+pub fn require_named(name: &str, prop: Prop) -> Stmt {
+    Stmt::Require {
+        prop,
+        name: Some(name.into()),
+    }
 }
 
 /// Deterministic unique-lookup binding statement. The companion to
@@ -344,7 +353,16 @@ pub fn require(prop: Prop) -> Stmt {
 ///
 /// binds both `policy_id` and `aggregate_limit` for the rest of the body.
 pub fn bind_one(prop: Prop) -> Stmt {
-    Stmt::BindOne(prop)
+    Stmt::BindOne { prop, name: None }
+}
+
+/// The named counterpart to [`bind_one`], for the same reason
+/// [`require_named`] exists.
+pub fn bind_one_named(name: &str, prop: Prop) -> Stmt {
+    Stmt::BindOne {
+        prop,
+        name: Some(name.into()),
+    }
 }
 
 pub fn assert_(predicate: &str, args: Vec<Term>) -> Stmt {
