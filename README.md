@@ -111,6 +111,8 @@ The second answer is exactly what an auditor would have seen at that moment, rec
 
 Each parses from `.morph` source and runs end to end against PostgreSQL. Nothing is mocked. Every per-example README has the business story.
 
+The list below is by domain. If you arrived with a question rather than a domain - "can it admit a set of records in one act?" - start from the [capability index](examples/README.md), which maps what you want to do to the example that shows it.
+
 - [**Settlement netting**](examples/01_settlement_netting/) - inputs that are valid alone but forbidden together are refused before commit.
 - [**Verified revenue**](examples/02_verified_revenue/) - the flagship: a figure is verified, relied on, then corrected - and every decision made along the way stays defensible.
 - [**Double-entry ledger**](examples/03_double_entry_ledger/) - the accounting equation as a rule; period close; restatement; the trial balance with as-of replay.
