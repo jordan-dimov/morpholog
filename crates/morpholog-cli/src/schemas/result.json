@@ -233,6 +233,7 @@
           "properties": {
             "kind": { "const": "gate" },
             "gate": { "type": "string" },
+            "rule": { "type": "string" },
             "statement_kind": { "enum": ["require", "bind_one"] },
             "directly_missing_claims": {
               "type": "array",

@@ -83,6 +83,13 @@ pub enum Rejection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GateRejection {
     pub gate: String,
+    /// The gate's stable identifier, when its author gave it one. `gate`
+    /// is prose that any rewording changes; this does not move. Carried
+    /// here and not only on the rejection envelope because `explain` is a
+    /// command in its own right - a dry run has no envelope to fall back
+    /// on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
     pub statement_kind: GateKind,
     /// v0 reports the first directly-missing positive claim that kills
     /// the gate chain - not the exhaustive set of missing instances, and
@@ -249,29 +256,31 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
     match failing_entry(trace) {
         Some(TraceEntry::Require {
             expression,
+            name,
             outcome:
                 RequireOutcome::Rejected {
                     directly_missing_claims,
                     ..
                 },
-            ..
         }) => gate_verdict(
             program,
             expression,
+            name.as_deref(),
             GateKind::Require,
             directly_missing_claims,
         ),
         Some(TraceEntry::BindOne {
             expression,
+            name,
             outcome:
                 BindOneOutcome::NoMatch {
                     directly_missing_claims,
                     ..
                 },
-            ..
         }) => gate_verdict(
             program,
             expression,
+            name.as_deref(),
             GateKind::BindOne,
             directly_missing_claims,
         ),
@@ -292,6 +301,7 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
 fn gate_verdict(
     program: &Program,
     gate: &str,
+    rule: Option<&str>,
     statement_kind: GateKind,
     missing: &[RenderedClaim],
 ) -> Verdict {
@@ -308,6 +318,7 @@ fn gate_verdict(
         .collect();
     Verdict::Rejected(Rejection::Gate(GateRejection {
         gate: gate.to_string(),
+        rule: rule.map(ToString::to_string),
         statement_kind,
         directly_missing_claims,
     }))

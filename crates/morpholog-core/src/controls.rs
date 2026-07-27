@@ -117,7 +117,8 @@ pub struct GateControl {
     pub front_loads: Vec<GateFrontLoad>,
 }
 
-/// Every precondition of one transformation, in body order.
+/// One transformation's admission preconditions, in body order. Gates
+/// inside a `for` body are not among them - see `collect_gates`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TransformationControls {
@@ -134,6 +135,10 @@ pub struct GateRef {
     pub transformation: String,
     /// `"require"` or `"bind"`.
     pub form: String,
+    /// The gate's stable identifier, when it has one - so this view and
+    /// the transformation-side view name the same rule the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The gate condition, rendered in surface syntax.
     pub condition: String,
     /// The predicates this transformation admits that put the invariant
@@ -195,14 +200,10 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
         .map(|t| {
             let mut asserted = BTreeSet::new();
             predicates_asserted_by(t, &mut asserted);
-            let gates = t
-                .body
-                .iter()
-                .filter_map(|stmt| match stmt {
-                    Stmt::Require { prop, name } => Some(("require", prop, name)),
-                    Stmt::BindOne { prop, name } => Some(("bind", prop, name)),
-                    _ => None,
-                })
+            let mut collected = Vec::new();
+            collect_gates(&t.body, &mut collected);
+            let gates = collected
+                .into_iter()
                 .map(|(form, prop, name)| {
                     gate(
                         form,
@@ -237,6 +238,7 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
                     .push(GateRef {
                         transformation: t.transformation.clone(),
                         form: g.form.clone(),
+                        name: g.name.clone(),
                         condition: g.condition.clone(),
                         triggered_by: link.triggered_by.clone(),
                         shared: link.shared.clone(),
@@ -339,6 +341,30 @@ fn authored_implications(program: &Program, defs: DefinitionIndex<'_>) -> Vec<In
         }
     }
     out
+}
+
+/// The transformation's admission preconditions: top-level `require` and
+/// `bind` statements, in body order. A gate inside a `for` is deliberately
+/// NOT lifted here - it is an iteration condition, and rendering it flat
+/// would show a per-item condition as though it gated the whole
+/// transformation. `controls.rs`'s doctrine pin holds that line.
+fn collect_gates<'s>(body: &'s [Stmt], out: &mut Vec<(&'static str, &'s Prop, Option<String>)>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Require { prop, name } => {
+                out.push(("require", prop, name.as_ref().map(ToString::to_string)));
+            }
+            Stmt::BindOne { prop, name } => {
+                out.push(("bind", prop, name.as_ref().map(ToString::to_string)));
+            }
+            Stmt::For { .. }
+            | Stmt::Let { .. }
+            | Stmt::LetNewSubject { .. }
+            | Stmt::Assert(_)
+            | Stmt::Retract { .. }
+            | Stmt::Emit(_) => {}
+        }
+    }
 }
 
 fn gate(

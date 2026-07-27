@@ -264,6 +264,9 @@ class GateRejection:
     gate: str
     statement_kind: str
     directly_missing_claims: list[MissingClaim]
+    # The gate's stable identifier, when its author gave it one. `gate` is
+    # prose that any rewording changes; this does not move.
+    rule: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> GateRejection:
@@ -271,6 +274,7 @@ class GateRejection:
             "gate rejection",
             payload,
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
+            {"rule"},
         )
         return cls(
             gate=data["gate"],
@@ -278,6 +282,7 @@ class GateRejection:
             directly_missing_claims=[
                 MissingClaim.from_json(m) for m in data["directly_missing_claims"]
             ],
+            rule=data.get("rule"),
         )
 
 

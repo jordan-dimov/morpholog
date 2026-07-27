@@ -228,3 +228,57 @@ fn names_survive_format_and_reparse() {
         "formatted:\n{formatted}"
     );
 }
+
+/// `explain` is a command in its own right - a dry run against live state,
+/// with no rejection envelope around it - so it has to carry the name
+/// itself. The first cut discarded it here on the reasoning that the
+/// envelope already had one, which is true only of `--explain-on-reject`.
+#[test]
+fn explain_names_the_gate_that_would_refuse() {
+    use morpholog_core::{GateRejection, Rejection, Transition, Verdict, explain};
+
+    let diagnose = |source: &str| {
+        let program = parsed(source);
+        let transformation = program
+            .transformations
+            .iter()
+            .find(|t| t.name == "approve")
+            .expect("the scenario declares `approve`");
+        let transition = Transition {
+            transformation_name: transformation.name.clone(),
+            args: vec![subj("doc_1")],
+            actor: morpholog_test_support::test_actor(),
+        };
+        match explain(&program, &transition, &submitted()).verdict {
+            Verdict::Rejected(Rejection::Gate(gate)) => gate,
+            other => panic!("expected a gate rejection, got {other:?}"),
+        }
+    };
+
+    // The same rewording as the propose-path test: the identifier holds
+    // where the rendered gate does not.
+    let plain: GateRejection = diagnose(&programme("MayApprove(actor, doc)"));
+    let reworded = diagnose(&programme("MayApprove(actor, doc) and Submitted(doc)"));
+    assert_eq!(plain.rule.as_deref(), Some("approver_is_authorised"));
+    assert_eq!(reworded.rule.as_deref(), Some("approver_is_authorised"));
+    assert_ne!(
+        plain.gate, reworded.gate,
+        "the rendered gate must differ, or this proves nothing"
+    );
+
+    // An unnamed gate carries no identifier rather than a rendered
+    // stand-in, so a consumer reading it never gets unstable text.
+    let unnamed = diagnose(
+        "program unnamed
+
+predicate MayApprove(approver: Subject, doc: Subject)
+predicate Submitted(doc: Subject)
+predicate Approved(doc: Subject)
+
+transformation approve(doc):
+    require MayApprove(actor, doc)
+    admit Approved(doc)
+",
+    );
+    assert_eq!(unnamed.rule, None);
+}
