@@ -3032,3 +3032,58 @@ async fn inspect_coverage_json_carries_the_pinned_field_set() {
         "declared-but-unused transformations appear at zero: {report}"
     );
 }
+
+/// `migrate --check` fails a database AHEAD of this binary, not just one
+/// behind it.
+///
+/// Tested at the CLI because that is where a deploy gate reads the answer,
+/// and where this went wrong: the library reported the database as not
+/// current, the client's `is_current` agreed, and the command still exited
+/// zero because it asked `pending` rather than the report. Nothing is
+/// pending for an ahead database - that is the whole trap.
+#[tokio::test]
+async fn migrate_check_fails_a_database_ahead_of_the_binary() {
+    let pool = PgPool::connect(&database_url())
+        .await
+        .expect("connect to test DB");
+    let future = morpholog_postgres::head_version() + 1;
+
+    // Current to begin with, or the assertions below prove nothing.
+    let (before, _, _) = run_cli(&["migrate", "--check"]);
+    assert!(before.success(), "the test database must start current");
+
+    sqlx::query(
+        "INSERT INTO morpholog.schema_migrations (version, name)
+         VALUES ($1, 'from_a_newer_morpholog') ON CONFLICT DO NOTHING",
+    )
+    .bind(future)
+    .execute(&pool)
+    .await
+    .expect("record a version from the future");
+
+    let (status, stdout, _) = run_cli(&["migrate", "--check"]);
+    let (apply_status, _, _) = run_cli(&["migrate"]);
+
+    // Remove it before asserting: a failure here must not leave the shared
+    // database claiming to be from the future for every later test.
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(future)
+        .execute(&pool)
+        .await
+        .expect("remove it again");
+
+    let report: Value = serde_json::from_str(&stdout).expect("the report is still on stdout");
+    assert_eq!(
+        report["pending"].as_array().map(Vec::len),
+        Some(0),
+        "nothing is pending - which is why gating on that field green-lit this"
+    );
+    assert!(
+        !status.success(),
+        "a database ahead of this binary must fail the readiness check"
+    );
+    assert!(
+        !apply_status.success(),
+        "migrating a database ahead of this binary must be refused"
+    );
+}

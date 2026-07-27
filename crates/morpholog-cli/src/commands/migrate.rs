@@ -24,12 +24,16 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         let report = migration_status(&pool)
             .await
             .context("reading the database's migration state failed")?;
-        let behind = !report.pending.is_empty();
+        // Ask the report, not one field of it. Gating on `pending` alone
+        // green-lights a database AHEAD of this binary - nothing is pending
+        // there, and it is the case a readiness check exists to catch,
+        // because a rollback cannot know whether a migration it never saw
+        // still fits.
+        let ready = report.is_current();
         print_json(&report)?;
-        if behind {
-            // Non-zero so a deploy step can gate on it. The report is on
-            // stdout either way, so the caller reads what is pending rather
-            // than only that something is.
+        if !ready {
+            // The report is on stdout either way, so the caller reads WHAT
+            // is outstanding rather than only that something is.
             std::process::exit(1);
         }
         return Ok(());
