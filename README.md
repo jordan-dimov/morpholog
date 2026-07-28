@@ -111,6 +111,8 @@ The second answer is exactly what an auditor would have seen at that moment, rec
 
 Each parses from `.morph` source and runs end to end against PostgreSQL. Nothing is mocked. Every per-example README has the business story.
 
+The list below is by domain. If you arrived with a question rather than a domain - "can it admit a set of records in one act?" - start from the [capability index](examples/README.md), which maps what you want to do to the example that shows it.
+
 - [**Settlement netting**](examples/01_settlement_netting/) - inputs that are valid alone but forbidden together are refused before commit.
 - [**Verified revenue**](examples/02_verified_revenue/) - the flagship: a figure is verified, relied on, then corrected - and every decision made along the way stays defensible.
 - [**Double-entry ledger**](examples/03_double_entry_ledger/) - the accounting equation as a rule; period close; restatement; the trial balance with as-of replay.
@@ -125,6 +127,8 @@ Each parses from `.morph` source and runs end to end against PostgreSQL. Nothing
 - [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes: exact instants, computed deadlines, cargo in tonnes, delay priced in dollars.
 - [**Biometric identification oversight**](examples/13_biometric_identification_oversight/) - an EU AI Act statute enforced as admission rules: the AI's output has no standing until verified by two distinct, currently-authorised people.
 - [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one.
+- [**Metered billing**](examples/15_metered_billing/) - a bill correct to the penny: each line recomputed and rounded, the sealed total refusing the rival convention by name.
+- [**Worked embedder**](examples/etrm_embedder/) - the same trade lifecycle driven from Python through the generated client, including post-commit delivery.
 
 ## Try it yourself
 
