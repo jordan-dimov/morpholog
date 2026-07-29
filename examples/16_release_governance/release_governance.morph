@@ -80,7 +80,7 @@ transformation record_changelog(version):
 -- platform must not reach back and make last year's complete
 -- announcement retroactively unlawful. A gate governs what you may do
 -- next; an always-rule governs what is true - and completeness of the
--- matrix is only ever a fact about the moment of announcing.
+-- matrix is only ever a condition of the moment of announcing.
 transformation announce(version):
     require version_is_tagged: Tagged(version, _)
     require changelog_written: ChangelogEntry(version)
