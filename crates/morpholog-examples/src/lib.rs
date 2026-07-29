@@ -101,6 +101,7 @@ example_module!(kyc_sanctions_screening {
 example_module!(laytime_demurrage);
 example_module!(margin_call_run);
 example_module!(metered_billing);
+example_module!(release_governance);
 example_module!(settlement_netting);
 example_module!(trade_lifecycle);
 example_module!(verified_revenue {

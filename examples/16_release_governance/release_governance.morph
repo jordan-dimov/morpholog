@@ -1,0 +1,107 @@
+-- How a software release becomes announceable - the checklist as law.
+--
+-- Every project has release rules: don't tag a commit the test gate
+-- never blessed, don't announce before every platform's download
+-- exists, never reuse a version number. Usually they live in a
+-- checklist and in people's heads, and the day someone is tired or
+-- hurried, a step gets skipped and nobody notices until a user does.
+--
+-- This programme is a GOVERNED RELEASE REGISTER: the checklist as
+-- rules a runtime enforces over the release RECORD. An inconsistent
+-- record - a tag entry at an ungated commit, an announcement entry
+-- with a download missing - refuses to save. Honest boundary, stated
+-- up front: the register cannot yet PREVENT a git tag or a GitHub
+-- release made without it; the record is admitted claims about the
+-- release, not the release operation itself. Moving the operation
+-- behind the accepted transition (the announcement intent driving the
+-- actual publish, through the outbox) is the later stage, and only if
+-- living under the register for a release cycle earns it.
+--
+-- The claims are admitted by a person running one command per step
+-- during this project's real releases. Each rule below has a
+-- near-miss in our own history; writing them as law is the same move
+-- we ask of every domain we model.
+
+program release_governance
+
+-- The vocabulary. A platform in the release matrix; a commit the full
+-- test gate ran green at; a version tagged at a commit; a built
+-- download for a version on a platform; the changelog entry; the
+-- public announcement.
+--
+-- `append only` says history is never edited: a gate run, a tag, an
+-- announcement can never be quietly retracted - a mistake is fixed by
+-- a new version, never by rewriting what happened. The tag also
+-- carries `unique by`: one commit per version, forever, so "which
+-- code was v0.0.8?" always has exactly one answer.
+predicate PlatformDeclared(platform: Subject)
+-- One attestation, deliberately whole: "the gate ran green at this
+-- commit" means the full precommit suite passed, the tag matches the
+-- workspace version, and the commit is on the main branch. Splitting
+-- those into separate claims would be more expressive and busier than
+-- this example's teaching warrants; the attestation names the bundle.
+predicate GateGreen(version: Subject, commit: Subject)
+    append only
+predicate Tagged(version: Subject, commit: Subject)
+    unique by (version)
+    append only
+predicate AssetPublished(version: Subject, platform: Subject)
+predicate ChangelogEntry(version: Subject)
+predicate Announced(version: Subject)
+    append only
+
+intent ReleaseAnnounced(version: Subject)
+
+-- The rules that must always hold, whatever anyone does.
+
+-- A tag exists only at a commit whose gate ran green. Both sides are
+-- append-only, so this is safe as an always-rule: no later change can
+-- pull the gate run out from under an existing tag.
+invariant tagged_commit_ran_the_gate:
+    Tagged(version, commit) implies GateGreen(version, commit)
+
+-- An announcement never exists without its tag and its changelog.
+invariant announced_release_is_tagged_and_documented:
+    Announced(version) implies (Tagged(version, _) and ChangelogEntry(version))
+
+-- The steps of a release, each a single command.
+
+transformation declare_platform(platform):
+    admit PlatformDeclared(platform)
+
+transformation record_gate(version, commit):
+    admit GateGreen(version, commit)
+
+transformation tag_release(version, commit):
+    require gate_ran_green_at_this_commit: GateGreen(version, commit)
+    admit Tagged(version, commit)
+
+transformation publish_asset(version, platform):
+    require version_is_tagged: Tagged(version, _)
+    require platform_is_in_the_matrix: PlatformDeclared(platform)
+    admit AssetPublished(version, platform)
+
+transformation record_changelog(version):
+    admit ChangelogEntry(version)
+
+-- The act the whole programme exists for. Its first gate is the
+-- replay guard: admitting `Announced` twice would be a harmless
+-- no-op (claims are a set), but the announcement INTENT would go out
+-- twice - so any act that emits an external effect needs an explicit
+-- already-done gate. Set semantics protect the record, never the
+-- outside world.
+--
+-- Note that "every declared
+-- platform has its download" is a gate on THIS act, deliberately not
+-- an always-rule: the matrix can grow next year, and declaring a new
+-- platform must not reach back and make last year's complete
+-- announcement retroactively unlawful. A gate governs what you may do
+-- next; an always-rule governs what is true - and completeness of the
+-- matrix is only ever a condition of the moment of announcing.
+transformation announce(version):
+    require release_not_already_announced: not Announced(version)
+    require version_is_tagged: Tagged(version, _)
+    require changelog_written: ChangelogEntry(version)
+    require every_declared_platform_has_its_asset: (forall p in PlatformDeclared(p): AssetPublished(version, p))
+    admit Announced(version)
+    emit ReleaseAnnounced(version)
