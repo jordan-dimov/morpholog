@@ -6,14 +6,19 @@
 -- checklist and in people's heads, and the day someone is tired or
 -- hurried, a step gets skipped and nobody notices until a user does.
 --
--- This programme turns that checklist into rules a runtime enforces.
--- A release that skipped a step is not "risky" here - the change that
--- would skip it simply refuses to save. The claims are admitted by a
--- person running one command per step during a real release; nothing
--- is automated, and that is the point of the first stage: the law is
--- worth having before the plumbing is.
+-- This programme is a GOVERNED RELEASE REGISTER: the checklist as
+-- rules a runtime enforces over the release RECORD. An inconsistent
+-- record - a tag entry at an ungated commit, an announcement entry
+-- with a download missing - refuses to save. Honest boundary, stated
+-- up front: the register cannot yet PREVENT a git tag or a GitHub
+-- release made without it; the record is admitted claims about the
+-- release, not the release operation itself. Moving the operation
+-- behind the accepted transition (the announcement intent driving the
+-- actual publish, through the outbox) is the later stage, and only if
+-- living under the register for a release cycle earns it.
 --
--- It is also this project governing itself. Each rule below has a
+-- The claims are admitted by a person running one command per step
+-- during this project's real releases. Each rule below has a
 -- near-miss in our own history; writing them as law is the same move
 -- we ask of every domain we model.
 
@@ -30,6 +35,11 @@ program release_governance
 -- carries `unique by`: one commit per version, forever, so "which
 -- code was v0.0.8?" always has exactly one answer.
 predicate PlatformDeclared(platform: Subject)
+-- One attestation, deliberately whole: "the gate ran green at this
+-- commit" means the full precommit suite passed, the tag matches the
+-- workspace version, and the commit is on the main branch. Splitting
+-- those into separate claims would be more expressive and busier than
+-- this example's teaching warrants; the attestation names the bundle.
 predicate GateGreen(version: Subject, commit: Subject)
     append only
 predicate Tagged(version: Subject, commit: Subject)
@@ -74,7 +84,14 @@ transformation publish_asset(version, platform):
 transformation record_changelog(version):
     admit ChangelogEntry(version)
 
--- The act the whole programme exists for. Note that "every declared
+-- The act the whole programme exists for. Its first gate is the
+-- replay guard: admitting `Announced` twice would be a harmless
+-- no-op (claims are a set), but the announcement INTENT would go out
+-- twice - so any act that emits an external effect needs an explicit
+-- already-done gate. Set semantics protect the record, never the
+-- outside world.
+--
+-- Note that "every declared
 -- platform has its download" is a gate on THIS act, deliberately not
 -- an always-rule: the matrix can grow next year, and declaring a new
 -- platform must not reach back and make last year's complete
@@ -82,6 +99,7 @@ transformation record_changelog(version):
 -- next; an always-rule governs what is true - and completeness of the
 -- matrix is only ever a condition of the moment of announcing.
 transformation announce(version):
+    require release_not_already_announced: not Announced(version)
     require version_is_tagged: Tagged(version, _)
     require changelog_written: ChangelogEntry(version)
     require every_declared_platform_has_its_asset: (forall p in PlatformDeclared(p): AssetPublished(version, p))
