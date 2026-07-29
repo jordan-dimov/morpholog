@@ -141,3 +141,60 @@ async fn body_gate_rejection_flows_identically() {
     };
     assert!(reason.contains("require"), "gate rejection, not invariant: {reason}");
 }
+
+/// The case-bound divergence, pinned in its ONE permitted direction.
+/// Attacker capability modelled: none - the dirty row stands in for
+/// legacy state under a rule-version adoption, inserted directly
+/// because no governed path can create it.
+#[tokio::test]
+async fn dirty_history_diverges_only_in_the_pinned_direction() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let compiled = common::compiled(double_entry_ledger::program());
+
+    // One unbalanced legacy entry, bypassing the kernel.
+    for (pred, args) in [
+        ("JournalEntry", serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"d0"}, {"type":"subject","value":"p0"}])),
+        ("JournalLine", serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"cash"}, {"type":"decimal","value":"100"}, {"type":"decimal","value":"0"}])),
+    ] {
+        sqlx::query("INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ($1, $2, $3)")
+            .bind(pred).bind(args).bind(uuid::Uuid::nil())
+            .execute(&pool).await.unwrap();
+    }
+
+    let t = double_entry_ledger::post_simple_entry();
+
+    // A fresh BALANCED entry: kernel and stage 1 refuse (global check
+    // trips over the legacy violation); stage 2 commits (the delta
+    // introduces no fresh violation) - the inconsistency-tolerant rule.
+    let interpreted = propose_pg_with_test_actor(&pool, &compiled, &t, balanced_args("e_new"))
+        .await
+        .unwrap();
+    let PgProposalOutcome::Rejected { rule, .. } = interpreted else {
+        panic!("kernel must refuse over dirty history");
+    };
+    assert_eq!(rule.as_deref(), Some("balanced_posted_entry"));
+
+    let s1 = propose_compiled(&pool, &t, balanced_args("e_new"), Stage::Stage1).await;
+    assert!(
+        matches!(s1, PgProposalOutcome::Rejected { .. }),
+        "stage 1 is verdict-equivalent to the kernel, dirty history included"
+    );
+
+    let s2 = propose_compiled(&pool, &t, balanced_args("e_new"), Stage::Stage2).await;
+    assert!(
+        matches!(s2, PgProposalOutcome::Committed { .. }),
+        "stage 2 admits the non-worsening write - the deliberate divergence"
+    );
+
+    // An UNBALANCED proposal still refuses everywhere: the divergence
+    // never runs the other way.
+    let t_split = double_entry_ledger::post_split_entry();
+    for stage in [Stage::Stage1, Stage::Stage2] {
+        let outcome = propose_compiled(&pool, &t_split, unbalanced_split("e_worse"), stage).await;
+        assert!(
+            matches!(outcome, PgProposalOutcome::Rejected { .. }),
+            "a worsening write must refuse at {stage:?}"
+        );
+    }
+}
