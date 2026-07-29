@@ -588,7 +588,7 @@ fn outbox_row_serializes_as_pinned() {
         intent_type: "AccountOpened".to_string(),
         arguments: vec![EvalValue::Subject(Subject::from("acct_1"))],
         idempotency_key: "k1".to_string(),
-        status: "pending".to_string(),
+        status: morpholog_postgres::OutboxStatus::Pending,
         attempt_count: 0,
         enqueued_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
         last_attempt_at: None,

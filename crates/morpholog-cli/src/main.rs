@@ -1016,14 +1016,17 @@ pub(crate) enum InspectOutboxStatus {
 }
 
 impl InspectOutboxStatus {
-    /// Database status string, or `None` for the `All` filter (which
-    /// drops the `WHERE status = ?` clause).
-    pub(crate) fn db_filter(self) -> Option<&'static str> {
+    /// The shared [`morpholog_postgres::OutboxStatus`] this flag names,
+    /// or `None` for the `All` filter (which drops the `WHERE status =
+    /// ?` clause). Typed end to end: no string mapping to drift from
+    /// the database vocabulary.
+    pub(crate) fn db_filter(self) -> Option<morpholog_postgres::OutboxStatus> {
+        use morpholog_postgres::OutboxStatus;
         match self {
-            InspectOutboxStatus::Pending => Some("pending"),
-            InspectOutboxStatus::InProgress => Some("in_progress"),
-            InspectOutboxStatus::Delivered => Some("delivered"),
-            InspectOutboxStatus::Failed => Some("failed"),
+            InspectOutboxStatus::Pending => Some(OutboxStatus::Pending),
+            InspectOutboxStatus::InProgress => Some(OutboxStatus::InProgress),
+            InspectOutboxStatus::Delivered => Some(OutboxStatus::Delivered),
+            InspectOutboxStatus::Failed => Some(OutboxStatus::Failed),
             InspectOutboxStatus::All => None,
         }
     }
