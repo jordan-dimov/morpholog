@@ -540,6 +540,29 @@ pub(crate) async fn write_accepted(
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
 ) -> Result<(), PgError> {
+    write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
+    write_audit_outbox(
+        tx,
+        transition_id,
+        transformation,
+        transition,
+        invariants,
+        asserted_claims,
+        retracted_claims,
+        emitted_intents,
+    )
+    .await
+}
+
+/// The claim half of [`write_accepted`]: apply the delta to
+/// `morpholog.claims`. Split out so the spike's compiled path can stage
+/// the delta before its SQL invariant checks run.
+pub(crate) async fn write_claim_delta(
+    tx: &mut Transaction<'_, Postgres>,
+    transition_id: Uuid,
+    asserted_claims: &[ClaimInstance],
+    retracted_claims: &[ClaimInstance],
+) -> Result<(), PgError> {
     // Retractions: dedupe, then delete each distinct claim. Exactly
     // one row per distinct retraction is expected; zero rows means a
     // persistent-state mismatch (concurrent interference, which SSI
@@ -588,6 +611,22 @@ pub(crate) async fn write_accepted(
         .map_err(classify_checked_query)?;
     }
 
+    Ok(())
+}
+
+/// The audit-and-outbox half of [`write_accepted`], run after every
+/// invariant check has passed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_audit_outbox(
+    tx: &mut Transaction<'_, Postgres>,
+    transition_id: Uuid,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+    asserted_claims: &[ClaimInstance],
+    retracted_claims: &[ClaimInstance],
+    emitted_intents: &[IntentInstance],
+) -> Result<(), PgError> {
     // Audit row.
     let checked: Vec<AuditedInvariantCheck> = invariants
         .iter()

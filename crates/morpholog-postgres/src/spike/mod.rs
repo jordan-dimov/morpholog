@@ -3,7 +3,9 @@
 //! transaction; the sync kernel remains the executable specification.
 
 mod compile;
+mod propose;
 
 pub use compile::{
     CaseFilter, CompileRefusal, CompiledInvariant, CompiledInvariantSet, compile_invariants,
 };
+pub use propose::{Stage, propose_against_pg_compiled, staged_delta_for};
