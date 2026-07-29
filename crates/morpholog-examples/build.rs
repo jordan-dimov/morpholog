@@ -34,7 +34,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", examples_dir.display());
 
-    let mut modules: Vec<String> = Vec::new();
+    let mut modules: Vec<(String, String)> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for entry in fs::read_dir(&examples_dir).expect("examples/ dir") {
         let dir = entry.unwrap().path();
@@ -60,21 +60,35 @@ fn main() {
 
         let rendered = render_module(&module, &rel, &source);
         fs::write(Path::new(&out_dir).join(format!("{module}.rs")), rendered).unwrap();
-        modules.push(module);
+        modules.push((module, rel));
     }
 
-    // The auto-discovered registry: every example, enumerated for the
-    // cross-example property tests. Generated, so a new `.morph` is covered
+    // The auto-discovered registry: one descriptor per example, and the
+    // programme list derived from it - one discovery, one meaning of
+    // "all worked examples". Generated, so a new `.morph` is covered
     // the moment it is added - no manual list to forget.
     modules.sort();
     let mut registry = String::from(
-        "/// Every worked example's program, auto-discovered from `examples/`.\n\
-         pub fn all_programs() -> Vec<morpholog_core::Program> {\n    vec![\n",
+        "/// Every worked example, as build discovery found it: the single\n\
+         /// authority on what \"all worked examples\" means.\n\
+         pub fn all_examples() -> Vec<crate::ExampleDescriptor> {\n    vec![\n",
     );
-    for m in &modules {
-        registry.push_str(&format!("        crate::{m}::program(),\n"));
+    for (m, rel) in &modules {
+        registry.push_str(&format!(
+            "        crate::ExampleDescriptor {{\n            \
+             name: {m:?},\n            \
+             rel_path: {rel:?},\n            \
+             source: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../examples/{rel}\")),\n            \
+             program: crate::{m}::program,\n        \
+             }},\n"
+        ));
     }
-    registry.push_str("    ]\n}\n");
+    registry.push_str("    ]\n}\n\n");
+    registry.push_str(
+        "/// Every worked example's program, derived from [`all_examples`].\n\
+         pub fn all_programs() -> Vec<morpholog_core::Program> {\n    \
+         all_examples().into_iter().map(|e| (e.program)()).collect()\n}\n",
+    );
     fs::write(Path::new(&out_dir).join("_registry.rs"), registry).unwrap();
 }
 

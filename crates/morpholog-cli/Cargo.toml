@@ -25,6 +25,10 @@ jiff = { workspace = true }
 rust_decimal = { workspace = true }
 
 [dev-dependencies]
+# Tests only: the binary stays file-path-driven and bundles no
+# programmes. The all-examples check iterates the generated registry
+# instead of re-walking examples/ with its own heuristic.
+morpholog-examples = { path = "../morpholog-examples" }
 sqlx = { workspace = true }
 tempfile = "3"
 

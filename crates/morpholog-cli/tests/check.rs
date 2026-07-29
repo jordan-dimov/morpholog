@@ -290,47 +290,30 @@ fn developer_intro_complete_program_checks() {
 
 #[test]
 fn check_all_worked_examples_are_well_formed() {
-    // Every worked example .morph must parse and validate cleanly -
-    // discovered by walking examples/, so a new example is covered the
-    // day it lands (a hardcoded list here once silently stopped at 12).
-    let mut checked = 0usize;
-    let mut example_dirs = 0usize;
-    for entry in std::fs::read_dir(repo_root().join("examples")).expect("examples dir") {
-        let dir = entry.expect("dir entry").path();
-        if !dir.is_dir() {
-            continue;
-        }
-        // Only the numbered gallery dirs are examples with a .morph;
-        // the worked embedder's dir carries a Python package instead.
-        if dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with(|c: char| c.is_ascii_digit()))
-        {
-            example_dirs += 1;
-        }
-        for file in std::fs::read_dir(&dir).expect("example dir") {
-            let path = file.expect("file entry").path();
-            if path.extension().is_some_and(|e| e == "morph") {
-                let out = Command::new(bin())
-                    .arg("check")
-                    .arg(&path)
-                    .output()
-                    .expect("morpholog check should run");
-                assert!(
-                    out.status.success(),
-                    "{} failed check; stderr:\n{}",
-                    path.display(),
-                    String::from_utf8_lossy(&out.stderr),
-                );
-                checked += 1;
-            }
-        }
+    // Every worked example .morph must parse and validate cleanly. The
+    // list is the generated registry - the same one `all_programs()`
+    // derives from - so "all worked examples" means exactly one thing,
+    // and a new example is covered the moment build discovery sees it
+    // (a hardcoded list here once silently stopped at 12; a filesystem
+    // walk with a numbered-dir heuristic replaced it, and the registry
+    // replaces the heuristic).
+    let examples = morpholog_examples::all_examples();
+    assert!(!examples.is_empty(), "the registry discovered no examples");
+    for example in examples {
+        let path = repo_root().join("examples").join(example.rel_path);
+        let out = Command::new(bin())
+            .arg("check")
+            .arg(&path)
+            .output()
+            .expect("morpholog check should run");
+        assert!(
+            out.status.success(),
+            "{} ({}) failed check; stderr:\n{}",
+            example.name,
+            path.display(),
+            String::from_utf8_lossy(&out.stderr),
+        );
     }
-    assert!(
-        checked >= example_dirs && example_dirs > 0,
-        "every example dir carries a checked .morph ({checked} checked, {example_dirs} dirs)"
-    );
 }
 
 const LINT_TRIP: &str = r#"
