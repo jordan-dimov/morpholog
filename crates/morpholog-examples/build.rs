@@ -78,7 +78,7 @@ fn main() {
             "        crate::ExampleDescriptor {{\n            \
              name: {m:?},\n            \
              rel_path: {rel:?},\n            \
-             source: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../examples/{rel}\")),\n            \
+             source: crate::{m}::SOURCE,\n            \
              program: crate::{m}::program,\n        \
              }},\n"
         ));
@@ -162,10 +162,16 @@ fn render_module(name: &str, rel: &str, source: &str) -> String {
     out.push_str("};\n\n");
 
     // The path is resolved at the lib's compile time from CARGO_MANIFEST_DIR,
-    // not baked in as a build-machine absolute path.
+    // not baked in as a build-machine absolute path. Embedded ONCE: the
+    // registry's descriptor references this same const, so the path
+    // expression exists in exactly one generated place.
     out.push_str(&format!(
-        "static PROGRAM: LazyLock<Program> = LazyLock::new(|| {{\n    \
-         crate::parse_example({name:?}, include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../examples/{rel}\")))\n}});\n\n"
+        "/// The example's `.morph` source, embedded at compile time.\n\
+         pub const SOURCE: &str =\n    \
+         include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../examples/{rel}\"));\n\n"
+    ));
+    out.push_str(&format!(
+        "static PROGRAM: LazyLock<Program> = LazyLock::new(|| crate::parse_example({name:?}, SOURCE));\n\n"
     ));
 
     out.push_str("pub fn program() -> Program { PROGRAM.clone() }\n");
