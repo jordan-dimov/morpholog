@@ -46,6 +46,10 @@ use morpholog_core::{
     predicates_referenced_by_derived,
 };
 use morpholog_examples::double_entry_ledger;
+use morpholog_postgres::spike::{
+    CompiledInvariantSet, Stage, compile_invariants, drop_spike_index_sql,
+    propose_against_pg_compiled, spike_index_sql,
+};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates, list_derived_at,
     propose_against_pg, reconstruct_state_at,
@@ -60,6 +64,93 @@ use uuid::Uuid;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+/// SPIKE: which propose path the scenario times. Echoed in the header
+/// line so every captured number is self-describing; a flag, not an env
+/// var, so a stale shell cannot contaminate a table cell.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum Engine {
+    Interpreted,
+    Stage1,
+    Stage2,
+}
+
+/// SPIKE: whether the derived partial expression indexes exist for the
+/// run. Both modes assert the state explicitly (indexes survive
+/// TRUNCATE, so ambient state from a prior run would lie).
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum ArgIndex {
+    None,
+    Spike,
+}
+
+/// Compile the programme's invariants or abort the run: a measurement
+/// under a compiled engine must never silently be interpreted numbers.
+fn build_sql_set(program: &morpholog_core::Program) -> Result<CompiledInvariantSet> {
+    compile_invariants(program).map_err(|refusals| {
+        anyhow!("compiled engine requested but the programme refuses: {refusals:?}")
+    })
+}
+
+async fn apply_arg_index(
+    pool: &PgPool,
+    mode: ArgIndex,
+    set: &CompiledInvariantSet,
+) -> Result<()> {
+    for sql in drop_spike_index_sql(set) {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+            .execute(pool)
+            .await
+            .context("drop spike index")?;
+    }
+    if mode == ArgIndex::Spike {
+        for sql in spike_index_sql(set) {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                .execute(pool)
+                .await
+                .context("create spike index")?;
+        }
+    }
+    // Fresh statistics either way: EXPLAIN and the planner must see the
+    // fixture, not the last run.
+    sqlx::raw_sql("ANALYZE morpholog.claims")
+        .execute(pool)
+        .await
+        .context("analyze claims")?;
+    Ok(())
+}
+
+async fn propose_engine(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    sql_set: Option<&CompiledInvariantSet>,
+    proposal: &Proposal,
+    engine: Engine,
+) -> Result<PgProposalOutcome, PgError> {
+    match engine {
+        Engine::Interpreted => propose_against_pg(pool, compiled, proposal).await,
+        Engine::Stage1 => {
+            propose_against_pg_compiled(
+                pool,
+                compiled,
+                sql_set.expect("sql_set built for compiled engine"),
+                proposal,
+                Stage::Stage1,
+            )
+            .await
+        }
+        Engine::Stage2 => {
+            propose_against_pg_compiled(
+                pool,
+                compiled,
+                sql_set.expect("sql_set built for compiled engine"),
+                proposal,
+                Stage::Stage2,
+            )
+            .await
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -131,6 +222,20 @@ struct ScenarioArgs {
     /// the scoped vs. unscoped difference is invisible.
     #[arg(long, default_value_t = 0)]
     noise_claims: usize,
+
+    /// SPIKE: which propose path to time.
+    #[arg(long, value_enum, default_value_t = Engine::Interpreted)]
+    engine: Engine,
+
+    /// SPIKE: whether the derived partial expression indexes exist.
+    #[arg(long, value_enum, default_value_t = ArgIndex::None)]
+    arg_index: ArgIndex,
+
+    /// SPIKE: sequential timed proposes after one fixture build (each
+    /// with a distinct entry id). Run 1 is the cold number; the warm
+    /// median over runs 2..R is the comparison number.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
 
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
@@ -243,6 +348,14 @@ struct ContendArgs {
     #[arg(long, default_value_t = 100)]
     max_retries: usize,
 
+    /// SPIKE: which propose path every worker uses.
+    #[arg(long, value_enum, default_value_t = Engine::Interpreted)]
+    engine: Engine,
+
+    /// SPIKE: whether the derived partial expression indexes exist.
+    #[arg(long, value_enum, default_value_t = ArgIndex::None)]
+    arg_index: ArgIndex,
+
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
     #[arg(long, env = "DATABASE_URL")]
@@ -313,9 +426,12 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
         .await
         .context("connect to PostgreSQL")?;
     println!(
-        "scenario=write n={} accounts={} noise_claims={}",
-        args.n, args.accounts, args.noise_claims
+        "scenario=write n={} accounts={} noise_claims={} engine={:?} arg_index={:?} repeat={}",
+        args.n, args.accounts, args.noise_claims, args.engine, args.arg_index, args.repeat
     );
+    if args.repeat == 0 {
+        return Err(anyhow!("--repeat must be at least 1"));
+    }
 
     let t = Instant::now();
     reset_db(&pool).await?;
@@ -323,33 +439,55 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     insert_noise_claims(&pool, args.noise_claims).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
-    let t = Instant::now();
-    let transformation = double_entry_ledger::post_simple_entry();
-    let transition = Transition {
-        transformation_name: transformation.name.clone(),
-        args: vec![
-            subj("entry_bench_target"),
-            subj("d_2026_05_17"),
-            subj("p_bench"),
-            subj("account_cash"),
-            subj("account_revenue"),
-            dec(42),
-        ],
-        actor: Subject::from("bench"),
-    };
     let compiled = CompiledProgram::new(double_entry_ledger::program())
         .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
-    let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
-        .await
-        .context("propose_against_pg")?;
-    println!("  propose_one:    {:>8} ms", t.elapsed().as_millis());
-    println!("  outcome:        {}", outcome_summary(&outcome));
+    let sql_set = build_sql_set(compiled.program())?;
+    apply_arg_index(&pool, args.arg_index, &sql_set).await?;
+    let sql_set = (args.engine != Engine::Interpreted).then_some(&sql_set);
 
-    if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
-        return Err(anyhow!(
-            "expected the target propose to commit; bench fixture or kernel \
-             behaviour has changed"
-        ));
+    let transformation = double_entry_ledger::post_simple_entry();
+    let mut times_ms: Vec<u128> = Vec::with_capacity(args.repeat);
+    for r in 0..args.repeat {
+        let transition = Transition {
+            transformation_name: transformation.name.clone(),
+            args: vec![
+                subj(&format!("entry_bench_target_{r}")),
+                subj("d_2026_05_17"),
+                subj("p_bench"),
+                subj("account_cash"),
+                subj("account_revenue"),
+                dec(42),
+            ],
+            actor: Subject::from("bench"),
+        };
+        let t = Instant::now();
+        let outcome = propose_engine(
+            &pool,
+            &compiled,
+            sql_set,
+            &Proposal::gateway(&transition),
+            args.engine,
+        )
+        .await
+        .context("propose")?;
+        let ms = t.elapsed().as_millis();
+        times_ms.push(ms);
+        println!("  propose_one:    {ms:>8} ms");
+        if r == 0 {
+            println!("  outcome:        {}", outcome_summary(&outcome));
+        }
+        if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
+            return Err(anyhow!(
+                "expected the target propose to commit; bench fixture or kernel \
+                 behaviour has changed"
+            ));
+        }
+    }
+    if args.repeat > 1 {
+        let mut warm: Vec<u128> = times_ms[1..].to_vec();
+        warm.sort_unstable();
+        println!("  cold:           {:>8} ms", times_ms[0]);
+        println!("  warm_median:    {:>8} ms", warm[warm.len() / 2]);
     }
     Ok(())
 }
@@ -561,18 +699,24 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         .await
         .context("connect to PostgreSQL")?;
     println!(
-        "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} disjoint={} max_retries={}",
+        "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} disjoint={} max_retries={} engine={:?} arg_index={:?}",
         args.workers,
         args.ops_per_worker,
         args.prepopulate,
         args.periods,
         args.disjoint,
-        args.max_retries
+        args.max_retries,
+        args.engine,
+        args.arg_index
     );
 
     let t = Instant::now();
     reset_db(&pool).await?;
     insert_n_entries(&pool, args.prepopulate, 2).await?;
+    // Index the ledger key set (the disjoint workload's residuals need
+    // no index: `Bench_*` claims are the antecedent's own predicate).
+    let ledger_set = build_sql_set(&double_entry_ledger::program())?;
+    apply_arg_index(&pool, args.arg_index, &ledger_set).await?;
     println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
 
     // Fan out: every worker shares the pool and posts uniquely-keyed
@@ -585,8 +729,9 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         let max_retries = args.max_retries;
         let periods = args.periods;
         let disjoint = args.disjoint;
+        let engine = args.engine;
         handles.push(tokio::spawn(async move {
-            contend_worker(pool, w, ops, max_retries, periods, disjoint).await
+            contend_worker(pool, w, ops, max_retries, periods, disjoint, engine).await
         }));
     }
 
@@ -673,6 +818,7 @@ async fn contend_worker(
     max_retries: usize,
     periods: usize,
     disjoint: bool,
+    engine: Engine,
 ) -> Result<Tally> {
     let mut tally = Tally::default();
     if disjoint {
@@ -685,6 +831,8 @@ async fn contend_worker(
         let transformation = synthetic_bump(&predicate);
         let compiled = CompiledProgram::new(synthetic_program(&predicate))
             .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+        let sql_set = build_sql_set(compiled.program())?;
+        let sql_set = (engine != Engine::Interpreted).then_some(&sql_set);
         for op in 0..ops {
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
@@ -695,8 +843,10 @@ async fn contend_worker(
             one_op(
                 &pool,
                 &compiled,
+                sql_set,
                 &transition,
                 max_retries,
+                engine,
                 &label,
                 &mut tally,
             )
@@ -706,6 +856,8 @@ async fn contend_worker(
         let transformation = double_entry_ledger::post_simple_entry();
         let compiled = CompiledProgram::new(double_entry_ledger::program())
             .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+        let sql_set = build_sql_set(compiled.program())?;
+        let sql_set = (engine != Engine::Interpreted).then_some(&sql_set);
         let period = format!("p_contend_{}", worker_id % periods);
         for op in 0..ops {
             let transition = Transition {
@@ -724,8 +876,10 @@ async fn contend_worker(
             one_op(
                 &pool,
                 &compiled,
+                sql_set,
                 &transition,
                 max_retries,
+                engine,
                 &label,
                 &mut tally,
             )
@@ -740,17 +894,21 @@ async fn contend_worker(
 /// `max_retries` (then counts as `failed`); any other error is drift,
 /// not contention, and propagates as `Err` so a real run and the smoke
 /// test fail loudly instead of banking it as an expected outcome.
+#[allow(clippy::too_many_arguments)]
 async fn one_op(
     pool: &PgPool,
     compiled: &CompiledProgram,
+    sql_set: Option<&CompiledInvariantSet>,
     transition: &Transition,
     max_retries: usize,
+    engine: Engine,
     label: &str,
     tally: &mut Tally,
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, compiled, &Proposal::gateway(transition)).await {
+        match propose_engine(pool, compiled, sql_set, &Proposal::gateway(transition), engine).await
+        {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());
@@ -1100,16 +1258,39 @@ mod smoke {
             n: 1,
             accounts: 2,
             noise_claims: 1,
+            engine: Engine::Interpreted,
+            arg_index: ArgIndex::None,
+            repeat: 1,
             database_url: url.clone(),
             reset: true,
         })
         .await
         .expect("write scenario smoke");
 
+        // Every compiled engine once, with the index axis exercised, so
+        // the spike plumbing cannot silently rot against the schema.
+        for engine in [Engine::Stage1, Engine::Stage2] {
+            run_write(ScenarioArgs {
+                n: 1,
+                accounts: 2,
+                noise_claims: 1,
+                engine,
+                arg_index: ArgIndex::Spike,
+                repeat: 2,
+                database_url: url.clone(),
+                reset: true,
+            })
+            .await
+            .expect("write scenario smoke (compiled)");
+        }
+
         run_read(ScenarioArgs {
             n: 1,
             accounts: 2,
             noise_claims: 1,
+            engine: Engine::Interpreted,
+            arg_index: ArgIndex::None,
+            repeat: 1,
             database_url: url.clone(),
             reset: true,
         })
@@ -1145,11 +1326,28 @@ mod smoke {
             periods: 2,
             disjoint: false,
             max_retries: 20,
+            engine: Engine::Interpreted,
+            arg_index: ArgIndex::None,
             database_url: url.clone(),
             reset: true,
         })
         .await
         .expect("contend scenario smoke (ledger)");
+
+        run_contend(ContendArgs {
+            workers: 2,
+            ops_per_worker: 2,
+            prepopulate: 2,
+            periods: 2,
+            disjoint: false,
+            max_retries: 20,
+            engine: Engine::Stage2,
+            arg_index: ArgIndex::Spike,
+            database_url: url.clone(),
+            reset: true,
+        })
+        .await
+        .expect("contend scenario smoke (ledger, compiled)");
 
         // The synthetic disjoint-predicate workload uses a different
         // (ir_builder-built) transformation, so smoke it too.
@@ -1160,10 +1358,12 @@ mod smoke {
             periods: 2,
             disjoint: true,
             max_retries: 20,
+            engine: Engine::Stage2,
+            arg_index: ArgIndex::None,
             database_url: url,
             reset: true,
         })
         .await
-        .expect("contend scenario smoke (disjoint)");
+        .expect("contend scenario smoke (disjoint, compiled)");
     }
 }

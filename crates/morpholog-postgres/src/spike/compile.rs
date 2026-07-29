@@ -98,6 +98,14 @@ impl CompiledInvariant {
         sql
     }
 
+    /// Every (predicate, argument position) this invariant filters or
+    /// joins on - the positions an expression index makes seekable.
+    pub(crate) fn key_positions(&self) -> impl Iterator<Item = (&PredicateName, usize)> {
+        self.occurrences
+            .iter()
+            .flat_map(|o| o.var_map.iter().map(move |(pos, _)| (&o.predicate, *pos)))
+    }
+
     /// Bound the check to the cases a delta could have changed. Sound by
     /// widening: a binder that cannot constrain a variable widens toward
     /// full stage 1, never narrows past a touched case.
