@@ -156,6 +156,12 @@ fn decode_witness(
                 PgError::InvalidState(format!("witness decimal {col} unparseable: {e}"))
             })?),
             PredicateArgKind::Bool => EvalValue::Bool(text == "true"),
+            PredicateArgKind::Date => EvalValue::Date(text.parse().map_err(|e| {
+                PgError::InvalidState(format!("witness date {col} unparseable: {e}"))
+            })?),
+            PredicateArgKind::Timestamp => EvalValue::Timestamp(text.parse().map_err(|e| {
+                PgError::InvalidState(format!("witness timestamp {col} unparseable: {e}"))
+            })?),
             other => {
                 return Err(PgError::InvalidState(format!(
                     "witness kind {other} outside spike decode"
@@ -168,6 +174,184 @@ fn decode_witness(
         });
     }
     Ok(witness)
+}
+
+/// SPIKE: the same-snapshot differential. Inside ONE SERIALIZABLE
+/// transaction: load the full interpreted scope, take the kernel's
+/// verdict in memory (the spec), then run the compiled sequence in the
+/// same transaction and take stage-1 and stage-2 verdicts. Any
+/// disagreement is an error naming both sides; agreement finalises
+/// normally. Same snapshot = zero race window.
+pub async fn propose_differential(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    sql_set: &CompiledInvariantSet,
+    proposal: &Proposal,
+) -> Result<PgProposalOutcome, PgError> {
+    let (transformation, invariants, definitions) =
+        resolve(compiled, &proposal.transformation_name)?;
+    let transition = proposal.transition();
+
+    let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
+    let scope = crate::propose::compute_load_scope(transformation, invariants, definitions);
+    let state = load_state(&mut tx, &scope).await?;
+
+    // The spec's verdict, in memory, against the same snapshot.
+    let kernel = morpholog_core::propose(transformation, &transition, &state, invariants, definitions)?;
+
+    let staged = propose_stage_delta(transformation, &transition, &state, definitions)?;
+    let (asserted, retracted, emitted) = match staged {
+        StagedDelta::Rejected { reason } => {
+            // Body rejections share the kernel's code path; parity is
+            // structural but assert it anyway.
+            match &kernel {
+                morpholog_core::Outcome::Rejected { reason: k } if k.to_string() == reason.to_string() => {}
+                other => {
+                    return Err(disagreement("body rejection", &format!("{other:?}"), &reason.to_string()));
+                }
+            }
+            return finalise_outcome(
+                pool,
+                tx,
+                transformation,
+                &transition,
+                invariants,
+                morpholog_core::Outcome::Rejected { reason },
+            )
+            .await;
+        }
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
+
+    let transition_id = Uuid::now_v7();
+    write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+
+    let stage1 = first_violation(&mut tx, sql_set, Stage::Stage1, &asserted, &retracted).await?;
+    let stage2 = first_violation(&mut tx, sql_set, Stage::Stage2, &asserted, &retracted).await?;
+
+    match (&kernel, &stage1, &stage2) {
+        (morpholog_core::Outcome::Accepted { .. }, None, None) => {
+            write_audit_outbox(
+                &mut tx,
+                transition_id,
+                transformation,
+                &transition,
+                invariants,
+                &asserted,
+                &retracted,
+                &emitted,
+            )
+            .await?;
+            tx.commit().await.map_err(classify)?;
+            Ok(PgProposalOutcome::Committed {
+                transition_id,
+                actor: transition.actor.clone(),
+                asserted_claims: asserted,
+                retracted_claims: retracted,
+                emitted_intents: emitted,
+            })
+        }
+        (morpholog_core::Outcome::Rejected { reason }, Some(s1), Some(s2)) => {
+            let (k_name, k_version, k_witness) = match reason {
+                RejectionReason::Invariant {
+                    name,
+                    version,
+                    witness,
+                } => (name, version, witness),
+                other => {
+                    return Err(disagreement(
+                        "kernel rejected at body level after staging succeeded",
+                        &other.to_string(),
+                        "staged",
+                    ));
+                }
+            };
+            for (label, s) in [("stage1", s1), ("stage2", s2)] {
+                if &s.0 != k_name || s.1 != *k_version {
+                    return Err(disagreement(
+                        label,
+                        &format!("kernel {k_name} v{k_version}"),
+                        &format!("{} v{}", s.0, s.1),
+                    ));
+                }
+                // Witness VARS must agree; values are deliberately not
+                // compared. Two lawful causes of value divergence, both
+                // observed on the corpus: a symmetric self-join names the
+                // violating pair in candidate order (delta appended last)
+                // where SQL sorts the delta into key order; and a body
+                // minting `new Subject()` gives the kernel run and the
+                // staged run different fresh ids. Verdict + name/version
+                // + var-set parity is the contract; value identity is an
+                // observation for the verdict doc.
+                let s_vars: Vec<_> = s.2.iter().map(|w| &w.var).collect();
+                let k_vars: Vec<_> = k_witness.iter().map(|w| &w.var).collect();
+                if s_vars != k_vars {
+                    return Err(disagreement(
+                        &format!("{label} witness variables"),
+                        &format!("{k_witness:?}"),
+                        &format!("{:?}", s.2),
+                    ));
+                }
+            }
+            finalise_outcome(
+                pool,
+                tx,
+                transformation,
+                &transition,
+                invariants,
+                morpholog_core::Outcome::Rejected {
+                    reason: reason.clone(),
+                },
+            )
+            .await
+        }
+        (kernel, s1, s2) => Err(disagreement(
+            "verdict",
+            &format!("kernel {kernel:?}"),
+            &format!("stage1 {s1:?} stage2 {s2:?}"),
+        )),
+    }
+}
+
+fn disagreement(what: &str, spec: &str, compiled: &str) -> PgError {
+    PgError::InvalidState(format!(
+        "DIFFERENTIAL DISAGREEMENT on {what}: kernel-as-spec said [{spec}], compiled said [{compiled}]"
+    ))
+}
+
+/// First violating invariant in programme order at the given stage, with
+/// its decoded witness - the compiled analogue of the kernel's
+/// first-failure loop.
+async fn first_violation(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sql_set: &CompiledInvariantSet,
+    stage: Stage,
+    asserted: &[ClaimInstance],
+    retracted: &[ClaimInstance],
+) -> Result<Option<(morpholog_core::InvariantName, u32, Vec<WitnessBinding>)>, PgError> {
+    for inv in &sql_set.invariants {
+        let sql = match stage {
+            Stage::Stage1 => inv.violation_sql(None),
+            Stage::Stage2 => match inv.case_filter(asserted, retracted) {
+                CaseFilter::Untouched => continue,
+                CaseFilter::Bounded(filter) => inv.violation_sql(Some(&filter)),
+                CaseFilter::Unbounded => inv.violation_sql(None),
+            },
+        };
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(classify)?;
+        if let Some(row) = row {
+            let witness = decode_witness(inv, &row)?;
+            return Ok(Some((inv.name.clone(), inv.version, witness)));
+        }
+    }
+    Ok(None)
 }
 
 /// A convenience for tests: the delta a staged proposal produced,

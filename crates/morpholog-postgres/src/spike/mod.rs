@@ -8,4 +8,4 @@ mod propose;
 pub use compile::{
     CaseFilter, CompileRefusal, CompiledInvariant, CompiledInvariantSet, compile_invariants,
 };
-pub use propose::{Stage, propose_against_pg_compiled, staged_delta_for};
+pub use propose::{Stage, propose_against_pg_compiled, propose_differential, staged_delta_for};
