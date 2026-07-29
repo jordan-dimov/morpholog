@@ -154,7 +154,10 @@ async fn begin_compensation_claims_failed_row_and_sets_lease() {
         .unwrap()
         .expect("must return Some when a failed uncompensated row exists");
     assert_eq!(claimed.intent_id, intent_id);
-    assert_eq!(claimed.status, "compensation_in_progress");
+    assert_eq!(
+        claimed.status,
+        morpholog_postgres::OutboxStatus::CompensationInProgress
+    );
     assert_eq!(claimed.locked_by, Some("comp_worker".to_string()));
     assert!(claimed.lock_expires_at.is_some());
 }

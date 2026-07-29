@@ -117,7 +117,7 @@ async fn claim_returns_first_pending_row_and_sets_lease() {
         .expect("must return Some when a pending row is available");
 
     assert_eq!(claimed.intent_id, enqueued);
-    assert_eq!(claimed.status, "in_progress");
+    assert_eq!(claimed.status, morpholog_postgres::OutboxStatus::InProgress);
     assert_eq!(claimed.locked_by, Some("worker_a".to_string()));
     let lease_until = claimed
         .lock_expires_at
@@ -222,7 +222,8 @@ async fn claim_reclaims_row_whose_lease_has_expired() {
     assert_eq!(claimed.intent_id, intent_id);
     assert_eq!(claimed.locked_by, Some("worker_a".to_string()));
     assert_eq!(
-        claimed.status, "in_progress",
+        claimed.status,
+        morpholog_postgres::OutboxStatus::InProgress,
         "row remains in_progress; lease just moved to the new worker"
     );
     let lease_until = claimed.lock_expires_at.unwrap();

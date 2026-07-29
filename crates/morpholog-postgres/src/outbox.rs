@@ -18,6 +18,60 @@ use uuid::Uuid;
 pub fn system_actor() -> Subject {
     Subject::from("morpholog-system")
 }
+/// The `morpholog.outbox.status` vocabulary - the same closed set the
+/// schema's CHECK constraint pins. One enum shared by database decoding,
+/// the [`list_outbox_rows`] filter, and the CLI's `--status` flag, so
+/// the vocabulary cannot drift between them. Serialises as the exact
+/// database string (`compensation_in_progress`), keeping every envelope
+/// carrying an [`OutboxRow`] byte-identical to the stringly form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboxStatus {
+    Pending,
+    InProgress,
+    Delivered,
+    Failed,
+    CompensationInProgress,
+    CompensationFailed,
+}
+
+impl OutboxStatus {
+    /// The database string - byte-identical to the CHECK vocabulary and
+    /// to the serialised wire form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutboxStatus::Pending => "pending",
+            OutboxStatus::InProgress => "in_progress",
+            OutboxStatus::Delivered => "delivered",
+            OutboxStatus::Failed => "failed",
+            OutboxStatus::CompensationInProgress => "compensation_in_progress",
+            OutboxStatus::CompensationFailed => "compensation_failed",
+        }
+    }
+}
+
+impl std::str::FromStr for OutboxStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(OutboxStatus::Pending),
+            "in_progress" => Ok(OutboxStatus::InProgress),
+            "delivered" => Ok(OutboxStatus::Delivered),
+            "failed" => Ok(OutboxStatus::Failed),
+            "compensation_in_progress" => Ok(OutboxStatus::CompensationInProgress),
+            "compensation_failed" => Ok(OutboxStatus::CompensationFailed),
+            other => Err(format!("unknown outbox status `{other}`")),
+        }
+    }
+}
+
+impl std::fmt::Display for OutboxStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One row of `morpholog.outbox` decoded into typed runtime values.
 ///
 /// Carries every column on the table. The delivery-state extensions are
@@ -32,7 +86,7 @@ pub struct OutboxRow {
     pub intent_type: String,
     pub arguments: Vec<EvalValue>,
     pub idempotency_key: String,
-    pub status: String,
+    pub status: OutboxStatus,
     pub attempt_count: i32,
     pub enqueued_at: DateTime<Utc>,
     pub last_attempt_at: Option<DateTime<Utc>>,
@@ -96,9 +150,10 @@ pub async fn list_pending_outbox(pool: &PgPool) -> Result<Vec<OutboxRow>, PgErro
 /// custom SQL; used by `morpholog inspect outbox` for non-pending rows.
 pub async fn list_outbox_rows(
     pool: &PgPool,
-    status_filter: Option<&str>,
+    status_filter: Option<OutboxStatus>,
     intent_type_filter: Option<&str>,
 ) -> Result<Vec<OutboxRow>, PgError> {
+    let status_filter = status_filter.map(OutboxStatus::as_str);
     // One statement for every INSPECTION filter shape: a NULL
     // parameter drops its predicate. This surface scans; the
     // pending-specific read above keeps its literal predicate for the
@@ -149,7 +204,9 @@ pub(crate) fn decode_outbox_row(row: OutboxRowRaw) -> Result<OutboxRow, PgError>
         intent_type: row.intent_type,
         arguments: serde_json::from_value(row.arguments)?,
         idempotency_key: row.idempotency_key,
-        status: row.status,
+        // The CHECK constraint makes an unknown string unreachable; a
+        // decode failure here means the schema and this enum drifted.
+        status: row.status.parse().map_err(PgError::InvalidState)?,
         attempt_count: row.attempt_count,
         enqueued_at: row.enqueued_at,
         last_attempt_at: row.last_attempt_at,
@@ -933,5 +990,34 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::OutboxStatus;
+
+    /// The one vocabulary: every variant round-trips through its
+    /// database string, and serde emits exactly that string - so the
+    /// enum, the schema CHECK, and the wire form cannot drift apart
+    /// silently.
+    #[test]
+    fn status_vocabulary_round_trips_and_serialises_as_the_db_string() {
+        let all = [
+            OutboxStatus::Pending,
+            OutboxStatus::InProgress,
+            OutboxStatus::Delivered,
+            OutboxStatus::Failed,
+            OutboxStatus::CompensationInProgress,
+            OutboxStatus::CompensationFailed,
+        ];
+        for status in all {
+            assert_eq!(status.as_str().parse::<OutboxStatus>(), Ok(status));
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::Value::String(status.as_str().to_string())
+            );
+        }
+        assert!("bogus".parse::<OutboxStatus>().is_err());
     }
 }

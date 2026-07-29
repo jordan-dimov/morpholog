@@ -58,11 +58,11 @@ pub use migrations::{
     MigrationRef, MigrationReport, apply_migrations, head_version, migration_status,
 };
 pub use outbox::{
-    CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxUpdate, ProcessOutcome,
-    begin_compensation, claim_pending_outbox_row, complete_compensation, earliest_pending_retry,
-    list_outbox_rows, list_pending_outbox, mark_compensation_failed, mark_outbox_delivered,
-    mark_outbox_failed, mark_outbox_transient_attempt, process_one_outbox_row, record_compensation,
-    release_outbox_claim,
+    CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxStatus, OutboxUpdate,
+    ProcessOutcome, begin_compensation, claim_pending_outbox_row, complete_compensation,
+    earliest_pending_retry, list_outbox_rows, list_pending_outbox, mark_compensation_failed,
+    mark_outbox_delivered, mark_outbox_failed, mark_outbox_transient_attempt,
+    process_one_outbox_row, record_compensation, release_outbox_claim,
 };
 pub use pack::{
     EvidencePack, PackError, PackManifest, RowInclusionProof, SelectiveEvidencePack,

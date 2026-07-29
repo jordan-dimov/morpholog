@@ -1408,7 +1408,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     // Fresh-enqueue rows have `attempt_count = 0` and no
     // `last_attempt_at`; a retried row would have both set.
     for row in &outbox {
-        assert_eq!(row.status, "pending");
+        assert_eq!(row.status, morpholog_postgres::OutboxStatus::Pending);
         assert_eq!(row.attempt_count, 0);
         assert!(row.last_attempt_at.is_none());
         assert!(!row.idempotency_key.is_empty());
