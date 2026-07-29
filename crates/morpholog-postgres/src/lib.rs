@@ -31,8 +31,8 @@ mod provision;
 mod rejections;
 mod score;
 mod signing;
-mod sql_quote;
 pub mod spike;
+mod sql_quote;
 mod txn;
 mod verify;
 

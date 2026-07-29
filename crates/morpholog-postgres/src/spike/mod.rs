@@ -10,4 +10,4 @@ pub use compile::{
     CaseFilter, CompileRefusal, CompiledInvariant, CompiledInvariantSet, compile_invariants,
 };
 pub use indexes::{drop_spike_index_sql, spike_index_sql};
-pub use propose::{Stage, propose_against_pg_compiled, propose_differential, staged_delta_for};
+pub use propose::{Stage, propose_against_pg_compiled, propose_differential};

@@ -58,8 +58,7 @@ mod tests {
 
     #[test]
     fn ledger_index_set_is_pinned() {
-        let set =
-            compile_invariants(&morpholog_examples::double_entry_ledger::program()).unwrap();
+        let set = compile_invariants(&morpholog_examples::double_entry_ledger::program()).unwrap();
         let sql = spike_index_sql(&set);
         assert_eq!(
             sql,

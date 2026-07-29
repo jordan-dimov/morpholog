@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use morpholog_core::{
     ClaimInstance, CompiledProgram, EvalValue, PredicateArgKind, PredicateName, RejectionReason,
-    StagedDelta, Transition, WitnessBinding, propose_stage_delta,
+    StagedDelta, WitnessBinding, propose_stage_delta,
 };
 use sqlx::Row;
 use uuid::Uuid;
@@ -84,6 +84,15 @@ pub async fn propose_against_pg_compiled(
 
     let transition_id = Uuid::now_v7();
     write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+
+    // The violation queries are index point-probes whose PLANNED cost is
+    // inflated by correlated-subquery estimates, tripping the JIT
+    // threshold at scale: ~118ms of JIT compilation for a sub-ms plan
+    // (measured at N=100k). JIT is for analytics; off for this tx only.
+    sqlx::raw_sql("SET LOCAL jit = off")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
 
     for inv in &sql_set.invariants {
         let sql = match stage {
@@ -197,7 +206,8 @@ pub async fn propose_differential(
     let state = load_state(&mut tx, &scope).await?;
 
     // The spec's verdict, in memory, against the same snapshot.
-    let kernel = morpholog_core::propose(transformation, &transition, &state, invariants, definitions)?;
+    let kernel =
+        morpholog_core::propose(transformation, &transition, &state, invariants, definitions)?;
 
     let staged = propose_stage_delta(transformation, &transition, &state, definitions)?;
     let (asserted, retracted, emitted) = match staged {
@@ -205,9 +215,14 @@ pub async fn propose_differential(
             // Body rejections share the kernel's code path; parity is
             // structural but assert it anyway.
             match &kernel {
-                morpholog_core::Outcome::Rejected { reason: k } if k.to_string() == reason.to_string() => {}
+                morpholog_core::Outcome::Rejected { reason: k }
+                    if k.to_string() == reason.to_string() => {}
                 other => {
-                    return Err(disagreement("body rejection", &format!("{other:?}"), &reason.to_string()));
+                    return Err(disagreement(
+                        "body rejection",
+                        &format!("{other:?}"),
+                        &reason.to_string(),
+                    ));
                 }
             }
             return finalise_outcome(
@@ -229,6 +244,15 @@ pub async fn propose_differential(
 
     let transition_id = Uuid::now_v7();
     write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+
+    // The violation queries are index point-probes whose PLANNED cost is
+    // inflated by correlated-subquery estimates, tripping the JIT
+    // threshold at scale: ~118ms of JIT compilation for a sub-ms plan
+    // (measured at N=100k). JIT is for analytics; off for this tx only.
+    sqlx::raw_sql("SET LOCAL jit = off")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
 
     let stage1 = first_violation(&mut tx, sql_set, Stage::Stage1, &asserted, &retracted).await?;
     let stage2 = first_violation(&mut tx, sql_set, Stage::Stage2, &asserted, &retracted).await?;
@@ -352,23 +376,4 @@ async fn first_violation(
         }
     }
     Ok(None)
-}
-
-/// A convenience for tests: the delta a staged proposal produced,
-/// exposed so harnesses can drive `case_filter` directly.
-pub fn staged_delta_for(
-    compiled: &CompiledProgram,
-    proposal: &Proposal,
-    state: &morpholog_core::State,
-) -> Result<Option<(Vec<ClaimInstance>, Vec<ClaimInstance>)>, PgError> {
-    let (transformation, _, definitions) = resolve(compiled, &proposal.transformation_name)?;
-    let transition: Transition = proposal.transition();
-    match propose_stage_delta(transformation, &transition, state, definitions)? {
-        StagedDelta::Rejected { .. } => Ok(None),
-        StagedDelta::Staged {
-            asserted,
-            retracted,
-            ..
-        } => Ok(Some((asserted, retracted))),
-    }
 }

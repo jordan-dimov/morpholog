@@ -78,8 +78,8 @@ pub use ir::{
 };
 pub use lint::{Lint, lints};
 pub use propose::{
-    BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, TraceEntry,
-    StagedDelta, TracedProposal, Transition, WitnessBinding, propose, propose_stage_delta,
+    BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
+    TraceEntry, TracedProposal, Transition, WitnessBinding, propose, propose_stage_delta,
     propose_with_trace,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};

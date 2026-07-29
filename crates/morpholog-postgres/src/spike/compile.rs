@@ -109,7 +109,11 @@ impl CompiledInvariant {
     /// Bound the check to the cases a delta could have changed. Sound by
     /// widening: a binder that cannot constrain a variable widens toward
     /// full stage 1, never narrows past a touched case.
-    pub fn case_filter(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> CaseFilter {
+    pub fn case_filter(
+        &self,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+    ) -> CaseFilter {
         let mut disjuncts: BTreeSet<String> = BTreeSet::new();
         let mut touched = false;
         for claim in asserted.iter().chain(retracted) {
@@ -117,11 +121,12 @@ impl CompiledInvariant {
                 if occ.predicate != claim.predicate {
                     continue;
                 }
-                if !occ
-                    .guards
-                    .iter()
-                    .all(|(pos, lit)| claim.args.get(*pos).is_some_and(|ev| literal_matches(lit, ev)))
-                {
+                if !occ.guards.iter().all(|(pos, lit)| {
+                    claim
+                        .args
+                        .get(*pos)
+                        .is_some_and(|ev| literal_matches(lit, ev))
+                }) {
                     continue;
                 }
                 touched = true;
@@ -180,11 +185,15 @@ pub fn compile_invariants(program: &Program) -> Result<CompiledInvariantSet, Vec
 
 type Env = BTreeMap<Var, ColRef>;
 
+/// (predicate, literal guards, var positions) as collected during the
+/// walk, before restriction to the antecedent's columns.
+type RawOccurrence = (PredicateName, Vec<(usize, Value)>, Vec<(usize, Var)>);
+
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     counter: usize,
     footprint: BTreeSet<PredicateName>,
-    occurrences: Vec<(PredicateName, Vec<(usize, Value)>, Vec<(usize, Var)>)>,
+    occurrences: Vec<RawOccurrence>,
 }
 
 struct Rendered {
@@ -228,12 +237,12 @@ fn compile_invariant(
     };
 
     let (select_from_where, order_limit, case_cols) = match &inv.body {
-        Prop::Implies { left, right } => {
-            compile_denial(left, right, &mut ctx)?
-        }
-        Prop::Forall { binding: _, source, body } => {
-            compile_denial(source, body, &mut ctx)?
-        }
+        Prop::Implies { left, right } => compile_denial(left, right, &mut ctx)?,
+        Prop::Forall {
+            binding: _,
+            source,
+            body,
+        } => compile_denial(source, body, &mut ctx)?,
         // Top-level Not: violated iff the inner matches; its bindings are
         // the natural witness.
         Prop::Not(inner) => {
@@ -379,12 +388,24 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
             .collect::<Vec<_>>()
             .join(",\n       ")
     };
-    let order = r
-        .from
-        .iter()
-        .map(|(alias, _)| format!("{alias}.arguments"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Order by the witness expressions, not the generators' raw
+    // `arguments`: raw-argument order matches the PK, which baits the
+    // planner into an early-stop scan of the whole predicate (measured
+    // plan flip at N=100k); the witness expressions match the spike
+    // indexes instead. Deterministic in everything the row reports.
+    let order = if r.env.is_empty() {
+        r.from
+            .iter()
+            .map(|(alias, _)| format!("{alias}.arguments"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        r.env
+            .values()
+            .map(|col| format!("({})::text", col_sql(col, Repr::Text)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     (select, order)
 }
 
@@ -404,7 +425,9 @@ fn repr_for(kind: &PredicateArgKind) -> Repr {
 }
 
 fn col_sql(col: &ColRef, repr: Repr) -> String {
-    let ColRef { alias, position, .. } = col;
+    let ColRef {
+        alias, position, ..
+    } = col;
     match repr {
         Repr::Text => format!("{alias}.arguments -> {position} ->> 'value'"),
         Repr::Numeric => format!("({alias}.arguments -> {position} ->> 'value')::numeric"),
@@ -516,7 +539,11 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Str
                 env,
             })
         }
-        Prop::Forall { binding: _, source, body } => render_prop(
+        Prop::Forall {
+            binding: _,
+            source,
+            body,
+        } => render_prop(
             &Prop::Implies {
                 left: source.clone(),
                 right: body.clone(),
@@ -526,7 +553,12 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Str
         ),
         Prop::Eq(a, b) => compare_sql(a, b, "=", &env, ctx),
         Prop::Neq(a, b) => compare_sql(a, b, "<>", &env, ctx),
-        Prop::Compare { op, domain, left, right } => {
+        Prop::Compare {
+            op,
+            domain,
+            left,
+            right,
+        } => {
             if *domain != morpholog_core::OrderedDomain::Decimal {
                 return Err(format!("comparison domain outside fragment: {domain:?}"));
             }
@@ -721,7 +753,7 @@ SELECT (t0.arguments -> 0 ->> 'value')::text AS "w_entry"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
   AND NOT ((COALESCE((SELECT sum((t1.arguments -> 2 ->> 'value')::numeric) FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')), 0::numeric)) = (COALESCE((SELECT sum((t2.arguments -> 3 ->> 'value')::numeric) FROM morpholog.claims t2 WHERE t2.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t2.arguments -> 0 ->> 'value')), 0::numeric)))
-ORDER BY t0.arguments
+ORDER BY (t0.arguments -> 0 ->> 'value')::text
 LIMIT 1"#
         );
     }
@@ -741,7 +773,7 @@ WHERE t0.predicate_name = 'Supersedes'
   AND t1.predicate_name = 'Supersedes'
   AND (t0.arguments -> 1 ->> 'value') = (t1.arguments -> 1 ->> 'value')
   AND NOT ((t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
-ORDER BY t0.arguments, t1.arguments
+ORDER BY (t0.arguments -> 0 ->> 'value')::text, (t1.arguments -> 0 ->> 'value')::text, (t0.arguments -> 1 ->> 'value')::text
 LIMIT 1"#
         );
     }
@@ -757,7 +789,7 @@ SELECT (t0.arguments -> 0 ->> 'value')::text AS "w_entry"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
   AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
-ORDER BY t0.arguments
+ORDER BY (t0.arguments -> 0 ->> 'value')::text
 LIMIT 1"#
         );
     }
@@ -767,10 +799,11 @@ LIMIT 1"#
         let set = ledger();
         let asserted = vec![
             claim_instance("JournalEntry", &[subj("e42"), subj("d1"), subj("p1")]),
-            claim_instance("JournalLine", &[subj("e42"), subj("cash"), dec(100), dec(0)],
+            claim_instance(
+                "JournalLine",
+                &[subj("e42"), subj("cash"), dec(100), dec(0)],
             ),
-            claim_instance("JournalLine", &[subj("e42"), subj("rev"), dec(0), dec(100)],
-            ),
+            claim_instance("JournalLine", &[subj("e42"), subj("rev"), dec(0), dec(100)]),
         ];
         let balanced = &set.invariants[1];
         assert_eq!(
@@ -801,7 +834,9 @@ LIMIT 1"#
     #[test]
     fn retraction_also_touches_cases() {
         let set = ledger();
-        let retracted = vec![claim_instance("JournalLine", &[subj("e7"), subj("cash"), dec(5), dec(0)],
+        let retracted = vec![claim_instance(
+            "JournalLine",
+            &[subj("e7"), subj("cash"), dec(5), dec(0)],
         )];
         assert_eq!(
             set.invariants[1].case_filter(&[], &retracted),
@@ -829,7 +864,11 @@ invariant in_fragment:
         let program = morpholog_surface::parse_program(source).expect("parses");
         let refusals = compile_invariants(&program).expect_err("or and pre refuse");
         let refused: Vec<&str> = refusals.iter().map(|r| r.invariant.as_str()).collect();
-        assert_eq!(refused, ["uses_or", "uses_pre"], "whole-run refusal names each offender, in-fragment invariant not blamed");
+        assert_eq!(
+            refused,
+            ["uses_or", "uses_pre"],
+            "whole-run refusal names each offender, in-fragment invariant not blamed"
+        );
         assert!(refusals[0].reason.contains("or"));
         assert!(refusals[1].reason.contains("pre"));
     }

@@ -444,20 +444,15 @@ pub(crate) fn propose_inner(
     definitions: &[Definition],
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
-    let (asserted, retracted, emitted) = match stage_delta_inner(
-        transformation,
-        transition,
-        pre_state,
-        definitions,
-        trace,
-    )? {
-        StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
-        StagedDelta::Staged {
-            asserted,
-            retracted,
-            emitted,
-        } => (asserted, retracted, emitted),
-    };
+    let (asserted, retracted, emitted) =
+        match stage_delta_inner(transformation, transition, pre_state, definitions, trace)? {
+            StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
+            StagedDelta::Staged {
+                asserted,
+                retracted,
+                emitted,
+            } => (asserted, retracted, emitted),
+        };
 
     let candidate = build_candidate_state(pre_state, &asserted, &retracted);
 

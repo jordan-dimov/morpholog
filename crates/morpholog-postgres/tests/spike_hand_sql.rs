@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Spike step 1: hand-written stage-1 violation SQL for the ledger's
 //! `balanced_posted_entry` invariant, diffed against the kernel's verdict
 //! on the same states. The query is the compiler's target output; if this
@@ -48,11 +49,7 @@ where
         .map(|row| row.get::<String, _>("w_entry"))
 }
 
-async fn insert_claim(
-    tx: &mut sqlx::PgConnection,
-    predicate: &str,
-    args: serde_json::Value,
-) {
+async fn insert_claim(tx: &mut sqlx::PgConnection, predicate: &str, args: serde_json::Value) {
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          VALUES ($1, $2, $3)",
@@ -179,8 +176,12 @@ async fn unbalanced_candidate_yields_witness_where_kernel_rejects() {
     // an open transaction (the spike's writes-first shape) and run the
     // violation query against it.
     let mut tx = pool.begin().await.unwrap();
-    insert_claim(&mut tx, "JournalEntry", serde_json::json!([s("e_bad"), s("d1"), s("p1")]))
-        .await;
+    insert_claim(
+        &mut tx,
+        "JournalEntry",
+        serde_json::json!([s("e_bad"), s("d1"), s("p1")]),
+    )
+    .await;
     insert_claim(
         &mut tx,
         "JournalLine",
@@ -217,8 +218,12 @@ async fn scale_insensitive_decimals_agree_with_kernel_equality() {
     // comparison must be too. Hand-stage an entry whose sums agree only
     // numerically.
     let mut tx = pool.begin().await.unwrap();
-    insert_claim(&mut tx, "JournalEntry", serde_json::json!([s("e_s"), s("d1"), s("p1")]))
-        .await;
+    insert_claim(
+        &mut tx,
+        "JournalEntry",
+        serde_json::json!([s("e_s"), s("d1"), s("p1")]),
+    )
+    .await;
     insert_claim(
         &mut tx,
         "JournalLine",

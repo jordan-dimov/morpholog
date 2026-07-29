@@ -93,11 +93,7 @@ fn build_sql_set(program: &morpholog_core::Program) -> Result<CompiledInvariantS
     })
 }
 
-async fn apply_arg_index(
-    pool: &PgPool,
-    mode: ArgIndex,
-    set: &CompiledInvariantSet,
-) -> Result<()> {
+async fn apply_arg_index(pool: &PgPool, mode: ArgIndex, set: &CompiledInvariantSet) -> Result<()> {
     for sql in drop_spike_index_sql(set) {
         sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
             .execute(pool)
@@ -130,25 +126,17 @@ async fn propose_engine(
 ) -> Result<PgProposalOutcome, PgError> {
     match engine {
         Engine::Interpreted => propose_against_pg(pool, compiled, proposal).await,
-        Engine::Stage1 => {
-            propose_against_pg_compiled(
-                pool,
-                compiled,
-                sql_set.expect("sql_set built for compiled engine"),
-                proposal,
-                Stage::Stage1,
-            )
-            .await
-        }
-        Engine::Stage2 => {
-            propose_against_pg_compiled(
-                pool,
-                compiled,
-                sql_set.expect("sql_set built for compiled engine"),
-                proposal,
-                Stage::Stage2,
-            )
-            .await
+        Engine::Stage1 | Engine::Stage2 => {
+            let Some(sql_set) = sql_set else {
+                return Err(PgError::InvalidState(
+                    "compiled engine dispatched without a compiled set".into(),
+                ));
+            };
+            let stage = match engine {
+                Engine::Stage1 => Stage::Stage1,
+                _ => Stage::Stage2,
+            };
+            propose_against_pg_compiled(pool, compiled, sql_set, proposal, stage).await
         }
     }
 }
@@ -907,7 +895,14 @@ async fn one_op(
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_engine(pool, compiled, sql_set, &Proposal::gateway(transition), engine).await
+        match propose_engine(
+            pool,
+            compiled,
+            sql_set,
+            &Proposal::gateway(transition),
+            engine,
+        )
+        .await
         {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;

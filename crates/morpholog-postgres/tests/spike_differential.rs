@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Spike step 7: differential harness v1. Every whole-programme
 //! in-fragment example is swept with eval_totality-style argument
 //! vectors over a depth-2 governed frontier held in PG; every probe runs
@@ -218,9 +219,7 @@ async fn sweep(program: Program) {
                     let outcome = probe(&pool, &compiled, &sql_set, name, case).await;
                     probes += 1;
                     let is_baseline = i == 0;
-                    if is_baseline
-                        && matches!(outcome, Some(PgProposalOutcome::Committed { .. }))
-                    {
+                    if is_baseline && matches!(outcome, Some(PgProposalOutcome::Committed { .. })) {
                         let mut extended = chain.clone();
                         extended.push((name.clone(), case.args.clone()));
                         next.push(extended);
@@ -235,7 +234,8 @@ async fn sweep(program: Program) {
     }
     println!(
         "{}: {} differential probes, zero disagreements",
-        compiled.program().name, probes
+        compiled.program().name,
+        probes
     );
 }
 

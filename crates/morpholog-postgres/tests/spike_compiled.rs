@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Spike step 5 smoke: the compiled propose path commits and rejects on
 //! the ledger exactly like the interpreted path, at both stages.
 
@@ -18,9 +19,15 @@ async fn propose_compiled(
     let compiled = common::compiled(double_entry_ledger::program());
     let sql_set = compile_invariants(compiled.program()).expect("ledger compiles");
     let transition = morpholog_test_support::test_transition(transformation, args);
-    propose_against_pg_compiled(pool, &compiled, &sql_set, &common::attested(&transition), stage)
-        .await
-        .expect("no operational error")
+    propose_against_pg_compiled(
+        pool,
+        &compiled,
+        &sql_set,
+        &common::attested(&transition),
+        stage,
+    )
+    .await
+    .expect("no operational error")
 }
 
 fn balanced_args(id: &str) -> Vec<EvalValue> {
@@ -67,13 +74,12 @@ async fn compiled_path_commits_balanced_entries_at_both_stages() {
             panic!("balanced entry must commit at {stage:?}");
         };
         // The audit row exists inside the same commit.
-        let audited: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM morpholog.audit WHERE transition_id = $1",
-        )
-        .bind(transition_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let audited: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM morpholog.audit WHERE transition_id = $1")
+                .bind(transition_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(audited, 1);
     }
     // Two entries x three claims.
@@ -139,7 +145,10 @@ async fn body_gate_rejection_flows_identically() {
     let PgProposalOutcome::Rejected { reason, .. } = outcome else {
         panic!("re-close must reject at the gate");
     };
-    assert!(reason.contains("require"), "gate rejection, not invariant: {reason}");
+    assert!(
+        reason.contains("require"),
+        "gate rejection, not invariant: {reason}"
+    );
 }
 
 /// The case-bound divergence, pinned in its ONE permitted direction.
@@ -154,8 +163,14 @@ async fn dirty_history_diverges_only_in_the_pinned_direction() {
 
     // One unbalanced legacy entry, bypassing the kernel.
     for (pred, args) in [
-        ("JournalEntry", serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"d0"}, {"type":"subject","value":"p0"}])),
-        ("JournalLine", serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"cash"}, {"type":"decimal","value":"100"}, {"type":"decimal","value":"0"}])),
+        (
+            "JournalEntry",
+            serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"d0"}, {"type":"subject","value":"p0"}]),
+        ),
+        (
+            "JournalLine",
+            serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"cash"}, {"type":"decimal","value":"100"}, {"type":"decimal","value":"0"}]),
+        ),
     ] {
         sqlx::query("INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ($1, $2, $3)")
             .bind(pred).bind(args).bind(uuid::Uuid::nil())

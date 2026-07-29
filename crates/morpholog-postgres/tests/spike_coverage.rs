@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Spike step 6: compile-coverage census over every worked example.
 //! Pure (no PG). The census is the coverage number the verdict quotes;
 //! the hard assertion is that the target programme (03) is 100%
