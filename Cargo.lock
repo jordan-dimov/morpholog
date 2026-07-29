@@ -1209,6 +1209,7 @@ dependencies = [
  "clap",
  "jiff",
  "morpholog-core",
+ "morpholog-examples",
  "morpholog-postgres",
  "morpholog-surface",
  "rust_decimal",
