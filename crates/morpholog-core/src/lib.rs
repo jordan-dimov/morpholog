@@ -79,7 +79,8 @@ pub use ir::{
 pub use lint::{Lint, lints};
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, TraceEntry,
-    TracedProposal, Transition, WitnessBinding, propose, propose_with_trace,
+    StagedDelta, TracedProposal, Transition, WitnessBinding, propose, propose_stage_delta,
+    propose_with_trace,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{
@@ -2049,6 +2050,68 @@ mod tests {
             panic!("expected Completed");
         };
         assert_eq!(outcome_a, outcome_b);
+    }
+
+    /// SPIKE parity: `propose_stage_delta` produces exactly the delta
+    /// `propose` accepts with, and the same Require rejection when the
+    /// body gates.
+    #[test]
+    fn propose_stage_delta_matches_propose_on_delta_and_body_rejection() {
+        use ir_builder::*;
+        let state = State::from_claims(vec![ClaimInstance {
+            predicate: "Policy".into(),
+            args: vec![
+                EvalValue::Subject("p1".into()),
+                EvalValue::Decimal(Decimal::new(100, 0)),
+            ],
+        }]);
+        let t = transformation(
+            "lookup",
+            vec![],
+            vec![
+                bind_one(claim("Policy", vec![var("pid"), var("limit")])),
+                assert_("Echo", vec![var("pid"), var("limit")]),
+            ],
+        );
+        let transition = trace_transition(&t, vec![]);
+        let Outcome::Accepted {
+            asserted_claims,
+            retracted_claims,
+            emitted_intents,
+            ..
+        } = propose(&t, &transition, &state, &[], &[]).unwrap()
+        else {
+            panic!("expected Accepted");
+        };
+        let StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } = propose_stage_delta(&t, &transition, &state, &[]).unwrap()
+        else {
+            panic!("expected Staged");
+        };
+        assert_eq!(asserted, asserted_claims);
+        assert_eq!(retracted, retracted_claims);
+        assert_eq!(emitted, emitted_intents);
+
+        let gated = transformation(
+            "gated",
+            vec![],
+            vec![require(claim("Missing", vec![var("x")]))],
+        );
+        let transition = trace_transition(&gated, vec![]);
+        let Outcome::Rejected { reason: kernel } =
+            propose(&gated, &transition, &state, &[], &[]).unwrap()
+        else {
+            panic!("expected Rejected");
+        };
+        let StagedDelta::Rejected { reason: staged } =
+            propose_stage_delta(&gated, &transition, &state, &[]).unwrap()
+        else {
+            panic!("expected Rejected");
+        };
+        assert_eq!(format!("{kernel}"), format!("{staged}"));
     }
 
     // ============================================================

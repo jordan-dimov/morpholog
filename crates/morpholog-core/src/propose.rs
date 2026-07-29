@@ -398,6 +398,41 @@ pub fn propose_with_trace(
     }
 }
 
+/// SPIKE (branch-only): the staged delta of a transformation body,
+/// before any candidate state or invariant check exists. The compiled
+/// propose path writes this delta into the open transaction and checks
+/// invariants in SQL instead.
+#[derive(Debug)]
+pub enum StagedDelta {
+    Rejected {
+        reason: RejectionReason,
+    },
+    Staged {
+        asserted: Vec<ClaimInstance>,
+        retracted: Vec<ClaimInstance>,
+        emitted: Vec<IntentInstance>,
+    },
+}
+
+/// SPIKE (branch-only): execute only the transformation body against the
+/// pre-state - the same statement loop `propose` runs, stopping before
+/// `build_candidate_state`. Require/BindNone rejections surface exactly
+/// as they do on the interpreted path.
+pub fn propose_stage_delta(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    definitions: &[Definition],
+) -> Result<StagedDelta, EvalError> {
+    stage_delta_inner(
+        transformation,
+        transition,
+        pre_state,
+        definitions,
+        &mut TraceSink::Off,
+    )
+}
+
 /// Shared executor for `propose` and `propose_with_trace`. The
 /// `trace` sink is `Off` for the former and `On(&mut Vec)` for the
 /// latter; every other line of execution is identical.
@@ -409,6 +444,64 @@ pub(crate) fn propose_inner(
     definitions: &[Definition],
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
+    let (asserted, retracted, emitted) = match stage_delta_inner(
+        transformation,
+        transition,
+        pre_state,
+        definitions,
+        trace,
+    )? {
+        StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
+
+    let candidate = build_candidate_state(pre_state, &asserted, &retracted);
+
+    for inv in invariants {
+        // Pass both pre_state and candidate. Invariants that contain
+        // `Prop::Pre` flip into pre-state lookup for the wrapped
+        // subtree; invariants that don't are unaffected.
+        let held = eval_invariant(inv, &candidate, Some(pre_state), definitions)?;
+        if trace.is_on() {
+            trace.push(TraceEntry::InvariantCheck {
+                name: inv.name.clone(),
+                expression: format::format_prop_inline(&inv.body),
+                held,
+            });
+        }
+        if !held {
+            // Diagnosed only now: the accepting path never pays for it.
+            let witness =
+                crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?;
+            return Ok(Outcome::Rejected {
+                reason: RejectionReason::Invariant {
+                    name: inv.name.clone(),
+                    version: inv.version,
+                    witness,
+                },
+            });
+        }
+    }
+
+    Ok(Outcome::Accepted {
+        asserted_claims: asserted,
+        retracted_claims: retracted,
+        emitted_intents: emitted,
+        candidate_state: candidate,
+    })
+}
+
+fn stage_delta_inner(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    definitions: &[Definition],
+    trace: &mut TraceSink<'_>,
+) -> Result<StagedDelta, EvalError> {
     if transformation.name != transition.transformation_name {
         return Err(EvalError::TypeMismatch(format!(
             "transition names transformation `{}` but Transformation passed is `{}`",
@@ -452,43 +545,14 @@ pub(crate) fn propose_inner(
             trace,
         )? {
             StmtOutcome::Continue => {}
-            StmtOutcome::Rejected(reason) => return Ok(Outcome::Rejected { reason }),
+            StmtOutcome::Rejected(reason) => return Ok(StagedDelta::Rejected { reason }),
         }
     }
 
-    let candidate = build_candidate_state(pre_state, &asserted, &retracted);
-
-    for inv in invariants {
-        // Pass both pre_state and candidate. Invariants that contain
-        // `Prop::Pre` flip into pre-state lookup for the wrapped
-        // subtree; invariants that don't are unaffected.
-        let held = eval_invariant(inv, &candidate, Some(pre_state), definitions)?;
-        if trace.is_on() {
-            trace.push(TraceEntry::InvariantCheck {
-                name: inv.name.clone(),
-                expression: format::format_prop_inline(&inv.body),
-                held,
-            });
-        }
-        if !held {
-            // Diagnosed only now: the accepting path never pays for it.
-            let witness =
-                crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?;
-            return Ok(Outcome::Rejected {
-                reason: RejectionReason::Invariant {
-                    name: inv.name.clone(),
-                    version: inv.version,
-                    witness,
-                },
-            });
-        }
-    }
-
-    Ok(Outcome::Accepted {
-        asserted_claims: asserted,
-        retracted_claims: retracted,
-        emitted_intents: emitted,
-        candidate_state: candidate,
+    Ok(StagedDelta::Staged {
+        asserted,
+        retracted,
+        emitted,
     })
 }
 
