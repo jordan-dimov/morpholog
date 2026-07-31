@@ -358,6 +358,20 @@ pub enum ValidationError {
         declaration: String,
         argument: String,
     },
+    /// A calendar span reached a place only governed values may
+    /// occupy: a claim or intent argument (even against an `Any`
+    /// declaration), a derived output value, or a transformation
+    /// parameter (which a transition argument must supply, and no
+    /// transition argument may carry a span). The runtime refuses
+    /// each of these too; this surfaces the mistake at `check` time
+    /// instead of as an operational proposal error.
+    #[error(
+        "a calendar span cannot leave expression position: {place} in {context}; a span shifts a date inside arithmetic and is never itself a governed value"
+    )]
+    CalendarSpanEscapesExpression {
+        place: String,
+        context: ValidationContext,
+    },
     /// An equality (`==` or `!=`) had two operands of distinct,
     /// incompatible kinds. Symmetric by nature: there is no
     /// "expected" side - both kinds are equally constrained by the

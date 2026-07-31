@@ -1144,6 +1144,82 @@ transformation t(span):
 }
 
 #[test]
+fn a_span_cannot_escape_through_an_any_slot_at_check_time() {
+    // The runtime refuses this too, but an authoring mistake known
+    // from the programme must not survive `check` and become an
+    // operational proposal error. `Any` is kind-compatible with
+    // everything, so without the dedicated refusal this validated.
+    let source = "program leak
+predicate Holds(payload: Any)
+transformation leak(l):
+    let sp = span(P3M)
+    admit Holds(sp)
+";
+    let program = parse_program(source).expect("parses");
+    let errors = program.validate().expect_err("the span must not escape");
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("cannot leave expression position")),
+        "got: {errors:?}"
+    );
+}
+
+#[test]
+fn a_span_cannot_escape_through_an_emit_or_a_derived_value() {
+    let emit_source = "program leak_emit
+intent Notify(payload: Any)
+predicate P(x: Subject)
+transformation leak(l):
+    let sp = span(P45D)
+    admit P(l)
+    emit Notify(sp)
+";
+    let derived_source = "program leak_derived
+predicate Period(p: Subject, ends_on: Date)
+predicate Out(p: Subject, v: Any)
+derived Out(p):
+    over Period(p, _)
+    value v = span(P3M)
+";
+    for source in [emit_source, derived_source] {
+        let program = parse_program(source).expect("parses");
+        let errors = program.validate().expect_err("the span must not escape");
+        assert!(
+            errors
+                .iter()
+                .any(|e| format!("{e}").contains("cannot leave expression position")),
+            "got: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn a_parameter_inferred_as_a_span_has_no_lawful_call_and_is_refused() {
+    // `sp` is only ever used as a span operand, so inference lands it
+    // on CalendarSpan - but no transition argument may carry one, so
+    // every invocation would be refused. That contradiction is the
+    // author's to fix, at check time. (The known side arrives via
+    // `bind`: a `require` walks a cloned scope, so kinds observed
+    // there do not export - matching the runtime's no-export rule.)
+    let source = "program impossible
+predicate SomeDate(d: Date)
+transformation shift(d, sp):
+    bind SomeDate(d)
+    let moved = d + sp
+    admit SomeDate(moved)
+";
+    let program = parse_program(source).expect("parses");
+    let errors = program.validate().expect_err("the parameter is unfillable");
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("parameter `sp`")),
+        "got: {errors:?}"
+    );
+}
+
+#[test]
 fn a_time_unit_span_literal_names_duration_as_the_fix() {
     let source = "program bad_span
 predicate P(d: Date)

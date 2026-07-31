@@ -411,6 +411,27 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             };
             cx.walk_stmt(stmt, &mut scope);
         }
+
+        // A parameter whose inference lands on CalendarSpan (the body
+        // uses it as a span operand) has no lawful argument vector:
+        // spans are expression-only and no transition argument may
+        // carry one. Checked after the walk so a refinement made by a
+        // later statement still counts.
+        for param in &transformation.parameters {
+            if scope.kinds.lookup(param) == InferredKind::Known(PredicateArgKind::CalendarSpan) {
+                cx.errors
+                    .push(ValidationError::CalendarSpanEscapesExpression {
+                        place: format!(
+                            "parameter `{param}` (no transition argument may carry a span; \
+                             write the span as a literal in the body)"
+                        ),
+                        context: ValidationContext::Transformation {
+                            name: transformation.name.to_string(),
+                            statement: None,
+                        },
+                    });
+            }
+        }
     }
 
     for derived in &program.derived_claims {
@@ -449,6 +470,18 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             .iter()
             .map(|v| cx.infer_value(&v.expr, &mut scope))
             .collect();
+        // A derived output is a governed read-side value; a span is
+        // not one, whatever the output declaration says.
+        for (i, kind) in value_kinds.iter().enumerate() {
+            if *kind == InferredKind::Known(PredicateArgKind::CalendarSpan) {
+                let context = cx.context.clone();
+                cx.errors
+                    .push(ValidationError::CalendarSpanEscapesExpression {
+                        place: format!("derived value #{i} of `{}`", derived.predicate),
+                        context,
+                    });
+            }
+        }
 
         // Output args check: the runtime emits claims of the form
         // `predicate(key_0, ..., key_K-1, value_0, ..., value_V-1)`.
@@ -1414,6 +1447,21 @@ impl CheckCtx<'_> {
         mode: RefMode,
         scope: &mut Scope,
     ) {
+        // Calendar spans are expression-only, and `Any` would otherwise
+        // let one through: a span literal or a span-kinded variable in
+        // any claim or intent argument position is refused here, so the
+        // mistake surfaces at check time rather than as the runtime's
+        // own refusal on every proposal.
+        if matches!(resolved_term_kind(arg, &scope.kinds), InferredKind::Known(k) if k == PredicateArgKind::CalendarSpan)
+        {
+            let context = self.context.clone();
+            self.errors
+                .push(ValidationError::CalendarSpanEscapesExpression {
+                    place: format!("argument #{position} of {vocabulary} `{name}`"),
+                    context,
+                });
+            return;
+        }
         let actual = term_kind(arg);
         if let Term::Var(var_name) = arg {
             match mode {

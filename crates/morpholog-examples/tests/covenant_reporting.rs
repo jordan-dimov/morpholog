@@ -173,6 +173,44 @@ fn a_certificate_on_day_forty_five_earns_timely_standing() {
 }
 
 #[test]
+fn delivery_on_the_period_end_itself_is_timely() {
+    // The window's lower edge is inclusive: the period ends, the
+    // certificate lands the same day.
+    let state = opened();
+    let state = ex().must_accept(
+        &covenant_reporting::submit_certificate(),
+        vec![subj("fac"), subj("p1"), date("2026-11-30")],
+        state,
+    );
+    ex().must_accept(
+        &covenant_reporting::accept_timely(),
+        vec![subj("fac"), subj("p1")],
+        state,
+    );
+}
+
+#[test]
+fn delivery_before_the_period_ends_is_refused_the_standing() {
+    // A certificate cannot attest a period still running: recording
+    // the document is lawful, the standing is not.
+    let state = opened();
+    let state = ex().must_accept(
+        &covenant_reporting::submit_certificate(),
+        vec![subj("fac"), subj("p1"), date("2026-11-29")],
+        state,
+    );
+    let reason = ex().must_reject(
+        &covenant_reporting::accept_timely(),
+        vec![subj("fac"), subj("p1")],
+        &state,
+    );
+    assert!(
+        refused_at_gate(&reason, "delivery_landed_inside_the_window"),
+        "{reason:?}"
+    );
+}
+
+#[test]
 fn day_forty_six_is_refused_the_standing() {
     let state = opened();
     let state = ex().must_accept(

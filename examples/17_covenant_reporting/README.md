@@ -36,7 +36,7 @@ caller-stated and refused unless exact.
 |---|---|
 | `periods_follow_three_month_anniversaries` | Any next period not exactly `prior + span(P3M)` - including the date the calendar's own clamping forbids (30 Nov + three months is 28 Feb, and two hops drift to 28 May where one six-month shift keeps the 30th; the .morph teaches why). |
 | `follows_links_periods_of_one_facility` | A schedule link across facilities, or to periods the record does not hold. |
-| `timely_certificates_landed_inside_the_window` (with its totality companion) | Timely standing for a certificate past day 45 - or standing with no certificate at all. |
+| `timely_certificates_landed_inside_the_window` (with its totality companion) | Timely standing outside either edge of the window: a certificate past day 45, one dated before the period even ended, or standing with no certificate at all. |
 | `overdue_notices_state_the_records_own_lateness` | A notice whose `days_late` differs by even one day from `as_of - deadline`. |
 | `overdue_notices_follow_the_deadline`, `overdue_notices_precede_any_delivery` | A notice before the deadline has passed, and - in either proposal order - a notice over a delivered certificate or a certificate backdated under a standing notice. |
 
@@ -61,6 +61,9 @@ not an inadmissible document - governing it is a standing question,
 not an admission question), business-day conventions and holiday
 calendars (data that changes over time, so they enter as claims with
 a named authority when an example forces them), fixed quarter-end
-schedules (state the dates; the same rule pins them), and correcting
-a wrongly issued notice (supersession, as in the verified-revenue
-example).
+schedules (a different law: the anniversary rule cannot pin
+31 March / 30 June / 30 September / 31 December, because
+30 September plus three months is 30 December - such an agreement
+admits its named dates as schedule claims and replaces the
+anniversary rule), and correcting a wrongly issued notice
+(supersession, as in the verified-revenue example).

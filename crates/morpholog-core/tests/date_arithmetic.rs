@@ -134,6 +134,44 @@ fn date_differences_are_signed_actual_days() {
     }
 }
 
+fn rejects(prop: Prop) {
+    let t = transformation("probe", params(&[]), vec![require(prop)]);
+    let outcome = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
+        .expect("evaluates cleanly");
+    assert!(
+        matches!(outcome, Outcome::Rejected { .. }),
+        "expected the proposition to be false: {outcome:?}"
+    );
+}
+
+#[test]
+fn span_equality_compares_normalised_values() {
+    // Spans have no ordered comparison, but equality is coherent over
+    // the normalised (months, days) pair: a year IS twelve months.
+    // Days never normalise into months, so P1M and P30D stay distinct.
+    holds(eq(term(span("P1Y")), term(span("P12M"))));
+    holds(eq(term(span("P1W")), term(span("P7D"))));
+    rejects(eq(term(span("P1M")), term(span("P30D"))));
+}
+
+#[test]
+fn one_span_can_cross_the_whole_calendar() {
+    // The grammar bounds a component only by its representation; the
+    // range check is the evaluator's, against the date the span is
+    // applied to. Ten thousand and one years from the calendar's
+    // floor is a lawful shift.
+    holds(eq(
+        shifted("-009999-01-01", "P10001Y"),
+        term(date("0002-01-01")),
+    ));
+    // The same vast span applied where it cannot land refuses by
+    // name, per date - the span itself was never the problem.
+    refuses(
+        eq(shifted("2026-01-01", "P500000M"), term(date("2026-01-01"))),
+        &["leaves the calendar"],
+    );
+}
+
 #[test]
 fn shifts_off_the_calendar_are_out_of_range_by_name() {
     // The calendar is jiff's proleptic Gregorian range (year -9999 to

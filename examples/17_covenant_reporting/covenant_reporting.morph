@@ -96,8 +96,12 @@ invariant follows_links_periods_of_one_facility:
 -- from 30 November reach 28 May, while one six-month shift reaches
 -- 30 May. Neither is wrong - that is what the words "three months
 -- after the previous date" do around month ends. An agreement that
--- wants fixed quarter-ends instead simply states those dates, and
--- this rule would pin them the same way.
+-- wants fixed quarter-ends (31 March, 30 June, 30 September,
+-- 31 December) needs different law entirely - this rule cannot pin
+-- that sequence, because 30 September plus three months is
+-- 30 December, not the 31st. Such an agreement would admit its
+-- named dates as contractual schedule claims and replace this
+-- anniversary rule with one governing that schedule.
 invariant periods_follow_three_month_anniversaries:
     Follows(next, prior) and TestPeriod(f, next, next_ends) and TestPeriod(f, prior, prior_ends)
     implies next_ends = prior_ends + span(P3M)
@@ -115,13 +119,15 @@ invariant certificates_name_their_period:
 invariant timely_standing_names_a_certificate:
     Timely(p) implies (exists f: Certificate(f, p, _))
 
--- The window itself: standing holds only if delivery came on or
--- before the 45th day after the period end. The deadline is not a
--- stored date anyone maintains - it is computed from the period's
--- own end, each time, inside the rule.
+-- The window itself, and it has two edges. A certificate cannot
+-- attest a period that has not finished, so delivery comes no
+-- earlier than the period end; and it earns standing only through
+-- the 45th day after. The deadline is not a stored date anyone
+-- maintains - it is computed from the period's own end, each time,
+-- inside the rule.
 invariant timely_certificates_landed_inside_the_window:
     Timely(p) and Certificate(f, p, delivered_on) and TestPeriod(f, p, ends_on)
-    implies delivered_on on_or_before ends_on + span(P45D)
+    implies ends_on on_or_before delivered_on on_or_before ends_on + span(P45D)
 
 -- ------------------------------------------------------------
 -- Overdue notices
@@ -183,13 +189,14 @@ transformation submit_certificate(facility, period, delivered_on):
     admit Certificate(facility, period, delivered_on)
 
 -- Granting standing looks up the period and the certificate the
--- record already holds and gates on the window. The invariant
--- above re-states the same rule over the committed record, so the
--- standing stays honest even against later proposals.
+-- record already holds and gates on both edges of the window. The
+-- invariant above re-states the same rule over the committed
+-- record, so the standing stays honest even against later
+-- proposals.
 transformation accept_timely(facility, period):
     bind TestPeriod(facility, period, ends_on)
     bind Certificate(facility, period, delivered_on)
-    require delivery_landed_inside_the_window: delivered_on on_or_before ends_on + span(P45D)
+    require delivery_landed_inside_the_window: ends_on on_or_before delivered_on on_or_before ends_on + span(P45D)
     admit Timely(period)
 
 -- Declaring a period overdue: the deadline must have passed, and

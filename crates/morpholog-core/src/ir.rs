@@ -665,9 +665,11 @@ pub enum Value {
     /// string; parsing via [`crate::calendar::parse_calendar_span`] is
     /// the evaluator's concern. An arithmetic operand only - it shifts
     /// a `Date` and is refused everywhere else: not declarable as an
-    /// argument kind, not admissible into a claim or intent, not
-    /// comparable, not summable. Kept apart from [`Value::Duration`]
-    /// because a month has no exact length until it lands on a date.
+    /// argument kind, not admissible into a claim or intent, never
+    /// ordered or summed. Equality over the normalised value is
+    /// lawful (`span(P1Y) = span(P12M)` holds). Kept apart from
+    /// [`Value::Duration`] because a month has no exact length until
+    /// it lands on a date.
     CalendarSpan(String),
     /// A unit-tagged exact decimal quantity (`25000 USD`, `0 t`). The
     /// amount is stored as its exact source string, like

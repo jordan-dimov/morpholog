@@ -36,11 +36,12 @@ impl std::fmt::Display for CalendarSpan {
     }
 }
 
-/// Any month count that can shift one in-range civil date to another
-/// fits well inside these bounds; a larger component could only ever
-/// overflow, so it is refused at parse time and evaluation stays total.
-const MAX_MONTHS: i64 = 120_000;
-const MAX_DAYS: i64 = 3_700_000;
+/// The only parse-time bound is the representation's own: each
+/// normalised component must fit an `i32`. A span is not intrinsically
+/// out of range - whether a shift leaves the calendar depends on the
+/// date it is applied to, and that is the evaluator's
+/// `ArithOutOfRange`, not the grammar's business.
+const MAX_COMPONENT: i64 = i32::MAX as i64;
 
 /// Parse the calendar-span grammar. Uppercase only, unsigned whole
 /// numbers only, at least one component, no time part (even
@@ -104,7 +105,7 @@ pub fn parse_calendar_span(s: &str) -> Result<CalendarSpan, String> {
     if saw_week && component_count > 1 {
         return Err("weeks stand alone (PnW) and do not combine with other units".to_string());
     }
-    if months > MAX_MONTHS || days > MAX_DAYS {
+    if months > MAX_COMPONENT || days > MAX_COMPONENT {
         return Err("calendar span component out of range".to_string());
     }
     #[allow(clippy::cast_possible_truncation)] // bounded by the checks above
@@ -133,6 +134,11 @@ mod tests {
             ("P2W", span(0, 14)),
             ("P0D", span(0, 0)),
             ("P03M", span(3, 0)),
+            // Huge but representable: whether a shift this size leaves
+            // the calendar is decided against the date it is applied
+            // to, not by the grammar.
+            ("P500000M", span(500_000, 0)),
+            ("P10001Y", span(120_012, 0)),
         ] {
             assert_eq!(parse_calendar_span(text).unwrap(), expected, "{text}");
         }
@@ -154,8 +160,7 @@ mod tests {
             ("P3M1Y", "P3M or P45D"),
             ("P1M1M", "P3M or P45D"),
             ("P99999999999999999999M", "out of range"),
-            ("P500000M", "out of range"),
-            ("P4000000D", "out of range"),
+            ("P3000000000D", "out of range"),
             ("3M", "P3M or P45D"),
             ("", "P3M or P45D"),
         ] {
