@@ -254,7 +254,7 @@ fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
 /// args) gets an error receipt and processing continues; rejections
 /// are lawful outcomes. The exit code is zero whenever every row was
 /// processed; non-zero is reserved for operational failure (unreadable
-/// input, a broken connection - see [`BatchRowError`]). `row` is the
+/// input, a broken connection - see [`RowError`]). `row` is the
 /// 1-based line number in the input; blank lines are skipped without
 /// receipts.
 async fn run_batch(

@@ -162,14 +162,11 @@ async fn handle_line(
             anyhow!("a request is a JSON object with an `op` field"),
         ));
     };
-    let op = match body.remove("op") {
-        Some(serde_json::Value::String(op)) => op,
-        _ => {
-            return Err(SessionFailure::request(
-                SessionErrorCode::InvalidRequest,
-                anyhow!("a request names its operation in a string `op` field"),
-            ));
-        }
+    let Some(serde_json::Value::String(op)) = body.remove("op") else {
+        return Err(SessionFailure::request(
+            SessionErrorCode::InvalidRequest,
+            anyhow!("a request names its operation in a string `op` field"),
+        ));
     };
     match op.as_str() {
         "propose" => handle_propose(args, compiled, pool, value, row).await,
