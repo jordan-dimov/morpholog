@@ -22,7 +22,10 @@ use crate::{AsOf, Inspect};
 /// Resolve an `--as-of` argument to a concrete transition id,
 /// translating the timestamp form through the audit log. `None` stays
 /// `None`: it means "current state", not a coordinate.
-async fn resolve_as_of(pool: &PgPool, as_of: Option<AsOf>) -> anyhow::Result<Option<Uuid>> {
+pub(crate) async fn resolve_as_of(
+    pool: &PgPool,
+    as_of: Option<AsOf>,
+) -> anyhow::Result<Option<Uuid>> {
     Ok(match as_of {
         None => None,
         Some(AsOf::Transition(tid)) => Some(tid),
@@ -31,6 +34,79 @@ async fn resolve_as_of(pool: &PgPool, as_of: Option<AsOf>) -> anyhow::Result<Opt
                 .await
                 .context("resolving --as-of timestamp")?,
         ),
+    })
+}
+
+/// The claims read, shared by `inspect claims` and the session. Four
+/// paths, one rule: `as_of` picks current-vs-replay, `predicates`
+/// picks full-vs-scoped. The scoped replay filters during
+/// reconstruction; the current filtered read compares in the database
+/// (transfer and decoding saved, not scanning); the replayed paths
+/// filter after reconstruction, because there is no table to push the
+/// comparison into.
+pub(crate) async fn claims_rows(
+    pool: &PgPool,
+    as_of: Option<Uuid>,
+    predicates: &[String],
+    filters: &[FieldFilter],
+    declared_arity: i32,
+) -> anyhow::Result<Vec<ClaimInstance>> {
+    let claims = match (as_of, predicates) {
+        (Some(tid), []) => list_claims_at(pool, tid)
+            .await
+            .context("list_claims_at failed")?,
+        (Some(tid), preds) => list_claims_at_for_predicates(pool, tid, preds)
+            .await
+            .context("list_claims_at_for_predicates failed")?,
+        (None, []) => list_claims(pool).await.context("list_claims failed")?,
+        (None, [predicate]) if !filters.is_empty() => {
+            // Arity comes from the declaration `--where` already
+            // required, so a row that disagrees with it comes back and
+            // the decoder refuses it - the filter must not hide skew
+            // the unfiltered read would catch.
+            list_claims_where(pool, predicate, &pg_filters(filters)?, declared_arity)
+                .await
+                .context("list_claims_where failed")?
+        }
+        (None, preds) => list_claims_for_predicates(pool, preds)
+            .await
+            .context("list_claims_for_predicates failed")?,
+    };
+    Ok(if filters.is_empty() || as_of.is_none() {
+        claims
+    } else {
+        claims
+            .into_iter()
+            .filter(|c| crate::commands::filter::matches(&c.args, filters))
+            .collect()
+    })
+}
+
+/// The derived read, shared by `inspect derived` and the session:
+/// enumerate the view against current or replayed state, then filter
+/// here rather than in SQL, because the rows were computed from
+/// claims, not stored.
+pub(crate) async fn derived_rows(
+    pool: &PgPool,
+    definitions: &[morpholog_core::Definition],
+    derived: &morpholog_core::DerivedClaim,
+    as_of: Option<Uuid>,
+    filters: &[FieldFilter],
+) -> anyhow::Result<Vec<ClaimInstance>> {
+    let rows = match as_of {
+        Some(tid) => list_derived_at(pool, derived, definitions, tid)
+            .await
+            .context("list_derived_at failed")?,
+        None => list_derived(pool, derived, definitions)
+            .await
+            .context("list_derived failed")?,
+    };
+    Ok(if filters.is_empty() {
+        rows
+    } else {
+        rows.into_iter()
+            .filter(|r| crate::commands::filter::matches(&r.args, filters))
+            .collect()
     })
 }
 
@@ -107,48 +183,14 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
 
             let pool = connect(&args.db.database_url).await?;
             let as_of = resolve_as_of(&pool, args.as_of).await?;
-            // Four paths, one rule: `--as-of` picks current-vs-replay,
-            // `--predicate` picks full-vs-scoped. The scoped replay
-            // filters during reconstruction, not after, so a targeted
-            // historical read never materialises the full past state.
-            let claims = match (as_of, args.predicate.as_slice()) {
-                (Some(tid), []) => list_claims_at(&pool, tid)
-                    .await
-                    .context("list_claims_at failed")?,
-                (Some(tid), preds) => list_claims_at_for_predicates(&pool, tid, preds)
-                    .await
-                    .context("list_claims_at_for_predicates failed")?,
-                (None, []) => list_claims(&pool).await.context("list_claims failed")?,
-                // The comparison happens in the database, so rows that
-                // cannot match never cross the wire. It is transfer and
-                // decoding this saves, not scanning: no index covers
-                // argument positions, so the scan is still the
-                // predicate's.
-                (None, [predicate]) if !filters.is_empty() => {
-                    // Arity comes from the declaration `--where` already
-                    // required, so a row that disagrees with it comes
-                    // back and the decoder refuses it - the filter must
-                    // not hide skew the unfiltered read would catch.
-                    list_claims_where(&pool, predicate, &pg_filters(&filters)?, declared_arity)
-                        .await
-                        .context("list_claims_where failed")?
-                }
-                (None, preds) => list_claims_for_predicates(&pool, preds)
-                    .await
-                    .context("list_claims_for_predicates failed")?,
-            };
-            // The replayed paths filter after reconstruction: `--as-of`
-            // rebuilds past state from the audit log, so there is no
-            // table to push a comparison into. Same answer, more work -
-            // stated in the flag's help rather than implied.
-            let claims = if filters.is_empty() || as_of.is_none() {
-                claims
-            } else {
-                claims
-                    .into_iter()
-                    .filter(|c| crate::commands::filter::matches(&c.args, &filters))
-                    .collect()
-            };
+            let claims = claims_rows(
+                &pool,
+                as_of,
+                args.predicate.as_slice(),
+                &filters,
+                declared_arity,
+            )
+            .await?;
             match named_program {
                 Some((program, file)) => print_json(&decode_claims_named(&program, file, &claims)?),
                 None => print_json(&claims),
@@ -275,7 +317,7 @@ fn declared_predicates(program: &morpholog_core::Program) -> String {
 /// programme/database skew and a hard error naming both sides, never
 /// a silent skip. (The bare read keeps the opposite contract - claims
 /// table as authority - which is why decoding requires the file.)
-fn decode_claims_named(
+pub(crate) fn decode_claims_named(
     program: &morpholog_core::Program,
     file: &Path,
     claims: &[ClaimInstance],
@@ -356,21 +398,11 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
         }
     })?;
 
-    let pool = connect(&args.db.database_url).await?;
-    let rows = match resolve_as_of(&pool, args.as_of).await? {
-        Some(tid) => list_derived_at(&pool, derived, &program.definitions, tid)
-            .await
-            .context("list_derived_at failed")?,
-        None => list_derived(&pool, derived, &program.definitions)
-            .await
-            .context("list_derived failed")?,
-    };
     // A derived view's own output predicate is declared like any other,
     // so `--where` resolves field names the same way `inspect claims`
-    // does - no second vocabulary. The filter runs here rather than in
-    // SQL because the rows were computed from claims, not stored.
-    let rows = if args.filter.is_empty() {
-        rows
+    // does - no second vocabulary.
+    let filters = if args.filter.is_empty() {
+        Vec::new()
     } else {
         let decl = program.predicate(&args.derived).ok_or_else(|| {
             anyhow!(
@@ -380,11 +412,11 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
                 args.file.display()
             )
         })?;
-        let filters = crate::commands::filter::resolve(decl, &args.filter)?;
-        rows.into_iter()
-            .filter(|r| crate::commands::filter::matches(&r.args, &filters))
-            .collect()
+        crate::commands::filter::resolve(decl, &args.filter)?
     };
+    let pool = connect(&args.db.database_url).await?;
+    let as_of = resolve_as_of(&pool, args.as_of).await?;
+    let rows = derived_rows(&pool, &program.definitions, derived, as_of, &filters).await?;
     if args.named {
         print_json(&decode_claims_named(program, &args.file, &rows)?)
     } else {

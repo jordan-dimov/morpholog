@@ -1,0 +1,6 @@
+{
+  "code": "serialization_failure",
+  "error": "the proposal could not be decided: restart the transaction",
+  "row": 17,
+  "status": "error"
+}

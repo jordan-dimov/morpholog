@@ -66,6 +66,72 @@ pub struct HashReport {
     pub program: String,
 }
 
+/// `session`: the ready line - the first and only unprompted line a
+/// session emits. Carries the staleness token (`model_hash` is the
+/// canonical rules-identity hash the programme was pinned at) and the
+/// protocol number, which is the wire's version, distinct from the
+/// binary's.
+#[derive(Serialize)]
+pub struct SessionReady {
+    pub model_hash: String,
+    pub morpholog_version: &'static str,
+    pub program: String,
+    pub protocol: u32,
+    pub status: &'static str,
+}
+
+impl SessionReady {
+    pub fn new(model_hash: String, program: String) -> Self {
+        Self {
+            model_hash,
+            morpholog_version: env!("CARGO_PKG_VERSION"),
+            program,
+            protocol: 1,
+            status: "ready",
+        }
+    }
+}
+
+/// `session`: the per-request error receipt. Unlike the batch error
+/// receipt it carries a stable `code`, because a session caller
+/// deciding whether a retry is safe must never parse English prose.
+/// `row` is the 1-based request line number, the same counter the
+/// propose receipts carry.
+#[derive(Serialize)]
+pub struct SessionErrorReceipt {
+    pub code: SessionErrorCode,
+    pub error: String,
+    pub row: u64,
+    pub status: &'static str,
+}
+
+impl SessionErrorReceipt {
+    pub fn new(code: SessionErrorCode, error: String, row: u64) -> Self {
+        Self {
+            code,
+            error,
+            row,
+            status: "error",
+        }
+    }
+}
+
+/// The closed set of per-request failure codes a session can answer
+/// with. `serialization_failure` is the one a caller may re-submit on
+/// (retries stay the caller's); the rest describe the request itself.
+/// Operational failures never become receipts - the session aborts.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionErrorCode {
+    DuplicateIntent,
+    InvalidArguments,
+    InvalidRequest,
+    KernelError,
+    SerializationFailure,
+    UnknownOperation,
+    UnknownTransformation,
+}
+
 /// `init`: day-zero provisioning outcome.
 #[derive(Serialize)]
 pub struct InitReport {

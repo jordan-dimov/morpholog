@@ -541,6 +541,35 @@
         }
       ]
     },
+    "session_ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_hash", "morpholog_version", "program", "protocol", "status"],
+      "properties": {
+        "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "morpholog_version": { "type": "string" },
+        "program": { "type": "string" },
+        "protocol": { "type": "integer", "minimum": 1 },
+        "status": { "const": "ready" }
+      }
+    },
+    "session_error_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "error", "row", "status"],
+      "properties": {
+        "code": {
+          "enum": [
+            "duplicate_intent", "invalid_arguments", "invalid_request",
+            "kernel_error", "serialization_failure", "unknown_operation",
+            "unknown_transformation"
+          ]
+        },
+        "error": { "type": "string" },
+        "row": { "type": "integer", "minimum": 1 },
+        "status": { "const": "error" }
+      }
+    },
     "attestation": {
       "type": "object",
       "additionalProperties": false,

@@ -177,43 +177,75 @@ fn print_rule_location(reason: &str, parsed: &ParsedSource) {
 
 /// One NDJSON batch row: a self-contained transition naming its own
 /// transformation and actor, with args in either codec (exactly one).
+/// Also the propose body of a session request, which is the same
+/// self-contained shape plus a per-request explanation flag.
 #[derive(serde::Deserialize)]
-struct BatchRow {
-    transformation: String,
-    actor: String,
+pub(crate) struct BatchRow {
+    pub(crate) transformation: String,
+    pub(crate) actor: String,
     #[serde(default)]
-    args: Option<serde_json::Value>,
+    pub(crate) args: Option<serde_json::Value>,
     #[serde(default)]
-    args_named: Option<serde_json::Value>,
+    pub(crate) args_named: Option<serde_json::Value>,
 }
 
-/// Whether a row's failure belongs to the row or to the run. The
-/// distinction IS the exit-code contract: a `Row` failure (malformed
-/// JSON, unknown transformation, undecodable args, a serialization
-/// conflict or kernel error on that row's data) becomes an error
-/// receipt and the batch continues; an `Operational` failure (a dead
-/// connection, a schema mismatch) aborts the batch with a non-zero
-/// exit, because pretending the remaining rows were processed would
-/// make infrastructure failure look like successful import.
-enum BatchRowError {
-    Row(anyhow::Error),
-    Operational(anyhow::Error),
+/// What exactly went wrong with one row's proposal. The batch only
+/// needs the row-vs-operational split (its exit-code contract), but
+/// the session answers with a stable per-request code, so the
+/// classification keeps the distinctions rather than collapsing them
+/// into prose.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowErrorKind {
+    /// The row itself did not parse or carried both/neither codec.
+    MalformedRow,
+    /// The named transformation is not in the programme.
+    UnknownTransformation,
+    /// The arguments did not decode against the inferred kinds.
+    BadArgs,
+    /// A SERIALIZABLE conflict: the one failure a caller re-submits.
+    Serialization,
+    /// The kernel refused to evaluate (a programme/data mismatch).
+    Kernel,
+    /// The emitted intent collided on its idempotency key.
+    DuplicateIntent,
+    /// Infrastructure: a dead connection, a schema mismatch. Aborts
+    /// the batch or the session; never a receipt.
+    Operational,
+}
+
+/// A per-row failure with its kind. The kind decides receipt-vs-abort
+/// (batch) and the stable error code (session); the reason renders
+/// into the receipt's human prose.
+pub(crate) struct RowError {
+    pub(crate) kind: RowErrorKind,
+    pub(crate) reason: anyhow::Error,
+}
+
+impl RowError {
+    fn new(kind: RowErrorKind, reason: anyhow::Error) -> Self {
+        Self { kind, reason }
+    }
+    pub(crate) fn is_operational(&self) -> bool {
+        self.kind == RowErrorKind::Operational
+    }
 }
 
 /// Classify a proposal-path error. `SerializationFailure` is the
 /// documented per-row outcome (the caller re-submits that row;
 /// retries stay the caller's), and a kernel error or colliding intent
 /// is that row's data speaking - everything else is infrastructure.
-fn classify_pg_error(err: morpholog_postgres::PgError) -> BatchRowError {
+fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
     use morpholog_postgres::PgError;
-    match &err {
-        PgError::SerializationFailure | PgError::Kernel(_) | PgError::DuplicateIntent => {
-            BatchRowError::Row(anyhow::Error::new(err).context("the proposal could not be decided"))
-        }
-        _ => BatchRowError::Operational(
-            anyhow::Error::new(err).context("the proposal could not be decided"),
-        ),
-    }
+    let kind = match &err {
+        PgError::SerializationFailure => RowErrorKind::Serialization,
+        PgError::Kernel(_) => RowErrorKind::Kernel,
+        PgError::DuplicateIntent => RowErrorKind::DuplicateIntent,
+        _ => RowErrorKind::Operational,
+    };
+    RowError::new(
+        kind,
+        anyhow::Error::new(err).context("the proposal could not be decided"),
+    )
 }
 
 /// Batch mode: one receipt per row, in row order, each row its own
@@ -261,24 +293,26 @@ async fn run_batch(
                 }
                 envelope
             }
-            // A row-level failure is a receipt, never a process
-            // failure: the rows after it still run.
-            Err(BatchRowError::Row(reason)) => {
-                errored += 1;
-                serde_json::json!({
-                    "row": row,
-                    "status": "error",
-                    "error": format!("{reason:#}"),
-                })
-            }
             // Infrastructure failure aborts: the summary names how far
             // the batch got, and the exit code tells the truth.
-            Err(BatchRowError::Operational(reason)) => {
+            Err(err) if err.is_operational() => {
                 eprintln!(
                     "batch aborted at row {row}: {committed} committed, \
                      {rejected} rejected, {errored} errors before the failure"
                 );
-                return Err(reason.context(format!("operational failure at row {row}")));
+                return Err(err
+                    .reason
+                    .context(format!("operational failure at row {row}")));
+            }
+            // A row-level failure is a receipt, never a process
+            // failure: the rows after it still run.
+            Err(err) => {
+                errored += 1;
+                serde_json::json!({
+                    "row": row,
+                    "status": "error",
+                    "error": format!("{:#}", err.reason),
+                })
             }
         };
         println!("{}", serde_json::to_string(&receipt)?);
@@ -289,20 +323,35 @@ async fn run_batch(
 }
 
 /// Process one row to its single-run envelope (without the `row`
-/// field): the same codecs, the same propose calls, the same JSON
-/// shapes as the non-batch path, so the receipt contract cannot drift
-/// from the pinned single-run contract.
+/// field). Thin parse step over [`propose_row_outcome`], which the
+/// session shares.
 async fn batch_row_outcome(
     args: &ProposeArgs,
     compiled: &morpholog_core::CompiledProgram,
     pool: &morpholog_postgres::PgPool,
     line: &str,
-) -> Result<serde_json::Value, BatchRowError> {
+) -> Result<serde_json::Value, RowError> {
     let row: BatchRow = serde_json::from_str(line)
         .context("malformed batch row")
-        .map_err(BatchRowError::Row)?;
-    let transformation = lookup_transformation(compiled, &row.transformation, &args.file)
-        .map_err(BatchRowError::Row)?;
+        .map_err(|e| RowError::new(RowErrorKind::MalformedRow, e))?;
+    propose_row_outcome(&args.file, args.explain_on_reject, compiled, pool, row).await
+}
+
+/// One self-contained transition to its single-run envelope (without
+/// the `row` field): the same codecs, the same propose calls, the
+/// same JSON shapes as the non-batch path, so the receipt contract
+/// cannot drift from the pinned single-run contract. Shared by the
+/// batch (whose explanation flag is batch-wide) and the session
+/// (whose flag is per request).
+pub(crate) async fn propose_row_outcome(
+    file: &std::path::Path,
+    explain_on_reject: bool,
+    compiled: &morpholog_core::CompiledProgram,
+    pool: &morpholog_postgres::PgPool,
+    row: BatchRow,
+) -> Result<serde_json::Value, RowError> {
+    let transformation = lookup_transformation(compiled, &row.transformation, file)
+        .map_err(|e| RowError::new(RowErrorKind::UnknownTransformation, e))?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
         (Some(t), None) => {
@@ -314,25 +363,21 @@ async fn batch_row_outcome(
             CliArgs::Named(&named)
         }
         _ => {
-            return Err(BatchRowError::Row(anyhow::anyhow!(
-                "a batch row carries exactly one of `args` and `args_named`"
-            )));
+            return Err(RowError::new(
+                RowErrorKind::MalformedRow,
+                anyhow::anyhow!("a batch row carries exactly one of `args` and `args_named`"),
+            ));
         }
     };
-    let eval_args = decode_args(
-        &compiled.validated(),
-        transformation,
-        &args.file,
-        codec_input,
-    )
-    .map_err(BatchRowError::Row)?;
+    let eval_args = decode_args(&compiled.validated(), transformation, file, codec_input)
+        .map_err(|e| RowError::new(RowErrorKind::BadArgs, e))?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
         actor: Subject::from(row.actor),
     };
 
-    if args.explain_on_reject {
+    if explain_on_reject {
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
@@ -360,17 +405,17 @@ async fn batch_row_outcome(
                 explanation,
             ))
             .context("serialising the receipt")
-            .map_err(BatchRowError::Operational);
+            .map_err(|e| RowError::new(RowErrorKind::Operational, e));
         }
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
-            .map_err(BatchRowError::Operational)
+            .map_err(|e| RowError::new(RowErrorKind::Operational, e))
     } else {
         let outcome = propose_against_pg(pool, compiled, &Proposal::gateway(&transition))
             .await
             .map_err(classify_pg_error)?;
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
-            .map_err(BatchRowError::Operational)
+            .map_err(|e| RowError::new(RowErrorKind::Operational, e))
     }
 }
