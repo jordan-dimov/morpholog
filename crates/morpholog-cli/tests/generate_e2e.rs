@@ -46,16 +46,17 @@ fn generate(file: &Path, out: &Path) -> std::process::Output {
         .expect("run morpholog generate")
 }
 
-const PACKAGE_FILES: [&str; 5] = [
+const PACKAGE_FILES: [&str; 6] = [
     "__init__.py",
     "models.py",
     "values.py",
     "envelopes.py",
     "adapter.py",
+    "session.py",
 ];
 
 #[test]
-fn generates_the_five_file_package() {
+fn generates_exactly_the_package_files() {
     let out = tempfile::tempdir().unwrap();
     let result = generate(&trade_lifecycle(), out.path());
     assert!(
@@ -67,10 +68,10 @@ fn generates_the_five_file_package() {
     for file in PACKAGE_FILES {
         assert!(package.join(file).is_file(), "{file} should exist");
     }
-    // The package directory holds exactly the five files - nothing
+    // The package directory holds exactly the listed files - nothing
     // extra travels (in particular, not the template test suite).
     let count = std::fs::read_dir(&package).unwrap().count();
-    assert_eq!(count, PACKAGE_FILES.len(), "exactly the five package files");
+    assert_eq!(count, PACKAGE_FILES.len(), "exactly the package files");
 }
 
 // The collection-argument contract, rendered: a transformation taking a
@@ -118,7 +119,7 @@ fn generation_is_byte_deterministic() {
 fn static_modules_are_byte_equal_to_their_templates() {
     let out = tempfile::tempdir().unwrap();
     assert!(generate(&trade_lifecycle(), out.path()).status.success());
-    for file in ["values.py", "envelopes.py", "adapter.py"] {
+    for file in ["values.py", "envelopes.py", "adapter.py", "session.py"] {
         let template = std::fs::read(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("templates/python_client")

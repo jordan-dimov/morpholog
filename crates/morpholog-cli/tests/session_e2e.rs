@@ -47,11 +47,10 @@ transformation post_balance(account, figure):
 const REQUESTS: &[&str] = &[
     r#"{"actor":"teller","args_named":{"account":"acct_1","opened_on":"2026-01-15"},"op":"propose","transformation":"open_account"}"#,
     r#"{"actor":"teller","args_named":{"account":"acct_1","figure":"100"},"op":"propose","transformation":"post_balance"}"#,
-    r#"{"actor":"teller","args_named":{"account":"ghost","figure":"5"},"explain_on_reject":false,"op":"propose","transformation":"post_balance"}"#,
+    r#"{"actor":"teller","args_named":{"account":"ghost","figure":"5"},"explain_on_reject":true,"op":"propose","transformation":"post_balance"}"#,
     r#"{"named":true,"op":"claims","predicates":["Account"]}"#,
     r#"{"named":true,"op":"claims","predicates":["Balance"],"where":{"figure":"100"}}"#,
     r#"{"name":"BookTotal","named":true,"op":"derived"}"#,
-    r#"{"op":"nonsense"}"#,
     r#"{"actor":"teller","args_named":{},"op":"propose","transformation":"no_such_act"}"#,
     r#"{"as_of":"not-a-coordinate","op":"claims"}"#,
 ];
@@ -210,6 +209,7 @@ async fn blank_lines_are_skipped_and_the_session_keeps_answering() {
     // error receipt, and the session still answers afterwards.
     writeln!(stdin).unwrap();
     writeln!(stdin, "this is not json").unwrap();
+    writeln!(stdin, r#"{{"op":"nonsense"}}"#).unwrap();
     writeln!(
         stdin,
         r#"{{"actor":"teller","args_named":{{"account":"a1","opened_on":"2026-01-15"}},"op":"propose","transformation":"open_account"}}"#
@@ -223,13 +223,15 @@ async fn blank_lines_are_skipped_and_the_session_keeps_answering() {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(lines.len(), 3, "{stdout}");
+    assert_eq!(lines.len(), 4, "{stdout}");
     assert_eq!(lines[0]["status"], "ready");
     assert_eq!(lines[1]["status"], "error");
     assert_eq!(lines[1]["code"], "invalid_request");
     assert_eq!(lines[1]["row"], 2, "the blank line consumed row 1");
-    assert_eq!(lines[2]["status"], "committed");
-    assert_eq!(lines[2]["row"], 3);
+    assert_eq!(lines[2]["status"], "error");
+    assert_eq!(lines[2]["code"], "unknown_operation");
+    assert_eq!(lines[3]["status"], "committed");
+    assert_eq!(lines[3]["row"], 4);
 }
 
 #[tokio::test]

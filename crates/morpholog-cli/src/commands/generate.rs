@@ -1,8 +1,8 @@
 //! `morpholog generate python-client` - emit a typed, stdlib-only
 //! Python client for a `.morph` programme.
 //!
-//! The package is five files under `<out>/morpholog_client/`. Three
-//! are programme-independent and emitted VERBATIM from the templates
+//! The package's static modules are programme-independent and
+//! emitted VERBATIM from the templates
 //! beside this crate (`templates/python_client/`), so the files the
 //! template test suite runs are byte-identical to the files embedders
 //! receive. Two are generated per programme: `models.py` (a frozen
@@ -37,6 +37,7 @@ use crate::commands::{parse_or_exit, validate_or_exit};
 const VALUES_PY: &str = include_str!("../../templates/python_client/values.py");
 const ENVELOPES_PY: &str = include_str!("../../templates/python_client/envelopes.py");
 const ADAPTER_PY: &str = include_str!("../../templates/python_client/adapter.py");
+const SESSION_PY: &str = include_str!("../../templates/python_client/session.py");
 
 /// The interpreter floor the emitted package declares and enforces at
 /// import. A conservative-subset floor, moved only deliberately - the
@@ -72,6 +73,7 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
         ("values.py", VALUES_PY),
         ("envelopes.py", ENVELOPES_PY),
         ("adapter.py", ADAPTER_PY),
+        ("session.py", SESSION_PY),
     ];
 
     let package_dir = args.out.join("morpholog_client");
@@ -563,7 +565,11 @@ fn render_init(program: &Program) -> String {
          MORPHOLOG_VERSION = \"{version}\"\n\
          PYTHON_FLOOR = ({floor_major}, {floor_minor})\n\n\
          from . import envelopes, models, values  # noqa: E402\n\
-         from .adapter import Morpholog, MorphologError  # noqa: E402\n\n\
+         from .adapter import Morpholog, MorphologError  # noqa: E402\n\
+         from .session import (  # noqa: E402\n    \
+             MorphologOutcomeUnknown,\n    \
+             MorphologRequestError,\n    \
+             Session,\n)\n\n\
          __all__ = [\n    \
              \"PROGRAM\",\n    \
              \"MODEL_HASH\",\n    \
@@ -571,6 +577,9 @@ fn render_init(program: &Program) -> String {
              \"PYTHON_FLOOR\",\n    \
              \"Morpholog\",\n    \
              \"MorphologError\",\n    \
+             \"MorphologOutcomeUnknown\",\n    \
+             \"MorphologRequestError\",\n    \
+             \"Session\",\n    \
              \"envelopes\",\n    \
              \"models\",\n    \
              \"values\",\n]\n",

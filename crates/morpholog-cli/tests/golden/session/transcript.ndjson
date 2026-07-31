@@ -3,17 +3,15 @@
 {"actor":{"type":"subject","value":"teller"},"asserted_claims":[{"args":[{"type":"subject","value":"acct_1"},{"type":"date","value":"2026-01-15"}],"predicate":"Account"}],"emitted_intents":[],"retracted_claims":[],"row":1,"status":"committed","transition_id":"00000000-0000-0000-0000-000000000000"}
 {"actor":"teller","args_named":{"account":"acct_1","figure":"100"},"op":"propose","transformation":"post_balance"}
 {"actor":{"type":"subject","value":"teller"},"asserted_claims":[{"args":[{"type":"subject","value":"acct_1"},{"type":"decimal","value":"100"}],"predicate":"Balance"}],"emitted_intents":[],"retracted_claims":[],"row":2,"status":"committed","transition_id":"00000000-0000-0000-0000-000000000000"}
-{"actor":"teller","args_named":{"account":"ghost","figure":"5"},"explain_on_reject":false,"op":"propose","transformation":"post_balance"}
-{"reason":"invariant `balances_name_an_account` violated","row":3,"rule":"balances_name_an_account","status":"rejected","witness":[{"value":{"type":"subject","value":"ghost"},"var":"a"}]}
+{"actor":"teller","args_named":{"account":"ghost","figure":"5"},"explain_on_reject":true,"op":"propose","transformation":"post_balance"}
+{"explanation":{"transition":{"actor":"teller","args":["ghost","5"],"transformation":"post_balance"},"verdict":{"rejected":{"kind":"invariant","name":"balances_name_an_account","rule":"Balance(a, _) implies Account(a, _)"}}},"reason":"invariant `balances_name_an_account` violated","row":3,"rule":"balances_name_an_account","status":"rejected","witness":[{"value":{"type":"subject","value":"ghost"},"var":"a"}]}
 {"named":true,"op":"claims","predicates":["Account"]}
 [{"args":{"account":"acct_1","opened_on":"2026-01-15"},"predicate":"Account"}]
 {"named":true,"op":"claims","predicates":["Balance"],"where":{"figure":"100"}}
 [{"args":{"account":"acct_1","figure":"100"},"predicate":"Balance"}]
 {"name":"BookTotal","named":true,"op":"derived"}
 [{"args":{"account":"acct_1","total":"100"},"predicate":"BookTotal"}]
-{"op":"nonsense"}
-{"code":"unknown_operation","error":"unknown operation `nonsense`; this session answers propose, claims, derived","row":7,"status":"error"}
 {"actor":"teller","args_named":{},"op":"propose","transformation":"no_such_act"}
-{"code":"unknown_transformation","error":"transformation `no_such_act` not found in `<fixture>`. Available: open_account, post_balance","row":8,"status":"error"}
+{"code":"unknown_transformation","error":"transformation `no_such_act` not found in `<fixture>`. Available: open_account, post_balance","row":7,"status":"error"}
 {"as_of":"not-a-coordinate","op":"claims"}
-{"code":"invalid_arguments","error":"expected a transition_id (UUID) or an RFC 3339 timestamp (e.g. 2026-06-30T00:00:00Z), got `not-a-coordinate`","row":9,"status":"error"}
+{"code":"invalid_arguments","error":"expected a transition_id (UUID) or an RFC 3339 timestamp (e.g. 2026-06-30T00:00:00Z), got `not-a-coordinate`","row":8,"status":"error"}

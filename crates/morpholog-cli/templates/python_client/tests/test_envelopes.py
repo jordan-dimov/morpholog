@@ -573,5 +573,25 @@ class TamperEvidence(unittest.TestCase):
         self.assertEqual(intact.rows_disclosed, 1)
 
 
+class SessionEnvelopes(unittest.TestCase):
+    def test_the_ready_line_carries_the_staleness_token_and_protocol(self):
+        ready = envelopes.SessionReady.from_json(golden("session_ready.json"))
+        self.assertEqual(ready.model_hash, "sha256:" + "0" * 64)
+        self.assertEqual(ready.program, "envelopes")
+        self.assertEqual(ready.protocol, 1)
+
+    def test_the_error_receipt_carries_the_stable_code(self):
+        receipt = envelopes.SessionErrorReceipt.from_json(golden("session_error_receipt.json"))
+        self.assertEqual(receipt.code, "serialization_failure")
+        self.assertEqual(receipt.row, 17)
+        self.assertIn("could not be decided", receipt.error)
+
+    def test_an_uncoded_error_is_drift_not_a_receipt(self):
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.SessionErrorReceipt.from_json(
+                {"error": "prose only", "row": 1, "status": "error"}
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
