@@ -146,6 +146,13 @@ impl SourceMap {
             ValidationError::DisciplineLineageUnfit { pointer, .. } => {
                 self.decl_span(DeclKind::Predicate, pointer)
             }
+            // Unreachable from parsed source: the surface has no
+            // spelling for declaring a CalendarSpan argument. Anchored
+            // on the declaration defensively for hand-built IR routed
+            // through a source map.
+            ValidationError::CalendarSpanNotDeclarable { declaration, .. } => self
+                .decl_span(DeclKind::Predicate, declaration)
+                .or_else(|| self.decl_span(DeclKind::Intent, declaration)),
         }
     }
 

@@ -228,6 +228,10 @@ fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
             "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$",
             "x-morpholog-unit": u.as_str(),
         }),
+        // Expression-only: no declaration can carry this kind (the
+        // validator refuses it), so no schema is ever generated for
+        // it. The arm exists for exhaustiveness only.
+        PredicateArgKind::CalendarSpan => json!(false),
         // `Any` carries no constraint at the JSON-Schema level; the
         // contract-level "this is polymorphic" lives in the
         // property's description, not on the bare shape.
@@ -282,7 +286,10 @@ fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Opt
                  tracked at the kernel level in v0."
                 }
             }),
-            PredicateArgKind::Bool | PredicateArgKind::Any | PredicateArgKind::Quantity(_) => None,
+            PredicateArgKind::Bool
+            | PredicateArgKind::Any
+            | PredicateArgKind::CalendarSpan
+            | PredicateArgKind::Quantity(_) => None,
         },
     };
     owned.map(String::from)

@@ -538,13 +538,16 @@ pub(crate) fn arith_unique_counterpart(
     known: &PredicateArgKind,
     known_is_left: bool,
 ) -> Option<(PredicateArgKind, PredicateArgKind)> {
-    use PredicateArgKind::{Decimal, Duration, Timestamp};
+    use PredicateArgKind::{CalendarSpan, Date, Decimal, Duration, Timestamp};
     // Candidate counterparts: the unit-less arithmetic kinds, plus the
     // known side's own unit when the known side is a quantity. A unit
     // the expression has not already named cannot be INFERRED - only
     // declared - so a bare-decimal known side never infers a quantity
     // counterpart, even though the scaling rule would evaluate one.
-    let mut candidates = vec![Decimal, Timestamp, Duration];
+    // Note `Sub` with a known left-hand `Date` fits two rules (a span
+    // counterpart yields a date, a date counterpart yields days), so
+    // nothing is inferred there; both-sides-known checking still runs.
+    let mut candidates = vec![Decimal, Timestamp, Duration, Date, CalendarSpan];
     if let PredicateArgKind::Quantity(u) = known {
         candidates.push(PredicateArgKind::Quantity(u.clone()));
     }
@@ -567,11 +570,20 @@ pub(crate) fn arith_result_kind(
     left: &PredicateArgKind,
     right: &PredicateArgKind,
 ) -> Option<PredicateArgKind> {
-    use PredicateArgKind::{Decimal, Duration, Quantity, Timestamp};
+    use PredicateArgKind::{CalendarSpan, Date, Decimal, Duration, Quantity, Timestamp};
     match (op, left, right) {
         (_, Decimal, Decimal) => Some(Decimal),
         (ArithOp::Add | ArithOp::Sub, Timestamp, Duration) => Some(Timestamp),
         (ArithOp::Sub, Timestamp, Timestamp) => Some(Duration),
+        // The civil-date rules. A calendar span shifts a date (months
+        // first, day clamped to the destination month, then days); the
+        // difference of two dates is their signed count of actual days,
+        // as a decimal. Deliberately absent: `Date +/- Duration` (exact
+        // seconds cannot shift a day-less-precise value), and
+        // `Timestamp +/- CalendarSpan` (a calendar shift of an instant
+        // needs a time zone, which the kernel refuses to guess).
+        (ArithOp::Add | ArithOp::Sub, Date, CalendarSpan) => Some(Date),
+        (ArithOp::Sub, Date, Date) => Some(Decimal),
         (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Duration, Duration) => {
             Some(Duration)
         }
@@ -646,8 +658,17 @@ pub enum Value {
     /// exact source string; parsing into [`jiff::SignedDuration`] is
     /// the evaluator's concern. Exact seconds only - no calendar
     /// units (months, years), whose lengths depend on context the
-    /// kernel refuses to guess.
+    /// kernel refuses to guess. Calendar shifts are the separate
+    /// [`Value::CalendarSpan`], which only date arithmetic accepts.
     Duration(String),
+    /// A calendar span (`P3M`, `P45D`), stored as its exact source
+    /// string; parsing via [`crate::calendar::parse_calendar_span`] is
+    /// the evaluator's concern. An arithmetic operand only - it shifts
+    /// a `Date` and is refused everywhere else: not declarable as an
+    /// argument kind, not admissible into a claim or intent, not
+    /// comparable, not summable. Kept apart from [`Value::Duration`]
+    /// because a month has no exact length until it lands on a date.
+    CalendarSpan(String),
     /// A unit-tagged exact decimal quantity (`25000 USD`, `0 t`). The
     /// amount is stored as its exact source string, like
     /// [`Value::Decimal`]; the unit is an opaque [`Unit`] symbol. The
@@ -1078,6 +1099,11 @@ pub enum PredicateArgKind {
     /// units are equal; the unit is the whole of the kind's meaning
     /// (a contractual label, not a physical dimension).
     Quantity(Unit),
+    /// The kind of a `span(P3M)` calendar-span literal. Expression-only:
+    /// the surface has no declaration spelling for it, so no claim,
+    /// intent, or transformation argument can carry one - it exists so
+    /// kind inference has a name for the literal inside date arithmetic.
+    CalendarSpan,
     Any,
 }
 
@@ -1096,6 +1122,7 @@ impl std::fmt::Display for PredicateArgKind {
             PredicateArgKind::Bool => write!(f, "Bool"),
             PredicateArgKind::Collection => write!(f, "Collection"),
             PredicateArgKind::Quantity(u) => write!(f, "Decimal[{u}]"),
+            PredicateArgKind::CalendarSpan => write!(f, "CalendarSpan"),
             PredicateArgKind::Any => write!(f, "Any"),
         }
     }

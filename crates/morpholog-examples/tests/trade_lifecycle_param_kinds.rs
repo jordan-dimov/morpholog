@@ -185,7 +185,7 @@ fn expected_json_type(kind: &PredicateArgKind) -> Value {
         | PredicateArgKind::Quantity(_) => Value::String("string".into()),
         PredicateArgKind::Bool => Value::String("boolean".into()),
         PredicateArgKind::Collection => Value::String("array".into()),
-        PredicateArgKind::Any => Value::Null,
+        PredicateArgKind::CalendarSpan | PredicateArgKind::Any => Value::Null,
     }
 }
 

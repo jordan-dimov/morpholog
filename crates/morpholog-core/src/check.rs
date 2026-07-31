@@ -1587,6 +1587,9 @@ fn term_kind(term: &Term) -> InferredKind {
         Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),
         Term::Literal(Value::Timestamp(_)) => InferredKind::Known(PredicateArgKind::Timestamp),
         Term::Literal(Value::Duration(_)) => InferredKind::Known(PredicateArgKind::Duration),
+        Term::Literal(Value::CalendarSpan(_)) => {
+            InferredKind::Known(PredicateArgKind::CalendarSpan)
+        }
         Term::Literal(Value::Quantity { unit, .. }) => {
             InferredKind::Known(PredicateArgKind::Quantity(unit.clone()))
         }

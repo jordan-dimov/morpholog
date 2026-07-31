@@ -208,6 +208,14 @@ fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
             format!("arguments -> {i} -> 'value'"),
             "Morpholog kind Collection (jsonb array of tagged values)".to_string(),
         ),
+        // Expression-only: validation refuses any declaration carrying
+        // this kind, so no view column can ever be asked for one. The
+        // faithful-jsonb fallback keeps the arm honest if that ever
+        // changes.
+        PredicateArgKind::CalendarSpan => col(
+            format!("arguments -> {i}"),
+            "Morpholog kind CalendarSpan (expression-only; never admitted)".to_string(),
+        ),
         PredicateArgKind::Any => col(
             format!("arguments -> {i}"),
             "Morpholog kind Any (the whole tagged {type,value} object)".to_string(),

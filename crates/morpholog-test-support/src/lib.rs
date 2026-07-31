@@ -90,6 +90,17 @@ pub fn dur(s: &str) -> EvalValue {
     EvalValue::Duration(s.parse().expect("test duration literal must parse"))
 }
 
+/// Build an [`EvalValue::CalendarSpan`] through the kernel's own
+/// grammar. Panics on bad input - same rationale as [`dec_str`].
+/// Only refusal tests want one: a span is expression-only and every
+/// storage and wire boundary rejects it.
+pub fn cal_span(s: &str) -> EvalValue {
+    EvalValue::CalendarSpan(
+        morpholog_core::calendar::parse_calendar_span(s)
+            .expect("test calendar-span literal must parse"),
+    )
+}
+
 /// Build an [`EvalValue::Quantity`] from an exact decimal amount
 /// string and a unit symbol. Panics on a malformed amount - same
 /// rationale as [`dec_str`].

@@ -213,6 +213,26 @@ transformation post(l, net):
     admit Line(l, net)
 ";
 
+/// A `span(P3M)` calendar-span literal and a date subtraction nested
+/// in a let-sugared invariant body and reached through a defined call:
+/// the new literal kind meets every walker in the contexts the
+/// covenant example actually uses it.
+const SPAN_IN_DATE_ARITHMETIC: &str = "\
+program span_in_date_arithmetic
+predicate Period(p: Subject, ends_on: Date)
+predicate Notice(p: Subject, as_of: Date, days_late: Decimal)
+define lateness_exact(as_of, ends_on, days_late):
+    days_late = as_of - (ends_on + span(P45D))
+invariant lateness_is_the_records_own_count:
+    Notice(p, as_of, days_late) and Period(p, ends_on) implies lateness_exact(as_of, ends_on, days_late)
+invariant notices_come_after_the_deadline:
+    let deadline = (ends_on + span(P45D))
+    Notice(p, as_of, _) and Period(p, ends_on) implies deadline before as_of
+transformation notice(p, as_of, days_late):
+    require Period(p, ends_on) and (ends_on + span(P45D)) before as_of
+    admit Notice(p, as_of, days_late)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -226,6 +246,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
         ("const_across_body_sorts", CONST_ACROSS_BODY_SORTS),
+        ("span_in_date_arithmetic", SPAN_IN_DATE_ARITHMETIC),
     ]
 }
 

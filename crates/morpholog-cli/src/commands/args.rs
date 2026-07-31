@@ -153,6 +153,14 @@ fn decode_value(
             })
         }
         ParamKind::Concrete(PredicateArgKind::Bool) => decode_bool(param, raw, schema_hint),
+        // Expression-only: a span shifts a date inside a rule body and
+        // is never a governed value, so no argument can carry one.
+        ParamKind::Concrete(PredicateArgKind::CalendarSpan) => bail!(
+            "parameter `{param}` was inferred as a calendar span, which is \
+             expression-only and cannot be supplied as an argument; write the \
+             span as a literal (e.g. span(P3M)) in the transformation body \
+             instead. {schema_hint}"
+        ),
         // A collection with a known element kind: decode a JSON array,
         // each item by the element kind. This is the named-codec path an
         // external engine submits a whole batch through.
@@ -222,6 +230,9 @@ pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
         // both sides of the codec.
         EvalValue::Quantity { amount, .. } => Value::String(amount.to_string()),
         EvalValue::Bool(b) => Value::Bool(*b),
+        // Lawfully unreachable - a span never reaches storage or the
+        // wire - but rendered faithfully rather than panicking.
+        EvalValue::CalendarSpan(s) => Value::String(s.to_string()),
         EvalValue::Collection(items) => {
             Value::Array(items.iter().map(eval_value_to_bare_json).collect())
         }

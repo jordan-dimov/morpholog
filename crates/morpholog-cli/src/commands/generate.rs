@@ -373,7 +373,10 @@ fn kind_map(kind: &PredicateArgKind) -> (&'static str, String, Option<String>) {
                 "amount in {unit} (the declaration carries the unit)"
             )),
         ),
-        PredicateArgKind::Collection | PredicateArgKind::Duration | PredicateArgKind::Any => {
+        PredicateArgKind::Collection
+        | PredicateArgKind::Duration
+        | PredicateArgKind::CalendarSpan
+        | PredicateArgKind::Any => {
             unreachable!("the refusal sweep rejected unsupported kinds before rendering")
         }
     }

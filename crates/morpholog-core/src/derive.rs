@@ -169,6 +169,13 @@ pub fn enumerate_derived(
         let value_ctx = EvalContext::new(state, None, &per_key, None, index);
         for value_def in &derived.values {
             let v = eval_value(&value_def.expr, &value_ctx)?;
+            if v.contains_calendar_span() {
+                return Err(EvalError::TypeMismatch(format!(
+                    "a calendar span cannot be a derived value of `{}`: it shifts \
+                     a date inside an expression and is never itself a governed value",
+                    derived.predicate
+                )));
+            }
             args.push(v);
         }
         out.push(ClaimInstance {
@@ -235,6 +242,7 @@ impl Ord for EvalValueOrd {
                 EvalValue::Timestamp(_) => 5,
                 EvalValue::Duration(_) => 6,
                 EvalValue::Quantity { .. } => 7,
+                EvalValue::CalendarSpan(_) => 8,
             }
         }
 
@@ -252,6 +260,9 @@ impl Ord for EvalValueOrd {
                 EvalValue::Quantity { amount: a, unit: u },
                 EvalValue::Quantity { amount: b, unit: v },
             ) => u.cmp(v).then_with(|| a.cmp(b)),
+            (EvalValue::CalendarSpan(a), EvalValue::CalendarSpan(b)) => {
+                (a.months, a.days).cmp(&(b.months, b.days))
+            }
             (EvalValue::Collection(a), EvalValue::Collection(b)) => {
                 for (l, r) in a.iter().zip(b.iter()) {
                     let ord = EvalValueOrd(l.clone()).cmp(&EvalValueOrd(r.clone()));
