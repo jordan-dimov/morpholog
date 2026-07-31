@@ -129,6 +129,7 @@ The list below is by domain. If you arrived with a question rather than a domain
 - [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one.
 - [**Metered billing**](examples/15_metered_billing/) - a bill correct to the penny: each line recomputed and rounded, the sealed total refusing the rival convention by name.
 - [**Release governance**](examples/16_release_governance/) - this project's own release checklist as law: a tag at an ungated commit, or an announcement missing a platform's download, refuses to commit.
+- [**Covenant reporting**](examples/17_covenant_reporting/) - a loan's reporting calendar as law: test dates rolling exactly three calendar months (clamped at month ends), and an overdue notice refused unless its day count is the record's own.
 - [**Worked embedder**](examples/etrm_embedder/) - the same trade lifecycle driven from Python through the generated client, including post-commit delivery.
 
 ## Try it yourself

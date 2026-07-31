@@ -42,6 +42,8 @@ if you want to read one end to end.
 | watch a limit on a net position, long minus short | [10_trade_lifecycle](10_trade_lifecycle/) | `abs(...)` |
 | make a skipped process step uncommittable, not just reviewable | [16_release_governance](16_release_governance/) | `require name: ...` gates, one per checklist step |
 | gate an act on completeness over a declared set | [16_release_governance](16_release_governance/) | `forall p in PlatformDeclared(p): ...` inside a `require` |
+| roll a date forward by calendar months, month-end safe | [17_covenant_reporting](17_covenant_reporting/) | `span(P3M)` shifting a `Date` |
+| count the days between two dates and refuse any other figure | [17_covenant_reporting](17_covenant_reporting/) | date subtraction, `as_of - deadline` |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here
