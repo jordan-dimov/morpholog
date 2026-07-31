@@ -81,6 +81,10 @@ fn baseline_concrete(kind: &PredicateArgKind, name: &str) -> EvalValue {
         PredicateArgKind::Bool => bool_(true),
         PredicateArgKind::Quantity(unit) => qty("1", unit.as_str()),
         PredicateArgKind::Collection => coll(vec![subj(name)]),
+        // Expression-only: validation refuses declaring it and propose
+        // refuses receiving it, so no parameter ever infers to it. The
+        // subject stand-in keeps this total if that ever changes.
+        PredicateArgKind::CalendarSpan => subj(name),
     }
 }
 
@@ -141,11 +145,29 @@ fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
         }
         PredicateArgKind::Bool => vec![ordinary(bool_(false))],
         PredicateArgKind::Collection => vec![ordinary(coll(vec![]))],
-        // A single fixed instant per time kind: time arithmetic has no
-        // zero-like boundary an argument can supply on its own.
-        PredicateArgKind::Date | PredicateArgKind::Timestamp | PredicateArgKind::Duration => {
+        // The calendar's own edges: a date at either end of the
+        // representable range makes any span shift or day count near
+        // the boundary reachable. Extreme, so the named out-of-range
+        // refusal is lawful on vectors carrying them.
+        PredicateArgKind::Date => vec![
+            Witness {
+                value: date("-009999-01-01"),
+                extreme: true,
+            },
+            Witness {
+                value: date("9999-12-31"),
+                extreme: true,
+            },
+        ],
+        // A single fixed instant per remaining time kind: instant and
+        // duration arithmetic has no zero-like boundary an argument
+        // can supply on its own.
+        PredicateArgKind::Timestamp | PredicateArgKind::Duration => {
             vec![]
         }
+        // Expression-only; unreachable as a parameter kind (see
+        // `baseline_concrete`).
+        PredicateArgKind::CalendarSpan => vec![],
     }
 }
 

@@ -346,6 +346,32 @@ pub enum ValidationError {
         quantum: String,
         context: ValidationContext,
     },
+    /// A predicate or intent declaration names `CalendarSpan` as an
+    /// argument kind. The kind is expression-only - a span shifts a
+    /// date inside arithmetic and is never a governed value - and the
+    /// surface has no spelling for declaring it; this refusal keeps
+    /// hand-built IR to the same rule.
+    #[error(
+        "argument `{argument}` of `{declaration}` declares CalendarSpan, an expression-only kind that no claim or intent can carry"
+    )]
+    CalendarSpanNotDeclarable {
+        declaration: String,
+        argument: String,
+    },
+    /// A calendar span reached a place only governed values may
+    /// occupy: a claim or intent argument (even against an `Any`
+    /// declaration), a derived output value, or a transformation
+    /// parameter (which a transition argument must supply, and no
+    /// transition argument may carry a span). The runtime refuses
+    /// each of these too; this surfaces the mistake at `check` time
+    /// instead of as an operational proposal error.
+    #[error(
+        "a calendar span cannot leave expression position: {place} in {context}; a span shifts a date inside arithmetic and is never itself a governed value"
+    )]
+    CalendarSpanEscapesExpression {
+        place: String,
+        context: ValidationContext,
+    },
     /// An equality (`==` or `!=`) had two operands of distinct,
     /// incompatible kinds. Symmetric by nature: there is no
     /// "expected" side - both kinds are equally constrained by the
@@ -885,6 +911,29 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
             vocabulary: VocabularyKind::Predicate,
             name: name.to_string(),
         });
+    }
+
+    // CalendarSpan is expression-only; the surface cannot declare it,
+    // and hand-built IR is held to the same rule.
+    for decl in p.predicates.iter() {
+        for arg in &decl.args {
+            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
+                errors.push(ValidationError::CalendarSpanNotDeclarable {
+                    declaration: decl.name.to_string(),
+                    argument: arg.name.clone(),
+                });
+            }
+        }
+    }
+    for decl in p.intents.iter() {
+        for arg in &decl.args {
+            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
+                errors.push(ValidationError::CalendarSpanNotDeclarable {
+                    declaration: decl.name.to_string(),
+                    argument: arg.name.clone(),
+                });
+            }
+        }
     }
 
     // Same duplicate check for intents - separate namespace.

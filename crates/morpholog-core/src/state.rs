@@ -42,6 +42,11 @@ pub enum EvalValue {
     /// JSON shape: `{ "type": "duration", "value": "PT6H" }` (jiff's
     /// default serde format for [`jiff::SignedDuration`]).
     Duration(jiff::SignedDuration),
+    /// A calendar span (whole months plus whole days) - an arithmetic
+    /// operand only, never admitted state: the proposal path refuses a
+    /// calendar span in any claim, intent, or transition argument, so
+    /// this variant lawfully never reaches storage or the wire.
+    CalendarSpan(crate::calendar::CalendarSpan),
     /// A unit-tagged exact decimal quantity. The amount serialises as a
     /// JSON **string** (exactness, like [`EvalValue::Decimal`]); the
     /// unit is an opaque case-sensitive symbol. JSON shape:
@@ -51,6 +56,21 @@ pub enum EvalValue {
         amount: Decimal,
         unit: Unit,
     },
+}
+
+impl EvalValue {
+    /// Does this value carry a calendar span, directly or inside a
+    /// collection? The storage and wire boundaries (claim and intent
+    /// construction, transition arguments, derived rows) all refuse
+    /// on this - a span shifts a date inside an expression and is
+    /// never itself a governed value.
+    pub(crate) fn contains_calendar_span(&self) -> bool {
+        match self {
+            EvalValue::CalendarSpan(_) => true,
+            EvalValue::Collection(items) => items.iter().any(Self::contains_calendar_span),
+            _ => false,
+        }
+    }
 }
 
 /// A grounded claim: all args are values, no variables or wildcards.

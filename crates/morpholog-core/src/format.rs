@@ -548,6 +548,9 @@ fn format_value(v: &Value) -> String {
         // bare-literal DSL: boring on purpose. No quotes - the payload
         // is identifier-shaped, and the surface has no string literals.
         Value::Duration(s) => format!("duration({s})"),
+        // Calendar spans keep the same constructor shape as durations;
+        // the source string is preserved, so the text round-trips.
+        Value::CalendarSpan(s) => format!("span({s})"),
         // Quantity literals are amount-then-unit juxtaposition: the
         // way a charterparty or an invoice writes them.
         Value::Quantity { amount, unit } => format!("{amount} {unit}"),

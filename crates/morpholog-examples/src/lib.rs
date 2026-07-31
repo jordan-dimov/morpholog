@@ -89,6 +89,7 @@ example_module!(chess_transition_invariants);
 example_module!(clinical_trial_enrolment {
     pub const ROLE_RANDOMISE_PARTICIPANT: &str = "randomise_participant";
 });
+example_module!(covenant_reporting);
 example_module!(double_entry_ledger);
 example_module!(insurance_claim_settlement);
 example_module!(kyc_sanctions_screening {

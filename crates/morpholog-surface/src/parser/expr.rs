@@ -52,6 +52,39 @@ where
         })
 }
 
+/// The `span(P3M)` constructor: a calendar span in date units (Y/M/W/D),
+/// in the `duration(PT6H)` mould - the payload lexes as a plain
+/// identifier (ISO periods always start with `P`), and `span` is
+/// contextual (matched only when followed by `(`), so it remains
+/// usable as an ordinary variable name. Validated here through the
+/// kernel's own grammar (`morpholog_core::calendar`), so the parse
+/// diagnostic and the evaluator cannot drift. Value-position only:
+/// a span shifts a date inside arithmetic and is never a claim or
+/// intent argument, so `term_parser` deliberately does not carry it.
+pub(super) fn span_ctor<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    let payload = choice((
+        select! { Token::Ident(s) => s },
+        // A bare number (`span(3)`) is a shape mistake worth its own
+        // hint; capture it so the diagnostic names the fix.
+        select! { Token::DecimalLit(s) => s },
+    ));
+    select! { Token::Ident(s) if s == "span" => () }
+        .ignore_then(payload.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .validate(|s: String, e, emitter| {
+            if let Err(reason) = morpholog_core::calendar::parse_calendar_span(&s) {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("invalid span literal `{s}` ({reason})"),
+                ));
+            }
+            s
+        })
+}
+
 fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     Prop::Compare {
         op,
@@ -637,6 +670,8 @@ where
             timestamp_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Timestamp(s))));
         let duration_as_value =
             duration_ctor().map(|s| ValueExpr::Term(Term::Literal(Value::Duration(s))));
+        let span_as_value =
+            span_ctor().map(|s| ValueExpr::Term(Term::Literal(Value::CalendarSpan(s))));
         let subject_as_value =
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
@@ -788,8 +823,10 @@ where
             decimal_as_value,
             timestamp_as_value,
             date_as_value,
-            // Before bare idents: `duration(...)` is the constructor.
+            // Before bare idents: `duration(...)` / `span(...)` are
+            // the constructors.
             duration_as_value,
+            span_as_value,
             subject_as_value,
             wildcard_as_value,
             bare_ident,

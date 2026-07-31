@@ -102,6 +102,13 @@ pub fn duration(s: &str) -> Term {
     Term::Literal(Value::Duration(s.to_string()))
 }
 
+/// Calendar-span literal in date units (e.g. `P3M`, `P45D`) - the IR
+/// for the surface's `span(P3M)`. Stored as the exact source string;
+/// the evaluator parses it through the kernel's own grammar on use.
+pub fn span(s: &str) -> Term {
+    Term::Literal(Value::CalendarSpan(s.to_string()))
+}
+
 /// Unit-tagged quantity literal (`qty("25000", "USD")` builds the IR
 /// for the surface's `25000 USD`). Amount stored as the exact source
 /// string; the unit is an opaque symbol.

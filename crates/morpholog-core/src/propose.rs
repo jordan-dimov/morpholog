@@ -423,6 +423,21 @@ pub(crate) fn propose_inner(
             transition.args.len(),
         )));
     }
+    // Calendar spans are expression-only. No parameter can be declared
+    // to carry one, so a span among the supplied arguments is always a
+    // caller error - refused here so it cannot smuggle into a claim
+    // through an `Any`-kinded position or a collection element.
+    if transition
+        .args
+        .iter()
+        .any(EvalValue::contains_calendar_span)
+    {
+        return Err(EvalError::TypeMismatch(format!(
+            "transformation `{}` cannot take a calendar span argument: a span \
+             shifts a date inside an expression and is never itself a governed value",
+            transformation.name,
+        )));
+    }
 
     let mut bindings = Bindings::new();
     for (name, val) in transformation
@@ -799,7 +814,15 @@ pub(crate) fn resolve_claim(
                 "wildcard not allowed in assert".into(),
             ));
         }
-        args.push(resolve_term(t, bindings, actor)?);
+        let value = resolve_term(t, bindings, actor)?;
+        if value.contains_calendar_span() {
+            return Err(EvalError::TypeMismatch(format!(
+                "a calendar span cannot be admitted into claim `{}`: it shifts a \
+                 date inside an expression and is never itself a governed value",
+                claim.predicate
+            )));
+        }
+        args.push(value);
     }
     Ok(ClaimInstance {
         predicate: claim.predicate.clone(),
@@ -819,7 +842,15 @@ pub(crate) fn resolve_intent(
                 "wildcard not allowed in emit".into(),
             ));
         }
-        args.push(resolve_term(t, bindings, actor)?);
+        let value = resolve_term(t, bindings, actor)?;
+        if value.contains_calendar_span() {
+            return Err(EvalError::TypeMismatch(format!(
+                "a calendar span cannot be emitted in intent `{}`: it shifts a \
+                 date inside an expression and is never itself a governed value",
+                intent.name
+            )));
+        }
+        args.push(value);
     }
     Ok(IntentInstance {
         name: intent.name.clone(),

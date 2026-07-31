@@ -95,6 +95,7 @@ impl SourceMap {
             | ValidationError::UnboundVariable { context, .. }
             | ValidationError::UnresolvedDefinitionCall { context, .. }
             | ValidationError::PreNotAvailable { context }
+            | ValidationError::CalendarSpanEscapesExpression { context, .. }
             | ValidationError::RetractsAppendOnly { context, .. }
             // Anchored on the top-level statement the later duplicate sits
             // in, which for one inside a `for` is the `for` itself - the
@@ -146,6 +147,13 @@ impl SourceMap {
             ValidationError::DisciplineLineageUnfit { pointer, .. } => {
                 self.decl_span(DeclKind::Predicate, pointer)
             }
+            // Unreachable from parsed source: the surface has no
+            // spelling for declaring a CalendarSpan argument. Anchored
+            // on the declaration defensively for hand-built IR routed
+            // through a source map.
+            ValidationError::CalendarSpanNotDeclarable { declaration, .. } => self
+                .decl_span(DeclKind::Predicate, declaration)
+                .or_else(|| self.decl_span(DeclKind::Intent, declaration)),
         }
     }
 

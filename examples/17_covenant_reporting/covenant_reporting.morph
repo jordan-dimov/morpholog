@@ -1,0 +1,211 @@
+program covenant_reporting
+
+-- ============================================================
+-- Covenant reporting: the loan's calendar as admission law
+-- ============================================================
+--
+-- A company that borrows a large sum does not just owe the money
+-- back. The loan agreement makes it keep promises while the debt is
+-- outstanding - covenants: keep debt below so many times earnings,
+-- keep interest covered, and so on. The lender cannot watch the
+-- borrower's books directly, so the agreement builds a reporting
+-- calendar instead. Time is cut into test periods. When a period
+-- ends, the borrower measures its covenants over it and delivers a
+-- compliance certificate - a signed statement that the promises
+-- held - within a fixed number of days. Miss the deadline and the
+-- lateness itself is a default, usually pricing up the loan for
+-- every day the certificate is missing.
+--
+-- Everything here runs on civil dates - the dates a contract names,
+-- like 2026-11-30 - not on clock time. And civil dates have their
+-- own arithmetic. "Three months after 30 November" is not a number
+-- of seconds; it is a walk through the calendar, and the calendar's
+-- months are not the same length. This programme is the one that
+-- brought that arithmetic into Morpholog: a span like span(P3M) -
+-- three calendar months - can shift a date, and subtracting one
+-- date from another counts the actual days between them. Both are
+-- used only inside the rules. No rule here ever invents a stored
+-- figure; whenever a figure like a day count is admitted, it is the
+-- caller who states it and the record that refuses it unless it is
+-- exactly right.
+
+-- ------------------------------------------------------------
+-- The claims: what this register is prepared to say
+-- ------------------------------------------------------------
+
+-- One facility (the loan), opened with the end date of its first
+-- test period - the anchor the whole calendar grows from. One
+-- facility has one anchor: the identifier determines the record.
+predicate Facility(facility: Subject, first_period_ends: Date)
+    unique by (facility)
+
+-- One test period of one facility, named by its own identifier and
+-- carrying the date it ends on. Periods are history: once admitted,
+-- never rewritten - the schedule may only grow.
+predicate TestPeriod(facility: Subject, period: Subject, ends_on: Date)
+    unique by (period)
+    append only
+
+-- The schedule's chain: each period follows exactly one prior
+-- period. Unique on the prior means no fork (a period has at most
+-- one successor); unique on the next means no merge (a period has
+-- at most one predecessor). Append only: the chain is never
+-- quietly re-linked.
+predicate Follows(next: Subject, prior: Subject)
+    unique by (prior)
+    unique by (next)
+    append only
+
+-- A delivered compliance certificate for one period, with the date
+-- it arrived. One certificate per period, and delivery is an event
+-- that happened - it does not unhappen.
+predicate Certificate(facility: Subject, period: Subject, delivered_on: Date)
+    unique by (period)
+    append only
+
+-- Standing, not storage: Timely says the record accepts the
+-- period's certificate as having landed inside the window. It is
+-- granted by an act below and defended by the invariants - a
+-- certificate can exist without ever earning this.
+predicate Timely(period: Subject)
+
+-- An overdue notice: as of a stated date, the period's certificate
+-- had not arrived, and it was days_late days past the deadline.
+-- The count is the claim's whole point - default interest runs on
+-- it - which is exactly why the caller does not get to choose it.
+predicate Overdue(period: Subject, as_of: Date, days_late: Decimal)
+    unique by (period)
+
+-- ------------------------------------------------------------
+-- The calendar rules
+-- ------------------------------------------------------------
+
+-- A schedule link may only connect two periods of the same
+-- facility, and both must exist. Without this, a link across
+-- facilities would quietly escape the rolling rule below.
+invariant follows_links_periods_of_one_facility:
+    Follows(next, prior) implies (exists f: TestPeriod(f, next, _) and TestPeriod(f, prior, _))
+
+-- Each period ends three calendar months after the one it follows.
+-- That is the agreement's own convention here: intervals from the
+-- prior test date, anniversary style. Be careful what that means.
+-- A calendar month is not a fixed length, so when the day does not
+-- exist in the destination month, the shift lands on the month's
+-- last day: 30 November + span(P3M) is 28 February (29 in a leap
+-- year). And clamping makes the walk drift: two three-month hops
+-- from 30 November reach 28 May, while one six-month shift reaches
+-- 30 May. Neither is wrong - that is what the words "three months
+-- after the previous date" do around month ends. An agreement that
+-- wants fixed quarter-ends (31 March, 30 June, 30 September,
+-- 31 December) needs different law entirely - this rule cannot pin
+-- that sequence, because 30 September plus three months is
+-- 30 December, not the 31st. Such an agreement would admit its
+-- named dates as contractual schedule claims and replace this
+-- anniversary rule with one governing that schedule.
+invariant periods_follow_three_month_anniversaries:
+    Follows(next, prior) and TestPeriod(f, next, next_ends) and TestPeriod(f, prior, prior_ends)
+    implies next_ends = prior_ends + span(P3M)
+
+-- ------------------------------------------------------------
+-- The certificate window
+-- ------------------------------------------------------------
+
+-- A certificate names a period the record actually has.
+invariant certificates_name_their_period:
+    Certificate(f, p, _) implies TestPeriod(f, p, _)
+
+-- Timely standing without a certificate would be an empty honour;
+-- this is the companion that makes the window rule below total.
+invariant timely_standing_names_a_certificate:
+    Timely(p) implies (exists f: Certificate(f, p, _))
+
+-- The window itself, and it has two edges. A certificate cannot
+-- attest a period that has not finished, so delivery comes no
+-- earlier than the period end; and it earns standing only through
+-- the 45th day after. The deadline is not a stored date anyone
+-- maintains - it is computed from the period's own end, each time,
+-- inside the rule.
+invariant timely_certificates_landed_inside_the_window:
+    Timely(p) and Certificate(f, p, delivered_on) and TestPeriod(f, p, ends_on)
+    implies ends_on on_or_before delivered_on on_or_before ends_on + span(P45D)
+
+-- ------------------------------------------------------------
+-- Overdue notices
+-- ------------------------------------------------------------
+
+-- A notice names a period the record has...
+invariant overdue_notices_name_a_period:
+    Overdue(p, _, _) implies (exists f: TestPeriod(f, p, _))
+
+-- ...and only stands once the deadline has genuinely passed.
+invariant overdue_notices_follow_the_deadline:
+    Overdue(p, as_of, _) and TestPeriod(f, p, ends_on)
+    implies (ends_on + span(P45D)) before as_of
+
+-- The count on the notice is the record's own count: the days from
+-- the deadline to the notice date, by the calendar. The caller
+-- states a figure; if it differs by a single day, the notice does
+-- not commit. Days here are actual days - the count a default
+-- interest clause multiplies.
+invariant overdue_notices_state_the_records_own_lateness:
+    let deadline = (ends_on + span(P45D))
+    Overdue(p, as_of, days_late) and TestPeriod(f, p, ends_on)
+    implies days_late = as_of - deadline
+
+-- A notice and a delivery must agree on the order of events: the
+-- notice date comes strictly before any delivery date. Read it in
+-- both directions. A notice cannot be declared for a period whose
+-- certificate had already arrived - and once a notice stands, a
+-- certificate backdated to before it is refused, whichever act is
+-- proposed first.
+invariant overdue_notices_precede_any_delivery:
+    Overdue(p, as_of, _) and Certificate(f, p, delivered_on)
+    implies as_of before delivered_on
+
+-- ------------------------------------------------------------
+-- The acts
+-- ------------------------------------------------------------
+
+-- Opening admits the facility and its first period in one act, so
+-- the anchor and the first calendar entry cannot disagree - they
+-- are the same value by construction.
+transformation open_facility(facility, first_period, first_period_ends):
+    admit Facility(facility, first_period_ends)
+    admit TestPeriod(facility, first_period, first_period_ends)
+
+-- Scheduling states the next period's end date; the anniversary
+-- rule above refuses any date that is not exactly three calendar
+-- months after the prior period's end.
+transformation schedule_next_period(facility, prior, next, ends_on):
+    require the_prior_period_exists: TestPeriod(facility, prior, _)
+    admit TestPeriod(facility, next, ends_on)
+    admit Follows(next, prior)
+
+-- Delivery is recorded whenever it happens - late delivery is a
+-- late delivery, not an inadmissible document. Whether it earns
+-- Timely standing is a separate act.
+transformation submit_certificate(facility, period, delivered_on):
+    require the_period_exists: TestPeriod(facility, period, _)
+    admit Certificate(facility, period, delivered_on)
+
+-- Granting standing looks up the period and the certificate the
+-- record already holds and gates on both edges of the window. The
+-- invariant above re-states the same rule over the committed
+-- record, so the standing stays honest even against later
+-- proposals.
+transformation accept_timely(facility, period):
+    bind TestPeriod(facility, period, ends_on)
+    bind Certificate(facility, period, delivered_on)
+    require delivery_landed_inside_the_window: ends_on on_or_before delivered_on on_or_before ends_on + span(P45D)
+    admit Timely(period)
+
+-- Declaring a period overdue: the deadline must have passed, and
+-- nothing may have been delivered by the notice date. The lateness
+-- figure is the caller's statement; the exactness invariant is what
+-- makes it trustworthy.
+transformation declare_overdue(facility, period, as_of, days_late):
+    bind TestPeriod(facility, period, ends_on)
+    let deadline = ends_on + span(P45D)
+    require the_deadline_has_passed: deadline before as_of
+    require nothing_was_delivered_by_then: not (exists d: Certificate(facility, period, d) and d on_or_before as_of)
+    admit Overdue(period, as_of, days_late)

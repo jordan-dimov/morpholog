@@ -27,6 +27,7 @@ pub mod format;
 pub mod ir_builder;
 
 pub mod analysis;
+pub mod calendar;
 mod check;
 mod compiled;
 mod controls;

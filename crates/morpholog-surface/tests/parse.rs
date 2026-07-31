@@ -1110,6 +1110,173 @@ invariant dur_forms:
 }
 
 #[test]
+fn span_literals_parse_in_value_position_and_round_trip() {
+    let source = "program spans
+predicate Period(p: Subject, ends_on: Date)
+predicate Notice(p: Subject, as_of: Date, days_late: Decimal)
+
+invariant lateness_is_the_records_own_count:
+    Notice(p, as_of, days_late) and Period(p, ends_on) implies days_late = as_of - (ends_on + span(P45D))
+
+transformation schedule(p, prior_end, next):
+    require Period(p, prior_end)
+    let next_end = prior_end + span(P3M)
+    admit Period(next, next_end)
+";
+    let program = parse_program(source).expect("span literals should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+}
+
+#[test]
+fn span_stays_usable_as_a_variable_name() {
+    // The constructor is contextual: `span` followed by `(` only.
+    let source = "program ctx
+predicate Holds(span: Decimal)
+transformation t(span):
+    admit Holds(span)
+";
+    let program = parse_program(source).expect("`span` as a name should parse");
+    assert!(program.validate().is_ok());
+}
+
+#[test]
+fn a_span_cannot_escape_through_an_any_slot_at_check_time() {
+    // The runtime refuses this too, but an authoring mistake known
+    // from the programme must not survive `check` and become an
+    // operational proposal error. `Any` is kind-compatible with
+    // everything, so without the dedicated refusal this validated.
+    let source = "program leak
+predicate Holds(payload: Any)
+transformation leak(l):
+    let sp = span(P3M)
+    admit Holds(sp)
+";
+    let program = parse_program(source).expect("parses");
+    let errors = program.validate().expect_err("the span must not escape");
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("cannot leave expression position")),
+        "got: {errors:?}"
+    );
+}
+
+#[test]
+fn a_span_cannot_escape_through_an_emit_or_a_derived_value() {
+    let emit_source = "program leak_emit
+intent Notify(payload: Any)
+predicate P(x: Subject)
+transformation leak(l):
+    let sp = span(P45D)
+    admit P(l)
+    emit Notify(sp)
+";
+    let derived_source = "program leak_derived
+predicate Period(p: Subject, ends_on: Date)
+predicate Out(p: Subject, v: Any)
+derived Out(p):
+    over Period(p, _)
+    value v = span(P3M)
+";
+    for source in [emit_source, derived_source] {
+        let program = parse_program(source).expect("parses");
+        let errors = program.validate().expect_err("the span must not escape");
+        assert!(
+            errors
+                .iter()
+                .any(|e| format!("{e}").contains("cannot leave expression position")),
+            "got: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn a_parameter_inferred_as_a_span_has_no_lawful_call_and_is_refused() {
+    // `sp` is only ever used as a span operand, so inference lands it
+    // on CalendarSpan - but no transition argument may carry one, so
+    // every invocation would be refused. That contradiction is the
+    // author's to fix, at check time. (The known side arrives via
+    // `bind`: a `require` walks a cloned scope, so kinds observed
+    // there do not export - matching the runtime's no-export rule.)
+    let source = "program impossible
+predicate SomeDate(d: Date)
+transformation shift(d, sp):
+    bind SomeDate(d)
+    let moved = d + sp
+    admit SomeDate(moved)
+";
+    let program = parse_program(source).expect("parses");
+    let errors = program.validate().expect_err("the parameter is unfillable");
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("parameter `sp`")),
+        "got: {errors:?}"
+    );
+}
+
+#[test]
+fn a_time_unit_span_literal_names_duration_as_the_fix() {
+    let source = "program bad_span
+predicate P(d: Date)
+transformation t(d):
+    require d before d + span(PT6H)
+    admit P(d)
+";
+    let err = parse_program(source).expect_err("PT6H is not a calendar span");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("invalid span literal") && msg.contains("duration("),
+        "diagnostic should point at duration(...): {msg}"
+    );
+}
+
+#[test]
+fn a_bare_number_span_payload_is_a_parse_diagnostic() {
+    let source = "program bad_span
+predicate P(d: Date)
+transformation t(d):
+    require d before d + span(3)
+    admit P(d)
+";
+    let err = parse_program(source).expect_err("a bare number is not a span");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("invalid span literal"),
+        "diagnostic should name the bad literal: {msg}"
+    );
+}
+
+#[test]
+fn the_refused_span_grammar_forms_each_get_a_diagnostic() {
+    // Lowercase units, signs, fractions, combined weeks, empty P: the
+    // kernel's own grammar refuses each with a named reason; the parse
+    // diagnostic carries it.
+    for bad in ["P3m", "P1W2D", "P1M1M", "P3M1Y", "P0DT0S"] {
+        let source = format!(
+            "program bad_span
+predicate P(d: Date)
+transformation t(d):
+    require d before d + span({bad})
+    admit P(d)
+"
+        );
+        let err = parse_program(&source)
+            .map(|_| ())
+            .expect_err(&format!("`{bad}` should be refused"));
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("invalid span literal"),
+            "`{bad}` diagnostic: {msg}"
+        );
+    }
+}
+
+#[test]
 fn an_impossible_calendar_timestamp_is_a_lex_diagnostic() {
     // Shape-valid but not a real instant: month 13. Caught at lex via
     // jiff, the same early-diagnostic treatment `duration(...)` gets.

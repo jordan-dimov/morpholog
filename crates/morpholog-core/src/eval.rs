@@ -500,6 +500,7 @@ fn runtime_kind_label(v: &EvalValue) -> String {
         EvalValue::Date(_) => "date".to_string(),
         EvalValue::Timestamp(_) => "timestamp".to_string(),
         EvalValue::Duration(_) => "duration".to_string(),
+        EvalValue::CalendarSpan(_) => "calendar span".to_string(),
         EvalValue::Quantity { unit, .. } => format!("Decimal[{unit}]"),
         EvalValue::Collection(_) => "collection".to_string(),
     }
@@ -527,6 +528,44 @@ pub(crate) fn parse_quantity_literal(
 pub(crate) fn parse_duration_literal(s: &str) -> Result<jiff::SignedDuration, EvalError> {
     s.parse::<jiff::SignedDuration>()
         .map_err(|e| EvalError::TypeMismatch(format!("invalid duration `{s}`: {e}")))
+}
+
+/// Parse a `Value::CalendarSpan(String)` literal through the kernel's
+/// own grammar ([`crate::calendar::parse_calendar_span`]). Centralised
+/// for the same drift-prevention reason as [`parse_date_literal`]; the
+/// surface diagnostic path routes through the same grammar.
+pub(crate) fn parse_calendar_span_literal(
+    s: &str,
+) -> Result<crate::calendar::CalendarSpan, EvalError> {
+    crate::calendar::parse_calendar_span(s)
+        .map_err(|e| EvalError::TypeMismatch(format!("invalid calendar span `{s}`: {e}")))
+}
+
+/// Shift a civil date by whole months, then whole days - the kernel's
+/// own calendar-shift semantics, spelled out rather than delegated:
+/// the month component moves the (year, month) coordinate and clamps
+/// the day to the destination month's length; the day component then
+/// steps the calendar day by day. `None` when the result leaves the
+/// representable calendar.
+fn shift_date(d: Date, months: i64, days: i64) -> Option<Date> {
+    let total = i64::from(d.year()) * 12 + i64::from(d.month()) - 1 + months;
+    let year = i16::try_from(total.div_euclid(12)).ok()?;
+    #[allow(clippy::cast_possible_truncation)] // rem_euclid(12) is 0..=11
+    let month = (total.rem_euclid(12) + 1) as i8;
+    let first = Date::new(year, month, 1).ok()?;
+    let day = d.day().min(first.days_in_month());
+    let landed = Date::new(year, month, day).ok()?;
+    let day_span = jiff::Span::new().try_days(days).ok()?;
+    landed.checked_add(day_span).ok()
+}
+
+/// The signed count of civil days from `from` to `to` (positive when
+/// `to` is later). Total for in-range dates: the difference of two
+/// representable dates always fits the day unit.
+fn days_between(from: Date, to: Date) -> i64 {
+    from.until(to)
+        .map(|span| i64::from(span.get_days()))
+        .unwrap_or_else(|_| unreachable!("the gap between two civil dates always fits in days"))
 }
 
 /// The claims worth checking when matching `predicate(args)` against
@@ -589,6 +628,9 @@ fn select_candidates<'a>(
             Term::Literal(Value::Duration(s)) => {
                 parse_duration_literal(s).ok().map(EvalValue::Duration)
             }
+            // No admitted claim can carry a calendar span, so as a
+            // ground argument it matches nothing.
+            Term::Literal(Value::CalendarSpan(_)) => None,
             Term::Literal(Value::Quantity { amount, unit }) => {
                 parse_quantity_literal(amount, unit).ok()
             }
@@ -759,6 +801,9 @@ fn match_args<'a>(
                     _ => return None,
                 }
             }
+            // A stored value is never a calendar span, so the pattern
+            // cannot match one.
+            Term::Literal(Value::CalendarSpan(_)) => return None,
             Term::Literal(Value::Quantity { amount, unit }) => {
                 let parsed = parse_quantity_literal(amount, unit).ok()?;
                 if *v != parsed {
@@ -917,6 +962,38 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     ArithOp::Sub => Ok(EvalValue::Duration(a.duration_since(b))),
                     _ => Err(EvalError::TypeMismatch(format!(
                         "{op:?} is not defined for two timestamps (only Sub: the gap between them)"
+                    ))),
+                },
+                // The civil-date rules. A calendar span shifts a date:
+                // months first (the day clamped to the destination
+                // month's length, so Jan 31 + P1M is Feb 28 or 29),
+                // then days as plain civil-day steps. Subtraction is
+                // the same walk with both components negated - which
+                // makes the shift neither reversible nor associative
+                // around clamped month ends; that is the calendar's
+                // own behaviour, not an approximation.
+                (EvalValue::Date(d), EvalValue::CalendarSpan(s)) => {
+                    let (months, days) = (i64::from(s.months), i64::from(s.days));
+                    let shifted = match op {
+                        ArithOp::Add => shift_date(d, months, days),
+                        ArithOp::Sub => shift_date(d, -months, -days),
+                        _ => {
+                            return Err(EvalError::TypeMismatch(format!(
+                                "{op:?} is not defined for date and calendar span"
+                            )));
+                        }
+                    };
+                    shifted.map(EvalValue::Date).ok_or_else(|| {
+                        EvalError::ArithOutOfRange(format!("date {op:?} {s} leaves the calendar"))
+                    })
+                }
+                // The gap between two dates is their signed count of
+                // actual days, as a decimal: the ACT numerator every
+                // actual-day count convention starts from.
+                (EvalValue::Date(a), EvalValue::Date(b)) => match op {
+                    ArithOp::Sub => Ok(EvalValue::Decimal(Decimal::from(days_between(b, a)))),
+                    _ => Err(EvalError::TypeMismatch(format!(
+                        "{op:?} is not defined for two dates (only Sub: the days between them)"
                     ))),
                 },
                 (EvalValue::Duration(a), EvalValue::Duration(b)) => match op {
@@ -1383,6 +1460,9 @@ pub(crate) fn resolve_term(
         Term::Literal(Value::Date(s)) => Ok(EvalValue::Date(parse_date_literal(s)?)),
         Term::Literal(Value::Timestamp(s)) => Ok(EvalValue::Timestamp(parse_timestamp_literal(s)?)),
         Term::Literal(Value::Duration(s)) => Ok(EvalValue::Duration(parse_duration_literal(s)?)),
+        Term::Literal(Value::CalendarSpan(s)) => {
+            Ok(EvalValue::CalendarSpan(parse_calendar_span_literal(s)?))
+        }
         Term::Literal(Value::Quantity { amount, unit }) => {
             Ok(parse_quantity_literal(amount, unit)?)
         }
@@ -1686,6 +1766,7 @@ pub(crate) fn render_eval_value(v: &EvalValue) -> String {
         EvalValue::Date(d) => d.to_string(),
         EvalValue::Timestamp(t) => t.to_string(),
         EvalValue::Duration(d) => d.to_string(),
+        EvalValue::CalendarSpan(s) => s.to_string(),
         EvalValue::Quantity { amount, unit } => format!("{amount} {unit}"),
         EvalValue::Collection(items) => {
             let inner: Vec<String> = items.iter().map(render_eval_value).collect();

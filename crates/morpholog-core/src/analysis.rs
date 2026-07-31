@@ -1052,6 +1052,7 @@ impl<'a> ParamCollector<'a> {
                 crate::ir::Value::Date(_) => PredicateArgKind::Date,
                 crate::ir::Value::Timestamp(_) => PredicateArgKind::Timestamp,
                 crate::ir::Value::Duration(_) => PredicateArgKind::Duration,
+                crate::ir::Value::CalendarSpan(_) => PredicateArgKind::CalendarSpan,
                 crate::ir::Value::Quantity { unit, .. } => PredicateArgKind::Quantity(unit.clone()),
             }),
             ValueExpr::Term(Term::Var(name)) => {
