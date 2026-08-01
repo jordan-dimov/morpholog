@@ -53,12 +53,26 @@ fn index_of(anchor: &str, sp: &str, at: &str, expected: &str) {
         };
         let t = transformation("bound", params(&[]), vec![require(prop)]);
         match propose_with_test_actor(&t, vec![], &State::default(), &[], &[]) {
-            // The boundary shift left the calendar: the clipped
-            // sentinel makes the property hold by definition.
-            Err(err) => assert!(
-                format!("{err}").contains("leaves the calendar"),
-                "boundary({k}) for anchor {anchor} span {sp}: {err}"
-            ),
+            // The boundary shift left the calendar. The clipping is
+            // DIRECTIONAL: a negative multiple escapes below and
+            // reads as negative infinity (lawful only for the lower
+            // bound), a positive multiple escapes above and reads as
+            // positive infinity (lawful only for the upper bound).
+            // Accepting either direction blindly would bless exactly
+            // the clipping mistakes this oracle exists to catch.
+            Err(err) => {
+                assert!(
+                    format!("{err}").contains("leaves the calendar"),
+                    "boundary({k}) for anchor {anchor} span {sp}: {err}"
+                );
+                let lawful = if upper { k > 0 } else { k < 0 };
+                assert!(
+                    lawful,
+                    "boundary({k}) escaped the calendar in the wrong direction for the \
+                     {} bound (anchor {anchor} span {sp} at {at})",
+                    if upper { "upper" } else { "lower" }
+                );
+            }
             Ok(outcome) => assert!(
                 matches!(outcome, Outcome::Accepted { .. }),
                 "boundary({k}) property failed for anchor {anchor} span {sp} at {at}: {outcome:?}"
@@ -178,7 +192,7 @@ fn a_literal_zero_span_is_refused_at_validation_by_name() {
     let errs = p.validate().expect_err("a zero span cannot validate");
     assert!(
         errs.iter()
-            .any(|e| format!("{e}").contains("positive span")),
+            .any(|e| format!("{e}").contains("positive span; got P0D")),
         "got: {errs:?}"
     );
     // The multi-component spelling normalises to the same zero.
@@ -195,7 +209,14 @@ fn a_literal_zero_span_is_refused_at_validation_by_name() {
             ),
         )])
         .build();
-    assert!(p.validate().is_err(), "P0Y0M0D normalises to zero");
+    // The diagnostic carries the NORMALISED span - the parsed value's
+    // own face, not the author's spelling.
+    let errs = p.validate().expect_err("P0Y0M0D normalises to zero");
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e}").contains("positive span; got P0D")),
+        "got: {errs:?}"
+    );
 }
 
 #[test]
@@ -226,20 +247,107 @@ fn a_zero_span_through_a_variable_is_refused_at_evaluation_by_name() {
 }
 
 #[test]
-fn slot_kind_mismatches_are_refused() {
+fn every_slot_kind_mismatch_is_refused() {
+    use morpholog_core::ValueExpr;
     use morpholog_core::ir_builder::{invariant, program};
-    let p = program("bad_kinds")
-        .invariants(vec![invariant(
-            "k",
-            eq(
-                period_index(term(dec("1")), term(span("P1Y")), term(date("2000-04-02"))),
-                term(dec("0")),
+    // One wrong slot per row: decimal anchor, date span, decimal
+    // position - the whole (Date, CalendarSpan, Date) contract.
+    let cases: Vec<(&str, ValueExpr)> = vec![
+        (
+            "decimal anchor",
+            period_index(term(dec("1")), term(span("P1Y")), term(date("2000-04-02"))),
+        ),
+        (
+            "date span",
+            period_index(
+                term(date("2000-04-01")),
+                term(date("2000-04-02")),
+                term(date("2000-04-03")),
             ),
+        ),
+        (
+            "decimal position",
+            period_index(term(date("2000-04-01")), term(span("P1Y")), term(dec("1"))),
+        ),
+    ];
+    for (label, expr) in cases {
+        let p = program("bad_kinds")
+            .invariants(vec![invariant("k", eq(expr, term(dec("0"))))])
+            .build();
+        let errs = p.validate().expect_err("a wrong slot kind cannot validate");
+        assert!(
+            errs.iter().any(|e| format!("{e}").contains("period_index")),
+            "{label}: expected a period_index slot refusal, got {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_variable_in_each_slot_refines_to_its_kind() {
+    use morpholog_core::ir_builder::{assert_, let_, predicate, program, var};
+    use morpholog_core::{ParamKind, PredicateArgKind, transformation_param_kinds};
+    // Parameters whose only use is a date slot land on Date: each
+    // slot refines a bare variable toward its contract.
+    let p = program("refines")
+        .predicates(vec![predicate("Out").decimal("v").build()])
+        .transformations(vec![transformation(
+            "probe",
+            params(&["a", "at"]),
+            vec![
+                let_(
+                    "n",
+                    period_index(term(var("a")), term(span("P1Y")), term(var("at"))),
+                ),
+                assert_("Out", vec![var("n")]),
+            ],
         )])
         .build();
-    let errs = p.validate().expect_err("a decimal anchor cannot validate");
+    let validated = p.validated().expect("programme validates");
+    let kinds = transformation_param_kinds(&validated, &"probe".into()).expect("kinds resolve");
+    for name in ["a", "at"] {
+        let kind = kinds
+            .iter()
+            .find(|(v, _)| v.as_str() == name)
+            .map(|(_, k)| k.clone())
+            .expect("is a parameter");
+        assert_eq!(
+            kind,
+            ParamKind::Concrete(PredicateArgKind::Date),
+            "`{name}` is used only in a period_index date slot"
+        );
+    }
+}
+
+#[test]
+fn a_parameter_refined_by_the_span_slot_cannot_escape_the_expression() {
+    use morpholog_core::ir_builder::{assert_, let_, predicate, program, var};
+    // The span slot refines a bare parameter to CalendarSpan - and a
+    // CalendarSpan parameter has no lawful argument vector, so the
+    // programme is refused at the boundary, not at runtime.
+    let p = program("escapes")
+        .predicates(vec![predicate("Out").decimal("v").build()])
+        .transformations(vec![transformation(
+            "probe",
+            params(&["sp"]),
+            vec![
+                let_(
+                    "n",
+                    period_index(
+                        term(date("2000-04-01")),
+                        term(var("sp")),
+                        term(date("2026-01-01")),
+                    ),
+                ),
+                assert_("Out", vec![var("n")]),
+            ],
+        )])
+        .build();
+    let errs = p
+        .validate()
+        .expect_err("a span-kinded parameter cannot validate");
     assert!(
-        errs.iter().any(|e| format!("{e}").contains("period_index")),
+        errs.iter()
+            .any(|e| format!("{e}").contains("no transition argument may carry a span")),
         "got: {errs:?}"
     );
 }

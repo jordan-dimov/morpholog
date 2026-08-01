@@ -1162,6 +1162,34 @@ transformation open_run(r, starts_on, ends_on):
 }
 
 #[test]
+fn period_index_is_lawful_inside_a_const_initialiser() {
+    // Pure over literals, so the consts walk recurses through it: a
+    // const-held index substitutes to exactly the IR the hand-inlined
+    // expression parses to.
+    let via_const = "program epoch
+const year = (period_index(@2000-04-01, span(P1Y), @2026-07-01))
+predicate Run(r: Subject, year: Decimal)
+transformation open_run(r):
+    let y = year
+    admit Run(r, y)
+";
+    let inlined = "program epoch
+predicate Run(r: Subject, year: Decimal)
+transformation open_run(r):
+    let y = period_index(@2000-04-01, span(P1Y), @2026-07-01)
+    admit Run(r, y)
+";
+    let a = parse_program(via_const).expect("the const initialiser should parse");
+    assert!(a.validate().is_ok(), "{:?}", a.validate());
+    let b = parse_program(inlined).expect("the inlined form should parse");
+    assert_eq!(
+        morpholog_core::format::format_program(&a),
+        morpholog_core::format::format_program(&b),
+        "const substitution and hand-inlining must canonicalise identically"
+    );
+}
+
+#[test]
 fn period_index_stays_usable_as_a_variable_name() {
     let source = "program ctx
 predicate Holds(period_index: Decimal)

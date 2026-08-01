@@ -608,12 +608,25 @@ fn period_index_of(
             None => n < 0,
         }
     };
-    // The widest useful search: one month or one day per step bounds
-    // |n| by the representable months/days range.
-    let cap: i64 = 250_000 + 7_400_000;
+    // The bracket is derived from the calendar itself, not a magic
+    // number: every accepted positive span advances adjacent
+    // boundaries by at least one civil day, so the index magnitude
+    // between any two representable dates cannot exceed the
+    // calendar's whole day range (plus room for the clipped outer
+    // period). A widened date representation widens the bound with
+    // it.
+    let cap: i64 = days_between(Date::MIN, Date::MAX) + 2;
     let (mut lo, mut hi) = (-cap, cap);
-    // Invariant: at_or_before(lo) && !at_or_before(hi).
-    debug_assert!(at_or_before(lo) && !at_or_before(hi));
+    // Enforced in release builds, not merely debug: this operator
+    // promises an exact total answer, and a broken bracket must be a
+    // loud programmer-error stop, never a silently wrong index. By
+    // construction it cannot fire (see the bound's derivation); an
+    // internal guard on a structurally-impossible state is within
+    // the kernel's no-panic-on-input doctrine.
+    assert!(
+        at_or_before(lo) && !at_or_before(hi),
+        "period_index bracket must hold by construction"
+    );
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
         if at_or_before(mid) {

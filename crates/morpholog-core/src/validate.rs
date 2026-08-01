@@ -377,8 +377,11 @@ pub enum ValidationError {
     /// periods at once. Refused at authoring time when literal; a
     /// span arriving through a defined-call parameter is the runtime
     /// backstop `EvalError::PeriodSpanNotPositive`.
-    #[error("period_index needs a positive span in {context}")]
-    PeriodSpanNotPositive { context: ValidationContext },
+    #[error("period_index needs a positive span; got {span} in {context}")]
+    PeriodSpanNotPositive {
+        span: String,
+        context: ValidationContext,
+    },
     /// A conditional's two branches carry distinct, incompatible
     /// kinds. Whichever branch is selected must hand the surrounding
     /// expression the same kind of value; `if(p, #meter, 100)` is a
