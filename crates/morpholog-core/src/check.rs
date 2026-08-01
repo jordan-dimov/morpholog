@@ -152,6 +152,13 @@ impl BoundEnv {
         self.bound.contains(name)
     }
 
+    /// The bound names themselves, for walks that must merge kind
+    /// evidence about entry-bound variables back across a non-export
+    /// boundary (the conditional's condition).
+    fn names(&self) -> impl Iterator<Item = &Var> {
+        self.bound.iter()
+    }
+
     /// Keep only variables also bound in `other`. Used to merge
     /// `or`-branch bindings: a variable is guaranteed bound after a
     /// disjunction only if every branch bound it, since the runtime
@@ -1034,6 +1041,19 @@ impl CheckCtx<'_> {
             } => {
                 let mut scoped = scope.clone();
                 self.walk_prop(when, &mut scoped);
+                // Witnesses do not export, but the condition's USE of
+                // a variable already bound on entry is ordinary kind
+                // evidence (`Member(who)` pins `who: Subject`), and
+                // dropping it with the clone would let the branch
+                // unification below refine the same variable to a
+                // contradictory kind that only fails at runtime.
+                let entry_bound: Vec<Var> = scope.bound.names().cloned().collect();
+                for name in entry_bound {
+                    let refined = scoped.kinds.lookup(&name);
+                    if matches!(refined, InferredKind::Known(_)) {
+                        self.observe_or_report(scope, &name, refined);
+                    }
+                }
                 let then_op = (self.infer_value(then, scope), value_var_name(then));
                 let otherwise_op = (
                     self.infer_value(otherwise, scope),

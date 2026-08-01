@@ -323,3 +323,49 @@ fn the_conditional_round_trips_through_the_formatter() {
         "{rendered}"
     );
 }
+
+#[test]
+fn condition_kind_evidence_survives_into_branch_unification() {
+    // The adversarial composition of the two walks: `Member(who)`
+    // pins `who: Subject` INSIDE the condition, and the `otherwise`
+    // branch is a decimal. If the condition's kind evidence died with
+    // the cloned scope, branch unification would refine `who` to
+    // Decimal and the mismatch would only surface at runtime, when
+    // the condition happens to hold. It must be refused at check
+    // time instead.
+    let p = program("kind_hole")
+        .predicates(vec![
+            predicate("Member").subject("who").build(),
+            predicate("Out").decimal("v").build(),
+        ])
+        .transformations(vec![transformation(
+            "record",
+            params(&["who"]),
+            vec![
+                let_(
+                    "picked",
+                    cond(
+                        claim("Member", vec![var("who")]),
+                        term(var("who")),
+                        term(dec("1")),
+                    ),
+                ),
+                let_(
+                    "incremented",
+                    morpholog_core::ir_builder::add(term(var("picked")), term(dec("1"))),
+                ),
+                assert_("Out", vec![var("incremented")]),
+            ],
+        )])
+        .build();
+    let errors = p
+        .validate()
+        .expect_err("a Subject-evidenced branch against a Decimal branch must not validate");
+    assert!(
+        errors.iter().any(|e| {
+            let rendered = format!("{e}");
+            rendered.contains("branches of `if`") || rendered.contains("first constrained")
+        }),
+        "got: {errors:?}"
+    );
+}

@@ -1019,3 +1019,24 @@ fn a_conditional_claim_is_not_a_governing_selection_false_positive() {
         "a condition is not an effective-time selection: {found:?}"
     );
 }
+
+#[test]
+fn a_conditional_under_an_outer_negation_still_triggers_it() {
+    // The whole equality is negated, flipping the polarity AROUND the
+    // conditional: the selection dependency must survive that too.
+    // Concretely: Charge(c, 100) is permanent, the pointer exists, and
+    // `not (100 = 90)` holds - retracting the pointer selects 100 and
+    // the historical charge starts violating the rule.
+    let source = COND_POINTER.replace(
+        "implies amount = if(CurrentDiscount(c, _), 90, 100)",
+        "implies not (amount = if(CurrentDiscount(c, _), 90, 100))",
+    );
+    let found = lints_of(&source);
+    assert!(
+        found.iter().any(|l| matches!(
+            l,
+            Lint::GateVsInvariant { pointer, .. } if pointer == "CurrentDiscount"
+        )),
+        "outer polarity must not hide the selection dependency: {found:?}"
+    );
+}

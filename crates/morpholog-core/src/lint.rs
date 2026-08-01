@@ -625,23 +625,24 @@ fn positive_value_claims(
         // exists to surface.
         ValueExpr::Extremum { body, .. } => positive_claims(body, positive, definitions, seen, out),
         // A conditional's condition SELECTS the expected value, so
-        // every predicate that can flip it - present, absent, or under
-        // `not` - is a dependency of the rule's meaning: retracting a
-        // pointer read only here rewrites what the rule expects of
-        // permanent history. The condition therefore contributes its
-        // whole reference set, polarity-blind (unlike a sum body,
-        // whose zero-match case changes a total, not a selection).
-        // The branches contribute normally; only one is taken, but
-        // which one is not knowable here, so the union is the
-        // conservative reading - the same posture as `or`.
+        // every predicate that can flip it - present, absent, under
+        // `not` inside the condition, or with the whole conditional
+        // sitting under an outer negation - is a dependency of the
+        // rule's meaning: retracting a pointer read only here
+        // rewrites what the rule expects of permanent history. The
+        // condition therefore contributes its whole reference set
+        // UNCONDITIONALLY, ignoring the surrounding polarity too
+        // (unlike a sum body, whose zero-match case changes a total,
+        // not a selection). The branches contribute normally; only
+        // one is taken, but which one is not knowable here, so the
+        // union is the conservative reading - the same posture as
+        // `or`.
         ValueExpr::Cond {
             when,
             then,
             otherwise,
         } => {
-            if positive {
-                crate::analysis::prop_refs(when, definitions, &mut BTreeSet::new(), out);
-            }
+            crate::analysis::prop_refs(when, definitions, &mut BTreeSet::new(), out);
             positive_value_claims(then, positive, definitions, seen, out);
             positive_value_claims(otherwise, positive, definitions, seen, out);
         }

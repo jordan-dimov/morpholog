@@ -242,9 +242,9 @@ transformation notice(p, as_of, days_late):
 const COND_ACROSS_CHILDREN: &str = "\
 program cond_across_children
 predicate OnlyWhen(w: Subject)
-predicate OnlyThen(t: Subject, amount: Decimal)
-predicate OnlyOtherwise(o: Subject, fallback: Decimal)
-predicate Out(x: Subject, v: Decimal)
+predicate OnlyThen(t: Subject, amount: Decimal[kWh])
+predicate OnlyOtherwise(o: Subject, fallback: Decimal[kWh])
+predicate Out(x: Subject, v: Decimal[kWh])
 define armed(w):
     OnlyWhen(w)
 invariant picked_is_lawful:
@@ -323,7 +323,10 @@ fn a_sum_inside_a_branch_receives_its_seed() {
     let ValueExpr::Sum { seed, .. } = then.as_ref() else {
         panic!("the then branch is a sum; got {then:?}");
     };
-    assert_eq!(*seed, SumSeed::Decimal);
+    // Decimal is the UNLOWERED default, so asserting it would pass
+    // whether or not the lowering ever reached the branch; the
+    // quantity seed only appears if it did.
+    assert_eq!(*seed, SumSeed::Quantity("kWh".into()));
 }
 
 fn parsed(name: &str, source: &str) -> Program {
