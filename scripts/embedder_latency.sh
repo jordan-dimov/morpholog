@@ -117,6 +117,10 @@ echo
 echo "morpholog session (one resident process, same ${N} proposals):"
 printf '  startup to ready (spawn + parse + validate + pool)   : %7.2f ms once\n' "$ready_ms"
 printf '  first request (connection + statement warm-up)       : %7.2f ms\n' "$first_ms"
-printf '  steady state median                                   : %7.2f ms/request\n' "$session_median"
-printf '  steady state p95                                      : %7.2f ms/request\n' "$session_p95"
-awk "BEGIN { printf \"  speed-up vs one-shot propose (mean vs mean)           : %7.1fx\\n\", $run_ms / $session_mean }"
+if awk "BEGIN { exit !($session_mean > 0) }"; then
+    printf '  steady state median                                   : %7.2f ms/request\n' "$session_median"
+    printf '  steady state p95                                      : %7.2f ms/request\n' "$session_p95"
+    awk "BEGIN { printf \"  speed-up vs one-shot propose (mean vs mean)           : %7.1fx\\n\", $run_ms / $session_mean }"
+else
+    echo "  (N < 2: no steady-state sample - raise N for medians and the ratio)"
+fi

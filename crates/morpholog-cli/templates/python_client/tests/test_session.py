@@ -116,6 +116,9 @@ for request in sys.stdin:
         say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
     elif mode == "bogus_rows":
         say(json.dumps([{"bogus": True}]))
+    elif mode == "binary_garbage":
+        sys.stdout.buffer.write(b"\xff\xfe\n")
+        sys.stdout.buffer.flush()
     elif mode == "stderr_flood":
         sys.stderr.write("x" * 1000000)
         sys.stderr.flush()
@@ -278,6 +281,19 @@ class Lifecycle(SessionHarness):
         with self.assertRaises(MorphologError) as err:
             s.claims()
         self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+
+    def test_undecodable_stdout_fails_promptly_not_a_hang(self):
+        # Invalid UTF-8 under the strict decoder kills the drain
+        # thread's iterator; without the sentinel guard the caller
+        # would block for the whole timeout (or forever without one).
+        import time
+
+        s = self.session(mode="binary_garbage", timeout=30.0)
+        t0 = time.monotonic()
+        with self.assertRaises(MorphologError):
+            s.claims()
+        self.assertLess(time.monotonic() - t0, 10.0, "must fail via the sentinel, not the timeout")
+        self.assertIsNotNone(s._poisoned)
 
     def test_a_malformed_row_inside_a_valid_array_poisons(self):
         # The framing is intact, but a binary/client contract mismatch

@@ -205,15 +205,27 @@ class Session:
     def _drain_stdout(self) -> None:
         stdout = self._child.stdout
         assert stdout is not None
-        for line in stdout:
-            self._responses.put(line)
-        self._responses.put(None)
+        try:
+            for line in stdout:
+                self._responses.put(line)
+        except (OSError, ValueError):
+            # A stream that cannot be read further - a decode error
+            # under strict UTF-8, a pipe closed under the reader - is
+            # the end of the conversation as far as lockstep is
+            # concerned; the sentinel below routes the waiting caller
+            # onto the process-ended path instead of a silent hang.
+            pass
+        finally:
+            self._responses.put(None)
 
     def _drain_stderr(self) -> None:
         stderr = self._child.stderr
         assert stderr is not None
-        for line in stderr:
-            self._stderr_tail.append(line.rstrip("\n"))
+        try:
+            for line in stderr:
+                self._stderr_tail.append(line.rstrip("\n"))
+        except (OSError, ValueError):
+            pass
 
     def _stderr_text(self) -> str:
         text = "\n".join(self._stderr_tail).strip()
