@@ -1276,6 +1276,28 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
+            ValueExpr::PeriodIndex { anchor, span, at } => {
+                self.check_operand_kind(anchor, PredicateArgKind::Date, "period_index", scope);
+                self.check_operand_kind(
+                    span,
+                    PredicateArgKind::CalendarSpan,
+                    "period_index",
+                    scope,
+                );
+                self.check_operand_kind(at, PredicateArgKind::Date, "period_index", scope);
+                // A literal zero span must be refused here; a span
+                // arriving through a defined-call parameter is the
+                // runtime backstop's job (the round quantum pattern).
+                if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(text))) = span.as_ref()
+                    && crate::calendar::parse_calendar_span(text)
+                        .is_ok_and(|s| s.months == 0 && s.days == 0)
+                {
+                    let context = self.context.clone();
+                    self.errors
+                        .push(ValidationError::PeriodSpanNotPositive { context });
+                }
+                InferredKind::Known(PredicateArgKind::Decimal)
+            }
         }
     }
 

@@ -120,6 +120,11 @@ fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
             resolve_in_value(then, names);
             resolve_in_value(otherwise, names);
         }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            resolve_in_value(anchor, names);
+            resolve_in_value(span, names);
+            resolve_in_value(at, names);
+        }
         ValueExpr::Abs(operand) => resolve_in_value(operand, names),
         ValueExpr::Round { value, quantum } => {
             resolve_in_value(value, names);
@@ -246,6 +251,11 @@ pub(crate) fn defined_calls_in_value(value: &ValueExpr, out: &mut BTreeSet<Defin
             defined_calls_in_prop(when, out);
             defined_calls_in_value(then, out);
             defined_calls_in_value(otherwise, out);
+        }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            defined_calls_in_value(anchor, out);
+            defined_calls_in_value(span, out);
+            defined_calls_in_value(at, out);
         }
         ValueExpr::Abs(operand) => defined_calls_in_value(operand, out),
         ValueExpr::Round { value, quantum } => {

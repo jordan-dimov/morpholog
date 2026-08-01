@@ -489,6 +489,12 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
                 )
             }
         }
+        ValueExpr::PeriodIndex { anchor, span, at } => format!(
+            "period_index({}, {}, {})",
+            format_value_inline(anchor),
+            format_value_inline(span),
+            format_value_inline(at)
+        ),
         ValueExpr::Abs(operand) => format!("abs({})", format_value_inline(operand)),
         ValueExpr::Round { value, quantum } => format!(
             "round({}, {})",

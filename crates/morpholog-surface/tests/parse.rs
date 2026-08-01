@@ -1140,6 +1140,53 @@ transformation record(line, charge, meter, proposed):
 }
 
 #[test]
+fn period_index_parses_in_gates_lets_and_invariants_and_round_trips() {
+    let source = "program periods
+const anchor = (@2000-04-01)
+predicate Run(r: Subject, starts_on: Date, ends_on: Date, year: Decimal)
+
+invariant runs_stay_inside_one_year:
+    Run(_, starts_on, ends_on, _) implies period_index(anchor, span(P1Y), starts_on) = period_index(anchor, span(P1Y), ends_on)
+
+transformation open_run(r, starts_on, ends_on):
+    require inside_one_year: period_index(anchor, span(P1Y), starts_on) = period_index(anchor, span(P1Y), ends_on)
+    let year = period_index(anchor, span(P1Y), starts_on)
+    admit Run(r, starts_on, ends_on, year)
+";
+    let program = parse_program(source).expect("period_index should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+}
+
+#[test]
+fn period_index_stays_usable_as_a_variable_name() {
+    let source = "program ctx
+predicate Holds(period_index: Decimal)
+transformation t(period_index):
+    require period_index + 1 <= 10
+    admit Holds(period_index)
+";
+    let program = parse_program(source).expect("`period_index` as a name should parse");
+    assert!(program.validate().is_ok());
+}
+
+#[test]
+fn a_two_argument_period_index_is_a_parse_error() {
+    let source = "program bad
+predicate P(v: Decimal)
+transformation t(v):
+    let x = period_index(@2000-04-01, span(P1Y))
+    admit P(x)
+";
+    parse_program(source)
+        .map(|_| ())
+        .expect_err("the extractor takes anchor, span, and position");
+}
+
+#[test]
 fn if_stays_usable_as_a_variable_name() {
     // Contextual: a constructor only when followed by `(`. As a bare
     // identifier - even in arithmetic - it is an ordinary variable.

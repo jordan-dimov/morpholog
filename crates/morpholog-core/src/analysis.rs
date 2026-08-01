@@ -160,6 +160,13 @@ fn value_refs(
             value_refs(then, definitions, seen, out);
             value_refs(otherwise, definitions, seen, out);
         }
+        // Pure arithmetic over its three children: no predicate of
+        // its own, but a lookup nested in a child still counts.
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            value_refs(anchor, definitions, seen, out);
+            value_refs(span, definitions, seen, out);
+            value_refs(at, definitions, seen, out);
+        }
         ValueExpr::Abs(operand) => value_refs(operand, definitions, seen, out),
         ValueExpr::Round { value, quantum } => {
             value_refs(value, definitions, seen, out);
@@ -1457,6 +1464,13 @@ impl<'a> ParamCollector<'a> {
                 self.walk_prop(when);
                 self.walk_value(then, expected.clone());
                 self.walk_value(otherwise, expected);
+            }
+            // Each slot pins its own kind; the result is Decimal
+            // regardless of `expected`.
+            ValueExpr::PeriodIndex { anchor, span, at } => {
+                self.walk_value(anchor, Some(PredicateArgKind::Date));
+                self.walk_value(span, Some(PredicateArgKind::CalendarSpan));
+                self.walk_value(at, Some(PredicateArgKind::Date));
             }
         }
     }
