@@ -495,6 +495,18 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             format_value_inline(value),
             format_value_inline(quantum)
         ),
+        // Function-shaped and self-delimiting, like round: no
+        // parenthesisation decisions, no precedence tier.
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => format!(
+            "if({}, {}, {})",
+            format_prop_inline(when),
+            format_value_inline(then),
+            format_value_inline(otherwise)
+        ),
     }
 }
 

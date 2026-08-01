@@ -51,7 +51,7 @@ pub fn predicates_referenced_by_prop(
 /// guards definition recursion: each definition body is walked once
 /// per top-level call, which both avoids rework and keeps the walk
 /// terminating on (invalid, cyclic) unvalidated IR.
-fn prop_refs(
+pub(crate) fn prop_refs(
     prop: &Prop,
     definitions: DefinitionIndex<'_>,
     seen: &mut BTreeSet<DefinitionName>,
@@ -146,6 +146,19 @@ fn value_refs(
         }
         ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
             prop_refs(body, definitions, seen, out);
+        }
+        // The footprint is the conservative union of the condition
+        // and BOTH branches: branch evaluation is lazy, but which
+        // branch will be taken is unknowable statically, so the
+        // durable adapter must load everything either could read.
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            prop_refs(when, definitions, seen, out);
+            value_refs(then, definitions, seen, out);
+            value_refs(otherwise, definitions, seen, out);
         }
         ValueExpr::Abs(operand) => value_refs(operand, definitions, seen, out),
         ValueExpr::Round { value, quantum } => {
@@ -1430,6 +1443,20 @@ impl<'a> ParamCollector<'a> {
             ValueExpr::Round { value, quantum } => {
                 self.walk_value(value, Some(PredicateArgKind::Decimal));
                 self.walk_value(quantum, Some(PredicateArgKind::Decimal));
+            }
+            // The condition pins nothing on the conditional's own
+            // kind; both branches carry the expected kind. The flat
+            // env unions their observations, so a parameter seen at
+            // two kinds across branches lands on Ambiguous exactly as
+            // it would across `or` branches.
+            ValueExpr::Cond {
+                when,
+                then,
+                otherwise,
+            } => {
+                self.walk_prop(when);
+                self.walk_value(then, expected.clone());
+                self.walk_value(otherwise, expected);
             }
         }
     }

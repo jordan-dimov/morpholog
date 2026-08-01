@@ -533,6 +533,17 @@ fn refuse_open_initialiser(
                 walk(value, c, const_names, errors);
                 walk(quantum, c, const_names, errors);
             }
+            // `if` evaluates a proposition, which is deliberately
+            // outside the constant-expression subset - a const is
+            // literals and earlier consts, never a decision.
+            ValueExpr::Cond { .. } => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` contains `if`, which evaluates a proposition - \
+                     a decision belongs in a rule, not a const",
+                    c.name
+                ),
+            )),
             // Named individually: a diagnostic that lists constructs the
             // author did not write sends them looking for the wrong line.
             ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } | ValueExpr::ValueOf { .. } => {
@@ -659,6 +670,15 @@ fn refuse_pattern_positions_in_value(
         ValueExpr::Round { value, quantum } => {
             refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
             refuse_pattern_positions_in_value(quantum, const_names, decl_span, errors);
+        }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            refuse_pattern_positions_in_prop(when, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(then, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(otherwise, const_names, decl_span, errors);
         }
     }
 }

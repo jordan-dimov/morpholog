@@ -956,3 +956,87 @@ invariant future_backstop:
         "a future-only witness is not a backstop: {found:?}"
     );
 }
+
+/// The conditional-selection hazard: a current-pointer read ONLY as
+/// an `if` condition still decides what a permanent record's rule
+/// expects, so retracting the pointer rewrites what history must
+/// satisfy - exactly the revocation shape GateVsInvariant surfaces.
+/// The condition contributes its whole reference set, polarity-blind.
+const COND_POINTER: &str = r#"
+program cond_pointer
+
+predicate Charge(charge_id: Subject, amount: Decimal)
+    append only
+predicate CurrentDiscount(charge_id: Subject, rate_id: Subject)
+    current pointer by (charge_id)
+
+transformation record(c, amount):
+    admit Charge(c, amount)
+
+transformation point(c, r):
+    admit CurrentDiscount(c, r)
+
+invariant amount_follows_the_discount:
+    Charge(c, amount) implies amount = if(CurrentDiscount(c, _), 90, 100)
+"#;
+
+#[test]
+fn a_pointer_read_only_as_a_condition_triggers_gate_vs_invariant() {
+    let found = lints_of(COND_POINTER);
+    assert!(
+        found.iter().any(|l| matches!(
+            l,
+            Lint::GateVsInvariant { pointer, .. } if pointer == "CurrentDiscount"
+        )),
+        "the condition selects the expected value, so the pointer is a \
+         dependency of the rule's meaning: {found:?}"
+    );
+}
+
+#[test]
+fn a_pointer_under_not_in_the_condition_also_triggers_it() {
+    let source = COND_POINTER.replace(
+        "if(CurrentDiscount(c, _), 90, 100)",
+        "if(not CurrentDiscount(c, _), 100, 90)",
+    );
+    let found = lints_of(&source);
+    assert!(
+        found.iter().any(|l| matches!(
+            l,
+            Lint::GateVsInvariant { pointer, .. } if pointer == "CurrentDiscount"
+        )),
+        "absence flips the branch just as presence does: {found:?}"
+    );
+}
+
+#[test]
+fn a_conditional_claim_is_not_a_governing_selection_false_positive() {
+    // A plain claim in a condition needs no totality companion:
+    // absence lawfully selects the other branch.
+    let found = lints_of(COND_POINTER);
+    assert!(
+        governing_finding(&found).is_none(),
+        "a condition is not an effective-time selection: {found:?}"
+    );
+}
+
+#[test]
+fn a_conditional_under_an_outer_negation_still_triggers_it() {
+    // The whole equality is negated, flipping the polarity AROUND the
+    // conditional: the selection dependency must survive that too.
+    // Concretely: Charge(c, 100) is permanent, the pointer exists, and
+    // `not (100 = 90)` holds - retracting the pointer selects 100 and
+    // the historical charge starts violating the rule.
+    let source = COND_POINTER.replace(
+        "implies amount = if(CurrentDiscount(c, _), 90, 100)",
+        "implies not (amount = if(CurrentDiscount(c, _), 90, 100))",
+    );
+    let found = lints_of(&source);
+    assert!(
+        found.iter().any(|l| matches!(
+            l,
+            Lint::GateVsInvariant { pointer, .. } if pointer == "CurrentDiscount"
+        )),
+        "outer polarity must not hide the selection dependency: {found:?}"
+    );
+}

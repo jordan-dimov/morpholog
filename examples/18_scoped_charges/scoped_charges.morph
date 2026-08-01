@@ -1,0 +1,101 @@
+program scoped_charges
+
+-- ============================================================
+-- Scoped charges: the record picks the figure's source
+-- ============================================================
+--
+-- A tariff prices many kinds of charge, and not every charge takes
+-- its quantity from the same place. A metered charge is priced off
+-- what the meter itself recorded - the caller has no say in the
+-- figure. A caller-sourced charge is priced off the quantity the
+-- caller proposes - a negotiated block, a contracted allowance -
+-- because there is nothing in the record to read it from. Which
+-- source applies is not the caller's choice either: the tariff
+-- declares it, once, per charge.
+--
+-- The trap in most billing systems is that this selection lives in
+-- application code: an if-statement in the billing engine decides
+-- which figure to apply, and nothing stops a bug - or a caller -
+-- from applying a proposed figure to a metered charge. Here the
+-- selection is part of the record's own law. One line act serves
+-- every source, and the applied figure is computed by the rules
+-- from the source the tariff declares: if(...) picks the meter's
+-- own reading for a metered charge and the caller's proposal
+-- otherwise, in the act AND in the invariant that re-checks every
+-- committed line. A line wearing the wrong source's figure cannot
+-- commit, and no future source multiplies the acts.
+--
+-- Before the conditional this was two acts - a record-quantity act
+-- and a caller-quantity act - duplicating their shared body, with
+-- every new source adding another copy. The deletion is the point:
+-- this example is the embedder's five-bodies collapse in miniature.
+
+-- ------------------------------------------------------------
+-- The claims
+-- ------------------------------------------------------------
+
+-- The tariff's declaration: which source prices this charge. The
+-- charge determines its source - one declaration, no rewrites.
+predicate TariffCharge(charge: Subject, source: Subject)
+    unique by (charge)
+    append only
+
+-- What the meter itself recorded. Append only and unique by the
+-- meter: one standing reading per meter in this single-period
+-- snapshot, and a reading does not unhappen.
+predicate MeterReading(meter: Subject, qty: Decimal)
+    unique by (meter)
+    append only
+
+-- One priced line. It keeps BOTH figures: what the caller proposed,
+-- and what the record applied. For a caller-sourced charge the two
+-- agree; for a metered charge the applied figure is the meter's, and
+-- the proposal is on the record for what it was - a proposal.
+predicate ChargeLine(line: Subject, charge: Subject, meter: Subject, proposed_qty: Decimal, applied_qty: Decimal)
+    unique by (line)
+    append only
+
+-- ------------------------------------------------------------
+-- The rules
+-- ------------------------------------------------------------
+
+-- Every line names a charge the tariff declares - the totality
+-- companion that keeps the selection below from passing emptily.
+invariant lines_name_a_declared_charge:
+    ChargeLine(_, charge, _, _, _) implies TariffCharge(charge, _)
+
+-- A source the rules do not know is refused at the declaration, so
+-- the selection can never meet a third case it has no branch for.
+invariant sources_are_the_known_two:
+    TariffCharge(_, source) implies (source = #meter or source = #caller)
+
+-- The selection itself, re-checked over every committed line: the
+-- applied figure IS the declared source's figure. For a metered
+-- charge that is the meter's own reading; otherwise the caller's
+-- proposal. The conditional evaluates only the branch the source
+-- selects, so a caller-sourced line needs no meter reading at all.
+invariant applied_quantity_follows_the_declared_source:
+    ChargeLine(_, charge, meter, proposed_qty, applied_qty) and TariffCharge(charge, source)
+    implies applied_qty = if(source = #meter, value MeterReading(meter, _), proposed_qty)
+
+-- ------------------------------------------------------------
+-- The acts
+-- ------------------------------------------------------------
+
+transformation declare_charge(charge, source):
+    admit TariffCharge(charge, source)
+
+transformation read_meter(meter, qty):
+    admit MeterReading(meter, qty)
+
+-- The ONE line act. It looks up the charge's declared source, gates
+-- on the selected source actually existing (a metered charge with no
+-- reading is a lawful refusal, not a kernel error - and a
+-- caller-sourced line needs no reading), then computes the applied
+-- figure from the source the record declares. The caller proposes;
+-- the record decides what applies.
+transformation record_line(line, charge, meter, proposed_qty):
+    bind TariffCharge(charge, source)
+    require the_selected_source_exists: source = #caller or (source = #meter and MeterReading(meter, _))
+    let applied_qty = if(source = #meter, value MeterReading(meter, _), proposed_qty)
+    admit ChargeLine(line, charge, meter, proposed_qty, applied_qty)

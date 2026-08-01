@@ -233,6 +233,27 @@ transformation notice(p, as_of, days_late):
     admit Notice(p, as_of, days_late)
 ";
 
+/// `if(...)` in a let-sugared invariant with a defined call inside
+/// the condition and a `sum` inside a branch: the new node meets
+/// every walker in the contexts the scoped-charges example uses it,
+/// with each of the three children carrying a predicate the others
+/// do not (so a walker that skips one child reddens the targeted
+/// footprint assertion below, not just the generic sweep).
+const COND_ACROSS_CHILDREN: &str = "\
+program cond_across_children
+predicate OnlyWhen(w: Subject)
+predicate OnlyThen(t: Subject, amount: Decimal[kWh])
+predicate OnlyOtherwise(o: Subject, fallback: Decimal[kWh])
+predicate Out(x: Subject, v: Decimal[kWh])
+define armed(w):
+    OnlyWhen(w)
+invariant picked_is_lawful:
+    let fallback_total = (sum(f | OnlyOtherwise(_, f)))
+    Out(x, v) implies v = if(armed(x), sum(a | OnlyThen(_, a)), fallback_total)
+transformation record(x, v):
+    admit Out(x, v)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -247,7 +268,65 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
         ("const_across_body_sorts", CONST_ACROSS_BODY_SORTS),
         ("span_in_date_arithmetic", SPAN_IN_DATE_ARITHMETIC),
+        ("cond_across_children", COND_ACROSS_CHILDREN),
     ]
+}
+
+/// The conditional's three children each carry a predicate the others
+/// do not; a broken walker that visits the condition but skips a
+/// branch (or vice versa) fails HERE, where the generic sweep's
+/// non-empty footprint check would still pass.
+#[test]
+fn the_conditional_footprint_carries_all_three_children() {
+    let program = parsed("cond_across_children", COND_ACROSS_CHILDREN);
+    let invariant = program
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "picked_is_lawful")
+        .expect("the fragment's invariant");
+    let mut refs = std::collections::BTreeSet::new();
+    morpholog_core::predicates_referenced_by_prop(&invariant.body, &program.definitions, &mut refs);
+    for expected in ["OnlyWhen", "OnlyThen", "OnlyOtherwise"] {
+        assert!(
+            refs.iter().any(|p| p.as_str() == expected),
+            "`{expected}` must be in the footprint (child-specific); got {refs:?}"
+        );
+    }
+}
+
+/// A sum nested in a conditional branch still receives its typed seed
+/// from `lower_sum_seeds` - the lowering descends both branches.
+#[test]
+fn a_sum_inside_a_branch_receives_its_seed() {
+    use morpholog_core::{Prop, SumSeed, ValueExpr};
+    let program = parsed("cond_across_children", COND_ACROSS_CHILDREN);
+    let invariant = program
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "picked_is_lawful")
+        .expect("the fragment's invariant");
+    // Walk to the conditional's `then` branch by the fragment's known
+    // shape (let-substituted: Implies { Out(..), v = if(..) }): the
+    // sum over a Decimal-declared position keeps the decimal seed -
+    // the point is that lowering REACHED it (an unlowered sum in a
+    // quantity position elsewhere would keep a wrong default
+    // silently).
+    let Prop::Implies { right, .. } = &invariant.body else {
+        panic!("fragment shape: implies; got {:?}", invariant.body);
+    };
+    let Prop::Eq(_, rhs) = right.as_ref() else {
+        panic!("fragment shape: v = if(..); got {right:?}");
+    };
+    let ValueExpr::Cond { then, .. } = rhs.as_ref() else {
+        panic!("fragment shape: a conditional; got {rhs:?}");
+    };
+    let ValueExpr::Sum { seed, .. } = then.as_ref() else {
+        panic!("the then branch is a sum; got {then:?}");
+    };
+    // Decimal is the UNLOWERED default, so asserting it would pass
+    // whether or not the lowering ever reached the branch; the
+    // quantity seed only appears if it did.
+    assert_eq!(*seed, SumSeed::Quantity("kWh".into()));
 }
 
 fn parsed(name: &str, source: &str) -> Program {

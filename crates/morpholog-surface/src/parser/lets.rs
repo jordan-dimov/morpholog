@@ -292,7 +292,8 @@ fn substitutable_term(value: &ValueExpr) -> Option<Term> {
         | ValueExpr::Extremum { .. }
         | ValueExpr::ValueOf { .. }
         | ValueExpr::Abs(_)
-        | ValueExpr::Round { .. } => None,
+        | ValueExpr::Round { .. }
+        | ValueExpr::Cond { .. } => None,
     }
 }
 
@@ -414,6 +415,15 @@ pub(super) fn substitute_in_value(
             );
             substitute_in_prop(body, name, value, binding, errors);
         }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            substitute_in_prop(when, name, value, binding, errors);
+            substitute_in_value(then, name, value, binding, errors);
+            substitute_in_value(otherwise, name, value, binding, errors);
+        }
         ValueExpr::ValueOf {
             predicate,
             args,
@@ -485,6 +495,17 @@ pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<Stri
         // let flowing into it is an ordinary term-slot substitution.
         ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
             collect_binders_in_prop(body, out)
+        }
+        // The condition's quantifier binders count for collision
+        // detection like a sum body's; the branches recurse.
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            collect_binders_in_prop(when, out);
+            collect_binders_in_value(then, out);
+            collect_binders_in_value(otherwise, out);
         }
         ValueExpr::Arith { left, right, .. } => {
             collect_binders_in_value(left, out);
@@ -577,6 +598,15 @@ pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
                 vars_in_value(d, out);
             }
         }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            vars_in_prop(when, out);
+            vars_in_value(then, out);
+            vars_in_value(otherwise, out);
+        }
         ValueExpr::Abs(operand) => vars_in_value(operand, out),
         ValueExpr::Round { value, quantum } => {
             vars_in_value(value, out);
@@ -628,6 +658,11 @@ fn count_value(expr: &ValueExpr, name: &Var) -> usize {
         ValueExpr::Round { value, quantum } => {
             count_value(value, name) + count_value(quantum, name)
         }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => count_prop(when, name) + count_value(then, name) + count_value(otherwise, name),
     }
 }
 
@@ -674,6 +709,15 @@ fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
         ValueExpr::Round { value, quantum } => {
             count_growth_value(value, name) + count_growth_value(quantum, name)
         }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            count_growth_prop(when, name)
+                + count_growth_value(then, name)
+                + count_growth_value(otherwise, name)
+        }
     }
 }
 
@@ -702,5 +746,10 @@ pub(super) fn value_nodes(expr: &ValueExpr) -> usize {
         }
         ValueExpr::Abs(operand) => value_nodes(operand),
         ValueExpr::Round { value, quantum } => value_nodes(value) + value_nodes(quantum),
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => prop_nodes(when) + value_nodes(then) + value_nodes(otherwise),
     }
 }

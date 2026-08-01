@@ -270,6 +270,17 @@ pub fn abs(operand: ValueExpr) -> ValueExpr {
     ValueExpr::Abs(Box::new(operand))
 }
 
+/// `if(when, then, otherwise)` - the value selected by whether the
+/// proposition holds; witnesses discarded, only the selected branch
+/// evaluates.
+pub fn cond(when: Prop, then: ValueExpr, otherwise: ValueExpr) -> ValueExpr {
+    ValueExpr::Cond {
+        when: Box::new(when),
+        then: Box::new(then),
+        otherwise: Box::new(otherwise),
+    }
+}
+
 /// `round(x, quantum)` - the multiple of `quantum` nearest to `x`,
 /// exact halves away from zero. Decimal-only.
 pub fn round(value: ValueExpr, quantum: ValueExpr) -> ValueExpr {

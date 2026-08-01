@@ -446,6 +446,26 @@ pub enum ValueExpr {
         value: Box<ValueExpr>,
         quantum: Box<ValueExpr>,
     },
+    /// `if(when, then, otherwise)`: the value selected by whether a
+    /// proposition holds. The test is exists-style - at least one
+    /// witness selects `then`, none selects `otherwise` - and the
+    /// witnesses' bindings are DISCARDED, the same non-export rule
+    /// `require` carries: nothing bound inside `when` reaches the
+    /// branches or the surrounding expression. Only the selected
+    /// branch evaluates (an error in the untaken branch cannot
+    /// surface), while an error in the condition itself propagates -
+    /// a condition that cannot be decided never silently selects
+    /// `otherwise`. Branch kinds unify with no ordering requirement:
+    /// selection is not ordering, so subject tags, booleans, and
+    /// collections are lawful branch kinds. A kernel node, not sugar:
+    /// no existing `ValueExpr` selects, and the relational spelling
+    /// (an `or` of tests) can only TEST an already-bound value, never
+    /// produce one.
+    Cond {
+        when: Box<Prop>,
+        then: Box<ValueExpr>,
+        otherwise: Box<ValueExpr>,
+    },
 }
 
 /// A comparison operator, independent of operand domain. Carried by

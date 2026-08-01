@@ -125,6 +125,18 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
                 *seed = resolved;
             }
         }
+        // Like Extremum, nothing of the conditional's own to type -
+        // but a sum inside the condition or either branch still needs
+        // its seed resolved.
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            lower_in_prop(when, ctx);
+            lower_in_value(then, ctx);
+            lower_in_value(otherwise, ctx);
+        }
         ValueExpr::Abs(operand) => lower_in_value(operand, ctx),
         ValueExpr::Round { value, quantum } => {
             lower_in_value(value, ctx);

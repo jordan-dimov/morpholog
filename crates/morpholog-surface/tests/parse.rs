@@ -1110,6 +1110,63 @@ invariant dur_forms:
 }
 
 #[test]
+fn conditionals_parse_nest_and_round_trip() {
+    // The forcing shape: a compound condition (a claim with commas,
+    // `and`, `=`), nested conditionals in BOTH branch positions, and
+    // arithmetic precedence around the self-delimiting form.
+    let source = "program conds
+predicate TariffCharge(charge: Subject, source: Subject)
+predicate MeterReading(meter: Subject, qty: Decimal)
+predicate Out(line: Subject, v: Decimal)
+
+invariant precedence_and_nesting:
+    Out(_, v) and TariffCharge(charge, source) implies v = 1 + if(TariffCharge(charge, #meter) and source = #meter, if(MeterReading(_, _), 2, 3), if(MeterReading(_, _), 4, 5)) * 4
+
+transformation record(line, charge, meter, proposed):
+    require TariffCharge(charge, _)
+    let applied = if(TariffCharge(charge, #meter), value MeterReading(meter, _), proposed)
+    admit Out(line, applied)
+";
+    let program = parse_program(source).expect("conditionals should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+    // Precedence: the `* 4` binds to the conditional, the `1 +` sits
+    // outside - the canonical rendering parenthesises the infix
+    // grouping, and the conditional itself needs none.
+    assert!(formatted.contains("1 + (if("), "{formatted}");
+}
+
+#[test]
+fn if_stays_usable_as_a_variable_name() {
+    // Contextual: a constructor only when followed by `(`. As a bare
+    // identifier - even in arithmetic - it is an ordinary variable.
+    let source = "program ctx
+predicate Holds(if: Decimal)
+transformation t(if):
+    require if + 1 <= 10
+    admit Holds(if)
+";
+    let program = parse_program(source).expect("`if` as a name should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+}
+
+#[test]
+fn a_two_argument_if_is_a_parse_error() {
+    let source = "program bad
+predicate P(v: Decimal)
+transformation t(v):
+    let x = if(P(_), 1)
+    admit P(x)
+";
+    parse_program(source)
+        .map(|_| ())
+        .expect_err("a conditional takes a proposition and two values");
+}
+
+#[test]
 fn span_literals_parse_in_value_position_and_round_trip() {
     let source = "program spans
 predicate Period(p: Subject, ends_on: Date)

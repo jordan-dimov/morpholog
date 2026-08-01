@@ -813,11 +813,33 @@ where
                 quantum: Box::new(quantum),
             });
 
+        // The conditional: `if ( <prop> , <value> , <value> )`. The
+        // value selected by whether the proposition holds. Contextual
+        // like `duration` - a constructor only when `if` is followed
+        // by `(` - so `if` stays a legal variable name. Function-
+        // shaped like `round`: self-delimiting, no precedence tier,
+        // no dangling else.
+        let if_expr = select! { Token::Ident(s) if s == "if" => () }
+            .ignore_then(
+                prop.clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(value.clone())
+                    .then_ignore(just(Token::Comma))
+                    .then(value.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|((when, then), otherwise)| ValueExpr::Cond {
+                when: Box::new(when),
+                then: Box::new(then),
+                otherwise: Box::new(otherwise),
+            });
+
         let primary = choice((
             sum_expr,
             min_max_expr,
             abs_expr,
             round_expr,
+            if_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,
