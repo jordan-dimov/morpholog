@@ -1,0 +1,74 @@
+program charging_years
+
+-- ============================================================
+-- Charging years: a period may not straddle the anniversary
+-- ============================================================
+--
+-- Electricity distribution is billed under charging years that run
+-- from 1 April to 31 March - the regulator publishes each year's
+-- band rates for exactly that window. A billing run resolves a
+-- supply's rates for ONE charging year, so a run whose period
+-- crosses 1 April would price part of its consumption under the
+-- wrong year's rates. The regulation's answer is simple: such a
+-- period is not billable as one run. Split it at the boundary.
+--
+-- The trap is where that rule usually lives: as prevalidation in
+-- application code, checked before the record is asked. A bug there
+-- - or a caller that skips the check - and a straddling run is on
+-- the books with no rule to refuse it. Here the boundary is the
+-- record's own law. A date's charging year is a computed
+-- coordinate: period_index counts how many whole years, anchored at
+-- 1 April, have elapsed at that date. The run's gate demands the
+-- period's two ends share that coordinate, the run records the
+-- charging year the rules computed - the caller cannot state it - and
+-- an invariant re-checks both over every committed run.
+--
+-- Two constants, honestly separated. The 1 APRIL is regulation -
+-- the charging methodology fixes it. The YEAR 2000 is merely an
+-- epoch: an arbitrary coordinate origin the index counts from, and
+-- changing it would shift every index without moving a single
+-- boundary. The recorded year below adds the epoch's year back, so
+-- the record says 2026 - the charging year's own name - never a
+-- bare offset from an origin nobody regulates.
+const charging_epoch = (@2000-04-01)
+const charging_epoch_year = (2000)
+
+-- One billing run: the period it covers and the charging year it
+-- resolved - computed by the rules, on the record, so a band-rate
+-- lookup can name its year. The period is INCLUSIVE at both ends:
+-- it covers starts_on through ends_on as billed days, so a full
+-- charging year runs 1 April through 31 March. Runs are history:
+-- one record per run, never rewritten.
+predicate BillingRun(run: Subject, starts_on: Date, ends_on: Date, charging_year: Decimal)
+    unique by (run)
+    append only
+
+-- A period runs forwards.
+invariant runs_run_forwards:
+    BillingRun(_, starts_on, ends_on, _) implies starts_on on_or_before ends_on
+
+-- The regulation's rule, over every committed run: both ends of the
+-- period sit in the same 1-April-anchored year. The coordinate is
+-- computed inside the rule, each time - there is no stored boundary
+-- date anyone maintains, and no prevalidation to skip.
+invariant runs_stay_inside_one_charging_year:
+    BillingRun(_, starts_on, ends_on, _)
+    implies period_index(charging_epoch, span(P1Y), starts_on) = period_index(charging_epoch, span(P1Y), ends_on)
+
+-- The recorded year is the record's own computation - the same
+-- recompute pattern the metered-billing example prices with: the
+-- caller never chooses the figure, and a figure that disagrees by
+-- one cannot commit.
+invariant runs_record_their_own_charging_year:
+    BillingRun(_, starts_on, _, charging_year)
+    implies charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
+
+-- The one act. The gate refuses a straddling period before anything
+-- is admitted; the let computes the coordinate the run will carry.
+-- Note what the caller does NOT supply: the charging year is not a
+-- parameter at all.
+transformation open_run(run, starts_on, ends_on):
+    require the_period_runs_forwards: starts_on on_or_before ends_on
+    require the_period_stays_inside_one_charging_year: period_index(charging_epoch, span(P1Y), starts_on) = period_index(charging_epoch, span(P1Y), ends_on)
+    let charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
+    admit BillingRun(run, starts_on, ends_on, charging_year)

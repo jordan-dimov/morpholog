@@ -45,6 +45,7 @@ if you want to read one end to end.
 | roll a date forward by calendar months, month-end safe | [17_covenant_reporting](17_covenant_reporting/) | `span(P3M)` shifting a `Date` |
 | count the days between two dates and refuse any other figure | [17_covenant_reporting](17_covenant_reporting/) | date subtraction, `as_of - deadline` |
 | record a value that follows which case the record shows | [18_scoped_charges](18_scoped_charges/) | `if(condition, a, b)` |
+| keep a period inside one anniversary-anchored year | [19_charging_years](19_charging_years/) | `period_index(anchor, span, at)` |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here

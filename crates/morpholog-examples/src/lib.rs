@@ -85,6 +85,7 @@ example_module!(carbon_credit_provenance {
         crate::invariant(&PROGRAM, "issued_unique_by_measurement")
     }
 });
+example_module!(charging_years);
 example_module!(chess_transition_invariants);
 example_module!(clinical_trial_enrolment {
     pub const ROLE_RANDOMISE_PARTICIPANT: &str = "randomise_participant";
