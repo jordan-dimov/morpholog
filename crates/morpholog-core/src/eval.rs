@@ -943,6 +943,11 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             then,
             otherwise,
         } => {
+            // Materialising every witness to answer a yes/no is the
+            // cost `Prop::Exists`, `Not`, `Implies`, and the `require`
+            // gate all pay today; a short-circuiting truth entry point
+            // would be one refactor across all five sites, taken when
+            // a measurement forces it, not piecemeal here.
             let matches = find_matches(when, ctx)?;
             if matches.is_empty() {
                 eval_value(otherwise, ctx)

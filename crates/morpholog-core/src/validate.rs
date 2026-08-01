@@ -377,7 +377,7 @@ pub enum ValidationError {
     /// expression the same kind of value; `if(p, #meter, 100)` is a
     /// kind error, not a runtime surprise.
     #[error(
-        "the branches of `if` must have the same kind; the taken branch would be {then_kind}, the other {otherwise_kind}, in {context}"
+        "the branches of `if` must have the same kind; `then` is {then_kind}, `otherwise` is {otherwise_kind}, in {context}"
     )]
     CondBranchKindMismatch {
         then_kind: PredicateArgKind,
