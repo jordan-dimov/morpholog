@@ -170,7 +170,7 @@ Not in the box yet: a worker supervisor and HTTP deliverer for the outbox, highe
 
 **How does a record's shape evolve once history exists?** By supersession, the same way records do: declare the new shape, carry forward with a governed transformation, and history stands as recorded. First-class migration tooling is future work.
 
-**Do I have to shell out to a CLI on every request?** The CLI is the non-Rust integration surface (~9ms per call, measured), and you don't hand-write the integration: `morpholog generate python-client` emits a complete, typed, dependency-free Python client from your own model, stamped with the hash of the rules it was built against. Rust embeds the library in-process. A long-running server mode and more languages follow when a real integration forces them.
+**Do I have to shell out to a CLI on every request?** No. One-shot CLI calls are the simple path (~9ms per call, measured), and `morpholog session` is the resident one: a single process that loads your rules once, holds a warm connection, and answers proposals and reads over stdio a few times faster per call - with the same JSON envelopes either way. You don't hand-write the integration: `morpholog generate python-client` emits a complete, typed, dependency-free Python client from your own model - including the session wrapper - stamped with the hash of the rules it was built against. Rust embeds the library in-process. A socket server mode and more languages follow when a real integration forces them.
 
 ## Deeper reading
 

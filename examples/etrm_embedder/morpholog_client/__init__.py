@@ -21,6 +21,11 @@ PYTHON_FLOOR = (3, 10)
 
 from . import envelopes, models, values  # noqa: E402
 from .adapter import Morpholog, MorphologError  # noqa: E402
+from .session import (  # noqa: E402
+    MorphologOutcomeUnknown,
+    MorphologRequestError,
+    Session,
+)
 
 __all__ = [
     "PROGRAM",
@@ -29,6 +34,9 @@ __all__ = [
     "PYTHON_FLOOR",
     "Morpholog",
     "MorphologError",
+    "MorphologOutcomeUnknown",
+    "MorphologRequestError",
+    "Session",
     "envelopes",
     "models",
     "values",

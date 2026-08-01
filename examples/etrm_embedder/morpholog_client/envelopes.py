@@ -612,6 +612,57 @@ class Explanation:
 
 
 @dataclass(frozen=True)
+class SessionReady:
+    """The first and only unprompted line a ``morpholog session``
+    emits. ``model_hash`` is the canonical rules-identity hash the
+    programme was pinned at; ``protocol`` is the wire's own version,
+    distinct from the binary's."""
+
+    model_hash: str
+    morpholog_version: str
+    program: str
+    protocol: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> SessionReady:
+        data = _strict(
+            "session ready",
+            payload,
+            {"model_hash", "morpholog_version", "program", "protocol", "status"},
+        )
+        if data["status"] != "ready":
+            raise EnvelopeError(f"session ready: unexpected status {data['status']!r}")
+        return cls(
+            model_hash=str(data["model_hash"]),
+            morpholog_version=str(data["morpholog_version"]),
+            program=str(data["program"]),
+            protocol=int(str(data["protocol"])),
+        )
+
+
+@dataclass(frozen=True)
+class SessionErrorReceipt:
+    """A per-request session failure with its stable ``code`` - the
+    field a caller consults to decide whether re-submitting is safe
+    (``serialization_failure`` is the one re-submittable code)."""
+
+    code: str
+    error: str
+    row: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> SessionErrorReceipt:
+        data = _strict("session error receipt", payload, {"code", "error", "row", "status"})
+        if data["status"] != "error":
+            raise EnvelopeError(f"session error receipt: unexpected status {data['status']!r}")
+        return cls(
+            code=str(data["code"]),
+            error=str(data["error"]),
+            row=int(str(data["row"])),
+        )
+
+
+@dataclass(frozen=True)
 class BatchError:
     error: str
 

@@ -89,6 +89,19 @@ pub fn with_default_user(url: &str) -> String {
     apply_default_user(url, user.as_deref())
 }
 
+/// A pool capped at one connection - the resident session's shape: a
+/// lockstep protocol cannot use a second connection, and the cap
+/// bounds database connection load when many application workers each
+/// hold a session open. The URL is taken as given; callers wanting
+/// the OS-user default apply [`with_default_user`] first.
+pub async fn single_connection_pool(url: &str) -> Result<PgPool, PgError> {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .map_err(crate::error::classify)
+}
+
 /// [`with_default_user`] with the username supplied rather than read
 /// from the environment - the testable core, and the form a caller with
 /// its own identity source wants.

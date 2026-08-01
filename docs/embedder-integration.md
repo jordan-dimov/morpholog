@@ -396,3 +396,93 @@ reserved for operational failure: unreadable input, a programme that
 fails validation, a broken connection. A serialization conflict
 (SQLSTATE 40001) surfaces in that row's error receipt; retries stay
 the caller's, per the runtime doctrine.
+
+## The resident session (`morpholog session`)
+
+```bash
+morpholog session <file.morph> --database-url ...
+```
+
+One process, many operations: parse and validate once, hold one warm
+connection, then answer NDJSON requests on stdin with the same pinned
+envelopes the one-shot commands print - one compact line per request,
+in order. This is the escape from the per-call subprocess and
+connection tax when an embedder drives many operations
+(`scripts/embedder_latency.sh` measures both paths side by side; a
+steady-state session proposal runs a few times faster than a one-shot
+`propose` locally, and over a remote link it also removes a
+connection handshake per call). The generated Python client wraps it
+as `Session`, a context manager with the same method names the
+one-shot client carries.
+
+**The protocol is lockstep.** One request line in, one response line
+out, strictly in order, no correlation ids. The first line out -
+unprompted - is the ready line (`session_ready` in the pinned
+schema): `status: "ready"`, the `protocol` number this wire speaks,
+and `model_hash`, the canonical rules-identity hash of the programme
+the session pinned at startup. The programme is read once: editing
+the file does not change a running session, and rolling out a new
+model means starting new sessions and draining old ones - the ready
+line tells a client what it got; it does not prevent an obsolete
+process from continuing to write. A deployment that must not run
+against the wrong model asserts the hash at open (the Python client's
+`expected_model_hash`).
+
+**Requests.** One JSON object per line, an `op` field naming the
+operation, remaining fields exactly the generated client's
+parameters. Unknown fields are refused, not ignored - a misspelt
+`predciates` must never silently mean "all predicates".
+
+- `{"op": "propose", "transformation": ..., "actor": ...,
+  "args"|"args_named": ..., "explain_on_reject"?: true}` - answered
+  with the batch receipt shape verbatim (`row` = the 1-based request
+  line number).
+- `{"op": "claims", "predicates"?: [...], "named"?: true,
+  "as_of"?: ..., "where"?: {...}}` - answered with the pinned claim
+  array (tagged or named), compact on one line.
+- `{"op": "derived", "name": ..., "named"?: true, "as_of"?: ...,
+  "where"?: {...}}` - the derived read, same array shapes.
+
+The streaming reads stay one-shot commands: the audit tail holds a
+read transaction open and coverage replays the whole log under a
+deferrable snapshot - neither fits a lockstep wire.
+
+**Per-request failure is a coded receipt; operational failure aborts.**
+A malformed line, an unknown operation or transformation, undecodable
+arguments, a serialization conflict, a kernel error, or a colliding
+intent answers with `session_error_receipt`: `status: "error"`, the
+`row`, the prose, and a stable `code` - because a caller deciding
+whether a retry is safe must never parse prose.
+`serialization_failure` is the one code that is safe to re-submit on;
+the session stays healthy after every coded receipt. An operational
+failure (a dead connection, a schema mismatch) aborts the process
+with a non-zero exit and no receipt.
+
+**A lost response is an unknown outcome.** Once a propose request has
+been written, a session that dies, hangs, or answers garbage leaves
+the commit outcome UNKNOWN - the database may have committed before
+the failure reached the caller. The generated client poisons the
+session (no later call can consume a late line) and raises
+`MorphologOutcomeUnknown`, distinct from both a coded refusal
+(`MorphologRequestError`) and an ordinary operational error: blind
+re-submission after an unknown outcome can duplicate a business
+action, so read the record first. Retries stay the caller's in every
+case, per the runtime doctrine.
+
+**Attestation is the batch's, documented.** Every commit still
+records `authenticated_by` from its own connection's `session_user`
+inside the committing transaction - which for a resident process is
+the session's role for its whole lifetime, exactly as a batch import
+records one role for all its rows. The per-request `actor` remains a
+caller assertion. Lineage granularity is therefore the process: a
+deployment that needs `authenticated_by` to discriminate callers runs
+one session per PostgreSQL role. The session holds exactly one
+connection, so many application workers each holding a session stay
+bounded on the database.
+
+The whole conversation is pinned: the two new envelopes are in
+`schema --result` and the golden set, and a golden transcript
+(`tests/golden/session/transcript.ndjson`) pins the request bytes the
+generated client emits and the response lines it parses - the Rust
+end-to-end test records it against a real database, the Python
+session tests replay it.

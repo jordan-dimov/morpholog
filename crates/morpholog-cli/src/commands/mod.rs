@@ -38,6 +38,7 @@ pub(crate) mod outbox;
 pub(crate) mod propose;
 pub(crate) mod refresh;
 pub(crate) mod schema;
+pub(crate) mod session;
 pub(crate) mod verify;
 
 /// One parsed `.morph` file with everything needed to render a
@@ -172,6 +173,17 @@ pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
     // tool; sqlx 0.9 alone reads it as `anonymous`.
     let url = morpholog_postgres::with_default_user(url);
     PgPool::connect(&url)
+        .await
+        .context("failed to connect to PostgreSQL")
+}
+
+/// `connect`, capped at one connection: the session's shape. A
+/// lockstep protocol cannot use a second connection, and the cap
+/// bounds database connection load when many application workers each
+/// hold a session open.
+pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
+    let url = morpholog_postgres::with_default_user(url);
+    morpholog_postgres::single_connection_pool(&url)
         .await
         .context("failed to connect to PostgreSQL")
 }

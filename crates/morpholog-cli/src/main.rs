@@ -37,7 +37,7 @@ mod commands;
         morpholog inspect claims           what is admitted right now?\n\n\
         The commands, by what you are doing:\n  \
         authoring a programme    check, hash, schema, generate\n  \
-        governing state          propose, explain, inspect\n  \
+        governing state          propose, explain, inspect, session\n  \
         running a deployment     init, refresh, outbox\n  \
         proving the record       audit\n  \
         discovering rules        evaluate\n\n\
@@ -114,6 +114,24 @@ enum Command {
     /// stdin, one receipt per row; `--explain-on-reject` attaches the
     /// structured explanation to refusals.
     Propose(ProposeArgs),
+
+    /// Serve propose and the page reads over stdio, resident.
+    ///
+    /// Parses and validates the programme once, holds one warm
+    /// database connection, and answers NDJSON requests on stdin with
+    /// the same JSON envelopes the one-shot commands print - one
+    /// compact line per request, in order. The escape from the
+    /// per-call subprocess and connection tax when an embedder drives
+    /// many operations: a propose request answers with the batch
+    /// receipt shape, the claims and derived reads with their pinned
+    /// arrays, and a per-request failure with an error receipt
+    /// carrying a stable `code`. The first line out is `status:
+    /// "ready"` with the programme's canonical hash - the programme
+    /// is pinned for the session's lifetime. EOF on stdin ends the
+    /// session cleanly; operational failure aborts it with a
+    /// non-zero exit. Protocol reference in
+    /// docs/embedder-integration.md.
+    Session(SessionArgs),
 
     /// Preview whether a change would be admitted or refused, and why.
     ///
@@ -1131,6 +1149,19 @@ pub(crate) struct SchemaArgs {
 /// implementer-facing tagged-EvalValue codec; the second is the
 /// embedder-facing bare-by-name codec that mirrors the JSON Schema
 /// `morpholog schema` emits.
+/// Args for `session`: the programme file to pin for the session's
+/// lifetime, and the database connection.
+#[derive(clap::Args, Debug)]
+pub(crate) struct SessionArgs {
+    /// Path to a `.morph` source file containing the programme. Read
+    /// once at startup; the ready line's `model_hash` is its
+    /// canonical rules-identity hash.
+    pub(crate) file: PathBuf,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+}
+
 #[derive(clap::Args, Debug)]
 pub(crate) struct ProposeArgs {
     /// Path to a `.morph` source file containing the programme.
@@ -1259,6 +1290,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Inspect { what } => commands::inspect::run(what).await,
         Command::Check(args) => commands::check::run(args),
         Command::Propose(args) => commands::propose::run(args).await,
+        Command::Session(args) => commands::session::run(args).await,
         Command::Explain(args) => commands::explain::run(args).await,
         Command::Outbox { what } => match what {
             OutboxCmd::Claim(args) => commands::outbox::claim(args).await,

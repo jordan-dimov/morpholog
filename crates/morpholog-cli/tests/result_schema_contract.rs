@@ -856,6 +856,26 @@ fn report_envelopes_serialize_as_pinned() {
             program: "envelopes".to_string(),
         }),
     );
+    {
+        use morpholog_cli::envelopes::{SessionErrorCode, SessionErrorReceipt, SessionReady};
+        // The version is stamped from the crate at serialization time,
+        // which would rot the golden on every release; pin the value
+        // shape with the field overridden to a fixed string.
+        let mut ready = to_value(&SessionReady::new(
+            format!("sha256:{}", "0".repeat(64)),
+            "envelopes".to_string(),
+        ));
+        ready["morpholog_version"] = serde_json::json!("0.0.0");
+        assert_golden("session_ready.json", &ready);
+        assert_golden(
+            "session_error_receipt.json",
+            &to_value(&SessionErrorReceipt::new(
+                SessionErrorCode::SerializationFailure,
+                "the proposal could not be decided: restart the transaction".to_string(),
+                17,
+            )),
+        );
+    }
     assert_golden(
         "check_report.json",
         &to_value(&CheckReport {
@@ -1670,6 +1690,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_committed_receipt.json", "batch_receipt"),
         ("batch_rejected_receipt.json", "batch_receipt"),
         ("batch_error_receipt.json", "batch_receipt"),
+        ("session_ready.json", "session_ready"),
+        ("session_error_receipt.json", "session_error_receipt"),
         ("explanation_admissible.json", "explanation"),
         ("explanation_gate.json", "explanation"),
         ("explanation_gate_named.json", "explanation"),
