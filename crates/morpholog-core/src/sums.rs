@@ -137,6 +137,11 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
             lower_in_value(then, ctx);
             lower_in_value(otherwise, ctx);
         }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            lower_in_value(anchor, ctx);
+            lower_in_value(span, ctx);
+            lower_in_value(at, ctx);
+        }
         ValueExpr::Abs(operand) => lower_in_value(operand, ctx),
         ValueExpr::Round { value, quantum } => {
             lower_in_value(value, ctx);

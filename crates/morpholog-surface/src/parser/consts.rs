@@ -529,6 +529,12 @@ fn refuse_open_initialiser(
                 walk(right, c, const_names, errors);
             }
             ValueExpr::Abs(operand) => walk(operand, c, const_names, errors),
+            // Pure arithmetic over literals: const-lawful, recurse.
+            ValueExpr::PeriodIndex { anchor, span, at } => {
+                walk(anchor, c, const_names, errors);
+                walk(span, c, const_names, errors);
+                walk(at, c, const_names, errors);
+            }
             ValueExpr::Round { value, quantum } => {
                 walk(value, c, const_names, errors);
                 walk(quantum, c, const_names, errors);
@@ -670,6 +676,11 @@ fn refuse_pattern_positions_in_value(
         ValueExpr::Round { value, quantum } => {
             refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
             refuse_pattern_positions_in_value(quantum, const_names, decl_span, errors);
+        }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            refuse_pattern_positions_in_value(anchor, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(span, const_names, decl_span, errors);
+            refuse_pattern_positions_in_value(at, const_names, decl_span, errors);
         }
         ValueExpr::Cond {
             when,

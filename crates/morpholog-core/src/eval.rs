@@ -82,6 +82,14 @@ pub enum EvalError {
     /// backstop for a quantum that arrives through a variable.
     #[error("round quantum must be positive, got {0}")]
     RoundQuantumNotPositive(String),
+    /// A `period_index(anchor, span, at)` whose span is zero: a
+    /// period needs a positive span, or every date would sit in
+    /// infinitely many periods at once. `Program::validate` catches a
+    /// literal zero span at authoring time; this is the runtime
+    /// backstop for a span that arrives through a defined-call
+    /// parameter.
+    #[error("period_index needs a positive span; got {0}")]
+    PeriodSpanNotPositive(String),
     /// A `round(x, quantum)` whose exact answer cannot be represented:
     /// the nearest multiple of the quantum lies outside the decimal
     /// range (or the operands' scales exceed what exact remainder
@@ -559,6 +567,77 @@ fn shift_date(d: Date, months: i64, days: i64) -> Option<Date> {
     landed.checked_add(day_span).ok()
 }
 
+/// The anniversary-anchored period index: the greatest integer n with
+/// `boundary(n) <= at`, where boundary(n) is the anchor shifted by the
+/// span's components multiplied by n ONCE (never n repeated clamped
+/// hops - the calendar's non-associativity would let those drift).
+/// Representable boundaries form half-open periods `[B(n), B(n+1))`;
+/// a boundary shifted below or above the representable calendar acts
+/// as negative or positive infinity respectively, so the FIRST AND
+/// LAST PERIODS ARE CLIPPED to the calendar and the operation is
+/// total for every representable (anchor, at) pair. Exact
+/// anniversaries enter the new period; dates before the anchor take
+/// negative indexes. Binary search over the monotone boundary
+/// sequence within fixed calendar-derived bounds: correctness over
+/// micro-optimisation.
+fn period_index_of(
+    anchor: Date,
+    span: crate::calendar::CalendarSpan,
+    at: Date,
+) -> Result<i64, EvalError> {
+    if span.months < 0 || span.days < 0 || (span.months == 0 && span.days == 0) {
+        return Err(EvalError::PeriodSpanNotPositive(span.to_string()));
+    }
+    let boundary = |n: i64| -> Option<Date> {
+        shift_date(
+            anchor,
+            n.checked_mul(i64::from(span.months))?,
+            n.checked_mul(i64::from(span.days))?,
+        )
+    };
+    // A boundary at or before `at`? Out-of-range candidates count as
+    // "no" above the calendar and "yes" below it.
+    let at_or_before = |n: i64| -> bool {
+        match boundary(n) {
+            Some(b) => b <= at,
+            // The shift left the calendar. A positive multiple of a
+            // positive span can only leave upward and a negative one
+            // only downward, so this IS the clipped-period sentinel:
+            // below the calendar reads as negative infinity (always
+            // at-or-before), above as positive infinity (never).
+            None => n < 0,
+        }
+    };
+    // The bracket is derived from the calendar itself, not a magic
+    // number: every accepted positive span advances adjacent
+    // boundaries by at least one civil day, so the index magnitude
+    // between any two representable dates cannot exceed the
+    // calendar's whole day range (plus room for the clipped outer
+    // period). A widened date representation widens the bound with
+    // it.
+    let cap: i64 = days_between(Date::MIN, Date::MAX) + 2;
+    let (mut lo, mut hi) = (-cap, cap);
+    // Enforced in release builds, not merely debug: this operator
+    // promises an exact total answer, and a broken bracket must be a
+    // loud programmer-error stop, never a silently wrong index. By
+    // construction it cannot fire (see the bound's derivation); an
+    // internal guard on a structurally-impossible state is within
+    // the kernel's no-panic-on-input doctrine.
+    assert!(
+        at_or_before(lo) && !at_or_before(hi),
+        "period_index bracket must hold by construction"
+    );
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if at_or_before(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(lo)
+}
+
 /// The signed count of civil days from `from` to `to` (positive when
 /// `to` is later). Total for in-range dates: the difference of two
 /// representable dates always fits the day unit.
@@ -938,6 +1017,38 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
         // evaluates, so an error in the untaken branch cannot
         // surface; an error in the condition itself propagates -
         // an undecidable condition never silently selects.
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            let anchor = match eval_value(anchor, ctx)? {
+                EvalValue::Date(d) => d,
+                other => {
+                    return Err(EvalError::TypeMismatch(format!(
+                        "period_index anchor must be a date, got {}",
+                        runtime_kind_label(&other)
+                    )));
+                }
+            };
+            let span = match eval_value(span, ctx)? {
+                EvalValue::CalendarSpan(s) => s,
+                other => {
+                    return Err(EvalError::TypeMismatch(format!(
+                        "period_index span must be a calendar span, got {}",
+                        runtime_kind_label(&other)
+                    )));
+                }
+            };
+            let at = match eval_value(at, ctx)? {
+                EvalValue::Date(d) => d,
+                other => {
+                    return Err(EvalError::TypeMismatch(format!(
+                        "period_index position must be a date, got {}",
+                        runtime_kind_label(&other)
+                    )));
+                }
+            };
+            Ok(EvalValue::Decimal(Decimal::from(period_index_of(
+                anchor, span, at,
+            )?)))
+        }
         ValueExpr::Cond {
             when,
             then,

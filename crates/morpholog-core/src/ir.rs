@@ -466,6 +466,27 @@ pub enum ValueExpr {
         then: Box<ValueExpr>,
         otherwise: Box<ValueExpr>,
     },
+    /// `period_index(anchor, span, at)`: which anniversary-anchored
+    /// period `at` falls in - the greatest integer n (as an
+    /// integer-valued decimal) whose nth boundary is at or before
+    /// `at`. Boundary n is the anchor shifted by the span's
+    /// components multiplied by n ONCE and applied with the standard
+    /// clamped walk - never n repeated clamped hops, which the
+    /// calendar's non-associativity would let drift. Representable
+    /// boundaries form half-open periods; a boundary beyond either
+    /// end of the representable calendar acts as an infinity, so the
+    /// outermost periods are clipped and the extractor is total,
+    /// with negative indexes before the anchor. The operator itself
+    /// reads no state (its children are ordinary value expressions,
+    /// walked as such), so a fully-literal use is lawful in a
+    /// `const`. A non-positive span is refused by name at validation
+    /// when written literally and at evaluation otherwise (the round
+    /// quantum pattern).
+    PeriodIndex {
+        anchor: Box<ValueExpr>,
+        span: Box<ValueExpr>,
+        at: Box<ValueExpr>,
+    },
 }
 
 /// A comparison operator, independent of operand domain. Carried by

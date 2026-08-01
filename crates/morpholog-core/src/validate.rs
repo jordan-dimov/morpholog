@@ -372,6 +372,16 @@ pub enum ValidationError {
         place: String,
         context: ValidationContext,
     },
+    /// A `period_index` whose span is a literal zero: a period needs
+    /// a positive span, or every date would sit in infinitely many
+    /// periods at once. Refused at authoring time when literal; a
+    /// span arriving through a defined-call parameter is the runtime
+    /// backstop `EvalError::PeriodSpanNotPositive`.
+    #[error("period_index needs a positive span; got {span} in {context}")]
+    PeriodSpanNotPositive {
+        span: String,
+        context: ValidationContext,
+    },
     /// A conditional's two branches carry distinct, incompatible
     /// kinds. Whichever branch is selected must hand the surrounding
     /// expression the same kind of value; `if(p, #meter, 100)` is a
@@ -745,6 +755,9 @@ fn value_depth_capped(
         } => prop_depth_capped(when, inner, depths)?
             .max(value_depth_capped(then, inner, depths)?)
             .max(value_depth_capped(otherwise, inner, depths)?),
+        ValueExpr::PeriodIndex { anchor, span, at } => value_depth_capped(anchor, inner, depths)?
+            .max(value_depth_capped(span, inner, depths)?)
+            .max(value_depth_capped(at, inner, depths)?),
     };
     let total = below + 1;
     (total <= budget).then_some(total)
@@ -884,6 +897,11 @@ fn value_exceeds_depth(
             prop_exceeds_depth(when, budget, depths)
                 || value_exceeds_depth(then, budget, depths)
                 || value_exceeds_depth(otherwise, budget, depths)
+        }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            value_exceeds_depth(anchor, budget, depths)
+                || value_exceeds_depth(span, budget, depths)
+                || value_exceeds_depth(at, budget, depths)
         }
     }
 }

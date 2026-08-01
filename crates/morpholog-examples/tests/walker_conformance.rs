@@ -254,6 +254,32 @@ transformation record(x, v):
     admit Out(x, v)
 ";
 
+/// `period_index` nested in a let-sugared invariant, reached through
+/// a defined call, and with EACH SLOT carrying a predicate the other
+/// slots lack (an anchor lookup, an `if` over a mode claim in the
+/// span slot, an observation lookup in the position slot): an omitted
+/// per-slot walker arm reddens the targeted footprint assertion, not
+/// just the generic sweep.
+const PERIOD_INDEX_ACROSS_CONTEXTS: &str = "\
+program period_index_across_contexts
+predicate AnchorDate(d: Date)
+predicate AnnualMode(m: Subject)
+predicate ObservationDate(r: Subject, d: Date)
+predicate Run(r: Subject, starts_on: Date, ends_on: Date, year: Decimal)
+predicate Waived(r: Subject)
+define same_year(a, b):
+    period_index(@2000-04-01, span(P1Y), a) = period_index(@2000-04-01, span(P1Y), b)
+invariant runs_stay_inside_one_year:
+    Run(_, starts_on, ends_on, _) implies same_year(starts_on, ends_on)
+invariant recorded_year_is_the_records_own:
+    let anchored = (period_index(value AnchorDate(_), if(AnnualMode(#on), span(P1Y), span(P1M)), value ObservationDate(r, _)))
+    Run(r, starts_on, _, year) implies year = if(Waived(r), 0 - 1, anchored)
+transformation open_run(r, starts_on, ends_on, year):
+    admit Run(r, starts_on, ends_on, year)
+transformation waive(r):
+    admit Waived(r)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -269,7 +295,29 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("const_across_body_sorts", CONST_ACROSS_BODY_SORTS),
         ("span_in_date_arithmetic", SPAN_IN_DATE_ARITHMETIC),
         ("cond_across_children", COND_ACROSS_CHILDREN),
+        ("period_index_across_contexts", PERIOD_INDEX_ACROSS_CONTEXTS),
     ]
+}
+
+/// The extractor's three slots each carry a predicate the others do
+/// not; a per-slot walker omission fails here, where the generic
+/// sweep's non-empty check would still pass.
+#[test]
+fn the_period_index_footprint_carries_all_three_slots() {
+    let program = parsed("period_index_across_contexts", PERIOD_INDEX_ACROSS_CONTEXTS);
+    let invariant = program
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "recorded_year_is_the_records_own")
+        .expect("the fragment's invariant");
+    let mut refs = std::collections::BTreeSet::new();
+    morpholog_core::predicates_referenced_by_prop(&invariant.body, &program.definitions, &mut refs);
+    for expected in ["AnchorDate", "AnnualMode", "ObservationDate"] {
+        assert!(
+            refs.iter().any(|p| p.as_str() == expected),
+            "`{expected}` must be in the footprint (slot-specific); got {refs:?}"
+        );
+    }
 }
 
 /// The conditional's three children each carry a predicate the others

@@ -608,6 +608,16 @@ fn positive_value_claims(
             positive_value_claims(left, positive, definitions, seen, out);
             positive_value_claims(right, positive, definitions, seen, out);
         }
+        // The operator itself adds no dependencies - unlike a
+        // conditional there is no selection semantics - but its
+        // children are ordinary value expressions (a lookup or a
+        // conditional can sit in any slot), so the ordinary walk
+        // recurses into each.
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            positive_value_claims(anchor, positive, definitions, seen, out);
+            positive_value_claims(span, positive, definitions, seen, out);
+            positive_value_claims(at, positive, definitions, seen, out);
+        }
         // abs reads its operand, so it requires whatever the operand does.
         ValueExpr::Abs(operand) => positive_value_claims(operand, positive, definitions, seen, out),
         // round reads both operands, so it requires whatever they do.

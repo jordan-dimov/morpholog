@@ -270,6 +270,17 @@ pub fn abs(operand: ValueExpr) -> ValueExpr {
     ValueExpr::Abs(Box::new(operand))
 }
 
+/// `period_index(anchor, span, at)` - which anniversary-anchored
+/// period `at` falls in, as an integer-valued decimal; negative
+/// before the anchor.
+pub fn period_index(anchor: ValueExpr, span: ValueExpr, at: ValueExpr) -> ValueExpr {
+    ValueExpr::PeriodIndex {
+        anchor: Box::new(anchor),
+        span: Box::new(span),
+        at: Box::new(at),
+    }
+}
+
 /// `if(when, then, otherwise)` - the value selected by whether the
 /// proposition holds; witnesses discarded, only the selected branch
 /// evaluates.

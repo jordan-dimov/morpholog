@@ -834,12 +834,33 @@ where
                 otherwise: Box::new(otherwise),
             });
 
+        // The period extractor: `period_index ( <value> , <value> ,
+        // <value> )` - anchor date, calendar span, position date.
+        // Contextual like `if` and `duration`, function-shaped like
+        // `round`: self-delimiting, no precedence tier.
+        let period_index_expr = select! { Token::Ident(s) if s == "period_index" => () }
+            .ignore_then(
+                value
+                    .clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(value.clone())
+                    .then_ignore(just(Token::Comma))
+                    .then(value.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|((anchor, span), at)| ValueExpr::PeriodIndex {
+                anchor: Box::new(anchor),
+                span: Box::new(span),
+                at: Box::new(at),
+            });
+
         let primary = choice((
             sum_expr,
             min_max_expr,
             abs_expr,
             round_expr,
             if_expr,
+            period_index_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,
