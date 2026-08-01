@@ -253,9 +253,20 @@ class Session:
                 stdin.write(wire + "\n")
                 stdin.flush()
             except (OSError, ValueError):
-                self._poison("the session process ended unexpectedly")
+                # A failed write or flush does NOT prove nothing
+                # crossed the process boundary: the line may have
+                # reached the pipe, and the proposal may have
+                # committed, before the failure surfaced here.
+                self._poison("the request could not be written reliably")
+                detail = self._stderr_text()
+                if commitful:
+                    raise MorphologOutcomeUnknown(
+                        "the proposal may have reached the session before the "
+                        "write failed; the commit outcome is unknown - read the "
+                        f"record before re-submitting.\n{detail}"
+                    ) from None
                 raise MorphologError(
-                    f"the session process ended unexpectedly:\n{self._stderr_text()}"
+                    f"the session process ended unexpectedly:\n{detail}"
                 ) from None
             self._row += 1
             expected_row = self._row
@@ -291,9 +302,12 @@ class Session:
                     raise MorphologError(message) from None
                 if receipt.row != expected_row:
                     self._poison("response row does not match the request")
-                    raise MorphologError(
+                    message = (
                         f"session answered row {receipt.row} to request {expected_row}"
                     )
+                    if commitful:
+                        raise MorphologOutcomeUnknown(message)
+                    raise MorphologError(message)
                 raise MorphologRequestError(receipt.code, receipt.error, receipt.row)
             return payload
 
@@ -353,7 +367,7 @@ class Session:
         """The bare claims read, as on the one-shot client: the claims
         table is the authority, an unknown predicate matches nothing."""
         rows = self._read_rows(self._claims_body(predicates, named=False, as_of=as_of))
-        return [envelopes.ClaimInstance.from_json(r) for r in rows]
+        return self._parse_rows(rows, envelopes.ClaimInstance)
 
     def claims_named(
         self,
@@ -368,13 +382,13 @@ class Session:
         if where:
             body["where"] = dict(where)
         rows = self._read_rows(body)
-        return [envelopes.NamedClaim.from_json(r) for r in rows]
+        return self._parse_rows(rows, envelopes.NamedClaim)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view through the session - always live,
         never the refresh cache, as on the one-shot client."""
         rows = self._read_rows(self._derived_body(name, named=False, as_of=as_of))
-        return [envelopes.ClaimInstance.from_json(r) for r in rows]
+        return self._parse_rows(rows, envelopes.ClaimInstance)
 
     def derived_named(
         self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
@@ -385,7 +399,7 @@ class Session:
         if where:
             body["where"] = dict(where)
         rows = self._read_rows(body)
-        return [envelopes.NamedClaim.from_json(r) for r in rows]
+        return self._parse_rows(rows, envelopes.NamedClaim)
 
     def _claims_body(
         self, predicates: tuple[str, ...], named: bool, as_of: str | None
@@ -413,3 +427,14 @@ class Session:
             self._poison("a read response was not the pinned array shape")
             raise MorphologError(f"malformed read response: {payload!r}")
         return payload
+
+    def _parse_rows(self, rows: list[object], cls: type) -> list[object]:
+        """Parse each row of a well-framed read array. A row that does
+        not match the pinned contract poisons the session: the framing
+        is intact, but a binary/client contract mismatch will not heal
+        on the next call."""
+        try:
+            return [cls.from_json(r) for r in rows]
+        except envelopes.EnvelopeError as exc:
+            self._poison("a read row did not match the pinned contract")
+            raise MorphologError(f"malformed read row: {exc}") from None

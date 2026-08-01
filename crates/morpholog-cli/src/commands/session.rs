@@ -113,32 +113,73 @@ fn write_line(out: &mut impl Write, value: &serde_json::Value) -> anyhow::Result
 
 /// `read_line` with the runaway guard: accumulates through the
 /// buffered reader so an input that never supplies a newline cannot
-/// allocate without bound. Returns the bytes read; 0 is EOF.
+/// allocate without bound. Bytes accumulate first and decode ONCE at
+/// the end of the line - a multibyte character split across two
+/// buffer fills is valid UTF-8 only in whole. Returns the bytes
+/// read; 0 is EOF.
 fn read_line_capped(input: &mut impl BufRead, line: &mut String) -> anyhow::Result<usize> {
-    let mut total = 0usize;
+    let mut bytes = Vec::new();
     loop {
         let chunk = input.fill_buf().context("reading a request line")?;
         if chunk.is_empty() {
-            return Ok(total); // EOF (possibly mid-line; the trim handles it).
+            break; // EOF (possibly mid-line; the trim handles it).
         }
         let (take, done) = match chunk.iter().position(|&b| b == b'\n') {
             Some(pos) => (pos + 1, true),
             None => (chunk.len(), false),
         };
-        total += take;
-        if total > MAX_REQUEST_LINE {
+        if bytes.len() + take > MAX_REQUEST_LINE {
             anyhow::bail!(
                 "a request line exceeded {MAX_REQUEST_LINE} bytes; a half-read line \
                  cannot be resynchronised, so the session aborts"
             );
         }
-        line.push_str(
-            std::str::from_utf8(&chunk[..take]).context("a request line is not valid UTF-8")?,
-        );
+        bytes.extend_from_slice(&chunk[..take]);
         input.consume(take);
         if done {
-            return Ok(total);
+            break;
         }
+    }
+    line.push_str(std::str::from_utf8(&bytes).context("a request line is not valid UTF-8")?);
+    Ok(bytes.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_line_capped;
+    use std::io::BufReader;
+
+    #[test]
+    fn a_multibyte_character_split_across_buffer_fills_decodes_whole() {
+        // A two-byte reader capacity forces the fill boundary through
+        // the middle of the two-byte `é`; per-chunk decoding refused
+        // this as invalid UTF-8.
+        let mut input = BufReader::with_capacity(2, "h\u{e9}llo\n{\"op\":\"x\"}\n".as_bytes());
+        let mut line = String::new();
+        let n = read_line_capped(&mut input, &mut line).expect("valid line");
+        assert_eq!(line, "h\u{e9}llo\n");
+        assert_eq!(n, line.len());
+        line.clear();
+        read_line_capped(&mut input, &mut line).expect("next line intact");
+        assert_eq!(line, "{\"op\":\"x\"}\n");
+    }
+
+    #[test]
+    fn eof_mid_line_returns_what_arrived() {
+        let mut input = BufReader::with_capacity(3, "tail without newline".as_bytes());
+        let mut line = String::new();
+        let n = read_line_capped(&mut input, &mut line).expect("reads to EOF");
+        assert_eq!(line, "tail without newline");
+        assert_eq!(n, line.len());
+        assert_eq!(read_line_capped(&mut input, &mut line).unwrap(), 0);
+    }
+
+    #[test]
+    fn genuinely_invalid_utf8_is_still_refused() {
+        let mut input = BufReader::new(&b"\xff\xfe\n"[..]);
+        let mut line = String::new();
+        let err = read_line_capped(&mut input, &mut line).expect_err("invalid bytes");
+        assert!(format!("{err:#}").contains("not valid UTF-8"));
     }
 }
 

@@ -68,6 +68,9 @@ note("HAS_DATABASE_URL " + str("DATABASE_URL" in os.environ))
 if mode == "no_ready":
     sys.stderr.write("cannot connect: " + os.environ.get("DATABASE_URL", "") + "\n")
     sys.exit(3)
+if mode == "exit_after_ready":
+    say(READY)
+    sys.exit(0)
 if mode == "never_ready":
     time.sleep(30)
     sys.exit(3)
@@ -109,6 +112,10 @@ for request in sys.stdin:
         say("this is not json")
     elif mode == "uncoded_error":
         say(json.dumps({"error": "prose only", "row": n, "status": "error"}))
+    elif mode == "wrong_row_error":
+        say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
+    elif mode == "bogus_rows":
+        say(json.dumps([{"bogus": True}]))
     elif mode == "stderr_flood":
         sys.stderr.write("x" * 1000000)
         sys.stderr.flush()
@@ -247,6 +254,38 @@ class Lifecycle(SessionHarness):
         s = self.session(mode="wrong_row")
         with self.assertRaises(MorphologOutcomeUnknown):
             s.propose("t", "a", {})
+
+    def test_a_wrong_row_error_receipt_is_also_outcome_unknown(self):
+        # The coded receipt cannot be associated with the submitted
+        # proposal once the row disagrees; commitful means unknown.
+        s = self.session(mode="wrong_row_error")
+        with self.assertRaises(MorphologOutcomeUnknown):
+            s.propose("t", "a", {})
+        self.assertIsNotNone(s._poisoned)
+
+    def test_a_failed_write_after_child_exit_is_outcome_unknown(self):
+        # The child exits right after ready; once it is gone, writing
+        # the request fails - but a failed write does not prove zero
+        # bytes crossed, so a propose is unknown, never plain error.
+        s = self.session(mode="exit_after_ready")
+        s._child.wait(timeout=10)
+        with self.assertRaises(MorphologOutcomeUnknown):
+            s.propose("t", "a", {})
+
+    def test_a_failed_write_on_a_read_stays_plain_operational(self):
+        s = self.session(mode="exit_after_ready")
+        s._child.wait(timeout=10)
+        with self.assertRaises(MorphologError) as err:
+            s.claims()
+        self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+
+    def test_a_malformed_row_inside_a_valid_array_poisons(self):
+        # The framing is intact, but a binary/client contract mismatch
+        # will not heal on the next call.
+        s = self.session(mode="bogus_rows")
+        with self.assertRaises(MorphologError):
+            s.claims()
+        self.assertIsNotNone(s._poisoned)
 
     def test_an_uncoded_error_receipt_is_drift_and_poisons(self):
         s = self.session(mode="uncoded_error")
