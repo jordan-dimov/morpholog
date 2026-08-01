@@ -951,16 +951,34 @@ impl CheckCtx<'_> {
         operator: &'static str,
         scope: &mut Scope,
     ) {
+        self.unify_value_kinds(left, right, scope, |l, r, context| {
+            ValidationError::EqualityKindMismatch {
+                operator,
+                left: l,
+                right: r,
+                context,
+            }
+        });
+    }
+
+    /// The shared two-value kind unification: `Any` compatibility,
+    /// most-specific joining, bare-variable write-back. Equality and
+    /// the conditional's branches share the algebra and own their
+    /// diagnostics through `mismatch`. Returns the combined kind so a
+    /// caller that IS a value expression (the conditional) can carry
+    /// it as its own inferred kind.
+    fn unify_value_kinds(
+        &mut self,
+        left: EqualityOperand<'_>,
+        right: EqualityOperand<'_>,
+        scope: &mut Scope,
+        mismatch: impl FnOnce(PredicateArgKind, PredicateArgKind, ValidationContext) -> ValidationError,
+    ) -> InferredKind {
         let combined = match (left.0, right.0) {
             (InferredKind::Known(l), InferredKind::Known(r)) => {
                 if !kinds_compatible(&l, &r) {
                     let context = self.context.clone();
-                    self.errors.push(ValidationError::EqualityKindMismatch {
-                        operator,
-                        left: l,
-                        right: r,
-                        context,
-                    });
+                    self.errors.push(mismatch(l, r, context));
                     None
                 } else {
                     Some(InferredKind::Known(more_specific(l, r)))
@@ -970,11 +988,12 @@ impl CheckCtx<'_> {
             | (InferredKind::UnknownOrAny, k @ InferredKind::Known(_)) => Some(k),
             (InferredKind::UnknownOrAny, InferredKind::UnknownOrAny) => None,
         };
-        if let Some(refined) = combined {
+        if let Some(refined) = &combined {
             for name in [left.1, right.1].into_iter().flatten() {
                 self.observe_or_report(scope, name, refined.clone());
             }
         }
+        combined.unwrap_or(InferredKind::UnknownOrAny)
     }
 
     fn check_equality_operands(
@@ -1002,6 +1021,31 @@ impl CheckCtx<'_> {
                     self.use_var(scope, name);
                 }
                 resolved_term_kind(term, &scope.kinds)
+            }
+            // The condition walks under a cloned scope (its bindings
+            // do not export - `require`'s rule); the branches infer
+            // against the OUTER scope and unify with no ordering
+            // allow-list: selection is not ordering, so subject tags,
+            // booleans, and collections are lawful branch kinds.
+            ValueExpr::Cond {
+                when,
+                then,
+                otherwise,
+            } => {
+                let mut scoped = scope.clone();
+                self.walk_prop(when, &mut scoped);
+                let then_op = (self.infer_value(then, scope), value_var_name(then));
+                let otherwise_op = (
+                    self.infer_value(otherwise, scope),
+                    value_var_name(otherwise),
+                );
+                self.unify_value_kinds(then_op, otherwise_op, scope, |t, o, context| {
+                    ValidationError::CondBranchKindMismatch {
+                        then_kind: t,
+                        otherwise_kind: o,
+                        context,
+                    }
+                })
             }
             ValueExpr::Arith { op, left, right } => {
                 let operator = arith_token(*op);

@@ -931,6 +931,25 @@ pub(crate) fn find_in_matches(
 pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
     match e {
         ValueExpr::Term(t) => resolve_term(t, ctx.bindings, ctx.actor),
+        // The exists-style test (`Prop::Exists` is the ancestor, not
+        // `Sum`): at least one witness selects `then`, none selects
+        // `otherwise`, and the witnesses' bindings are DISCARDED -
+        // `require`'s non-export rule. Only the selected branch
+        // evaluates, so an error in the untaken branch cannot
+        // surface; an error in the condition itself propagates -
+        // an undecidable condition never silently selects.
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            let matches = find_matches(when, ctx)?;
+            if matches.is_empty() {
+                eval_value(otherwise, ctx)
+            } else {
+                eval_value(then, ctx)
+            }
+        }
         ValueExpr::Arith { op, left, right } => {
             let l = eval_value(left, ctx)?;
             let r = eval_value(right, ctx)?;

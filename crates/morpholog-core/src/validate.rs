@@ -372,6 +372,18 @@ pub enum ValidationError {
         place: String,
         context: ValidationContext,
     },
+    /// A conditional's two branches carry distinct, incompatible
+    /// kinds. Whichever branch is selected must hand the surrounding
+    /// expression the same kind of value; `if(p, #meter, 100)` is a
+    /// kind error, not a runtime surprise.
+    #[error(
+        "the branches of `if` must have the same kind; the taken branch would be {then_kind}, the other {otherwise_kind}, in {context}"
+    )]
+    CondBranchKindMismatch {
+        then_kind: PredicateArgKind,
+        otherwise_kind: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// An equality (`==` or `!=`) had two operands of distinct,
     /// incompatible kinds. Symmetric by nature: there is no
     /// "expected" side - both kinds are equally constrained by the
@@ -726,6 +738,13 @@ fn value_depth_capped(
         ValueExpr::Abs(operand) => value_depth_capped(operand, inner, depths)?,
         ValueExpr::Round { value, quantum } => value_depth_capped(value, inner, depths)?
             .max(value_depth_capped(quantum, inner, depths)?),
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => prop_depth_capped(when, inner, depths)?
+            .max(value_depth_capped(then, inner, depths)?)
+            .max(value_depth_capped(otherwise, inner, depths)?),
     };
     let total = below + 1;
     (total <= budget).then_some(total)
@@ -856,6 +875,15 @@ fn value_exceeds_depth(
         ValueExpr::Round { value, quantum } => {
             value_exceeds_depth(value, budget, depths)
                 || value_exceeds_depth(quantum, budget, depths)
+        }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            prop_exceeds_depth(when, budget, depths)
+                || value_exceeds_depth(then, budget, depths)
+                || value_exceeds_depth(otherwise, budget, depths)
         }
     }
 }
