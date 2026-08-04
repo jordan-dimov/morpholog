@@ -1,8 +1,9 @@
 # Installing Morpholog from a release
 
 Fresh machine to a running worked example, no Rust toolchain. Prebuilt
-binaries exist for linux (x86_64 and arm64) and macOS (Apple Silicon
-and Intel). This prints the asset name for the machine you are on, or a
+binaries exist for linux (x86_64 and arm64) and macOS (Apple Silicon).
+Intel Macs build from source - the free Intel CI runner is gone, and
+an Intel Mac cannot run an Apple Silicon binary. This prints the asset name for the machine you are on, or a
 STOP if there is none (it deliberately does not `exit`, which would
 close an interactive shell):
 
@@ -11,7 +12,6 @@ TARGET=$(case "$(uname -s)/$(uname -m)" in
   Linux/x86_64)              echo x86_64-unknown-linux-musl ;;
   Linux/aarch64|Linux/arm64) echo aarch64-unknown-linux-musl ;;
   Darwin/arm64)              echo aarch64-apple-darwin ;;
-  Darwin/x86_64)             echo x86_64-apple-darwin ;;
 esac)
 [ -n "$TARGET" ] && echo "$TARGET" \
   || echo "STOP: no prebuilt binary for $(uname -s)/$(uname -m) - build from source instead (README)" >&2

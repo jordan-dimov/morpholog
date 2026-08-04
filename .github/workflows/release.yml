@@ -3,6 +3,13 @@
 # pipeline dry-run on any PR that touches it - so the first real tag is
 # never the first execution.
 #
+# Intel macOS is deliberately absent: GitHub retired the free
+# `macos-13` label, and the Intel images that replaced it are billed
+# larger runners. Every Mac sold since late 2020 is Apple Silicon, and
+# an Intel Mac cannot run an arm64 binary, so those users take the
+# source build - which the install guide names rather than leaving
+# them to discover a missing asset.
+#
 # Every target builds on a runner of its own architecture rather than
 # cross-compiling. The dependency tree reaches C and assembly (`ring`),
 # so cross-linking would need a C toolchain per target - and, more to
@@ -99,11 +106,6 @@ jobs:
             # symbol names, and the parser crate's combinator types
             # monomorphise into some of the longest in the workspace.
             # The classic linker has no such limit.
-            rustflags: "-C link-arg=-Wl,-ld_classic"
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            static: false
-            arch: x86_64
             rustflags: "-C link-arg=-Wl,-ld_classic"
     env:
       CARGO_TERM_COLOR: always
@@ -218,7 +220,7 @@ jobs:
           LABEL="${GITHUB_REF_NAME}"
           case "$GITHUB_REF" in refs/heads/main) LABEL="main" ;; esac
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
-                        aarch64-apple-darwin x86_64-apple-darwin; do
+                        aarch64-apple-darwin; do
             for suffix in tar.gz tar.gz.sha256; do
               test -f "morpholog-$LABEL-$target.$suffix" || {
                 echo "missing asset: morpholog-$LABEL-$target.$suffix" >&2
@@ -237,7 +239,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
-            --notes "Prebuilt binaries for linux (x86_64, arm64) and macOS (Apple Silicon, Intel). Install guide: docs/install.md (select by uname -s / uname -m, verify the checksum; the worked examples ship in the source archive below, no Rust toolchain needed)." \
+            --notes "Prebuilt binaries for linux (x86_64, arm64) and macOS (Apple Silicon). Install guide: docs/install.md (select by uname -s / uname -m, verify the checksum; the worked examples ship in the source archive below, no Rust toolchain needed). Intel Macs build from source - GitHub retired the free Intel runner." \
             morpholog-"$GITHUB_REF_NAME"-*.tar.gz \
             morpholog-"$GITHUB_REF_NAME"-*.tar.gz.sha256
 
