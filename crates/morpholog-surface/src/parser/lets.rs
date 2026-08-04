@@ -323,6 +323,84 @@ pub(super) fn substitute_term_slot(
     }
 }
 
+/// Inline one `let` binding everywhere it is used.
+///
+/// Two kinds of site, and the difference is the whole refusal story:
+/// a value position takes the whole expression, while a term slot -
+/// a claim or call argument, a membership operand, a sum target, a
+/// lookup key - takes a plain term or nothing. The slot the walk
+/// hands over is what lets the refusal say WHERE, which is the only
+/// part of this an author can act on.
+struct Substitute<'a> {
+    name: &'a Var,
+    value: &'a ValueExpr,
+    binding: &'a LetBinding,
+    errors: &'a mut Vec<(Span, String)>,
+}
+
+fn slot_prose(slot: morpholog_core::fold::TermSlot<'_>) -> String {
+    use morpholog_core::fold::TermSlot;
+    match slot {
+        TermSlot::ClaimArg { predicate, index } => {
+            format!("as argument {} of `{predicate}`", index + 1)
+        }
+        TermSlot::DefinedArg { callee, index } => {
+            format!("as argument {} of `{callee}`", index + 1)
+        }
+        TermSlot::LookupArg { predicate, index } => {
+            format!(
+                "as argument {} of the `value {predicate}` lookup",
+                index + 1
+            )
+        }
+        TermSlot::InOperand => "as an `in` operand".to_string(),
+        TermSlot::SumTarget => "as a sum target".to_string(),
+        TermSlot::ExtremumTarget { op } => match op {
+            morpholog_core::ExtremumOp::Max => "as a max target".to_string(),
+            morpholog_core::ExtremumOp::Min => "as a min target".to_string(),
+        },
+        // A body `let` reaches invariant and define bodies only, so
+        // neither statement arguments nor a bare value slot arrive
+        // here - the value hook takes the latter before the walk
+        // descends.
+        TermSlot::StatementArg | TermSlot::Value => "in a term position".to_string(),
+    }
+}
+
+impl morpholog_core::fold::Rewrite for Substitute<'_> {
+    fn value(&mut self, expr: &mut ValueExpr) -> morpholog_core::fold::Descend {
+        if matches!(expr, ValueExpr::Term(Term::Var(v)) if v == self.name) {
+            *expr = self.value.clone();
+            // The substituted copy is the binding's own value, already
+            // expanded against earlier lets; walking into it again
+            // would re-substitute what is not there to substitute.
+            return morpholog_core::fold::Descend::Skip;
+        }
+        morpholog_core::fold::Descend::Into
+    }
+
+    fn term(&mut self, term: &mut Term, slot: morpholog_core::fold::TermSlot<'_>) {
+        if !matches!(term, Term::Var(v) if v == self.name) {
+            return;
+        }
+        match substitutable_term(self.value) {
+            Some(t) => *term = t,
+            None => {
+                let where_ = slot_prose(slot);
+                self.errors.push((
+                    self.binding.span.clone(),
+                    format!(
+                        "computed {} `{}` is used {where_}, which takes plain terms \
+                         only - match a variable there and compare it with `{}` \
+                         separately",
+                        self.binding.noun, self.binding.name, self.binding.name
+                    ),
+                ));
+            }
+        }
+    }
+}
+
 pub(super) fn substitute_in_prop(
     prop: &mut Prop,
     name: &Var,
@@ -330,48 +408,13 @@ pub(super) fn substitute_in_prop(
     binding: &LetBinding,
     errors: &mut Vec<(Span, String)>,
 ) {
-    match prop {
-        Prop::Claim { predicate, args } => {
-            for (i, arg) in args.iter_mut().enumerate() {
-                let where_ = format!("as argument {} of `{predicate}`", i + 1);
-                substitute_term_slot(arg, name, value, binding, &where_, errors);
-            }
-        }
-        Prop::Defined { name: callee, args } => {
-            for (i, arg) in args.iter_mut().enumerate() {
-                let where_ = format!("as argument {} of `{callee}`", i + 1);
-                substitute_term_slot(arg, name, value, binding, &where_, errors);
-            }
-        }
-        Prop::In(l, r) => {
-            substitute_term_slot(l, name, value, binding, "as an `in` operand", errors);
-            substitute_term_slot(r, name, value, binding, "as an `in` operand", errors);
-        }
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                substitute_in_prop(p, name, value, binding, errors);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            substitute_in_prop(left, name, value, binding, errors);
-            substitute_in_prop(right, name, value, binding, errors);
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            substitute_in_prop(p, name, value, binding, errors);
-        }
-        Prop::Forall { source, body, .. } => {
-            substitute_in_prop(source, name, value, binding, errors);
-            substitute_in_prop(body, name, value, binding, errors);
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            substitute_in_value(l, name, value, binding, errors);
-            substitute_in_value(r, name, value, binding, errors);
-        }
-        Prop::Compare { left, right, .. } => {
-            substitute_in_value(left, name, value, binding, errors);
-            substitute_in_value(right, name, value, binding, errors);
-        }
-    }
+    let mut s = Substitute {
+        name,
+        value,
+        binding,
+        errors,
+    };
+    morpholog_core::fold::rewrite_prop(prop, &mut s);
 }
 
 pub(super) fn substitute_in_value(
@@ -381,74 +424,13 @@ pub(super) fn substitute_in_value(
     binding: &LetBinding,
     errors: &mut Vec<(Span, String)>,
 ) {
-    match expr {
-        ValueExpr::Term(Term::Var(v)) if v == name => {
-            *expr = value.clone();
-        }
-        ValueExpr::Term(_) => {}
-        ValueExpr::Arith { left, right, .. } => {
-            substitute_in_value(left, name, value, binding, errors);
-            substitute_in_value(right, name, value, binding, errors);
-        }
-        ValueExpr::Sum {
-            value: target,
-            body,
-            ..
-        } => {
-            substitute_term_slot(target, name, value, binding, "as a sum target", errors);
-            substitute_in_prop(body, name, value, binding, errors);
-        }
-        ValueExpr::Extremum {
-            op,
-            value: target,
-            body,
-        } => {
-            substitute_term_slot(
-                target,
-                name,
-                value,
-                binding,
-                match op {
-                    morpholog_core::ExtremumOp::Max => "as a max target",
-                    morpholog_core::ExtremumOp::Min => "as a min target",
-                },
-                errors,
-            );
-            substitute_in_prop(body, name, value, binding, errors);
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            substitute_in_prop(when, name, value, binding, errors);
-            substitute_in_value(then, name, value, binding, errors);
-            substitute_in_value(otherwise, name, value, binding, errors);
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            substitute_in_value(anchor, name, value, binding, errors);
-            substitute_in_value(span, name, value, binding, errors);
-            substitute_in_value(at, name, value, binding, errors);
-        }
-        ValueExpr::ValueOf {
-            predicate,
-            args,
-            default,
-        } => {
-            for (i, arg) in args.iter_mut().enumerate() {
-                let where_ = format!("as argument {} of the `value {predicate}` lookup", i + 1);
-                substitute_term_slot(arg, name, value, binding, &where_, errors);
-            }
-            if let Some(d) = default {
-                substitute_in_value(d, name, value, binding, errors);
-            }
-        }
-        ValueExpr::Abs(operand) => substitute_in_value(operand, name, value, binding, errors),
-        ValueExpr::Round { value: v, quantum } => {
-            substitute_in_value(v, name, value, binding, errors);
-            substitute_in_value(quantum, name, value, binding, errors);
-        }
-    }
+    let mut s = Substitute {
+        name,
+        value,
+        binding,
+        errors,
+    };
+    morpholog_core::fold::rewrite_value(expr, &mut s);
 }
 
 // ------------------------------------------------------------
@@ -631,118 +613,61 @@ pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
     }
 }
 
-fn count_term(term: &Term, name: &Var) -> usize {
-    usize::from(matches!(term, Term::Var(v) if v == name))
+/// How many times `name` appears anywhere in the tree - term slots
+/// included. The descent belongs to `morpholog_core::fold`; only the
+/// question is local.
+struct CountOccurrences<'a> {
+    name: &'a Var,
+    seen: usize,
+}
+
+impl morpholog_core::fold::Visit for CountOccurrences<'_> {
+    fn term(&mut self, term: &Term, _slot: morpholog_core::fold::TermSlot<'_>) {
+        if matches!(term, Term::Var(v) if v == self.name) {
+            self.seen += 1;
+        }
+    }
 }
 
 fn count_prop(prop: &Prop, name: &Var) -> usize {
-    match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => {
-            args.iter().map(|a| count_term(a, name)).sum()
-        }
-        Prop::In(l, r) => count_term(l, name) + count_term(r, name),
-        Prop::And(props) | Prop::Or(props) => props.iter().map(|p| count_prop(p, name)).sum(),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            count_prop(left, name) + count_prop(right, name)
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => count_prop(p, name),
-        Prop::Forall { source, body, .. } => count_prop(source, name) + count_prop(body, name),
-        Prop::Eq(l, r) | Prop::Neq(l, r) => count_value(l, name) + count_value(r, name),
-        Prop::Compare { left, right, .. } => count_value(left, name) + count_value(right, name),
-    }
+    let mut c = CountOccurrences { name, seen: 0 };
+    morpholog_core::fold::visit_prop(prop, &mut c);
+    c.seen
 }
 
 fn count_value(expr: &ValueExpr, name: &Var) -> usize {
-    match expr {
-        ValueExpr::Term(t) => count_term(t, name),
-        ValueExpr::Arith { left, right, .. } => count_value(left, name) + count_value(right, name),
-        ValueExpr::Sum {
-            value: target,
-            body,
-            ..
-        }
-        | ValueExpr::Extremum {
-            value: target,
-            body,
-            ..
-        } => count_term(target, name) + count_prop(body, name),
-        ValueExpr::ValueOf { args, default, .. } => {
-            args.iter().map(|a| count_term(a, name)).sum::<usize>()
-                + default.as_ref().map_or(0, |d| count_value(d, name))
-        }
-        ValueExpr::Abs(operand) => count_value(operand, name),
-        ValueExpr::Round { value, quantum } => {
-            count_value(value, name) + count_value(quantum, name)
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => count_prop(when, name) + count_value(then, name) + count_value(otherwise, name),
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            count_value(anchor, name) + count_value(span, name) + count_value(at, name)
+    let mut c = CountOccurrences { name, seen: 0 };
+    morpholog_core::fold::visit_value(expr, &mut c);
+    c.seen
+}
+
+/// Occurrences that can ENLARGE the tree when substituted: value
+/// position only. A term slot (claim or call argument, membership
+/// operand, sum target, lookup key) takes a 1-for-1 term swap when the
+/// value is a plain term, and a refusal otherwise, so it cannot grow.
+struct CountGrowthSites<'a> {
+    name: &'a Var,
+    seen: usize,
+}
+
+impl morpholog_core::fold::Visit for CountGrowthSites<'_> {
+    fn value(&mut self, value: &ValueExpr) {
+        if matches!(value, ValueExpr::Term(Term::Var(v)) if v == self.name) {
+            self.seen += 1;
         }
     }
 }
 
-// Growth counting: occurrences that can enlarge the tree when
-// substituted, i.e. value-position variable references only. Term
-// slots (claim/call arguments, membership operands, sum targets,
-// lookup keys) are excluded - substitution there is a 1-for-1 term
-// swap when the value is a plain term and a refusal otherwise.
 fn count_growth_prop(prop: &Prop, name: &Var) -> usize {
-    match prop {
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => 0,
-        Prop::And(props) | Prop::Or(props) => {
-            props.iter().map(|p| count_growth_prop(p, name)).sum()
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            count_growth_prop(left, name) + count_growth_prop(right, name)
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => count_growth_prop(p, name),
-        Prop::Forall { source, body, .. } => {
-            count_growth_prop(source, name) + count_growth_prop(body, name)
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            count_growth_value(l, name) + count_growth_value(r, name)
-        }
-        Prop::Compare { left, right, .. } => {
-            count_growth_value(left, name) + count_growth_value(right, name)
-        }
-    }
+    let mut c = CountGrowthSites { name, seen: 0 };
+    morpholog_core::fold::visit_prop(prop, &mut c);
+    c.seen
 }
 
 fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
-    match expr {
-        ValueExpr::Term(t) => count_term(t, name),
-        ValueExpr::Arith { left, right, .. } => {
-            count_growth_value(left, name) + count_growth_value(right, name)
-        }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            count_growth_prop(body, name)
-        }
-        ValueExpr::ValueOf { default, .. } => {
-            default.as_ref().map_or(0, |d| count_growth_value(d, name))
-        }
-        ValueExpr::Abs(operand) => count_growth_value(operand, name),
-        ValueExpr::Round { value, quantum } => {
-            count_growth_value(value, name) + count_growth_value(quantum, name)
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            count_growth_prop(when, name)
-                + count_growth_value(then, name)
-                + count_growth_value(otherwise, name)
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            count_growth_value(anchor, name)
-                + count_growth_value(span, name)
-                + count_growth_value(at, name)
-        }
-    }
+    let mut c = CountGrowthSites { name, seen: 0 };
+    morpholog_core::fold::visit_value(expr, &mut c);
+    c.seen
 }
 
 fn prop_nodes(prop: &Prop) -> usize {

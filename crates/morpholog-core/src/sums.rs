@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::definitions::DefinitionTable;
 use crate::ir::{
-    DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, Value, ValueExpr, Var,
+    DefinitionName, PredicateArgKind, Program, Prop, SumSeed, Term, Value, ValueExpr, Var,
 };
 use crate::validate::MAX_EXPR_DEPTH;
 
@@ -42,21 +42,22 @@ pub fn lower_sum_seeds(program: &mut Program) {
         kinds: &kinds,
         definitions: DefinitionTable::new(&definitions),
     };
+    let mut lowerer = LowerSeeds { ctx: &ctx };
     for def in &mut program.definitions {
-        lower_in_prop(&mut def.body, &ctx);
+        crate::fold::rewrite_prop(&mut def.body, &mut lowerer);
     }
     for inv in &mut program.invariants {
-        lower_in_prop(&mut inv.body, &ctx);
+        crate::fold::rewrite_prop(&mut inv.body, &mut lowerer);
     }
     for t in &mut program.transformations {
         for stmt in &mut t.body {
-            lower_in_stmt(stmt, &ctx);
+            crate::fold::rewrite_stmt(stmt, &mut lowerer);
         }
     }
     for dc in &mut program.derived_claims {
-        lower_in_prop(&mut dc.domain, &ctx);
+        crate::fold::rewrite_prop(&mut dc.domain, &mut lowerer);
         for v in &mut dc.values {
-            lower_in_value(&mut v.expr, &ctx);
+            crate::fold::rewrite_value(&mut v.expr, &mut lowerer);
         }
     }
 }
@@ -66,57 +67,20 @@ struct SeedContext<'a> {
     definitions: DefinitionTable<'a>,
 }
 
-fn lower_in_prop(prop: &mut Prop, ctx: &SeedContext<'_>) {
-    match prop {
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => {}
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                lower_in_prop(p, ctx);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            lower_in_prop(left, ctx);
-            lower_in_prop(right, ctx);
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => lower_in_prop(p, ctx),
-        Prop::Forall { source, body, .. } => {
-            lower_in_prop(source, ctx);
-            lower_in_prop(body, ctx);
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            lower_in_value(l, ctx);
-            lower_in_value(r, ctx);
-        }
-        Prop::Compare { left, right, .. } => {
-            lower_in_value(left, ctx);
-            lower_in_value(right, ctx);
-        }
-    }
+/// Resolve each `sum`'s seed to the kind its target carries. Only the
+/// `Sum` node matters; the descent is [`crate::fold`]'s.
+struct LowerSeeds<'a> {
+    ctx: &'a SeedContext<'a>,
 }
 
-fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
-    match value {
-        ValueExpr::Term(_) => {}
-        ValueExpr::ValueOf { default, .. } => {
-            if let Some(d) = default {
-                lower_in_value(d, ctx);
-            }
-        }
-        ValueExpr::Arith { left, right, .. } => {
-            lower_in_value(left, ctx);
-            lower_in_value(right, ctx);
-        }
-        // No seed to resolve: an empty extremum has no value, so there
-        // is nothing to type. The body still needs the pass, since a sum
-        // can sit inside it.
-        ValueExpr::Extremum { body, .. } => lower_in_prop(body, ctx),
-        ValueExpr::Sum { value, body, seed } => {
-            lower_in_prop(body, ctx);
+impl crate::fold::Rewrite for LowerSeeds<'_> {
+    fn value(&mut self, expr: &mut ValueExpr) -> crate::fold::Descend {
+        if let ValueExpr::Sum { value, body, seed } = expr {
             let resolved = match value {
                 // A variable's kind comes from the claim position that
                 // binds it; a literal target carries its kind itself
                 // (`sum(1 t | ...)` counts in tonnes, empty or not).
-                Term::Var(v) => var_seed(v, body, ctx, &mut BTreeSet::new()),
+                Term::Var(v) => var_seed(v, body, self.ctx, &mut BTreeSet::new()),
                 Term::Literal(Value::Quantity { unit, .. }) => {
                     Some(SumSeed::Quantity(unit.clone()))
                 }
@@ -127,44 +91,7 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
                 *seed = resolved;
             }
         }
-        // Like Extremum, nothing of the conditional's own to type -
-        // but a sum inside the condition or either branch still needs
-        // its seed resolved.
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            lower_in_prop(when, ctx);
-            lower_in_value(then, ctx);
-            lower_in_value(otherwise, ctx);
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            lower_in_value(anchor, ctx);
-            lower_in_value(span, ctx);
-            lower_in_value(at, ctx);
-        }
-        ValueExpr::Abs(operand) => lower_in_value(operand, ctx),
-        ValueExpr::Round { value, quantum } => {
-            lower_in_value(value, ctx);
-            lower_in_value(quantum, ctx);
-        }
-    }
-}
-
-fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
-    match stmt {
-        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => lower_in_prop(p, ctx),
-        Stmt::Let { value, .. } => lower_in_value(value, ctx),
-        Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {}
-        Stmt::For {
-            collection, body, ..
-        } => {
-            lower_in_value(collection, ctx);
-            for inner in body {
-                lower_in_stmt(inner, ctx);
-            }
-        }
+        crate::fold::Descend::Into
     }
 }
 
@@ -235,6 +162,7 @@ fn var_seed(
 mod tests {
     use super::*;
     use crate::ir::Definition;
+    use crate::ir::Stmt;
     use crate::ir_builder::{defined, invariant, predicate, program, sum};
     use crate::{CompareOp, OrderedDomain, Term, Value, Var};
 

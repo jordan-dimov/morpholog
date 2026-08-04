@@ -6,7 +6,7 @@
 //! arm, so a new IR variant forces exactly one edit here instead of
 //! one per walker.
 
-use crate::ir::{Prop, Term, ValueExpr, Var};
+use crate::ir::{ExtremumOp, Prop, Stmt, Term, ValueExpr, Var};
 
 /// True when any `Prop` node in the tree satisfies `f`, descending
 /// through comparison operands, `sum` bodies, `ValueOf` defaults, and
@@ -244,5 +244,338 @@ mod tests {
             right: Box::new(ValueExpr::Term(var_term("other"))),
         };
         assert!(any_term_in_value(&arith, &is_x));
+    }
+}
+
+// ============================================================
+// The rewriting half.
+// ============================================================
+
+/// Where a term sits in the grammar.
+///
+/// A pass that has to explain itself to an author needs to know which
+/// slot it was handed: "as argument 2 of `Posted`" reads very
+/// differently from "as a sum target", and only the walk knows which
+/// one it just reached. Carrying the position here keeps the descent
+/// in one place without flattening what a client can say about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermSlot<'a> {
+    /// Argument of a claim pattern.
+    ClaimArg { predicate: &'a str, index: usize },
+    /// Argument of a call to a definition.
+    DefinedArg { callee: &'a str, index: usize },
+    /// Either operand of a membership test.
+    InOperand,
+    /// The summed target of `sum(target | body)`.
+    SumTarget,
+    /// The target of `min` / `max`.
+    ExtremumTarget { op: ExtremumOp },
+    /// Key argument of a `value P(..)` lookup.
+    LookupArg { predicate: &'a str, index: usize },
+    /// A term standing alone as a whole value expression.
+    Value,
+    /// A term in a statement's own argument list - `admit`,
+    /// `retract`, `emit`.
+    StatementArg,
+}
+
+/// Whether a rewrite wants the walk to continue into the node it was
+/// just handed - `Skip` for a hook that has replaced the node and
+/// does not want its own output re-examined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Descend {
+    Into,
+    Skip,
+}
+
+/// An in-place rewrite of a `Prop` / `ValueExpr` / `Stmt` tree.
+///
+/// Implementors supply only what happens AT a node; the descent
+/// belongs to this module. Several passes used to carry a copy of it -
+/// call resolution, sum-seed lowering, and the parse-time
+/// substitutions - which is one place per pass to edit for a single
+/// new IR variant, and one chance per pass to forget.
+///
+/// Hooks fire pre-order: a node is offered to its hook, then its
+/// children are walked unless the hook answered [`Descend::Skip`].
+pub trait Rewrite {
+    fn prop(&mut self, _prop: &mut Prop) -> Descend {
+        Descend::Into
+    }
+    fn value(&mut self, _value: &mut ValueExpr) -> Descend {
+        Descend::Into
+    }
+    fn term(&mut self, _term: &mut Term, _slot: TermSlot<'_>) {}
+}
+
+/// Rewrite every node of a proposition.
+pub fn rewrite_prop(prop: &mut Prop, r: &mut impl Rewrite) {
+    if r.prop(prop) == Descend::Skip {
+        return;
+    }
+    match prop {
+        Prop::Claim { predicate, args } => {
+            for (index, a) in args.iter_mut().enumerate() {
+                let slot = TermSlot::ClaimArg {
+                    predicate: predicate.as_str(),
+                    index,
+                };
+                r.term(a, slot);
+            }
+        }
+        Prop::Defined { name, args } => {
+            for (index, a) in args.iter_mut().enumerate() {
+                let slot = TermSlot::DefinedArg {
+                    callee: name.as_str(),
+                    index,
+                };
+                r.term(a, slot);
+            }
+        }
+        Prop::In(l, rt) => {
+            r.term(l, TermSlot::InOperand);
+            r.term(rt, TermSlot::InOperand);
+        }
+        Prop::And(props) | Prop::Or(props) => {
+            for p in props {
+                rewrite_prop(p, r);
+            }
+        }
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            rewrite_prop(left, r);
+            rewrite_prop(right, r);
+        }
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => rewrite_prop(p, r),
+        Prop::Forall { source, body, .. } => {
+            rewrite_prop(source, r);
+            rewrite_prop(body, r);
+        }
+        Prop::Eq(l, rt) | Prop::Neq(l, rt) => {
+            rewrite_value(l, r);
+            rewrite_value(rt, r);
+        }
+        Prop::Compare { left, right, .. } => {
+            rewrite_value(left, r);
+            rewrite_value(right, r);
+        }
+    }
+}
+
+/// Rewrite every node of a value expression.
+pub fn rewrite_value(value: &mut ValueExpr, r: &mut impl Rewrite) {
+    if r.value(value) == Descend::Skip {
+        return;
+    }
+    match value {
+        ValueExpr::Term(t) => r.term(t, TermSlot::Value),
+        ValueExpr::Arith { left, right, .. } => {
+            rewrite_value(left, r);
+            rewrite_value(right, r);
+        }
+        ValueExpr::Sum {
+            value: target,
+            body,
+            ..
+        } => {
+            r.term(target, TermSlot::SumTarget);
+            rewrite_prop(body, r);
+        }
+        ValueExpr::Extremum {
+            op,
+            value: target,
+            body,
+        } => {
+            r.term(target, TermSlot::ExtremumTarget { op: *op });
+            rewrite_prop(body, r);
+        }
+        ValueExpr::ValueOf {
+            predicate,
+            args,
+            default,
+        } => {
+            for (index, a) in args.iter_mut().enumerate() {
+                let slot = TermSlot::LookupArg {
+                    predicate: predicate.as_str(),
+                    index,
+                };
+                r.term(a, slot);
+            }
+            if let Some(d) = default {
+                rewrite_value(d, r);
+            }
+        }
+        ValueExpr::Abs(operand) => rewrite_value(operand, r),
+        ValueExpr::Round { value, quantum } => {
+            rewrite_value(value, r);
+            rewrite_value(quantum, r);
+        }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            rewrite_prop(when, r);
+            rewrite_value(then, r);
+            rewrite_value(otherwise, r);
+        }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            rewrite_value(anchor, r);
+            rewrite_value(span, r);
+            rewrite_value(at, r);
+        }
+    }
+}
+
+/// Rewrite every node reachable from a transformation statement.
+pub fn rewrite_stmt(stmt: &mut Stmt, r: &mut impl Rewrite) {
+    match stmt {
+        Stmt::Require { prop, .. } | Stmt::BindOne { prop, .. } => rewrite_prop(prop, r),
+        Stmt::Let { value, .. } => rewrite_value(value, r),
+        Stmt::Assert(claim) => {
+            for a in &mut claim.args {
+                r.term(a, TermSlot::StatementArg);
+            }
+        }
+        Stmt::Emit(intent) => {
+            for a in &mut intent.args {
+                r.term(a, TermSlot::StatementArg);
+            }
+        }
+        Stmt::Retract { args, .. } => {
+            for a in args {
+                r.term(a, TermSlot::StatementArg);
+            }
+        }
+        Stmt::LetNewSubject { .. } => {}
+        Stmt::For {
+            collection, body, ..
+        } => {
+            rewrite_value(collection, r);
+            for inner in body {
+                rewrite_stmt(inner, r);
+            }
+        }
+    }
+}
+
+/// A read-only walk, the counting twin of [`Rewrite`]. The boolean
+/// folds above short-circuit; an accumulator needs everything.
+pub trait Visit {
+    fn prop(&mut self, _prop: &Prop) {}
+    fn value(&mut self, _value: &ValueExpr) {}
+    fn term(&mut self, _term: &Term, _slot: TermSlot<'_>) {}
+}
+
+/// Visit every node of a proposition.
+pub fn visit_prop(prop: &Prop, v: &mut impl Visit) {
+    v.prop(prop);
+    match prop {
+        Prop::Claim { predicate, args } => {
+            for (index, a) in args.iter().enumerate() {
+                let slot = TermSlot::ClaimArg {
+                    predicate: predicate.as_str(),
+                    index,
+                };
+                v.term(a, slot);
+            }
+        }
+        Prop::Defined { name, args } => {
+            for (index, a) in args.iter().enumerate() {
+                let slot = TermSlot::DefinedArg {
+                    callee: name.as_str(),
+                    index,
+                };
+                v.term(a, slot);
+            }
+        }
+        Prop::In(l, r) => {
+            v.term(l, TermSlot::InOperand);
+            v.term(r, TermSlot::InOperand);
+        }
+        Prop::And(props) | Prop::Or(props) => {
+            for p in props {
+                visit_prop(p, v);
+            }
+        }
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            visit_prop(left, v);
+            visit_prop(right, v);
+        }
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => visit_prop(p, v),
+        Prop::Forall { source, body, .. } => {
+            visit_prop(source, v);
+            visit_prop(body, v);
+        }
+        Prop::Eq(l, r) | Prop::Neq(l, r) => {
+            visit_value(l, v);
+            visit_value(r, v);
+        }
+        Prop::Compare { left, right, .. } => {
+            visit_value(left, v);
+            visit_value(right, v);
+        }
+    }
+}
+
+/// Visit every node of a value expression.
+pub fn visit_value(value: &ValueExpr, v: &mut impl Visit) {
+    v.value(value);
+    match value {
+        ValueExpr::Term(t) => v.term(t, TermSlot::Value),
+        ValueExpr::Arith { left, right, .. } => {
+            visit_value(left, v);
+            visit_value(right, v);
+        }
+        ValueExpr::Sum {
+            value: target,
+            body,
+            ..
+        } => {
+            v.term(target, TermSlot::SumTarget);
+            visit_prop(body, v);
+        }
+        ValueExpr::Extremum {
+            op,
+            value: target,
+            body,
+        } => {
+            v.term(target, TermSlot::ExtremumTarget { op: *op });
+            visit_prop(body, v);
+        }
+        ValueExpr::ValueOf {
+            predicate,
+            args,
+            default,
+        } => {
+            for (index, a) in args.iter().enumerate() {
+                let slot = TermSlot::LookupArg {
+                    predicate: predicate.as_str(),
+                    index,
+                };
+                v.term(a, slot);
+            }
+            if let Some(d) = default {
+                visit_value(d, v);
+            }
+        }
+        ValueExpr::Abs(operand) => visit_value(operand, v),
+        ValueExpr::Round { value, quantum } => {
+            visit_value(value, v);
+            visit_value(quantum, v);
+        }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            visit_prop(when, v);
+            visit_value(then, v);
+            visit_value(otherwise, v);
+        }
+        ValueExpr::PeriodIndex { anchor, span, at } => {
+            visit_value(anchor, v);
+            visit_value(span, v);
+            visit_value(at, v);
+        }
     }
 }

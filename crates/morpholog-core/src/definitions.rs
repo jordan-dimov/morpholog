@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ir::{Definition, DefinitionName, Program, Prop, Stmt, ValueExpr};
+use crate::ir::{Definition, DefinitionName, Program, Prop, ValueExpr};
 
 /// Resolve claim-shaped references against the programme's definitions:
 /// every `Prop::Claim` whose name is a declared definition becomes the
@@ -36,116 +36,44 @@ pub fn resolve_defined_calls(program: &mut Program) {
     if names.is_empty() {
         return;
     }
+    let mut resolver = ResolveCalls { names: &names };
     for def in &mut program.definitions {
-        resolve_in_prop(&mut def.body, &names);
+        crate::fold::rewrite_prop(&mut def.body, &mut resolver);
     }
     for inv in &mut program.invariants {
-        resolve_in_prop(&mut inv.body, &names);
+        crate::fold::rewrite_prop(&mut inv.body, &mut resolver);
     }
     for t in &mut program.transformations {
         for stmt in &mut t.body {
-            resolve_in_stmt(stmt, &names);
+            crate::fold::rewrite_stmt(stmt, &mut resolver);
         }
     }
     for dc in &mut program.derived_claims {
-        resolve_in_prop(&mut dc.domain, &names);
+        crate::fold::rewrite_prop(&mut dc.domain, &mut resolver);
         for v in &mut dc.values {
-            resolve_in_value(&mut v.expr, &names);
+            crate::fold::rewrite_value(&mut v.expr, &mut resolver);
         }
     }
 }
 
-fn resolve_in_prop(prop: &mut Prop, names: &BTreeSet<String>) {
-    match prop {
-        Prop::Claim { predicate, args } => {
-            if names.contains(predicate.as_str()) {
-                *prop = Prop::Defined {
-                    name: DefinitionName::from(predicate.as_str()),
-                    args: std::mem::take(args),
-                };
-            }
-        }
-        Prop::Defined { .. } | Prop::In(_, _) => {}
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                resolve_in_prop(p, names);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            resolve_in_prop(left, names);
-            resolve_in_prop(right, names);
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            resolve_in_prop(p, names);
-        }
-        Prop::Forall { source, body, .. } => {
-            resolve_in_prop(source, names);
-            resolve_in_prop(body, names);
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            resolve_in_value(l, names);
-            resolve_in_value(r, names);
-        }
-        Prop::Compare { left, right, .. } => {
-            resolve_in_value(left, names);
-            resolve_in_value(right, names);
-        }
-    }
+/// Claim-shaped references to a declared definition become the calls
+/// they mean. Only the node matters here - the descent is
+/// [`crate::fold`]'s, so a new IR variant does not reach this file.
+struct ResolveCalls<'a> {
+    names: &'a BTreeSet<String>,
 }
 
-fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
-    match value {
-        // `ValueOf` is a value lookup against a claim, never a call.
-        ValueExpr::Term(_) => {}
-        ValueExpr::ValueOf { default, .. } => {
-            if let Some(d) = default {
-                resolve_in_value(d, names);
-            }
+impl crate::fold::Rewrite for ResolveCalls<'_> {
+    fn prop(&mut self, prop: &mut Prop) -> crate::fold::Descend {
+        if let Prop::Claim { predicate, args } = prop
+            && self.names.contains(predicate.as_str())
+        {
+            *prop = Prop::Defined {
+                name: DefinitionName::from(predicate.as_str()),
+                args: std::mem::take(args),
+            };
         }
-        ValueExpr::Arith { left, right, .. } => {
-            resolve_in_value(left, names);
-            resolve_in_value(right, names);
-        }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            resolve_in_prop(body, names)
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            resolve_in_prop(when, names);
-            resolve_in_value(then, names);
-            resolve_in_value(otherwise, names);
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            resolve_in_value(anchor, names);
-            resolve_in_value(span, names);
-            resolve_in_value(at, names);
-        }
-        ValueExpr::Abs(operand) => resolve_in_value(operand, names),
-        ValueExpr::Round { value, quantum } => {
-            resolve_in_value(value, names);
-            resolve_in_value(quantum, names);
-        }
-    }
-}
-
-fn resolve_in_stmt(stmt: &mut Stmt, names: &BTreeSet<String>) {
-    match stmt {
-        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => resolve_in_prop(p, names),
-        Stmt::Let { value, .. } => resolve_in_value(value, names),
-        // State changes and emissions target predicates and intents,
-        // never definitions.
-        Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {}
-        Stmt::For {
-            collection, body, ..
-        } => {
-            resolve_in_value(collection, names);
-            for inner in body {
-                resolve_in_stmt(inner, names);
-            }
-        }
+        crate::fold::Descend::Into
     }
 }
 
