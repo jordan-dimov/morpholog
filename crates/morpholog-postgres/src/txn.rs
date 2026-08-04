@@ -1,4 +1,5 @@
-use crate::error::{PgError, classify};
+use crate::error::{PgError, classify, classify_checked_query};
+use morpholog_core::Subject;
 use sqlx::{PgPool, Postgres, Transaction};
 
 /// The transaction isolation levels the adapter opens. A closed enum,
@@ -45,4 +46,36 @@ pub(crate) async fn begin_isolated_tx(
         .await
         .map_err(classify)?;
     Ok(tx)
+}
+
+/// Begin the proposal transaction, resolve the connection's
+/// authenticated identity, and settle whether that identity may
+/// propose as this actor - before anything is loaded or evaluated.
+///
+/// One seam for every durable proposal path. The traced and untraced
+/// paths each open their own transaction, and a policy check wired
+/// into only one of them would be a gate you could walk around by
+/// asking for a trace.
+///
+/// `session_user` is the role PostgreSQL authenticated at login: it
+/// is immune to `SET ROLE`, so a caller cannot shed or borrow an
+/// identity through this adapter. A superuser can still change it
+/// with `SET SESSION AUTHORIZATION` - the same accepted residue as a
+/// superuser writing audit rows directly.
+///
+/// The role travels back with the transaction because the audit row
+/// records it too, and reading it twice would leave room for the
+/// identity that was CHECKED and the identity that is RECORDED to
+/// differ.
+pub(crate) async fn begin_authorised_proposal_tx<'a>(
+    pool: &'a PgPool,
+    actor: &Subject,
+) -> Result<(Transaction<'a, Postgres>, String), PgError> {
+    let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
+    let login_role = sqlx::query_scalar!(r#"SELECT session_user AS "session_user!""#)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(classify_checked_query)?;
+    crate::actor_policy::authorise(&mut tx, actor, &login_role).await?;
+    Ok((tx, login_role))
 }

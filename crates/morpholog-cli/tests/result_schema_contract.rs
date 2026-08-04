@@ -1840,3 +1840,33 @@ fn every_internal_ref_resolves() {
         }
     }
 }
+
+/// Every session error code the binary can emit must be in the pinned
+/// enum. The goldens pin one code each; nothing else would notice a
+/// new variant reaching an embedder that had matched exhaustively on
+/// the published set.
+#[test]
+fn every_session_error_code_is_in_the_pinned_enum() {
+    use morpholog_cli::envelopes::SessionErrorCode;
+    let schema = result_schema();
+    let published = schema["$defs"]["session_error_receipt"]["properties"]["code"]["enum"]
+        .as_array()
+        .expect("the code enum is an array")
+        .iter()
+        .map(|v| v.as_str().expect("codes are strings").to_string())
+        .collect::<Vec<_>>();
+    for code in SessionErrorCode::ALL {
+        let wire = serde_json::to_value(code).expect("a code serialises");
+        let wire = wire.as_str().expect("as a string");
+        assert!(
+            published.iter().any(|p| p == wire),
+            "`{wire}` is emitted but not published in result.json; \
+             an embedder matching the pinned set would not know it"
+        );
+    }
+    assert_eq!(
+        published.len(),
+        SessionErrorCode::ALL.len(),
+        "result.json publishes codes the binary cannot emit: {published:?}"
+    );
+}

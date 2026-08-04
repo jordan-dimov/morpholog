@@ -230,6 +230,25 @@ The blessed read for downstream projectors (forced by the first real one: an ETR
 
 **`attestation`** records how the actor identity was established. Gateway mode - `{"mode":"gateway","authenticated_by":"<role>"}` - means the PostgreSQL-authenticated login role of the proposing connection asserted the actor; it proves who asserted, never that the named actor authorised anything. The value is resolved by the runtime from the connection itself, never supplied by the caller, and it is covered by the Merkle leaf: rewriting or stripping it after the fact breaks `verify`. Rows written before attestation existed carry none and keep their original leaf encoding, so existing checkpoints and packs stay valid. Operational notes for that boundary: a generated client from before the field existed refuses the first attested row by design (the drift tripwire - regenerate the client), and an offline verifier binary from before the field existed recomputes the wrong leaves for attested rows and reports a root mismatch on genuine history - upgrade the verifier before believing it.
 
+### Restricting who may assert an actor
+
+Gateway attestation records which login role vouched for an actor. It does not restrict which actors a role may name, and by default any role may name any actor - which is fine until a rule depends on two actors being different people, at which point one application holding one connection can satisfy it alone.
+
+Two reserved claims change that for a chosen actor. Both are ordinary claims you declare and govern through your own transformations, under your own authority gates; the runtime only recognises their name and shape, exactly as it does `AuditSigningKey`:
+
+```morph
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+```
+
+`ActorAssertionRestricted(a)` **arms** the actor when the claim is ADMITTED - not when the predicate is declared. An actor with no such claim behaves exactly as before, so adopting this costs no migration: arm the actors that matter, when they matter, and leave the rest alone. Once armed, a proposal naming `a` needs a matching `ActorAssertionAuthority(a, <session_user>)`, and without one the adapter refuses it before evaluating anything - no audit row, no rejection-log row, nothing recorded. An unauthorised assertion is not "that actor proposed and was refused", it is someone claiming to be them, and attribution before authorisation would let a caller manufacture a history of apparent attempts.
+
+Keep the two apart. If the grants did the arming, retracting the last grant would return the actor to unrestricted at exactly the moment you are revoking access. Here it **locks the actor out**; returning it to unrestricted means retracting the arming claim, which is its own governed act.
+
+Refusal surfaces as an operational failure on `propose` (non-zero exit, nothing on stdout), a per-row error receipt in `--batch`, and the `actor_assertion_unauthorised` code in a session - a receipt, so the session stays healthy.
+
+**The boundary, stated plainly.** This binds callers reaching the record through Morpholog. The runtime's writer role holds `INSERT`/`DELETE` on `morpholog.claims` and `INSERT` on `morpholog.audit`, so anything holding those credentials can write claims and attestation-shaped audit rows directly without passing this check. Two identities are genuinely distinct only when the two applications and their credentials are genuinely separate. This is adapter-enforced assertion policy, not proof of authorship. `session_user` is also immune to `SET ROLE` but not to a superuser's `SET SESSION AUTHORIZATION` - the same accepted residue as a superuser writing audit rows.
+
 **For direct SQL readers** (a projector that prefers the table): the `(committed_at, transition_id)` total order is stable - it is load-bearing in `verify`, coverage replay, and the as-of reconstructions, so it cannot drift; the claim JSONB inside `asserted_claims`/`retracted_claims` is the pinned `claim_instance` shape; the column set may grow additively. And `committed_at` is the transaction START instant, not the commit instant - so a direct tail wanting lossless resume must implement the same compute-horizon-first recipe and preconditions described under `--after` above (min `xact_start` over `pg_stat_activity`, snapshot, then page strictly below the horizon), itself - including, on a managed host, the writer-set assertion: filter to the asserted roles' `usesysid` and verify the census in the same statement, as above.
 
 ## Stability and what is not pinned

@@ -123,6 +123,7 @@ impl SessionErrorReceipt {
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionErrorCode {
+    ActorAssertionUnauthorised,
     DuplicateIntent,
     InvalidArguments,
     InvalidRequest,
@@ -130,6 +131,22 @@ pub enum SessionErrorCode {
     SerializationFailure,
     UnknownOperation,
     UnknownTransformation,
+}
+
+impl SessionErrorCode {
+    /// Every code, so a test can hold the published enum in
+    /// `result.json` to what the binary can actually emit. Adding a
+    /// variant without adding it here fails to compile.
+    pub const ALL: [SessionErrorCode; 8] = [
+        SessionErrorCode::ActorAssertionUnauthorised,
+        SessionErrorCode::DuplicateIntent,
+        SessionErrorCode::InvalidArguments,
+        SessionErrorCode::InvalidRequest,
+        SessionErrorCode::KernelError,
+        SessionErrorCode::SerializationFailure,
+        SessionErrorCode::UnknownOperation,
+        SessionErrorCode::UnknownTransformation,
+    ];
 }
 
 /// `init`: day-zero provisioning outcome.

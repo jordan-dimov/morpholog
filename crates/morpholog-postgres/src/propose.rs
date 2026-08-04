@@ -1,6 +1,6 @@
 use crate::attestation::{AuditAttestation, Proposal};
 use crate::error::{PgError, classify, classify_checked_query};
-use crate::txn::{TxIsolation, begin_isolated_tx};
+use crate::txn::begin_authorised_proposal_tx;
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
     InvariantName, Outcome, PredicateName, RejectionReason, RuleName, State, Subject, TraceEntry,
@@ -93,6 +93,12 @@ pub(crate) fn resolve<'a>(
     compiled: &'a CompiledProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, &'a [Invariant], &'a [Definition]), PgError> {
+    let findings = crate::actor_policy::validate_declarations(compiled.program());
+    if !findings.is_empty() {
+        return Err(PgError::ActorPolicyDeclaration {
+            findings: findings.iter().map(ToString::to_string).collect(),
+        });
+    }
     let transformation = compiled
         .transformation(name)
         .ok_or_else(|| PgError::UnknownTransformation { name: name.clone() })?;
@@ -176,14 +182,22 @@ pub(crate) async fn propose_against_pg_with_rejection_state_inner(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<RejectionStateOutcome, PgError> {
-    let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
+    let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
 
     let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
     let outcome = propose(transformation, transition, &state, invariants, definitions)?;
     let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
-    let pg_outcome =
-        finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
+    let pg_outcome = finalise_outcome(
+        pool,
+        tx,
+        transformation,
+        transition,
+        invariants,
+        outcome,
+        &login_role,
+    )
+    .await?;
     Ok(RejectionStateOutcome {
         outcome: pg_outcome,
         rejection_state,
@@ -254,15 +268,23 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<PgTracedOutcome, PgError> {
-    let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
+    let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
 
     let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
     let traced = propose_with_trace(transformation, transition, &state, invariants, definitions);
     match traced {
         TracedProposal::Completed { outcome, trace } => {
-            let outcome =
-                finalise_outcome(pool, tx, transformation, transition, invariants, outcome).await?;
+            let outcome = finalise_outcome(
+                pool,
+                tx,
+                transformation,
+                transition,
+                invariants,
+                outcome,
+                &login_role,
+            )
+            .await?;
             Ok(PgTracedOutcome::Outcome { outcome, trace })
         }
         TracedProposal::Errored { error, trace } => {
@@ -296,6 +318,7 @@ pub(crate) async fn finalise_outcome(
     transition: &Transition,
     invariants: &[Invariant],
     outcome: Outcome,
+    login_role: &str,
 ) -> Result<PgProposalOutcome, PgError> {
     match outcome {
         Outcome::Rejected { reason } => {
@@ -327,6 +350,7 @@ pub(crate) async fn finalise_outcome(
                 &asserted_claims,
                 &retracted_claims,
                 &emitted_intents,
+                login_role,
             )
             .await?;
             tx.commit().await.map_err(classify)?;
@@ -539,6 +563,7 @@ pub(crate) async fn write_accepted(
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
+    login_role: &str,
 ) -> Result<(), PgError> {
     // Retractions: dedupe, then delete each distinct claim. Exactly
     // one row per distinct retraction is expected; zero rows means a
@@ -597,16 +622,14 @@ pub(crate) async fn write_accepted(
         })
         .collect();
     // The attestation lineage: which PostgreSQL-authenticated login
-    // role asserted the actor. Resolved here, inside the committing
-    // transaction, from the connection itself - `session_user` is the
-    // role PostgreSQL authenticated at login and is immune to SET ROLE,
-    // so a caller cannot supply or spoof it through this adapter.
-    // session_user is never NULL for an authenticated connection.
-    let authenticated_by = sqlx::query_scalar!(r#"SELECT session_user AS "session_user!""#)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(classify_checked_query)?;
-    let attestation = AuditAttestation::Gateway { authenticated_by };
+    // role asserted the actor. It arrives from the seam that opened
+    // this transaction, which read `session_user` from the connection
+    // itself and settled the actor-assertion policy against it. One
+    // read, so the identity that was CHECKED and the identity that is
+    // RECORDED cannot differ.
+    let attestation = AuditAttestation::Gateway {
+        authenticated_by: login_role.to_string(),
+    };
     // Serialise the actor via the tagged `EvalValue::Subject` so the
     // `actor` column keeps its v0 shape (`#[serde(with = "actor_repr")]`
     // does not apply when the field is serialised directly, only through

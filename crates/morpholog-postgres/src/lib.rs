@@ -13,6 +13,7 @@ pub use sql_views::{RenderedViews, ViewRefusal, render_views};
 
 pub use sqlx::PgPool;
 
+mod actor_policy;
 mod as_of;
 mod attestation;
 mod audit;
@@ -36,6 +37,9 @@ mod txn;
 mod verify;
 
 // Re-export the full public surface so `morpholog_postgres::X` paths are unchanged.
+pub use actor_policy::{
+    AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
+};
 pub use as_of::{
     list_claims_at, list_claims_at_for_predicates, reconstruct_state_at,
     resolve_transition_at_or_before,

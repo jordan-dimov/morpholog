@@ -560,8 +560,9 @@
       "properties": {
         "code": {
           "enum": [
-            "duplicate_intent", "invalid_arguments", "invalid_request",
-            "kernel_error", "serialization_failure", "unknown_operation",
+            "actor_assertion_unauthorised", "duplicate_intent",
+            "invalid_arguments", "invalid_request", "kernel_error",
+            "serialization_failure", "unknown_operation",
             "unknown_transformation"
           ]
         },
