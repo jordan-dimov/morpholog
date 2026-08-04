@@ -55,7 +55,11 @@ async fn run_to_decision(pool: &PgPool) -> Uuid {
     commit_as(
         pool,
         &bio::deploy_system(),
-        vec![subj("cam_system"), subj("city_operator")],
+        vec![
+            subj("cam_system"),
+            subj("city_operator"),
+            subj("operator_login"),
+        ],
         "compliance_office",
     )
     .await;

@@ -31,7 +31,11 @@ fn ex() -> &'static Example {
 fn match_awaiting_verification() -> State {
     let state = ex().must_accept_as(
         &bio::deploy_system(),
-        vec![subj("cam_system"), subj("city_operator")],
+        vec![
+            subj("cam_system"),
+            subj("city_operator"),
+            subj("operator_login"),
+        ],
         "compliance_office",
         State::default(),
     );
@@ -99,7 +103,11 @@ fn programme_validates() {
 fn use_cannot_start_under_a_version_not_in_service() {
     let state = ex().must_accept_as(
         &bio::deploy_system(),
-        vec![subj("cam_system"), subj("city_operator")],
+        vec![
+            subj("cam_system"),
+            subj("city_operator"),
+            subj("operator_login"),
+        ],
         "compliance_office",
         State::default(),
     );

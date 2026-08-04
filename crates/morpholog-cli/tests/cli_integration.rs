@@ -3087,3 +3087,76 @@ async fn migrate_check_fails_a_database_ahead_of_the_binary() {
         "migrating a database ahead of this binary must be refused"
     );
 }
+
+/// The batch surface for an unauthorised assertion: a coded receipt
+/// for that row, and the run carries on. The grant is a claim matched
+/// against `session_user` as text, so granting a different login name
+/// is enough to make this connection unauthorised - no role switching.
+const POLICY_BATCH_MORPH: &str = "program policy_batch
+
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+predicate Noted(id: Subject)
+
+transformation arm(person, login_role):
+    admit ActorAssertionRestricted(person)
+    admit ActorAssertionAuthority(person, login_role)
+
+transformation note(id):
+    admit Noted(id)
+";
+
+#[tokio::test(flavor = "current_thread")]
+async fn batch_gives_an_unauthorised_row_a_coded_receipt_and_keeps_going() {
+    reset_db().await;
+    let fixture = common::write_fixture("policy_batch", POLICY_BATCH_MORPH);
+    let rows = format!(
+        "{}\n{}\n{}\n",
+        serde_json::json!({
+            "transformation": "arm", "actor": "bootstrap",
+            "args_named": {"person": "restricted_actor", "login_role": "somebody_else"}
+        }),
+        serde_json::json!({
+            "transformation": "note", "actor": "restricted_actor",
+            "args_named": {"id": "n1"}
+        }),
+        serde_json::json!({
+            "transformation": "note", "actor": "anyone_else",
+            "args_named": {"id": "n2"}
+        }),
+    );
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(f.path(), &rows).unwrap();
+    let (status, stdout, stderr) = run_cli(&[
+        "propose",
+        fixture.path.to_str().unwrap(),
+        "--batch",
+        f.path().to_str().unwrap(),
+    ]);
+    let receipts: Vec<Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 3, "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(receipts[0]["status"], "committed", "{stdout}");
+    assert_eq!(receipts[1]["status"], "error", "{stdout}");
+    assert_eq!(receipts[1]["row"], 2, "{stdout}");
+    // The batch error receipt carries prose, not a code - batch has
+    // never had stable codes, for any error kind; the session grew
+    // them because a client there must decide whether to re-submit.
+    // What matters here is that the refusal is a per-row receipt at
+    // all rather than an abort, and that it names the two parties.
+    let reason = receipts[1]["error"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("restricted_actor") && reason.contains("not authorised"),
+        "the refusal should name the actor it refused: {stdout}"
+    );
+    assert_eq!(
+        receipts[2]["status"], "committed",
+        "a refused row must not stop the run: {stdout}"
+    );
+    assert!(
+        status.success(),
+        "every row produced a receipt, so exit 0; {stderr}"
+    );
+}

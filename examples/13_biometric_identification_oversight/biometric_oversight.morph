@@ -84,7 +84,6 @@ predicate OversightAssigned(person: Subject, system: Subject)
 -- the runtime's own database credentials could not write to the
 -- tables directly.
 predicate ActorAssertionRestricted(actor: Subject)
-    append only
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 predicate UseStarted(use: Subject, system: Subject, version: Subject, reference_db: Subject, started_at: Timestamp)
 predicate UseEnded(use: Subject, ended_at: Timestamp)
@@ -171,9 +170,33 @@ invariant decision_rests_on_two_distinct_prior_verifications:
 -- The only ways the record may change. Gates police the moment of
 -- each action; the records then stand on their own.
 
-transformation deploy_system(system, deployer):
+-- Putting the system on the record - and, in the same breath, closing
+-- the door behind it.
+--
+-- The deployer is the trust root here: the enrolment acts below all
+-- ask "are you the deployer?", so whoever can SAY they are the
+-- deployer can hand any name to any application. Arming the verifiers
+-- while leaving the deployer open would be a lock on the door of an
+-- open room. So the deployer is armed and granted its login in this
+-- same act, and it must be one act: arm first and grant later, and
+-- between the two nobody could act as the deployer at all - including
+-- to issue the grant.
+--
+-- This is the general rule, and it is worth carrying to any model
+-- that adopts these claims: EVERY actor allowed to hand out authority
+-- must itself be restricted, or the restriction underneath it is
+-- decoration.
+--
+-- One consequence to bootstrap carefully: the login named here is the
+-- only one that can act as this deployer afterwards. Name the wrong
+-- one and this system has no reachable enrolment authority - the
+-- remedy is a fresh deployment, which is the safe direction for a
+-- trust root to fail in.
+transformation deploy_system(system, deployer, deployer_login_role):
     require not DeployedSystem(system, _)
     admit DeployedSystem(system, deployer)
+    admit ActorAssertionRestricted(deployer)
+    admit ActorAssertionAuthority(deployer, deployer_login_role)
 
 -- A model version enters service for a window - the period its
 -- assessment covers. The window is the unit of accountability: every

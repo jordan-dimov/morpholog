@@ -124,6 +124,33 @@ pub(crate) async fn authorise(
     actor: &Subject,
     login_role: &str,
 ) -> Result<(), PgError> {
+    // A policy claim the runtime cannot read is the dangerous case: it
+    // would simply never match, so an actor the operator believes is
+    // armed would be open. Refuse instead - and refuse HERE, at the
+    // one point every durable path passes, rather than trusting the
+    // declaration check the facades run. Compensation reaches the
+    // kernel with a decomposed transformation and no programme, so a
+    // programme-level check alone would leave it uncovered.
+    let malformed = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "malformed!" FROM morpholog.claims
+           WHERE (predicate_name = $1
+                    AND jsonb_array_length(arguments) IS DISTINCT FROM 1)
+              OR (predicate_name = $2
+                    AND jsonb_array_length(arguments) IS DISTINCT FROM 2)"#,
+        RESTRICTED_PREDICATE,
+        AUTHORITY_PREDICATE,
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(classify_checked_query)?;
+    if malformed > 0 {
+        return Err(PgError::ActorPolicyDeclaration {
+            findings: vec![format!(
+                "{malformed} admitted claim(s) under `{RESTRICTED_PREDICATE}` or                  `{AUTHORITY_PREDICATE}` do not have the shape the runtime matches,                  so the restriction they look like would protect nothing"
+            )],
+        });
+    }
+
     let actor_arg = serde_json::json!([{"type": "subject", "value": actor.as_str()}]);
     let restricted = sqlx::query_scalar!(
         r#"SELECT EXISTS (

@@ -139,6 +139,12 @@ for: if the grants did the arming, withdrawing someone's last grant - the
 thing you do the moment you suspect trouble - would hand their name back to
 everybody.
 
+The deployer is armed too, in the same act that puts the system on the record.
+That is not incidental. The enrolment acts all ask "are you the deployer?", so
+an unarmed deployer is a name anyone can wear to grant themselves every
+verifier - a lock on the door of an open room. The general rule travels: every
+actor allowed to hand out authority must itself be restricted.
+
 ## Running it
 
 ```bash
