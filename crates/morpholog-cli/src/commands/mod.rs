@@ -75,9 +75,10 @@ impl std::fmt::Display for AlreadyReported {
 impl std::error::Error for AlreadyReported {}
 
 /// Read a `.morph` source file and parse it. On parse failure,
-/// render diagnostics via ariadne to stderr and exit 1. Shared by
-/// `parse` and `check` so the diagnostic rendering stays identical
-/// across both subcommands.
+/// render diagnostics via ariadne to stderr and return
+/// [`AlreadyReported`] - the caller decides what to do next, and
+/// `main` prints nothing further. Shared by `parse` and `check` so
+/// the diagnostic rendering stays identical across both subcommands.
 pub(crate) fn parse_or_report(file: &Path) -> anyhow::Result<ParsedSource> {
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("read source file {}", file.display()))?;
@@ -112,8 +113,9 @@ pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSour
 }
 
 /// Validate a parsed programme; on failure, print each diagnostic to
-/// stderr (caret-located where the source map can place it) and exit
-/// 1; on success, return a [`ValidatedProgram`] handle the analysis
+/// stderr (caret-located where the source map can place it) and
+/// return [`AlreadyReported`]; on success, a [`ValidatedProgram`]
+/// handle the analysis
 /// surface ([`morpholog_core::transformation_param_kinds`],
 /// [`morpholog_core::transformation_arg_schema`]) consumes. Threading
 /// the handle through means the CLI pays the validation cost once,

@@ -2297,13 +2297,22 @@ mod exit_path_tests {
     /// gate would have taken the test runner down with it.
     #[test]
     fn a_refused_command_returns_rather_than_ending_the_process() {
-        let file = std::env::temp_dir().join("morpholog_exit_path_probe.morph");
+        // A unique path per run, and no UTF-8 assumption about where
+        // the temp dir lives: this suite runs in parallel with itself.
+        let file = tempfile::Builder::new()
+            .suffix(".morph")
+            .tempfile()
+            .unwrap();
         std::fs::write(
-            &file,
+            file.path(),
             "program p\npredicate P(x: Subject)\ntransformation t(x):\n    admit Q(x)\n",
         )
         .unwrap();
-        let args = Cli::parse_from(["morpholog", "check", file.to_str().unwrap()]);
+        let args = Cli::parse_from([
+            std::ffi::OsStr::new("morpholog"),
+            std::ffi::OsStr::new("check"),
+            file.path().as_os_str(),
+        ]);
         let Command::Check(check) = args.command else {
             panic!("expected check");
         };
@@ -2313,6 +2322,5 @@ mod exit_path_tests {
             "the diagnostics were printed, so main must add nothing: {err:?}"
         );
         // Still here - which is the whole assertion.
-        std::fs::remove_file(&file).ok();
     }
 }
