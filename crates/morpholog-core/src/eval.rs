@@ -1524,11 +1524,11 @@ fn nanos_to_duration(total: i128) -> Option<jiff::SignedDuration> {
 
 /// `min(a, b)` / `max(a, b)` over two finished values.
 ///
-/// The same-kind rule the arithmetic matrix uses, for the same reason:
-/// comparing a length against a weight is a category error, and two
-/// amounts compare only under the same unit label. The aggregate forms
-/// over a proposition are [`ValueExpr::Extremum`] - a construct,
-/// because they bind a variable and range over state.
+/// Defined on the kinds the language orders. Same-kind only, for the
+/// reason the comparators are: a length against a weight is a category
+/// error, and two amounts compare only under the same unit label. The
+/// aggregate forms over a proposition are [`ValueExpr::Extremum`] - a
+/// construct, because they bind a variable and range over state.
 fn extremum_of(builtin: Builtin, a: &EvalValue, b: &EvalValue) -> Result<EvalValue, EvalError> {
     let take_min = builtin == Builtin::Min;
     match (a, b) {
@@ -1542,6 +1542,20 @@ fn extremum_of(builtin: Builtin, a: &EvalValue, b: &EvalValue) -> Result<EvalVal
         } else {
             *x.max(y)
         })),
+        // Dates and instants order, so the earlier of two is an
+        // answer - the same total order the comparators read.
+        (EvalValue::Date(x), EvalValue::Date(y)) => Ok(EvalValue::Date(if take_min {
+            *x.min(y)
+        } else {
+            *x.max(y)
+        })),
+        (EvalValue::Timestamp(x), EvalValue::Timestamp(y)) => {
+            Ok(EvalValue::Timestamp(if take_min {
+                *x.min(y)
+            } else {
+                *x.max(y)
+            }))
+        }
         (
             EvalValue::Quantity {
                 amount: x,
@@ -1556,7 +1570,7 @@ fn extremum_of(builtin: Builtin, a: &EvalValue, b: &EvalValue) -> Result<EvalVal
             unit: ux.clone(),
         }),
         (x, y) => Err(EvalError::TypeMismatch(format!(
-            "{} is defined on two values of the same kind, not {} and {}",
+            "{} is defined on two ordered values of the same kind, not {} and {}",
             builtin.name(),
             runtime_kind_label(x),
             runtime_kind_label(y)

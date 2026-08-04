@@ -330,6 +330,19 @@ pub enum ValidationError {
         right: PredicateArgKind,
         context: ValidationContext,
     },
+    /// `min`/`max` applied to a kind the language does not order - a
+    /// subject, a bool, a calendar span. Taking the smaller of two is
+    /// the comparator's question with the answer kept instead of the
+    /// verdict, so the domain is exactly the ordered kinds.
+    #[error(
+        "{builtin} is defined on ordered values - decimals, quantities, durations, dates, \
+         and timestamps - not {kind} in {context}"
+    )]
+    BuiltinKind {
+        builtin: &'static str,
+        kind: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// `abs(...)` was applied to a value that has no magnitude. Defined
     /// on the signed numeric kinds - decimals, quantities, and durations.
     #[error("abs is defined on decimals, quantities, and durations, not {kind} in {context}")]

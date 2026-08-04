@@ -423,26 +423,6 @@ pub enum ValueExpr {
         args: Vec<Term>,
         default: Option<Box<ValueExpr>>,
     },
-    /// The magnitude of a signed value: `abs(x)`. Unary and
-    /// unit-preserving (`abs` of a `Decimal[USD]` is a `Decimal[USD]`),
-    /// defined on decimals, quantities, and durations. A dedicated node,
-    /// not `max(x, 0 - x)`, so the operand is evaluated once and the form
-    /// round-trips as `abs`.
-
-    /// `round(x, quantum)`: the multiple of `quantum` nearest to `x`,
-    /// exact halves rounding AWAY FROM ZERO (2.345 to a 0.01 quantum is
-    /// 2.35; -2.345 is -2.35). One mode only - a second rounding policy
-    /// joins as a parameter when a real domain forces it, not before.
-    /// Decimal-only in v0: both operands are bare decimals and the
-    /// result is a bare decimal (money convention: currency lives in
-    /// field names). A non-positive quantum is refused by name at
-    /// validation when written literally and raises
-    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation
-    /// otherwise. A dedicated node for the `abs` reasons: the operand
-    /// evaluates once, the form round-trips as `round`, and the
-    /// sign-branched shift-and-remainder spelling it replaces can never
-    /// be mistaken for user arithmetic.
-
     /// `if(when, then, otherwise)`: the value selected by whether a
     /// proposition holds. The test is exists-style - at least one
     /// witness selects `then`, none selects `otherwise` - and the
@@ -547,10 +527,22 @@ impl ExtremumOp {
 /// only answer was "recurse through the arguments".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
-    /// `abs(x)`: magnitude, preserving the operand's kind.
+    /// The magnitude of a signed value: `abs(x)`. Unary and
+    /// unit-preserving (`abs` of a `Decimal[USD]` is a `Decimal[USD]`),
+    /// defined on decimals, quantities, and durations - never
+    /// `max(x, 0 - x)`, so the operand evaluates once and the form
+    /// round-trips as `abs`.
     Abs,
-    /// `round(x, quantum)`: the multiple of `quantum` nearest `x`,
-    /// exact halves away from zero.
+    /// `round(x, quantum)`: the multiple of `quantum` nearest to `x`,
+    /// exact halves rounding AWAY FROM ZERO (2.345 to a 0.01 quantum
+    /// is 2.35; -2.345 is -2.35). One mode only - a second rounding
+    /// policy joins as a parameter when a real domain forces it, not
+    /// before. Decimal-only in v0: both operands are bare decimals and
+    /// the result is a bare decimal (money convention: currency lives
+    /// in field names). A non-positive quantum is refused by name at
+    /// validation when written literally and raises
+    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation
+    /// otherwise.
     Round,
     /// `period_index(anchor, span, at)`: which anniversary-anchored
     /// period `at` falls in.

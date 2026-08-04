@@ -408,3 +408,25 @@ fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
         "got: {err}"
     );
 }
+
+/// `min`/`max` over the ordered kinds, evaluated - not merely accepted.
+/// The trap this guards is a static domain wider than the evaluator's:
+/// a programme that validates and then fails at runtime is worse than
+/// one refused at authoring time.
+#[test]
+fn min_and_max_compute_over_every_ordered_kind() {
+    use morpholog_core::ir_builder::{max, min};
+
+    // Dates: the earlier and later of two.
+    holds(eq(
+        min(term(date("2026-04-01")), term(date("2026-03-31"))),
+        term(date("2026-03-31")),
+    ));
+    holds(eq(
+        max(term(date("2026-04-01")), term(date("2026-03-31"))),
+        term(date("2026-04-01")),
+    ));
+    // Decimals keep working, both directions.
+    holds(eq(min(term(dec("5")), term(dec("3"))), term(dec("3"))));
+    holds(eq(max(term(dec("5")), term(dec("3"))), term(dec("5"))));
+}

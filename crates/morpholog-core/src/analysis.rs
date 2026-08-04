@@ -1478,10 +1478,20 @@ impl<'a> ParamCollector<'a> {
                     self.walk_value(a, expected.clone());
                 }
             }
+            // Both operands share one kind, so a determinable side
+            // forces its counterpart - the same one-side-known
+            // refinement the arithmetic matrix runs, and the reason
+            // `min(x, 100)` still tells the schema `x` is a decimal.
             Builtin::Min | Builtin::Max => {
-                for a in args {
-                    self.walk_value(a, expected.clone());
-                }
+                let left_known = self.shallow_value_kind(&args[0]);
+                let right_known = self.shallow_value_kind(&args[1]);
+                let (left_expected, right_expected) = match (left_known, right_known) {
+                    (Some(k), None) => (expected.clone(), Some(k)),
+                    (None, Some(k)) => (Some(k), expected.clone()),
+                    _ => (expected.clone(), expected),
+                };
+                self.walk_value(&args[0], left_expected);
+                self.walk_value(&args[1], right_expected);
             }
             // Decimal-only in v0: both positions force Decimal.
             Builtin::Round => {

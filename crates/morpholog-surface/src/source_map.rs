@@ -89,6 +89,7 @@ impl SourceMap {
             | ValidationError::CondBranchKindMismatch { context, .. }
             | ValidationError::PeriodSpanNotPositive { context, .. }
             | ValidationError::BuiltinArity { context, .. }
+            | ValidationError::BuiltinKind { context, .. }
             | ValidationError::AbsKind { context, .. }
             | ValidationError::RoundQuantumNotPositive { context, .. }
             | ValidationError::EqualityKindMismatch { context, .. }

@@ -1351,17 +1351,20 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
-            // Same-kind, kind-preserving: whatever the operands agree
-            // on is what comes back, which is the arithmetic matrix's
-            // rule for the same reason - comparing across kinds is a
-            // category error.
+            // Same-kind and kind-preserving, over the SAME domain the
+            // evaluator supports: decimals, durations, and quantities
+            // that agree on their unit. These rows lived in the
+            // arithmetic matrix before `min`/`max` became builtins, and
+            // the restriction has to move with them - two dates share a
+            // kind but have no midpoint, and accepting them here would
+            // only defer the refusal to runtime.
             Builtin::Min | Builtin::Max => {
+                let name = builtin.name();
                 let left = self.infer_value(&args[0], scope);
                 let right = self.infer_value(&args[1], scope);
-                let name = builtin.name();
                 match (left, right) {
                     (InferredKind::Known(a), InferredKind::Known(b)) if a == b => {
-                        InferredKind::Known(a)
+                        self.ordered_domain(name, a)
                     }
                     (InferredKind::Known(a), InferredKind::Known(b)) => {
                         let context = self.context.clone();
@@ -1373,14 +1376,60 @@ impl CheckCtx<'_> {
                         });
                         InferredKind::UnknownOrAny
                     }
-                    (InferredKind::Known(k), InferredKind::UnknownOrAny)
-                    | (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
-                        InferredKind::Known(k)
+                    // One side known: the other must agree, so push the
+                    // known kind into it. That refines a bare variable
+                    // exactly as the operand path does elsewhere -
+                    // `min(x, 1.0)` still tells the schema `x` is a
+                    // decimal.
+                    (InferredKind::Known(k), InferredKind::UnknownOrAny) => {
+                        let resolved = self.ordered_domain(name, k);
+                        if let InferredKind::Known(k) = &resolved {
+                            self.check_operand_kind(&args[1], k.clone(), name, scope);
+                        }
+                        resolved
+                    }
+                    (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
+                        let resolved = self.ordered_domain(name, k);
+                        if let InferredKind::Known(k) = &resolved {
+                            self.check_operand_kind(&args[0], k.clone(), name, scope);
+                        }
+                        resolved
                     }
                     _ => InferredKind::UnknownOrAny,
                 }
             }
         }
+    }
+
+    /// The kinds `min`/`max` are defined over: those the language
+    /// already orders, since taking a smaller of two is asking the
+    /// comparator's question and keeping the answer instead of the
+    /// verdict. Dates and timestamps are in for exactly that reason -
+    /// `d1 on_or_before d2` is lawful, so "the earlier of the two" is
+    /// a question with an answer.
+    ///
+    /// Calendar spans are deliberately OUT. They carry months and days
+    /// that no common measure reconciles - P1M against P30D has no
+    /// truth without a date to land on - so they compare only for
+    /// equality, and an ordering here would have to invent one.
+    fn ordered_domain(&mut self, builtin: &'static str, kind: PredicateArgKind) -> InferredKind {
+        if matches!(
+            kind,
+            PredicateArgKind::Decimal
+                | PredicateArgKind::Quantity(_)
+                | PredicateArgKind::Duration
+                | PredicateArgKind::Date
+                | PredicateArgKind::Timestamp
+        ) {
+            return InferredKind::Known(kind);
+        }
+        let context = self.context.clone();
+        self.errors.push(ValidationError::BuiltinKind {
+            builtin,
+            kind,
+            context,
+        });
+        InferredKind::UnknownOrAny
     }
 
     /// A variable used where a bound value is required. Flags
