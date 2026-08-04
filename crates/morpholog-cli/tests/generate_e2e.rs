@@ -157,6 +157,30 @@ fn the_model_hash_stamp_matches_morpholog_hash() {
     );
 }
 
+/// The pinned open is the easy one: `open_session` supplies the model
+/// hash this package was generated against, so an embedder reaching
+/// for the obvious call cannot silently open against other rules.
+/// Constructing `Session` stays available for a deliberately
+/// unpinned open.
+#[test]
+fn the_emitted_factory_pins_the_model_hash() {
+    let out = tempfile::tempdir().unwrap();
+    assert!(generate(&trade_lifecycle(), out.path()).status.success());
+    let init = std::fs::read_to_string(out.path().join("morpholog_client/__init__.py")).unwrap();
+    assert!(
+        init.contains("def open_session("),
+        "__init__.py should emit the pinned-session factory"
+    );
+    assert!(
+        init.contains("expected_model_hash=MODEL_HASH"),
+        "open_session should pin the generated model hash"
+    );
+    assert!(
+        init.contains("\"open_session\","),
+        "open_session should be exported"
+    );
+}
+
 fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("model.morph");

@@ -27,6 +27,26 @@ from .session import (  # noqa: E402
     Session,
 )
 
+def open_session(
+    file,
+    database_url,
+    *,
+    binary=None,
+    timeout=None,
+):
+    """Open a session pinned to the programme this package was
+    generated from: a binary serving any other rules is refused at
+    the handshake, before a single proposal is written. Construct
+    ``Session`` directly to open deliberately unpinned."""
+    return Session(
+        file,
+        database_url,
+        binary=binary,
+        timeout=timeout,
+        expected_model_hash=MODEL_HASH,
+    )
+
+
 __all__ = [
     "PROGRAM",
     "MODEL_HASH",
@@ -37,6 +57,7 @@ __all__ = [
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
     "Session",
+    "open_session",
     "envelopes",
     "models",
     "values",
