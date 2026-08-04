@@ -1,11 +1,19 @@
-# Prebuilt-binary release channel: a static linux x86_64 `morpholog` on
-# tag push, with the same build/smoke/package pipeline dry-run on any PR
-# that touches it - so the first real tag is never the first execution.
+# Prebuilt-binary release channel: one packaged `morpholog` per
+# supported platform on tag push, with the same build/smoke/package
+# pipeline dry-run on any PR that touches it - so the first real tag is
+# never the first execution.
 #
-# Two jobs on purpose: the build job (which PRs can reach, and whose
-# steps a PR can edit) holds a read-only token; only the tag-gated
-# publish job gets `contents: write`, and it consumes the packaged
-# artifact rather than rebuilding. Actions are pinned to commit SHAs
+# Every target builds on a runner of its own architecture rather than
+# cross-compiling. The dependency tree reaches C and assembly (`ring`),
+# so cross-linking would need a C toolchain per target - and, more to
+# the point, a cross-built artifact cannot run its own smoke test. A
+# binary nobody has executed is not a release asset.
+#
+# Three jobs on purpose: the tag guard answers a question about the TAG
+# and runs once; the build matrix (which PRs can reach, and whose steps
+# a PR can edit) holds a read-only token; only the tag-gated publish
+# job gets `contents: write`, and it consumes the packaged artifacts
+# rather than rebuilding. Actions are pinned to commit SHAs
 # (not tags): this workflow publishes an executable artifact, so its
 # inputs are immutable by policy even though ci.yml uses the friendlier
 # tags.
@@ -24,30 +32,17 @@ on:
     tags: ["v*"]
 
 jobs:
-  build:
+  # A property of the tag, not of any target: checked once, before four
+  # runners spend anything.
+  guard:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      CARGO_TERM_COLOR: always
-      CARGO_INCREMENTAL: 0
-      TARGET: x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          # The ancestor-of-main guard below needs real history.
+          # The ancestor-of-main check needs real history.
           fetch-depth: 0
-
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          # The workspace floor, pinned exactly: a release artifact is
-          # built by a named compiler, not whichever stable is current.
-          toolchain: "1.95.0"
-          targets: x86_64-unknown-linux-musl
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          key: release
 
       - name: The tag names the workspace version and sits on main
         if: startsWith(github.ref, 'refs/tags/')
@@ -65,21 +60,88 @@ jobs:
             exit 1
           fi
 
+  build:
+    needs: guard
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      # One platform failing must not deny the others their evidence:
+      # a matrix that stops at the first red hides whether the rest
+      # would have packaged.
+      fail-fast: false
+      matrix:
+        include:
+          # The asset that already exists. Its name, target and
+          # toolchain are unchanged on purpose - a consumer pins its
+          # checksum, so this must not be rebuilt differently as a side
+          # effect of gaining siblings.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            static: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            static: true
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            static: false
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            static: false
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          # The workspace floor, pinned exactly: a release artifact is
+          # built by a named compiler, not whichever stable is current.
+          toolchain: "1.95.0"
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: release-${{ matrix.target }}
+
       - name: musl toolchain
+        if: matrix.static
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build (static; sqlx verifies against the committed offline cache)
         run: cargo build --release --locked --target "$TARGET" -p morpholog-cli
 
-      - name: The artifact is genuinely static and answers
+      # Every asset answers for itself, on its own architecture. The
+      # linkage claim differs by platform and the check follows: a musl
+      # build must be genuinely static (that is the promise - no glibc
+      # version to match), while macOS has no static libc, so the claim
+      # there is that it is a Mach-O for the right architecture and
+      # links only against system libraries.
+      - name: The artifact links as promised and answers
         run: |
           BIN="target/$TARGET/release/morpholog"
           strip "$BIN"
           file "$BIN"
-          file "$BIN" | grep -Eq 'statically linked|static-pie' || {
-            echo "the binary is not statically linked" >&2
-            exit 1
-          }
+          if [ "${{ matrix.static }}" = "true" ]; then
+            file "$BIN" | grep -Eq 'statically linked|static-pie' || {
+              echo "the binary is not statically linked" >&2
+              exit 1
+            }
+          else
+            file "$BIN" | grep -q 'Mach-O 64-bit executable' || {
+              echo "the binary is not a 64-bit Mach-O executable" >&2
+              exit 1
+            }
+            # Nothing from Homebrew or any other non-system prefix: a
+            # download must not need a package manager to run.
+            otool -L "$BIN"
+            otool -L "$BIN" | tail -n +2 | grep -vE '^\s+/usr/lib/|^\s+/System/' && {
+              echo "the binary links a non-system library" >&2
+              exit 1
+            }
+          fi
           "$BIN" --version
           "$BIN" check examples/01_settlement_netting/netting.morph
 
@@ -99,7 +161,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-package
+          name: release-package-${{ matrix.target }}
           path: |
             morpholog-*.tar.gz
             morpholog-*.tar.gz.sha256
@@ -115,7 +177,26 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: release-package
+          pattern: release-package-*
+          merge-multiple: true
+
+      # A glob is only as good as what it matched: an empty expansion
+      # would publish a release carrying no assets at all, and the
+      # first person to notice would be someone trying to download one.
+      - name: Every declared platform produced an asset
+        run: |
+          LABEL="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF" in refs/heads/main) LABEL="main" ;; esac
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+                        aarch64-apple-darwin x86_64-apple-darwin; do
+            for suffix in tar.gz tar.gz.sha256; do
+              test -f "morpholog-$LABEL-$target.$suffix" || {
+                echo "missing asset: morpholog-$LABEL-$target.$suffix" >&2
+                exit 1
+              }
+            done
+          done
+          sha256sum -c morpholog-"$LABEL"-*.tar.gz.sha256
 
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/')
@@ -126,9 +207,9 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
-            --notes "Prebuilt static linux x86_64 binary. Install guide: docs/install.md (verify the checksum; the worked examples ship in the source archive below, no Rust toolchain needed)." \
-            morpholog-"$GITHUB_REF_NAME"-x86_64-unknown-linux-musl.tar.gz \
-            morpholog-"$GITHUB_REF_NAME"-x86_64-unknown-linux-musl.tar.gz.sha256
+            --notes "Prebuilt binaries for linux (x86_64, arm64) and macOS (Apple Silicon, Intel). Install guide: docs/install.md (select by uname -s / uname -m, verify the checksum; the worked examples ship in the source archive below, no Rust toolchain needed)." \
+            morpholog-"$GITHUB_REF_NAME"-*.tar.gz \
+            morpholog-"$GITHUB_REF_NAME"-*.tar.gz.sha256
 
       # The rolling channel a fast-moving embedder tracks between
       # versioned releases: one prerelease, recreated on every main
@@ -148,5 +229,5 @@ jobs:
             --latest=false \
             --title "main (rolling)" \
             --notes "Rolling build of main at $GITHUB_SHA. Recreated on every merge; not a versioned release - pin a v* tag for anything durable. Install guide: docs/install.md." \
-            morpholog-main-x86_64-unknown-linux-musl.tar.gz \
-            morpholog-main-x86_64-unknown-linux-musl.tar.gz.sha256
+            morpholog-main-*.tar.gz \
+            morpholog-main-*.tar.gz.sha256
