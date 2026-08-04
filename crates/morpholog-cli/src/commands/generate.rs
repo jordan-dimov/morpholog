@@ -32,7 +32,7 @@ use morpholog_core::{
 };
 
 use crate::GeneratePythonClientArgs;
-use crate::commands::{parse_or_exit, validate_or_exit};
+use crate::commands::{AlreadyReported, parse_or_report, validate_or_report};
 
 const VALUES_PY: &str = include_str!("../../templates/python_client/values.py");
 const ENVELOPES_PY: &str = include_str!("../../templates/python_client/envelopes.py");
@@ -45,8 +45,8 @@ const SESSION_PY: &str = include_str!("../../templates/python_client/session.py"
 const PYTHON_FLOOR: (u32, u32) = (3, 10);
 
 pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    let validated = validate_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let validated = validate_or_report(&parsed)?;
     let program = &parsed.program;
 
     let refusals = sweep(program, &validated)?;
@@ -58,7 +58,7 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
             "generate python-client refused: {} finding(s); nothing was written",
             refusals.len()
         );
-        std::process::exit(1);
+        return Err(AlreadyReported.into());
     }
 
     // Render everything in memory before touching the filesystem, so
@@ -136,7 +136,7 @@ fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow
         drifted.len(),
         files.len(),
     );
-    std::process::exit(1);
+    Err(AlreadyReported.into())
 }
 
 // ============================================================

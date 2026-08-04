@@ -51,11 +51,34 @@ pub(crate) struct ParsedSource {
     pub(crate) source_name: String,
 }
 
+/// A failure the command has already reported in full - diagnostics
+/// rendered, remedy named - carried out to `main` only so it can set
+/// the exit code.
+///
+/// The alternative was calling `std::process::exit` from wherever the
+/// diagnostic was printed, which made those helpers unusable from
+/// anything that wanted to keep running: a caller could not compose
+/// them, and a test could not observe them without spawning a
+/// process. `main` prints nothing for this variant - the command
+/// already said everything.
+#[derive(Debug)]
+pub(crate) struct AlreadyReported;
+
+impl std::fmt::Display for AlreadyReported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Reached only if something re-renders it; the diagnostics
+        // that matter were printed where they were found.
+        f.write_str("the command reported its own diagnostics")
+    }
+}
+
+impl std::error::Error for AlreadyReported {}
+
 /// Read a `.morph` source file and parse it. On parse failure,
 /// render diagnostics via ariadne to stderr and exit 1. Shared by
 /// `parse` and `check` so the diagnostic rendering stays identical
 /// across both subcommands.
-pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<ParsedSource> {
+pub(crate) fn parse_or_report(file: &Path) -> anyhow::Result<ParsedSource> {
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("read source file {}", file.display()))?;
     let source_name = file.display().to_string();
@@ -70,7 +93,7 @@ pub(crate) fn parse_or_exit(file: &Path) -> anyhow::Result<ParsedSource> {
             for d in &diagnostics {
                 eprint!("{}", d.render(&source_name, &source));
             }
-            std::process::exit(1);
+            Err(AlreadyReported.into())
         }
     }
 }
@@ -103,32 +126,32 @@ pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSour
 /// reading or rendering, `schema` before computing the JSON Schema -
 /// so an arbitrary file is held to the same vocabulary contract the
 /// kernel would otherwise enforce only at proposal time.
-pub(crate) fn validate_or_exit(parsed: &ParsedSource) -> ValidatedProgram<'_> {
+pub(crate) fn validate_or_report(parsed: &ParsedSource) -> anyhow::Result<ValidatedProgram<'_>> {
     match parsed.program.validated() {
-        Ok(validated) => validated,
+        Ok(validated) => Ok(validated),
         Err(errors) => {
             for err in &errors {
                 render_validation_error(err, parsed);
             }
-            std::process::exit(1);
+            Err(AlreadyReported.into())
         }
     }
 }
 
-/// Like [`validate_or_exit`], but returns the owned, indexed
+/// Like [`validate_or_report`], but returns the owned, indexed
 /// [`CompiledProgram`] - one model object the command sources its
 /// transformation lookups, analysis handle ([`CompiledProgram::validated`]),
 /// and rule slices from. Clones the parsed programme once (negligible,
 /// one-time per invocation). Used by the by-name-lookup paths (`propose`,
-/// `explain`); the analysis-only commands keep `validate_or_exit`.
-pub(crate) fn compile_or_exit(parsed: &ParsedSource) -> CompiledProgram {
+/// `explain`); the analysis-only commands keep `validate_or_report`.
+pub(crate) fn compile_or_report(parsed: &ParsedSource) -> anyhow::Result<CompiledProgram> {
     match CompiledProgram::new(parsed.program.clone()) {
-        Ok(compiled) => compiled,
+        Ok(compiled) => Ok(compiled),
         Err(errors) => {
             for err in &errors {
                 render_validation_error(err, parsed);
             }
-            std::process::exit(1);
+            Err(AlreadyReported.into())
         }
     }
 }

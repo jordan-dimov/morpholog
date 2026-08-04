@@ -8,7 +8,7 @@ use morpholog_postgres::{
 };
 
 use crate::VerifyArgs;
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 
 /// Run `audit verify`: replay (claims vs audit), then the tamper-evidence
 /// check (recompute the audit Merkle root against each checkpoint, and
@@ -70,7 +70,7 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     // surface has nothing to contradict.
     let surface_tampered = matches!(report.views, Some(ViewsVerification::Tampered { .. }));
     if diverged || tampered || surface_tampered {
-        std::process::exit(1);
+        return Err(AlreadyReported.into());
     }
     Ok(())
 }

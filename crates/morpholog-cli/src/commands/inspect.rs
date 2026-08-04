@@ -16,7 +16,9 @@ use crate::commands::args::eval_value_to_bare_json;
 use crate::commands::filter::FieldFilter;
 use morpholog_postgres::ClaimFilter;
 
-use crate::commands::{compile_or_exit, connect, parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{
+    compile_or_report, connect, parse_or_report, print_json, validate_or_report,
+};
 use crate::{AsOf, Inspect};
 
 /// Resolve an `--as-of` argument to a concrete transition id,
@@ -124,8 +126,8 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             // authority, an unknown predicate matches nothing.)
             let named_program = match &args.named {
                 Some(file) => {
-                    let parsed = parse_or_exit(file)?;
-                    validate_or_exit(&parsed);
+                    let parsed = parse_or_report(file)?;
+                    validate_or_report(&parsed)?;
                     for requested in &args.predicate {
                         if !parsed
                             .program
@@ -235,8 +237,8 @@ async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
     // validated before any database work (the claims-arm contract).
     let named_program = match &args.named {
         Some(file) => {
-            let parsed = parse_or_exit(file)?;
-            validate_or_exit(&parsed);
+            let parsed = parse_or_report(file)?;
+            validate_or_report(&parsed)?;
             Some((parsed.program, file))
         }
         None => None,
@@ -285,8 +287,8 @@ fn audit_row_named_json(
 /// always exits zero on a parsed-and-validated programme - coverage
 /// answers a question, it does not enforce (the `explain` stance).
 async fn inspect_coverage(args: crate::InspectCoverageArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    validate_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    validate_or_report(&parsed)?;
     let pool = connect(&args.db.database_url).await?;
     let report = morpholog_postgres::coverage_replay(&pool, &parsed.program)
         .await
@@ -375,8 +377,8 @@ pub(crate) fn decode_claims_named(
 ///   declared on the parsed programme.
 /// - Connection failure or kernel error: propagated via anyhow context.
 async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    validate_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    validate_or_report(&parsed)?;
     let program = &parsed.program;
 
     let derived = program.derived_claim(&args.derived).ok_or_else(|| {
@@ -428,7 +430,7 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
 /// prints its declared predicates as JSON. Read-only and synchronous; no
 /// database connection.
 fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
+    let parsed = parse_or_report(&args.file)?;
     print_json(&parsed.program.predicates)
 }
 
@@ -436,8 +438,8 @@ fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> 
 /// preconditions plus the invariant guarantees. Static and read-only -
 /// no database. Prose by default; `--json` emits the structured form.
 fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    let compiled = compile_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let compiled = compile_or_report(&parsed)?;
     let matrix = morpholog_core::controls(&compiled);
     if args.json {
         print_json(&matrix)
@@ -451,8 +453,8 @@ fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
 /// invariant. Static and read-only - no database. Prose by default;
 /// `--json` emits the structured form.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    let compiled = compile_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let compiled = compile_or_report(&parsed)?;
     let guarantees = morpholog_core::guarantees(&compiled);
     if args.json {
         print_json(&guarantees)

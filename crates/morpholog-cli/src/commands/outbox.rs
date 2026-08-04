@@ -33,7 +33,7 @@ use morpholog_postgres::{
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 use crate::{OutboxClaimArgs, OutboxCompleteArgs, OutboxCompleteOutcome, OutboxReleaseArgs};
 
 /// `morpholog outbox claim` - acquire the next pending outbox row of
@@ -163,6 +163,6 @@ fn emit_update_and_exit(update: &OutboxUpdate) -> anyhow::Result<()> {
     print_json(&serde_json::json!({ "status": status }))?;
     match update {
         OutboxUpdate::Applied => Ok(()),
-        OutboxUpdate::LeaseLost => std::process::exit(1),
+        OutboxUpdate::LeaseLost => Err(AlreadyReported.into()),
     }
 }

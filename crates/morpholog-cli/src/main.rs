@@ -1283,8 +1283,31 @@ pub(crate) struct ExplainArgs {
     pub(crate) json: bool,
 }
 
+/// The one place this binary decides its exit code.
+///
+/// Commands return their outcome rather than calling
+/// `std::process::exit` from wherever a diagnostic was printed, which
+/// is what makes them composable and testable in-process. The pinned
+/// exit-code semantics are unchanged - success is 0, every failure is
+/// 1 - only where they are enacted moves.
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::process::ExitCode {
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        // The command has already rendered its diagnostics; printing
+        // `Error: ...` on top would say the same thing twice, in a
+        // worse voice.
+        Err(err) if err.is::<commands::AlreadyReported>() => std::process::ExitCode::FAILURE,
+        Err(err) => {
+            // Byte-identical to what `Result`'s own `Termination` used
+            // to print when `main` returned it.
+            eprintln!("Error: {err:?}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Inspect { what } => commands::inspect::run(what).await,
@@ -2259,5 +2282,37 @@ mod tests {
         let err = Cli::try_parse_from(["morpholog", "refresh", "derived"])
             .expect_err("missing file should error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod exit_path_tests {
+    use super::*;
+
+    /// The point of returning instead of exiting: a command that
+    /// refuses hands its caller an error and the caller is still
+    /// running to receive it. Written as a test because it could not
+    /// have been one before - `std::process::exit` inside the parse
+    /// gate would have taken the test runner down with it.
+    #[test]
+    fn a_refused_command_returns_rather_than_ending_the_process() {
+        let file = std::env::temp_dir().join("morpholog_exit_path_probe.morph");
+        std::fs::write(
+            &file,
+            "program p\npredicate P(x: Subject)\ntransformation t(x):\n    admit Q(x)\n",
+        )
+        .unwrap();
+        let args = Cli::parse_from(["morpholog", "check", file.to_str().unwrap()]);
+        let Command::Check(check) = args.command else {
+            panic!("expected check");
+        };
+        let err = commands::check::run(check).expect_err("an undeclared predicate is refused");
+        assert!(
+            err.is::<commands::AlreadyReported>(),
+            "the diagnostics were printed, so main must add nothing: {err:?}"
+        );
+        // Still here - which is the whole assertion.
+        std::fs::remove_file(&file).ok();
     }
 }

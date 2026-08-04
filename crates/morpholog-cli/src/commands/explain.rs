@@ -20,14 +20,16 @@ use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
 use crate::commands::args::{CliArgs, decode_args};
-use crate::commands::{compile_or_exit, connect, lookup_transformation, parse_or_exit, print_json};
+use crate::commands::{
+    compile_or_report, connect, lookup_transformation, parse_or_report, print_json,
+};
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same parse + validate front-end as `propose`: a malformed programme
     // never reaches the explanation path. The compiled programme is the
     // one model object the lookup, codec, and rule slices source from.
-    let parsed = parse_or_exit(&args.file)?;
-    let compiled = compile_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let compiled = compile_or_report(&parsed)?;
 
     let transformation = lookup_transformation(&compiled, &args.transformation, &args.file)?;
 

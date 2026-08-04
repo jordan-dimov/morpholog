@@ -12,15 +12,17 @@ use morpholog_cli::envelopes::RefreshDerivedReport;
 use morpholog_postgres::refresh_derived;
 
 use crate::RefreshDerivedArgs;
-use crate::commands::{connect, hash::canonical_hash, parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{
+    connect, hash::canonical_hash, parse_or_report, print_json, validate_or_report,
+};
 
 pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
+    let parsed = parse_or_report(&args.file)?;
     // Validate before touching the database - the same vocabulary gate
     // `schema`, `hash`, and `generate views` apply - and pass the
     // validated handle so the read model is only built for a sound
     // programme.
-    let validated = validate_or_exit(&parsed);
+    let validated = validate_or_report(&parsed)?;
     let model_hash = canonical_hash(&parsed.program);
 
     let pool = connect(&args.db.database_url).await?;

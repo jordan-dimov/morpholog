@@ -15,7 +15,7 @@ use anyhow::Context;
 use morpholog_postgres::{apply_migrations, migration_status};
 
 use crate::MigrateArgs;
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 
 pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
@@ -34,7 +34,7 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         if !ready {
             // The report is on stdout either way, so the caller reads WHAT
             // is outstanding rather than only that something is.
-            std::process::exit(1);
+            return Err(AlreadyReported.into());
         }
         return Ok(());
     }
