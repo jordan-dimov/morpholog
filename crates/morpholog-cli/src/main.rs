@@ -1283,13 +1283,21 @@ pub(crate) struct ExplainArgs {
     pub(crate) json: bool,
 }
 
-/// The one place this binary decides its exit code.
+/// The one place this binary decides the outcome of a dispatched
+/// command.
 ///
 /// Commands return their outcome rather than calling
 /// `std::process::exit` from wherever a diagnostic was printed, which
-/// is what makes them composable and testable in-process. The pinned
-/// exit-code semantics are unchanged - success is 0, every failure is
-/// 1 - only where they are enacted moves.
+/// is what makes them composable and testable in-process. Their pinned
+/// exit-code semantics are unchanged - success 0, failure 1 - only
+/// where they are enacted moves.
+///
+/// Argument parsing is deliberately NOT routed through here. Clap owns
+/// that boundary along with its own conventions: a usage error exits
+/// 2, `--help` and `--version` exit 0 having printed to stdout. Taking
+/// it over would mean re-implementing those semantics to keep them
+/// identical, for no gain - a command that never ran has nothing to
+/// report.
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     match run().await {

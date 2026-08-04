@@ -28,9 +28,9 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     //    diagnostics (same path `check` and `parse` use).
     let parsed = parse_or_report(&args.file)?;
 
-    // 2. Validate. Same error shape as `check`; exits non-zero on
-    //    validation failure so a malformed programme never reaches
-    //    the proposal path. The returned `ValidatedProgram` handle
+    // 2. Validate. Same error shape as `check`; returns a reported
+    //    failure so a malformed programme never reaches the proposal
+    //    path. The returned `ValidatedProgram` handle
     //    threads through to the codec so it does not re-validate.
     let compiled = compile_or_report(&parsed)?;
 
@@ -89,7 +89,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     trace: &trace,
                 })?;
                 if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
-                    return Err(rejected(reason, &parsed));
+                    return report_rejection(reason, &parsed);
                 }
             }
             PgTracedOutcome::KernelErrored { error, trace } => {
@@ -132,7 +132,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     witness,
                     explanation,
                 ))?;
-                return Err(rejected(reason, &parsed));
+                return report_rejection(reason, &parsed);
             }
             _ => print_json(&outcome)?,
         }
@@ -142,7 +142,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             .context("the proposal could not be decided")?;
         print_json(&outcome)?;
         if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
-            return Err(rejected(reason, &parsed));
+            return report_rejection(reason, &parsed);
         }
     }
     Ok(())
@@ -151,9 +151,15 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
 /// A decided rejection on a single-proposal path: locate the rule on
 /// stderr and carry the exit code out (the envelope is already on
 /// stdout, so nothing further is printed).
-fn rejected(reason: &str, parsed: &ParsedSource) -> anyhow::Error {
+///
+/// Returns `Result` rather than a bare `anyhow::Error` so the compiler
+/// enforces what a caller must do with it. An earlier draft of this
+/// refactor handed back the error, a caller built it and dropped it,
+/// and a decided refusal started exiting 0 - reported as success.
+/// `Result` is `#[must_use]`; a bare error is not.
+fn report_rejection(reason: &str, parsed: &ParsedSource) -> anyhow::Result<()> {
     print_rule_location(reason, parsed);
-    AlreadyReported.into()
+    Err(AlreadyReported.into())
 }
 
 /// On a single-run rejection, point stderr at the rule: take the
