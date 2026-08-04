@@ -19,6 +19,7 @@ use crate::definitions::DefinitionTable;
 use crate::ir::{
     DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, Value, ValueExpr, Var,
 };
+use crate::validate::MAX_EXPR_DEPTH;
 
 /// Resolve every `Sum` node's empty-case seed from the summed
 /// variable's declared kind. See the module doc for why this is a
@@ -194,11 +195,21 @@ fn var_seed(
                     _ => None,
                 })
         }
-        // The shared table's stack guard, so this pass no longer
-        // carries its own descent bound: a cycle in unvalidated IR
-        // terminates because the name is already on the stack, and a
-        // long chain of DISTINCT definitions now resolves instead of
-        // being truncated at an arbitrary depth.
+        // The shared table's stack guard stops cycles; the budget
+        // stops depth. Both are needed and they answer different
+        // hazards: `seen` catches a definition already on this path,
+        // while a chain of DISTINCT definitions is acyclic and would
+        // otherwise recurse until the stack ran out - this pass runs
+        // during parsing, before validation's own depth guard gets to
+        // refuse the programme.
+        //
+        // The budget is validation's constant, not a number of this
+        // pass's own. A definition call is charged its callee's
+        // expanded depth there, so a chain longer than this is a
+        // programme validation is about to reject anyway: nothing
+        // resolvable is lost by stopping, and the diagnostic the
+        // author gets is `NestingTooDeep` rather than a crash.
+        Prop::Defined { .. } if seen.len() >= MAX_EXPR_DEPTH => None,
         Prop::Defined { name, args } => ctx.definitions.enter(name, seen, |def, seen| {
             args.iter()
                 .zip(&def.parameters)
@@ -324,17 +335,41 @@ mod tests {
         );
     }
 
-    /// Descent through definition calls is bounded by the shared
-    /// stack guard, not by a depth number. A long chain of DISTINCT
-    /// definitions therefore resolves the summed variable's kind all
-    /// the way down - the old descent cap truncated it and silently
-    /// fell back to the decimal default, which was a wrong answer for
-    /// a programme that had done nothing unusual.
+    /// A chain of DISTINCT definitions resolves the summed variable's
+    /// kind all the way down, right up to the depth validation
+    /// permits. The old cap truncated at 16 and silently fell back to
+    /// the decimal default - a wrong answer for a programme that had
+    /// done nothing unusual.
     #[test]
     fn a_long_chain_of_definitions_still_resolves_the_summed_kind() {
         let mut deep = chained(64);
         lower_sum_seeds(&mut deep);
         assert_eq!(seed_of(&deep), SumSeed::Quantity("t".into()));
+
+        // The deepest chain validation will accept still resolves, so
+        // the budget never truncates a programme that would be lawful.
+        let mut at_limit = chained(MAX_EXPR_DEPTH - 1);
+        lower_sum_seeds(&mut at_limit);
+        assert_eq!(seed_of(&at_limit), SumSeed::Quantity("t".into()));
+    }
+
+    /// The budget's real job. Lowering runs during parsing, BEFORE
+    /// validation's depth guard, so an acyclic chain long enough to
+    /// exhaust the stack has to stop here - and the author still gets
+    /// the diagnostic rather than a crash, because validation refuses
+    /// the same programme moments later.
+    #[test]
+    fn an_oversized_acyclic_chain_returns_instead_of_exhausting_the_stack() {
+        let mut huge = chained(50_000);
+        lower_sum_seeds(&mut huge);
+        assert_eq!(seed_of(&huge), SumSeed::Decimal);
+        let errors = huge.validate().expect_err("validation refuses it");
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, crate::ValidationError::NestingTooDeep { .. })),
+            "the author should see NestingTooDeep, got {errors:?}"
+        );
     }
 
     /// The hazard the descent bound actually existed for: a CYCLE in
