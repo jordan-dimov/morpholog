@@ -401,6 +401,10 @@ pub enum ValidationError {
         found: usize,
         context: ValidationContext,
     },
+    /// `period_index` was given a span of zero length, written
+    /// literally. Every period would begin where the last one did, so
+    /// there is no partition to index into. A span arriving through a
+    /// variable is the evaluator's backstop instead.
     #[error("period_index needs a positive span; got {span} in {context}")]
     PeriodSpanNotPositive {
         span: String,

@@ -70,17 +70,6 @@ pub use explain::{
     Rejection, TransitionRef, Verdict, explain,
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
-/// The builtin evaluator, exposed for tests that must reach the
-/// arity backstop directly: a validated programme cannot carry a
-/// wrong-arity call, so nothing else can exercise it.
-#[doc(hidden)]
-pub fn eval_builtin_for_test(
-    builtin: ir::Builtin,
-    args: &[EvalValue],
-) -> Result<EvalValue, EvalError> {
-    eval::eval_builtin(builtin, args)
-}
-
 pub use ir::{
     ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
     DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,

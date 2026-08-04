@@ -379,10 +379,15 @@ fn the_extractor_round_trips_through_the_formatter() {
 /// count per call form, so only hand-built IR can get it wrong -
 /// validation refuses it by name, and the evaluator keeps its own
 /// backstop for IR that never went through validation.
+///
+/// The evaluator half checks arity BEFORE evaluating arguments, so a
+/// misshapen call is reported as misshapen. Evaluating first would
+/// answer with whatever the surplus argument happened to be wrong
+/// about, which tells a reader nothing about the real mistake.
 #[test]
 fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
-    use morpholog_core::ir_builder::{call, invariant, program};
-    use morpholog_core::{Builtin, EvalValue};
+    use morpholog_core::Builtin;
+    use morpholog_core::ir_builder::{call, invariant, program, var};
 
     let p = program("bad_arity")
         .invariants(vec![invariant(
@@ -397,15 +402,23 @@ fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
         "got: {errs:?}"
     );
 
-    // The evaluator's own guard, for IR that skipped validation.
-    let err = morpholog_core::eval_builtin_for_test(
-        Builtin::PeriodIndex,
-        &[EvalValue::Decimal(1.into())],
-    )
-    .expect_err("three arguments are required");
+    // Through the real evaluation route, with a surplus argument that
+    // would itself error: the arity refusal must still be what
+    // surfaces, or the diagnostic blames the wrong thing.
+    let t = transformation(
+        "probe",
+        params(&[]),
+        vec![require(eq(
+            call(Builtin::Abs, vec![term(dec("1")), term(var("never_bound"))]),
+            term(dec("1")),
+        ))],
+    );
+    let err = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
+        .expect_err("two arguments is not one");
+    let text = format!("{err}");
     assert!(
-        format!("{err}").contains("period_index takes 3 argument(s), got 1"),
-        "got: {err}"
+        text.contains("abs takes 1 argument(s), got 2"),
+        "the arity error must dominate the unbound operand: {text}"
     );
 }
 

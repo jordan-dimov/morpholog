@@ -443,22 +443,6 @@ pub enum ValueExpr {
         then: Box<ValueExpr>,
         otherwise: Box<ValueExpr>,
     },
-    /// `period_index(anchor, span, at)`: which anniversary-anchored
-    /// period `at` falls in - the greatest integer n (as an
-    /// integer-valued decimal) whose nth boundary is at or before
-    /// `at`. Boundary n is the anchor shifted by the span's
-    /// components multiplied by n ONCE and applied with the standard
-    /// clamped walk - never n repeated clamped hops, which the
-    /// calendar's non-associativity would let drift. Representable
-    /// boundaries form half-open periods; a boundary beyond either
-    /// end of the representable calendar acts as an infinity, so the
-    /// outermost periods are clipped and the extractor is total,
-    /// with negative indexes before the anchor. The operator itself
-    /// reads no state (its children are ordinary value expressions,
-    /// walked as such), so a fully-literal use is lawful in a
-    /// `const`. A non-positive span is refused by name at validation
-    /// when written literally and at evaluation otherwise (the round
-    /// quantum pattern).
     /// A strict call to a [`Builtin`]: arguments evaluated in order,
     /// then a context-free operation over the resulting values. The
     /// arity is the builtin's, checked at validation.
@@ -545,7 +529,21 @@ pub enum Builtin {
     /// otherwise.
     Round,
     /// `period_index(anchor, span, at)`: which anniversary-anchored
-    /// period `at` falls in.
+    /// period `at` falls in - the greatest integer n (as an
+    /// integer-valued decimal) whose nth boundary is at or before
+    /// `at`. Boundary n is the anchor shifted by the span's
+    /// components multiplied by n ONCE and applied with the standard
+    /// clamped walk - never n repeated clamped hops, which the
+    /// calendar's non-associativity would let drift. Representable
+    /// boundaries form half-open periods; a boundary beyond either
+    /// end of the representable calendar acts as an infinity, so the
+    /// outermost periods are clipped and the extractor is total,
+    /// with negative indexes before the anchor. The operator itself
+    /// reads no state (its children are ordinary value expressions,
+    /// walked as such), so a fully-literal use is lawful in a
+    /// `const`. A non-positive span is refused by name at validation
+    /// when written literally and at evaluation otherwise (the round
+    /// quantum pattern).
     PeriodIndex,
     /// `min(a, b)` / `max(a, b)`: the smaller or larger of two values.
     /// Spelled like the calls they are - the aggregate forms over a
@@ -593,8 +591,6 @@ pub enum ArithOp {
     /// rules - `(file + rank) % 2` for a chess square's colour.
     Mod,
 }
-
-impl ArithOp {}
 
 /// The ordered domain an [`Prop::Compare`] compares over. Explicit in the
 /// IR, never inferred from operand kind: the surface picks it by token (`<`

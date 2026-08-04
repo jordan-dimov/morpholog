@@ -1024,6 +1024,13 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
         // bindings, or the actor; `eval_builtin` sees finished values
         // only, which is what makes the contract checkable.
         ValueExpr::Call { builtin, args } => {
+            // Arity first, BEFORE any argument is touched. A call with
+            // the wrong shape is wrong about itself, and an operand
+            // error from the surplus argument would answer a question
+            // nobody asked - the reader needs to hear "abs takes 1
+            // argument", not "y is unbound". Only hand-built IR
+            // reaches this; validation refuses it earlier.
+            check_builtin_arity(*builtin, args.len())?;
             let mut values = Vec::with_capacity(args.len());
             for a in args {
                 values.push(eval_value(a, ctx)?);
@@ -1390,6 +1397,22 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
     }
 }
 
+/// The arity a builtin takes, refused by name when it does not match.
+/// Checked before arguments are evaluated so a misshapen call is
+/// reported as such, and again inside [`eval_builtin`] so no caller
+/// can reach the operation with the wrong count.
+fn check_builtin_arity(builtin: Builtin, found: usize) -> Result<(), EvalError> {
+    if found == builtin.arity() {
+        return Ok(());
+    }
+    Err(EvalError::TypeMismatch(format!(
+        "{} takes {} argument(s), got {}",
+        builtin.name(),
+        builtin.arity(),
+        found
+    )))
+}
+
 /// Apply a builtin to its evaluated arguments.
 ///
 /// Exhaustive over [`Builtin`] with no wildcard: a new builtin cannot
@@ -1398,14 +1421,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
 /// went through validation - a validated programme cannot arrive with
 /// the wrong count.
 pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalValue, EvalError> {
-    if args.len() != builtin.arity() {
-        return Err(EvalError::TypeMismatch(format!(
-            "{} takes {} argument(s), got {}",
-            builtin.name(),
-            builtin.arity(),
-            args.len()
-        )));
-    }
+    check_builtin_arity(builtin, args.len())?;
     match builtin {
         Builtin::Abs => match &args[0] {
             EvalValue::Decimal(d) => Ok(EvalValue::Decimal(d.abs())),
